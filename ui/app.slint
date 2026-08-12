@@ -1,0 +1,53 @@
+// The face. Nothing here is final — this is the shell the real design goes into.
+//
+// Laid out for a head unit first: large touch targets, high contrast, readable
+// at a glance while driving. The CarFM design work (docs/design in the CarFM
+// tree) is the reference for what this becomes.
+
+export component AppWindow inherits Window {
+    title: "Carnyx";
+    background: #0d0f12;
+    preferred-width: 1024px;
+    preferred-height: 600px;
+
+    // Fed by Rust. Placeholders until the tuner lands.
+    in property <string> frequency: "--.-";
+    in property <string> station: "";
+    in property <string> radio-text: "";
+    in property <bool> stereo: false;
+
+    VerticalLayout {
+        padding: 32px;
+        spacing: 16px;
+        alignment: center;
+
+        Text {
+            text: root.frequency;
+            color: #f2f4f7;
+            font-size: 96px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.station == "" ? "No station" : root.station;
+            color: root.station == "" ? #5c6470 : #ffb833;
+            font-size: 32px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.radio-text;
+            color: #98a2b3;
+            font-size: 20px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: root.stereo ? "STEREO" : "MONO";
+            color: root.stereo ? #4a9eff : #5c6470;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+    }
+}

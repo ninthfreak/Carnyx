@@ -1,0 +1,27 @@
+# Carnyx — the Slint rebuild of the CarFM head-unit radio.
+#
+# One crate for now. The portable logic (RDS decoding, station identity, the
+# signal-meter maths) comes across from the CarFM tree as it is needed, not
+# ahead of it: a module ported without a caller is a second copy to maintain and
+# proves nothing, which is the trap the first attempt fell into.
+[package]
+name = "carnyx"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Radio for a NOWADA Android head unit."
+
+[lib]
+# cdylib is what Android loads; rlib so the same code compiles for the host and
+# `cargo build` / `cargo test` stay useful as a check. There is deliberately no
+# desktop binary — this app targets the head unit.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+slint = "1.17"
+
+[build-dependencies]
+slint-build = "1.17"
+
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { version = "1.17", features = ["backend-android-activity-06"] }
