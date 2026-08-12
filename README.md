@@ -61,10 +61,14 @@ second look (audio released, tuner error, driving, lossy reception, no presets).
 
 ## Building
 
-`cargo build` compiles for the host. That is a compile check only — there is no
+Everything below runs on your development machine. Nothing is ever compiled on
+the head unit — the Android build is a cross-compile, and what you carry over is
+an APK file.
+
+`cargo build` compiles for the host. That is a compile check only: there is no
 desktop application, and the head unit is the only target that matters.
 
-For the head unit:
+### An APK to sideload
 
 ```sh
 rustup target add aarch64-linux-android armv7-linux-androideabi
@@ -74,30 +78,59 @@ export ANDROID_HOME=~/Android/Sdk
 export ANDROID_NDK_ROOT=~/Android/Sdk/ndk/<version>
 export JAVA_HOME=<android-studio>/jbr        # only if javac is not on PATH
 
-cargo apk run --target aarch64-linux-android --lib
+cargo apk build --lib
 ```
 
-`--lib` because the crate is a `cdylib` with no `main`: the entry point is
-`android_main`. No `cmdline-tools` are needed.
+The APK lands at **`target/debug/apk/carnyx.apk`**. Copy it to the unit however
+you normally do — `adb install -r target/debug/apk/carnyx.apk`, a USB stick,
+whatever. (`cargo apk run` exists but it builds AND installs over adb AND then
+tails logcat; `build` is the one that just produces the file.)
 
-Two things about cargo-apk 0.10 that cost time if you meet them cold, both read
-out of its source rather than guessed:
+`--lib` because the crate is a `cdylib` with no `main`: the entry point is
+`android_main`. No `--target` flag: `build_targets` in `Cargo.toml` already lists
+both ABIs, so one APK covers arm64 and armv7. No `cmdline-tools` are needed.
+
+### Release builds need a keystore
+
+`cargo apk build --lib --release` **fails** with `MissingReleaseKey` unless a key
+is configured — the debug keystore is only auto-generated for the dev profile,
+where cargo-apk mints `~/.android/debug.keystore` (password `android`) on first
+use. For release, either point at a keystore through the environment:
+
+```sh
+CARGO_APK_RELEASE_KEYSTORE=/path/to/release.keystore \
+CARGO_APK_RELEASE_KEYSTORE_PASSWORD=... \
+cargo apk build --lib --release
+```
+
+or add a stanza to `Cargo.toml` (path is relative to the crate root, and the file
+itself must never be committed):
+
+```toml
+[package.metadata.android.signing.release]
+path = "release.keystore"
+keystore_password = "..."
+```
+
+### Two cargo-apk traps
+
+Both read out of its source rather than guessed:
 
 - **It shells out to `aapt`, not `aapt2`** (`ndk-build::apk`). Recent build-tools
   packages ship only `aapt2`. Check with `ls $ANDROID_HOME/build-tools/*/aapt`;
   if nothing comes back, install an older build-tools alongside the current one.
 - **It picks the HIGHEST build-tools version it finds**, by `max()` over the
   directory names (`ndk-build::ndk::Ndk::from_env`) — so installing an older one
-  alongside is not enough on its own if the newest lacks `aapt`. It also needs
-  `keytool` from a JDK to mint the debug keystore.
+  alongside is not enough on its own if the newest lacks `aapt`.
 
 `xbuild` (`cargo install xbuild`) is the alternative that uses `aapt2`. It has
 not been tried here.
 
-**Untested path.** The APK has never been built: this repository has been
-developed in a container with no SDK and no NDK. The `[package.metadata.android]`
-block is schema-checked against cargo-apk and accepted, but everything past
-manifest parsing is unproven. Expect to iterate on the first attempt.
+**Untested path.** No APK has ever been built: this repository has been developed
+in a container with no SDK and no NDK. The `[package.metadata.android]` block is
+schema-checked against cargo-apk and accepted, and the paths and failure modes
+above are read from its source, but nothing past manifest parsing has been run.
+Expect to iterate on the first attempt.
 
 ## Licence
 

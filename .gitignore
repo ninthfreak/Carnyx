@@ -1,3 +1,6 @@
 /target
 # Rendered by `cargo run --example shot` — output, not source.
 /shots
+# Signing keys never go in the repository.
+*.keystore
+*.jks
