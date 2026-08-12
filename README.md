@@ -61,16 +61,43 @@ second look (audio released, tuner error, driving, lossy reception, no presets).
 
 ## Building
 
+`cargo build` compiles for the host. That is a compile check only — there is no
+desktop application, and the head unit is the only target that matters.
+
+For the head unit:
+
 ```sh
 rustup target add aarch64-linux-android armv7-linux-androideabi
 cargo install cargo-apk
+
 export ANDROID_HOME=~/Android/Sdk
 export ANDROID_NDK_ROOT=~/Android/Sdk/ndk/<version>
+export JAVA_HOME=<android-studio>/jbr        # only if javac is not on PATH
+
 cargo apk run --target aarch64-linux-android --lib
 ```
 
-`cargo build` compiles for the host. That is a compile check only — there is no
-desktop application, and the head unit is the only target that matters.
+`--lib` because the crate is a `cdylib` with no `main`: the entry point is
+`android_main`. No `cmdline-tools` are needed.
+
+Two things about cargo-apk 0.10 that cost time if you meet them cold, both read
+out of its source rather than guessed:
+
+- **It shells out to `aapt`, not `aapt2`** (`ndk-build::apk`). Recent build-tools
+  packages ship only `aapt2`. Check with `ls $ANDROID_HOME/build-tools/*/aapt`;
+  if nothing comes back, install an older build-tools alongside the current one.
+- **It picks the HIGHEST build-tools version it finds**, by `max()` over the
+  directory names (`ndk-build::ndk::Ndk::from_env`) — so installing an older one
+  alongside is not enough on its own if the newest lacks `aapt`. It also needs
+  `keytool` from a JDK to mint the debug keystore.
+
+`xbuild` (`cargo install xbuild`) is the alternative that uses `aapt2`. It has
+not been tried here.
+
+**Untested path.** The APK has never been built: this repository has been
+developed in a container with no SDK and no NDK. The `[package.metadata.android]`
+block is schema-checked against cargo-apk and accepted, but everything past
+manifest parsing is unproven. Expect to iterate on the first attempt.
 
 ## Licence
 

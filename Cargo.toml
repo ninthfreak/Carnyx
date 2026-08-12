@@ -35,9 +35,16 @@ slint = { version = "1.17", features = ["backend-android-activity-06"] }
 slint = { version = "1.17", features = ["renderer-software"] }
 png = "0.18"
 
-# Android packaging for cargo-apk. UNVERIFIED IN CI: this container has no SDK,
-# no NDK and no cargo-apk, so these keys have never been parsed by the tool that
-# reads them — check them on the first real device build.
+# Android packaging for cargo-apk.
+#
+# Every key below was checked against cargo-apk 0.10's own schema
+# (ndk-build::manifest::{AndroidManifest, Sdk, Application, Activity}) and accepted
+# by the tool. That check was worth doing: none of those structs use
+# `deny_unknown_fields`, so a misspelled key is silently dropped rather than
+# reported, and a build that "succeeds" can quietly ship the defaults.
+#
+# The APK itself has still never been built — this container has no SDK and no
+# NDK, so the toolchain path beyond manifest parsing is untested.
 [package.metadata.android]
 package = "com.ninthfreak.carnyx"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
