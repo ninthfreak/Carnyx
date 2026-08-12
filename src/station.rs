@@ -51,12 +51,25 @@ pub fn clean_call(s: &str) -> String {
     t.trim().to_string()
 }
 
-/// The label a preset tile or peek card prints inside its colour box: the core
-/// call letters, or the first four characters of the name when the string is not
-/// a call sign at all (a bare "FM 88.7" preset, say).
-pub fn plate_label(name: &str) -> String {
-    let cleaned = clean_call(name);
-    let short: String = cleaned.chars().take(4).collect();
+/// The label a preset tile or peek card prints inside its colour box.
+///
+/// `base` is the call sign resolved from the station database, when one resolved.
+/// It is printed IN FULL — four letters is the common case but not the rule: of
+/// the 20,733 stations in CarFM's shipped database, 8,277 are FM translators with
+/// six-character call signs (`K227EA`, `W249BC`), plus a handful of seven. The
+/// box's font size divides by the label's length, so a longer call sign shrinks
+/// to fit rather than overflowing.
+///
+/// Truncation to four applies ONLY to the fallback, where there is no resolved
+/// call sign and the preset's own name has to stand in — a name like "FM 88.7"
+/// is not a call sign and there is nothing to preserve.
+pub fn plate_label(base: Option<&str>, name: &str) -> String {
+    if let Some(b) = base {
+        if !b.is_empty() {
+            return clean_call(b);
+        }
+    }
+    let short: String = clean_call(name).chars().take(4).collect();
     if !short.is_empty() {
         return short;
     }
@@ -88,10 +101,23 @@ mod tests {
     }
 
     #[test]
+    fn plate_label_prints_a_resolved_call_sign_in_full() {
+        // FM translators are 40% of the shipped station database and their call
+        // signs are six characters. Truncating them to four was the bug this
+        // signature exists to prevent.
+        assert_eq!(plate_label(Some("K227EA"), "K227EA"), "K227EA");
+        assert_eq!(plate_label(Some("W249BC"), "some preset name"), "W249BC");
+        assert_eq!(plate_label(Some("DK203DR"), ""), "DK203DR");
+        assert_eq!(plate_label(Some("WWHG-FM"), ""), "WWHG");
+    }
+
+    #[test]
     fn plate_label_falls_back_to_four_characters() {
-        assert_eq!(plate_label("WWHG-FM"), "WWHG");
-        assert_eq!(plate_label("magic 98"), "magi");
-        assert_eq!(plate_label(""), "");
+        assert_eq!(plate_label(None, "WWHG-FM"), "WWHG");
+        assert_eq!(plate_label(None, "magic 98"), "magi");
+        assert_eq!(plate_label(None, ""), "");
+        // An empty base is no base.
+        assert_eq!(plate_label(Some(""), "WQLF-FM"), "WQLF");
     }
 
     /// Values taken from CarFM's `brandColor` for the same keys, so a station

@@ -23,7 +23,10 @@ const STATIONS: &[(&str, f32)] = &[
 ];
 
 fn preset(name: &str, mhz: f32) -> Preset {
-    let call = plate_label(name);
+    // No station database yet, so there is no resolved call sign to pass — the
+    // fallback path takes the preset's own name. Once the database lands this is
+    // where the resolved base goes.
+    let call = plate_label(None, name);
     Preset {
         name: name.into(),
         call: call.clone().into(),
