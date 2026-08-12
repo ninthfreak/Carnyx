@@ -219,8 +219,13 @@ component GenreText inherits Rectangle {
     /// STEREO pill's own band; the tall track lets it be its own line.
     in property <length> band-h: 0px;
 
-    // No width binding: the enclosing layout stretches it, which is what lets the
-    // centred variant actually centre. Wide caps it the way the design does.
+    // Both Texts bind their width to root.width, so this Rectangle has no
+    // intrinsic width of its own — it has to be told one, or a HorizontalLayout
+    // hands it zero and the genre silently disappears. (A VerticalLayout stretches
+    // its children instead, which is how the wide track lost the line while the
+    // tall track kept it.) No `width` binding, so the centred variant can still be
+    // stretched by its parent; 200 is the design's cap on the wide track.
+    preferred-width: live.preferred-width;
     max-width: root.centered ? 100000px : 200px;
     height: root.band-h > 0px ? root.band-h : live.preferred-height;
 

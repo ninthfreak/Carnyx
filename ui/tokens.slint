@@ -29,17 +29,23 @@ export global Band {
 // The palette. `dark` selects the theme; `off` is §4.7 — audio priority released,
 // where the whole face desaturates. React Native gets that from a `grayscale(1)`
 // filter, which Slint has no equivalent for, so it is done here instead: every
-// token passes through `flat()`, which collapses a colour to its Rec.601 luma —
-// the same transform the CSS/RN filter applies.
+// token passes through `flat()`, which collapses a colour to the same Rec.709
+// luma the CSS/RN filter uses.
 export global Pal {
     in property <bool> dark: false;
     in property <bool> off: false;
 
+    // Rec.709, and the 0.5 is not decoration. These are the exact coefficients
+    // React Native puts in its Android ColorMatrix for `filter: grayscale(1)`
+    // (ReactAndroid FilterHelper.createGrayscaleColorMatrix), which is the CSS
+    // Filter Effects matrix. Rec.601 (0.299/0.587/0.114) is the wrong one and is
+    // off by up to 14/255 on a saturated station colour. Colors.rgb TRUNCATES its
+    // arguments rather than rounding, hence the half.
     pure public function flat(c: color) -> color {
         return Pal.off
-            ? Colors.rgb(c.red * 0.299 + c.green * 0.587 + c.blue * 0.114,
-                         c.red * 0.299 + c.green * 0.587 + c.blue * 0.114,
-                         c.red * 0.299 + c.green * 0.587 + c.blue * 0.114)
+            ? Colors.rgb(c.red * 0.2126 + c.green * 0.7152 + c.blue * 0.0722 + 0.5,
+                         c.red * 0.2126 + c.green * 0.7152 + c.blue * 0.0722 + 0.5,
+                         c.red * 0.2126 + c.green * 0.7152 + c.blue * 0.0722 + 0.5)
             : c;
     }
     // Alpha-carrying tokens: `flat` would drop the alpha (Colors.rgb is opaque),

@@ -32,6 +32,13 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("driving", 1024, 614, false, State::Driving),
     ("weak-and-lossy", 1024, 614, false, State::WeakAndLossy),
     ("no-presets", 1024, 614, false, State::NoPresets),
+    ("tuned", 1024, 614, false, State::Tuned),
+    ("tuned-portrait", 360, 800, false, State::Tuned),
+    ("out-of-band", 1024, 614, false, State::OutOfBand),
+    ("long-radiotext", 1024, 614, false, State::LongRadioText),
+    ("no-callsign", 1024, 614, false, State::NoCallsign),
+    ("stereo-unknown", 1024, 614, false, State::StereoUnknown),
+    ("long-genre", 1024, 614, false, State::LongGenre),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -46,6 +53,21 @@ enum State {
     /// A strong carrier arriving in pieces: dotted outer arcs, mono, no RDS.
     WeakAndLossy,
     NoPresets,
+    /// Tuned TO a preset: the enlarged tile, its blue border and underline, and
+    /// the neighbours the peek cards then show.
+    Tuned,
+    /// Dial outside 87.5-108.0.
+    OutOfBand,
+    /// RadioText past the ~46-character marquee threshold.
+    LongRadioText,
+    /// The built-in tuner with no GPS lock yet: nothing resolves the call sign, so
+    /// the frequency stands as the identity — never an inaccurate "Tuning...".
+    NoCallsign,
+    /// Nothing has reported yet, so the pill is EMPTY rather than asserting MONO.
+    StereoUnknown,
+    /// A genre string past the 200dp cap, which must elide rather than push the
+    /// controls or collapse the line.
+    LongGenre,
 }
 
 struct Headless {
@@ -116,6 +138,17 @@ fn apply(ui: &carnyx::AppWindow, state: State) {
             ui.set_has_prev(false);
             ui.set_has_next(false);
         }
+        State::Tuned => ui.invoke_select_preset(2),
+        State::OutOfBand => {
+            ui.set_in_band(false);
+            ui.set_freq_label("76.5".into());
+        }
+        State::LongRadioText => ui.set_radio_text(
+            "NOW PLAYING ON HOT 105.1 — Harry Styles — As It Was — up next Dua Lipa".into(),
+        ),
+        State::NoCallsign => ui.set_ident("".into()),
+        State::StereoUnknown => ui.set_stereo_known(false),
+        State::LongGenre => ui.set_pty("Adult Album Alternative and Classic Rock".into()),
     }
 }
 

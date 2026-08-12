@@ -23,6 +23,15 @@ export component RadioTextStrip inherits Rectangle {
 
     // One linear pass per loop; x is derived so a text change re-derives the
     // travel instead of stranding the ticker at a stale offset.
+    //
+    // DELIBERATE DEVIATION, the only one in this file. The travel below is
+    // textWidth + 100, so the second copy lands exactly where the first began.
+    // CarFM's RadioTextStrip animates to -trackWidth/2 with trackWidth measured off
+    // a row whose `columnGap: 100` puts the gap only BETWEEN the copies — so it
+    // travels textWidth + 50 and hitches 50dp once every 16s. Its own comment says
+    // "looping seamlessly (the second copy lands where the first began)", so this
+    // matches the stated intent rather than the shipped arithmetic. Flagged, not
+    // silent: if the hitch is wanted, the travel is the one number to change.
     property <float> phase: 0;
     init => { self.phase = 1; }
     animate phase { duration: 16s; easing: linear; iteration-count: -1; }

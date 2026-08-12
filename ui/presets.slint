@@ -51,6 +51,13 @@ component PlateBox inherits Rectangle {
         // Containment invariant (§4.5): fully visible, never cropped, never
         // overflowing, centred. The plate owns the geometry; the image scales to
         // the largest size that fits inside it.
+        //
+        // LIMIT OF THE §4.7 DEAD FACE: CarFM desaturates with a filter over the
+        // rendered subtree, so a logo greys out with everything else. Here the
+        // desaturation is done in the palette, which cannot reach an image — once
+        // real logo assets exist, a released-audio face will show them in full
+        // colour. Fix it by desaturating the asset at load and keeping both
+        // variants, not by reaching for a filter Slint does not have.
         image-fit: contain;
         width: parent.width;
         height: parent.height;
@@ -177,7 +184,10 @@ export component PeekCard inherits Rectangle {
     width: root.card-w * root.scale;
     height: root.card-w * root.scale;
     opacity: touch.pressed ? 0.35 : 0.6;
-    border-width: 1px;
+    // CarFM scales the whole card with a transform, so its 1dp border comes out at
+    // 0.88 too. Authoring the size directly means the border has to be scaled by
+    // hand or the peek reads a touch heavier than the real one.
+    border-width: 1px * root.scale;
     border-color: Pal.border;
     border-radius: Metrics.s(24) * root.scale;
     background: Pal.panel;
@@ -279,6 +289,19 @@ export component PresetsBand inherits Rectangle {
     property <bool> strip-grow: root.active-index >= 0 && !root.reordering;
     property <length> strip-delta: root.strip-grow ? (root.strip-w-on - root.strip-w-off) : 0px;
 
+    // Content extent, computed from the tile arithmetic rather than read back off
+    // the Flickable: the rail's HEIGHT depends on this, so reading rail.width here
+    // would close a layout loop.
+    property <length> content-w: Metrics.two-rows
+        ? Math.ceil(root.n / 2) * (Metrics.s(150) + root.gap) - root.gap
+        : root.n * (root.strip-w-off + root.gap) - root.gap + root.strip-delta;
+    property <bool> overflowing: root.n > 0 && root.content-w > root.width - root.side-chrome;
+    // Nav buttons plus the nearby disc plus the layout's four gaps, so `overflowing`
+    // can be decided before the rail has been given a width.
+    property <length> side-chrome:
+        (root.show-nav ? 2 * (Math.max(48px, Metrics.s(56)) + 10px) : 0px)
+        + (root.show-nearby ? Metrics.s(92) + 10px : 0px);
+
     property <length> tall-tile-w: (rail.width - 2 * root.grid-gap - 8px) / 3;
     property <length> tall-tile-h: Metrics.s(128);
     // Two rows plus the row gap inside the rail's own 2px padding.
@@ -304,14 +327,16 @@ export component PresetsBand inherits Rectangle {
             rail := Flickable {
                 x: 0; y: 0;
                 width: parent.width;
-                // The horizontal tracks reserve the scrollbar's 6px + 6px margin.
-                height: Metrics.tall ? parent.height : parent.height - 12px;
+                // The scrollbar's 6px track + 6px margin. The STRIP always reserves
+                // it — CarFM draws an empty track there even with nothing to scroll
+                // — but the two-row grid renders no track at all when it fits, and
+                // its rows are 6dp taller as a result.
+                height: Metrics.tall ? parent.height
+                    : (Metrics.two-rows && !root.overflowing) ? parent.height
+                    : parent.height - 12px;
                 interactive: !root.reordering;
 
-                viewport-width: Metrics.tall ? self.width
-                    : Metrics.two-rows
-                        ? Math.ceil(root.n / 2) * (Metrics.s(150) + root.gap) - root.gap
-                        : root.n * (root.strip-w-off + root.gap) - root.gap + root.strip-delta;
+                viewport-width: Metrics.tall ? self.width : root.content-w;
                 viewport-height: Metrics.tall
                     ? Math.ceil(root.n / 3) * (root.tall-tile-h + root.grid-gap) - root.grid-gap + 6px
                     : self.height;
