@@ -1,0 +1,26 @@
+// Shapes the Rust side fills in.
+//
+// Anything that is a DECISION rather than a layout — which four call letters to
+// show, which brand colour a station hashes to, what the level readout reads —
+// is computed in Rust and arrives here as a finished value. Slint draws; it does
+// not decide.
+
+/// One preset, as the band and the peek cards need it.
+export struct Preset {
+    /// Stored preset name, used for accessibility and as the logo lookup key.
+    name: string,
+    /// The 4 core call letters — `-FM`/`-AM` and hyphens already stripped
+    /// (CarFM `cleanCall`). This is what a no-logo tile prints inside its box.
+    call: string,
+    freq-mhz: float,
+    /// The dial frequency already formatted to one decimal by Rust. Slint's
+    /// float-to-string has no precision control, and "88.70000000000001" on a
+    /// preset tile is not a thing that can be allowed to happen.
+    freq-label: string,
+    /// Station colour for the no-logo box, hashed from the callsign in Rust
+    /// (CarFM `brandColor`).
+    brand: color,
+    /// A real logo asset. Empty unless `has-logo`.
+    logo: image,
+    has-logo: bool,
+}

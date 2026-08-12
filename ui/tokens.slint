@@ -1,0 +1,150 @@
+// Design tokens — the CarFM face, verbatim.
+//
+// Every value here is copied from CarFM's `src/components/carfm/tokens.ts` and
+// the token ramp in `CarFmFace.tsx`. The shipped app is the reference, NOT the
+// design bundle (docs/design/handoff, v1.10.0): the bundle predates the app on
+// several values — `amberFill` is 0.12/0.15 there and 0.08/0.10 in the app — and
+// the brief is a face identical to the one currently on the head unit.
+//
+// Sizes are logical pixels, which Slint maps to Android dp, so the spec's dp
+// numbers transfer 1:1.
+
+// Atkinson Hyperlegible (400/700) — an accessibility face chosen for
+// glance-legibility in a moving car (ANDROID §3). Importing the .ttf here
+// registers the family with the runtime; `font-weight: 700` picks the bold cut.
+import "fonts/AtkinsonHyperlegible-Regular.ttf";
+import "fonts/AtkinsonHyperlegible-Bold.ttf";
+
+export global Font {
+    out property <string> face: "Atkinson Hyperlegible";
+    out property <int> regular: 400;
+    out property <int> bold: 700;
+}
+
+export global Band {
+    out property <float> min-mhz: 87.5;
+    out property <float> max-mhz: 108.0;
+}
+
+// The palette. `dark` selects the theme; `off` is §4.7 — audio priority released,
+// where the whole face desaturates. React Native gets that from a `grayscale(1)`
+// filter, which Slint has no equivalent for, so it is done here instead: every
+// token passes through `flat()`, which collapses a colour to its Rec.601 luma —
+// the same transform the CSS/RN filter applies.
+export global Pal {
+    in property <bool> dark: false;
+    in property <bool> off: false;
+
+    pure public function flat(c: color) -> color {
+        return Pal.off
+            ? Colors.rgb(c.red * 0.299 + c.green * 0.587 + c.blue * 0.114,
+                         c.red * 0.299 + c.green * 0.587 + c.blue * 0.114,
+                         c.red * 0.299 + c.green * 0.587 + c.blue * 0.114)
+            : c;
+    }
+    // Alpha-carrying tokens: `flat` would drop the alpha (Colors.rgb is opaque),
+    // so they desaturate through the same luma then take their alpha back.
+    pure public function flat-a(c: color, a: float) -> color {
+        return Pal.flat(c).with-alpha(a);
+    }
+
+    out property <color> bg:          Pal.flat(Pal.dark ? #161E29 : #EEF1F5);
+    out property <color> panel:       Pal.flat(Pal.dark ? #212B38 : #FFFFFF);
+    out property <color> raised:      Pal.flat(Pal.dark ? #2A3644 : #F5F7FA);
+    out property <color> text:        Pal.flat(Pal.dark ? #E9EEF4 : #1B222C);
+    out property <color> dim:         Pal.flat(Pal.dark ? #8B97A7 : #67717F);
+    // Frequency amber is a FIXED safety colour (ANDROID §3) — never themed, never
+    // part of the accent system. It differs by theme only for contrast.
+    out property <color> amber:       Pal.flat(Pal.dark ? #FFB833 : #C9760A);
+    out property <color> blue:        Pal.flat(Pal.dark ? #4A9EFF : #2E86FF);
+    out property <color> border:      Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.13);
+    out property <color> blue-fill:   Pal.flat-a(Pal.dark ? #4A9EFF : #2E86FF, Pal.dark ? 0.18 : 0.12);
+    out property <color> amber-fill:  Pal.flat-a(Pal.dark ? #FFB833 : #C9760A, Pal.dark ? 0.10 : 0.08);
+    out property <color> backdrop:    Pal.flat(Pal.dark ? #0C1218 : #DCE0E6);
+    out property <color> meter-empty: Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.10);
+    out property <color> scroll-thumb: Pal.flat-a(#808690, 0.6);
+    out property <color> nearby-line:  Pal.flat(Pal.dark ? #E9EEF4 : #111111);
+    out property <color> nearby-disc:  Pal.flat(Pal.dark ? #2A3644 : #FFFFFF);
+    out property <color> nearby-glass: Pal.flat(Pal.dark ? #2A3644 : #DCE7F5);
+
+    // §4.7 veils: a light grey one over the hero card, a darker one over the rest.
+    out property <color> hero-veil:   Pal.dark ? #0000006B : #48526042;
+    out property <color> screen-veil: Pal.dark ? #00000080 : #18202E57;
+    // The power button is the ONE element that keeps its colour when the face is
+    // dead, so it is deliberately outside `flat()`.
+    out property <color> power-on: #FFAE1A;
+}
+
+// Layout tracks and the token ramp (ANDROID §0/§2, CarFmFace's `L` memo).
+//
+// The face measures its own container and re-derives the spec's dp for the space
+// actually available. This is NOT scale-to-fit: the layout below reflows per
+// track, and only the token VALUES ramp.
+export global Metrics {
+    in property <length> avail-w: 1024px;
+    in property <length> avail-h: 614px;
+
+    out property <float> w: Metrics.avail-w / 1px;
+    out property <float> h: Metrics.avail-h / 1px;
+
+    // Width-class breakpoint 600dp, per WindowSizeClass Compact.
+    out property <bool> tall: Metrics.w < 600;
+    // 500, not 480: the landscape reference surface is 1080x486, so h<480 could
+    // never fire on the very surface the branch is sized for.
+    out property <bool> landscape: !Metrics.tall && Metrics.h < 500;
+    out property <bool> two-rows: !Metrics.tall && !Metrics.landscape && (Metrics.w / Metrics.h) < 1.4;
+
+    out property <float> k: Metrics.tall
+        ? Math.min(1, Math.max(0.68, Metrics.w / 486))
+        : Math.min(1, Math.max(0.68, Metrics.landscape
+            ? Math.min(Metrics.w / 1080, Metrics.h / 486)
+            : Metrics.two-rows
+                ? Math.min(Metrics.w / 900, Metrics.h / 810)
+                : Math.min(Metrics.w / 1024, Metrics.h / 614)));
+
+    pure public function s(v: float) -> length { return Math.round(v * Metrics.k) * 1px; }
+    pure public function sf(v: float) -> float { return Math.round(v * Metrics.k); }
+
+    out property <length> pad-h: Metrics.s(Metrics.tall ? 16 : 24);
+    out property <length> pad-v: Metrics.s(Metrics.tall ? 14 : 18);
+    out property <length> gap: Metrics.s(Metrics.tall ? 10 : 12);
+
+    out property <length> freq-size: Metrics.s(Metrics.tall ? 64 : Metrics.landscape ? 56 : 78);
+    out property <length> call-size: Metrics.s(Metrics.tall ? 62 : Metrics.landscape ? 60 : 94);
+    out property <length> star: Metrics.s(Metrics.tall ? 58 : Metrics.landscape ? 48 : 56);
+
+    // The strip is 64 tall on every track; the ZONE around it is what varies.
+    out property <length> rt-height: Metrics.s(64);
+    out property <length> rt-zone-h: Metrics.s(Metrics.tall ? 60 : Metrics.landscape ? 50 : Metrics.two-rows ? 56 : 76);
+    out property <length> rt-font: Metrics.s(Metrics.landscape ? 26 : 30);
+
+    // SIGNAL-METER.md's rendered sizes. The glyph swallowed the level number that
+    // used to sit beside it, so the wide cluster is narrower than it was.
+    out property <length> signal-icon: Metrics.s(Metrics.tall ? 74.75 : 54.6);
+    out property <length> signal-num: Math.max(12px, Metrics.s(Metrics.tall ? 19 : 15));
+    out property <length> signal-num-top: Metrics.s(Metrics.tall ? 32.1 : 23);
+
+    out property <length> stereo-font: Math.max(12px, Metrics.s(Metrics.tall ? 18 : 15));
+    out property <length> stereo-wave-w: Metrics.s(Metrics.tall ? 28 : 20);
+    out property <length> stereo-wave-h: Metrics.s(Metrics.tall ? 40 : 28);
+    // Heights are minimums so a large system font scale grows the pill, not clips it.
+    out property <length> stereo-h: Metrics.s(Metrics.tall ? 46 : 36);
+    out property <length> stereo-pad-h: Metrics.s(Metrics.tall ? 18 : 14);
+    out property <length> stereo-radius: Metrics.tall ? 12px : 10px;
+    out property <length> stereo-min-w: Metrics.s(Metrics.tall ? 196 : 158);
+
+    // Small status type floors at legibility, not proportion (ANDROID §10).
+    out property <length> pty-font: Math.max(12px, Metrics.s(Metrics.tall ? 19 : 15));
+    out property <length> tell-font: Math.max(10px, Metrics.s(Metrics.tall ? 14 : 11));
+
+    out property <length> band-height: Metrics.s(Metrics.two-rows ? 250 : Metrics.landscape ? 104 : 140);
+
+    // Wide/two-row/landscape hero is a card of clamped width: clamp(470, 62%, 720).
+    out property <length> hero-card-w: Math.max(Metrics.s(470), Math.min(Metrics.s(720), Math.round(Metrics.w * 0.62) * 1px));
+    // Tall/portrait: a narrower card (82%) flanked by smaller peek cards.
+    out property <length> tall-hero-w: Math.min(Metrics.s(560), Math.round(Metrics.w * 0.82) * 1px);
+    // LOGO-SIZING §4: peek card = 20% of surface width, capped at 206, every track.
+    out property <length> peek-w: Math.min(Metrics.s(206), Math.round(Metrics.w * 0.2) * 1px);
+    // The peek tucks UNDER the hero card by this much.
+    out property <length> peek-overlap: Metrics.s(Metrics.tall ? 46 : 72);
+}

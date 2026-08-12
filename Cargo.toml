@@ -25,3 +25,34 @@ slint-build = "1.17"
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.17", features = ["backend-android-activity-06"] }
+
+# Screenshots. There is no desktop app, but the face still has to be LOOKED at
+# without a car: `cargo run --example shot` renders every layout track headless
+# and writes PNGs, which is what the design references get diffed against.
+[dev-dependencies]
+# The software renderer, driven directly — the testing backend's adapter has no
+# take_snapshot, so the example builds its own minimal platform instead.
+slint = { version = "1.17", features = ["renderer-software"] }
+png = "0.18"
+
+# Android packaging for cargo-apk. UNVERIFIED IN CI: this container has no SDK,
+# no NDK and no cargo-apk, so these keys have never been parsed by the tool that
+# reads them — check them on the first real device build.
+[package.metadata.android]
+package = "com.ninthfreak.carnyx"
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 23
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "Carnyx"
+# The face is the whole screen; the head unit has no use for a title bar.
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+# DUDU OS resizes the app into vertical thirds, and the face reflows per surface
+# rather than restarting — so it handles these itself.
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density"
+launch_mode = "singleTask"

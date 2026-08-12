@@ -1,32 +1,29 @@
-//! Carnyx — radio for a NOWADA Android head unit.
+//! Carnyx — radio for a NOWADA (NWD) Android head unit.
 //!
-//! The UI is Slint; the logic is Rust. There is no JavaScript layer and no
-//! desktop binary: the target is the head unit, and the host build exists only
-//! so the code can be compiled and tested off-device.
+//! The interface is Slint and the logic is Rust. There is no desktop
+//! application: `cargo build` on the host is a compile check, and the screenshot
+//! example is how the face is inspected without a car.
 
 slint::include_modules!();
 
-/// Build the window and run the event loop. Shared by every entry point, so the
-/// Android path and any future one cannot drift apart.
-pub fn run() -> Result<(), slint::PlatformError> {
+pub mod demo;
+pub mod station;
+
+/// Build the window and fill it with placeholder dial state.
+pub fn build() -> Result<AppWindow, slint::PlatformError> {
     let ui = AppWindow::new()?;
-
-    // Placeholders. The tuner replaces these — the NWD built-in first, then an
-    // SDR backend behind the same interface.
-    ui.set_frequency("101.5".into());
-    ui.set_station("".into());
-    ui.set_radio_text("".into());
-    ui.set_stereo(false);
-
-    ui.run()
+    demo::install(&ui);
+    Ok(ui)
 }
 
-/// Android entry point. `android-activity` calls this instead of `main`, so the
-/// symbol name and the `no_mangle` are load-bearing — a rename is an app that
-/// starts and immediately does nothing.
+pub fn run() -> Result<(), slint::PlatformError> {
+    build()?.run()
+}
+
+/// Android entry point. `cargo-apk` calls this; there is no `main`.
 #[cfg(target_os = "android")]
 #[no_mangle]
 fn android_main(app: slint::android::AndroidApp) {
-    slint::android::init(app).expect("Slint Android backend failed to start");
-    run().expect("event loop failed");
+    slint::android::init(app).unwrap();
+    run().unwrap();
 }

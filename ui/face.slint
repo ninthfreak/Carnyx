@@ -1,0 +1,252 @@
+// The radio face: a vertical stack of three regions — status bar, hero, preset
+// band — laid out directly at the real available dp.
+//
+// ANDROID §0 is the rule this file exists to obey: no design canvas, no uniform
+// scale. The tracks reflow per surface and the token ramp in `Metrics` re-derives
+// the spec's dp for the space actually available.
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { Preset } from "types.slint";
+import { StatusBar } from "status-bar.slint";
+import { HeroRow, RadioTextStrip } from "hero.slint";
+import { PresetsBand } from "presets.slint";
+
+export component Face inherits Rectangle {
+    // ── Dial and identity ──
+    in property <string> ident;
+    in property <string> freq-label: "—";
+    in property <image> logo;
+    in property <bool> has-logo: false;
+    in property <bool> show-call: true;
+    in property <bool> show-freq: true;
+    in property <bool> saved: false;
+    in property <bool> in-band: true;
+    in property <string> radio-text;
+
+    // ── Status ──
+    in property <int> full-pairs: 0;
+    in property <bool> half: false;
+    in property <float> dot-opacity: 1.0;
+    in property <int> dotted-arcs: 0;
+    in property <string> level-text: "—";
+    in property <bool> stereo-known: false;
+    in property <bool> stereo: false;
+    in property <bool> rds: false;
+    in property <bool> tp: false;
+    in property <bool> ta: false;
+    in property <bool> af: false;
+    in property <string> pty;
+    in property <bool> tuner-error: false;
+    in property <bool> gps-fix: false;
+    in property <bool> in-motion: false;
+
+    // ── Presets ──
+    in property <[Preset]> presets;
+    in property <int> active-index: -1;
+    in property <Preset> prev-preset;
+    in property <Preset> next-preset;
+    in property <bool> has-prev: false;
+    in property <bool> has-next: false;
+
+    // ── Modes ──
+    /// Whether this app holds FM audio priority on the shared bus (§4.7). NOT a
+    /// mute: false means priority is released to another source and the face goes
+    /// flat and dead.
+    in property <bool> audio-active: true;
+    in property <bool> scanning: false;
+    in property <bool> reordering: false;
+
+    callback tune-here();
+    callback toggle-save();
+    callback open-settings();
+    callback open-nearby();
+    callback open-numpad();
+    callback claim-audio();
+    callback release-audio();
+    callback select-preset(int);
+    callback step-preset(int);
+    callback done-reordering();
+
+    property <bool> dead: !root.audio-active;
+
+    // The face measures its own container so it composes correctly inside a DUDU
+    // OS vertical third as well as full-screen.
+    init => {
+        Metrics.avail-w = root.width;
+        Metrics.avail-h = root.height;
+        Pal.off = root.dead;
+    }
+    changed width => { Metrics.avail-w = root.width; }
+    changed height => { Metrics.avail-h = root.height; }
+    changed dead => { Pal.off = root.dead; }
+
+    background: Pal.bg;
+
+    // Tall track: the preset band sizes to its 3-column grid content but is capped
+    // at ~42% of the screen. A definite computed height keeps the vertical grid
+    // scrollable while still letting the hero reclaim the freed space when there
+    // are few presets, which is what kills the dead void on a real phone portrait.
+    property <length> tall-band: Math.min(
+        Math.round(Metrics.h * 0.42) * 1px,
+        Math.max(Metrics.s(96),
+            root.presets.length > 0
+                ? Math.ceil(root.presets.length / 3) * (Metrics.s(128) + Metrics.s(12))
+                    - Metrics.s(12) + 8px
+                : 0px));
+    property <length> band-h: Metrics.tall ? root.tall-band : Metrics.band-height;
+
+    VerticalLayout {
+        padding-left: Metrics.pad-h;
+        padding-right: Metrics.pad-h;
+        padding-top: Metrics.pad-v;
+        padding-bottom: Metrics.pad-v;
+        spacing: Metrics.gap;
+
+        StatusBar {
+            vertical-stretch: 0;
+            // §4.7: with priority released the indicators go to their off states
+            // — no bars, no level, an empty pill, dim tells, no genre. The face
+            // enforces that here so no caller has to remember to.
+            full-pairs: root.dead ? 0 : root.full-pairs;
+            half: root.dead ? false : root.half;
+            dot-opacity: root.dead ? 0 : root.dot-opacity;
+            dotted-arcs: root.dead ? 0 : root.dotted-arcs;
+            level-text: root.dead ? "—" : root.level-text;
+            stereo-known: root.stereo-known;
+            stereo: root.stereo;
+            rds: root.rds;
+            tp: root.tp;
+            ta: root.ta;
+            af: root.af;
+            pty: root.pty;
+            in-band: root.in-band;
+            tuner-error: root.tuner-error;
+            dead: root.dead;
+            gps-fix: root.gps-fix;
+            in-motion: root.in-motion;
+            reordering: root.reordering;
+            open-settings => { root.open-settings(); }
+            open-nearby => { root.open-nearby(); }
+            done-reordering => { root.done-reordering(); }
+        }
+
+        // Space reserved for the hero band. The band itself is drawn last, over
+        // the §4.7 screen veil, because the hero rises above that veil and carries
+        // its own lighter one.
+        hero-slot := Rectangle { vertical-stretch: 1; }
+
+        PresetsBand {
+            vertical-stretch: 0;
+            band-height: root.band-h;
+            presets: root.presets;
+            active-index: root.active-index;
+            reordering: root.reordering;
+            show-nav: !Metrics.tall;
+            show-nearby: !Metrics.tall;
+            select(i) => { root.select-preset(i); }
+            open-nearby => { root.open-nearby(); }
+            done-reordering => { root.done-reordering(); }
+        }
+    }
+
+    // §4.7: a darker veil over the rest of the face. The hero band sits above it.
+    if root.dead: Rectangle {
+        background: Pal.screen-veil;
+    }
+
+    // ── Hero band ──
+    Rectangle {
+        x: hero-slot.x;
+        y: hero-slot.y;
+        width: hero-slot.width;
+        height: hero-slot.height;
+
+        // Wide: the hero row takes the leftover height, with the RadioText zone
+        // pinned beneath it.
+        if !Metrics.tall: VerticalLayout {
+            spacing: 16px;
+            HeroRow {
+                vertical-stretch: 1;
+                card-w: Metrics.hero-card-w;
+                card-fill: true;
+                ident: root.ident;
+                freq-label: root.freq-label;
+                logo: root.logo;
+                has-logo: root.has-logo;
+                show-call: root.show-call;
+                show-freq: root.show-freq;
+                saved: root.saved;
+                dead: root.dead;
+                scanning: root.scanning;
+                has-prev: root.has-prev;
+                has-next: root.has-next;
+                prev-preset: root.prev-preset;
+                next-preset: root.next-preset;
+                step(d) => { root.step-preset(d); }
+                toggle-save => { root.toggle-save(); }
+                open-numpad => { root.open-numpad(); }
+                toggle-audio => { if (root.dead) { root.claim-audio(); } else { root.release-audio(); } }
+            }
+            Rectangle {
+                vertical-stretch: 0;
+                height: Metrics.rt-zone-h;
+                RadioTextStrip {
+                    // Centred in its zone: the strip is 64 tall on every track
+                    // and the ZONE around it is what varies.
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: Math.min(parent.width, Metrics.s(880));
+                    text: root.radio-text;
+                    opacity: root.dead ? 0 : 1;
+                }
+            }
+        }
+
+        // Tall: the leftover height is DISTRIBUTED, not pooled. Three equal
+        // flexible gaps — above the hero, hero to RadioText, RadioText to the
+        // preset shelf — put the hero upper-middle and centre the strip in the
+        // space beneath it, instead of pooling all the slack at the bottom.
+        if Metrics.tall: VerticalLayout {
+            padding-top: 14px;
+            spacing: 0px;
+            Rectangle { vertical-stretch: 1; }
+            HeroRow {
+                vertical-stretch: 0;
+                card-w: Metrics.tall-hero-w;
+                card-fill: false;
+                ident: root.ident;
+                freq-label: root.freq-label;
+                logo: root.logo;
+                has-logo: root.has-logo;
+                show-call: root.show-call;
+                show-freq: root.show-freq;
+                saved: root.saved;
+                dead: root.dead;
+                scanning: root.scanning;
+                has-prev: root.has-prev;
+                has-next: root.has-next;
+                prev-preset: root.prev-preset;
+                next-preset: root.next-preset;
+                step(d) => { root.step-preset(d); }
+                toggle-save => { root.toggle-save(); }
+                open-numpad => { root.open-numpad(); }
+                toggle-audio => { if (root.dead) { root.claim-audio(); } else { root.release-audio(); } }
+            }
+            Rectangle { vertical-stretch: 1; }
+            Rectangle {
+                vertical-stretch: 0;
+                height: Metrics.rt-zone-h;
+                RadioTextStrip {
+                    // Centred in its zone: the strip is 64 tall on every track
+                    // and the ZONE around it is what varies.
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: Math.min(parent.width, Metrics.s(880));
+                    text: root.radio-text;
+                    opacity: root.dead ? 0 : 1;
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

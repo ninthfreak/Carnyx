@@ -1,53 +1,96 @@
-// The face. Nothing here is final — this is the shell the real design goes into.
-//
-// Laid out for a head unit first: large touch targets, high contrast, readable
-// at a glance while driving. The CarFM design work (docs/design in the CarFM
-// tree) is the reference for what this becomes.
+import { Pal, Metrics } from "tokens.slint";
+import { Preset } from "types.slint";
+import { Face } from "face.slint";
+
+export { Pal, Metrics, Preset }
 
 export component AppWindow inherits Window {
-    title: "Carnyx";
-    background: #0d0f12;
-    preferred-width: 1024px;
-    preferred-height: 600px;
-
-    // Fed by Rust. Placeholders until the tuner lands.
-    in property <string> frequency: "--.-";
-    in property <string> station: "";
-    in property <string> radio-text: "";
+    in property <string> ident;
+    in property <string> freq-label: "—";
+    in property <bool> saved: false;
+    in property <bool> in-band: true;
+    in property <string> radio-text;
+    in property <int> full-pairs: 0;
+    in property <bool> half: false;
+    in property <float> dot-opacity: 1.0;
+    in property <int> dotted-arcs: 0;
+    in property <string> level-text: "—";
+    in property <bool> stereo-known: false;
     in property <bool> stereo: false;
+    in property <bool> rds: false;
+    in property <bool> tp: false;
+    in property <bool> ta: false;
+    in property <bool> af: false;
+    in property <string> pty;
+    in property <bool> tuner-error: false;
+    in property <bool> gps-fix: false;
+    in property <bool> in-motion: false;
+    in property <[Preset]> presets;
+    in property <int> active-index: -1;
+    in property <Preset> prev-preset;
+    in property <Preset> next-preset;
+    in property <bool> has-prev: false;
+    in property <bool> has-next: false;
+    in property <bool> audio-active: true;
+    in property <bool> scanning: false;
+    in property <bool> reordering: false;
 
-    VerticalLayout {
-        padding: 32px;
-        spacing: 16px;
-        alignment: center;
+    callback toggle-save();
+    callback open-settings();
+    callback open-nearby();
+    callback open-numpad();
+    callback claim-audio();
+    callback release-audio();
+    callback select-preset(int);
+    callback step-preset(int);
+    callback done-reordering();
 
-        Text {
-            text: root.frequency;
-            color: #f2f4f7;
-            font-size: 96px;
-            horizontal-alignment: center;
-        }
+    title: "Carnyx";
+    background: Pal.bg;
+    default-font-family: "Atkinson Hyperlegible";
+    preferred-width: 1024px;
+    preferred-height: 614px;
 
-        Text {
-            text: root.station == "" ? "No station" : root.station;
-            color: root.station == "" ? #5c6470 : #ffb833;
-            font-size: 32px;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: root.radio-text;
-            color: #98a2b3;
-            font-size: 20px;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Text {
-            text: root.stereo ? "STEREO" : "MONO";
-            color: root.stereo ? #4a9eff : #5c6470;
-            font-size: 16px;
-            horizontal-alignment: center;
-        }
+    Face {
+        width: root.width;
+        height: root.height;
+        ident: root.ident;
+        freq-label: root.freq-label;
+        saved: root.saved;
+        in-band: root.in-band;
+        radio-text: root.radio-text;
+        full-pairs: root.full-pairs;
+        half: root.half;
+        dot-opacity: root.dot-opacity;
+        dotted-arcs: root.dotted-arcs;
+        level-text: root.level-text;
+        stereo-known: root.stereo-known;
+        stereo: root.stereo;
+        rds: root.rds;
+        tp: root.tp;
+        ta: root.ta;
+        af: root.af;
+        pty: root.pty;
+        tuner-error: root.tuner-error;
+        gps-fix: root.gps-fix;
+        in-motion: root.in-motion;
+        presets: root.presets;
+        active-index: root.active-index;
+        prev-preset: root.prev-preset;
+        next-preset: root.next-preset;
+        has-prev: root.has-prev;
+        has-next: root.has-next;
+        audio-active: root.audio-active;
+        scanning: root.scanning;
+        reordering: root.reordering;
+        toggle-save => { root.toggle-save(); }
+        open-settings => { root.open-settings(); }
+        open-nearby => { root.open-nearby(); }
+        open-numpad => { root.open-numpad(); }
+        claim-audio => { root.claim-audio(); }
+        release-audio => { root.release-audio(); }
+        select-preset(i) => { root.select-preset(i); }
+        step-preset(d) => { root.step-preset(d); }
+        done-reordering => { root.done-reordering(); }
     }
 }

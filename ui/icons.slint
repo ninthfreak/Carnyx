@@ -1,0 +1,354 @@
+// The face's icons, redrawn as Slint paths from CarFM's
+// `src/components/carfm/icons.tsx` — which is itself the design handoff's inline
+// SVG. There are no external icon assets anywhere in this design.
+//
+// Three of these needed geometry that JS built at runtime and Slint cannot (no
+// loops, no trig, no stroke-dasharray): the signal glyph's dotted lossy arcs, the
+// nearby magnifier's barrel-warped tower, and the GPS satellite's -28 degree
+// rotation. Those command strings are generated from the SAME numbers by
+// `tools/gen-icon-paths.py` and pasted in below.
+
+import { Pal } from "tokens.slint";
+
+// Slint's Path fits its geometry into (element size - stroke width) and then
+// nudges it back by half a stroke, and it does NOT scale stroke width with the
+// viewbox — both differ from SVG. This wrapper cancels the difference: it takes
+// the box the icon should occupy, scales the stroke by the viewbox ratio the way
+// SVG would, and grows/offsets the element so the geometry lands exactly where
+// the viewbox says.
+component VPath inherits Path {
+    in property <length> box-w;
+    in property <length> box-h;
+    in property <float> vbw;
+    in property <float> vbh;
+    /// Stroke width in VIEWBOX units, as written in the SVG.
+    in property <float> raw-stroke: 0;
+    /// Extra offset in the parent's coordinates (for baked-in group transforms).
+    in property <length> ox: 0px;
+    in property <length> oy: 0px;
+
+    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
+    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
+
+    viewbox-width: root.vbw;
+    viewbox-height: root.vbh;
+    stroke-width: root.raw-stroke * root.sc * 1px;
+    x: root.ox - self.stroke-width / 2;
+    y: root.oy - self.stroke-width / 2;
+    width: root.box-w + self.stroke-width;
+    height: root.box-h + self.stroke-width;
+}
+
+// ── Signal strength (SIGNAL-METER.md v1.14) ─────────────────────────────────
+//
+// A centre dot with four elliptical arc pairs radiating left and right. NOT a
+// tower and not bars — a point source, bilaterally symmetric.
+//
+// Three independent things are drawn: `full-pairs` at full strength innermost
+// outward; a HALF-STEP ring (the next pair up at 45%) once the level passes the
+// midpoint of its band, which is what gives a five-element glyph nine states; and
+// a ramped centre dot, so levels below the seek floor are told apart instead of
+// rendering identically.
+//
+// `dotted-arcs` converts that many of the OUTERMOST DRAWN arcs to dots, counting
+// the half-step ring as drawn — reception loss, spreading inward from the leading
+// arc. Everything always renders; unlit elements take `off`, so the zero state is
+// the full glyph gone dim rather than a vanishing icon.
+export component SignalWaves {
+    in property <length> size: 54.6px;
+    in property <int> full-pairs: 0;
+    in property <bool> half: false;
+    in property <float> dot-opacity: 1.0;
+    in property <int> dotted-arcs: 0;
+    in property <color> on;
+    in property <color> off;
+
+    property <int> drawn: root.full-pairs + (root.half && root.full-pairs < 4 ? 1 : 0);
+    property <int> dotted: Math.max(0, Math.min(root.drawn, root.dotted-arcs));
+
+    pure function lit(i: int) -> bool { return i < root.full-pairs || (root.half && i == root.full-pairs); }
+    pure function ghost(i: int) -> bool { return root.half && i == root.full-pairs && i < 4; }
+    pure function dots(i: int) -> bool { return root.lit(i) && i >= root.drawn - root.dotted; }
+    pure function ink(i: int) -> color { return root.lit(i) ? root.on : root.off; }
+    // HALF_STEP_OPACITY, services/nwdSignalLevel.ts
+    pure function fade(i: int) -> float { return root.ghost(i) ? 0.45 : 1.0; }
+
+    width: root.size;
+    height: root.size * 32 / 58;
+
+    // The dot carries the sub-floor ramp. At zero it takes the off token rather
+    // than vanishing, which is the difference between "no station" and "the icon
+    // is missing".
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
+        commands: "M26.4 16 A2.6 2.6 0 1 0 31.6 16 A2.6 2.6 0 1 0 26.4 16 Z";
+        fill: root.dot-opacity > 0 ? root.on : root.off;
+        opacity: root.dot-opacity > 0 ? root.dot-opacity : 1;
+    }
+
+    // Pair 0 (innermost) → 3 (outermost). Each has a solid form and a dotted one;
+    // the dots are round caps of the full 2.2 stroke diameter, so a lossy arc keeps
+    // its weight instead of thinning to an outline.
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
+        visible: !root.dots(0);
+        opacity: root.fade(0);
+        commands: "M23.8 11.6 A 6.5 5.5 0 0 0 23.8 20.4 M34.2 11.6 A 6.5 5.5 0 0 1 34.2 20.4";
+        stroke: root.ink(0); stroke-line-cap: round;
+    }
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
+        visible: root.dots(0);
+        opacity: root.fade(0);
+        commands: "M22.70 11.60 A1.1 1.1 0 1 0 24.90 11.60 A1.1 1.1 0 1 0 22.70 11.60 Z M20.13 15.47 A1.1 1.1 0 1 0 22.33 15.47 A1.1 1.1 0 1 0 20.13 15.47 Z M21.85 19.75 A1.1 1.1 0 1 0 24.05 19.75 A1.1 1.1 0 1 0 21.85 19.75 Z M33.10 11.60 A1.1 1.1 0 1 0 35.30 11.60 A1.1 1.1 0 1 0 33.10 11.60 Z M35.67 15.47 A1.1 1.1 0 1 0 37.87 15.47 A1.1 1.1 0 1 0 35.67 15.47 Z M33.95 19.75 A1.1 1.1 0 1 0 36.15 19.75 A1.1 1.1 0 1 0 33.95 19.75 Z";
+        fill: root.ink(0);
+    }
+
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
+        visible: !root.dots(1);
+        opacity: root.fade(1);
+        commands: "M19.25 8.3 A 11.31 9.57 0 0 0 19.25 23.7 M38.75 8.3 A 11.31 9.57 0 0 1 38.75 23.7";
+        stroke: root.ink(1); stroke-line-cap: round;
+    }
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
+        visible: root.dots(1);
+        opacity: root.fade(1);
+        commands: "M18.15 8.30 A1.1 1.1 0 1 0 20.35 8.30 A1.1 1.1 0 1 0 18.15 8.30 Z M14.79 11.66 A1.1 1.1 0 1 0 16.99 11.66 A1.1 1.1 0 1 0 14.79 11.66 Z M13.56 16.23 A1.1 1.1 0 1 0 15.76 16.23 A1.1 1.1 0 1 0 13.56 16.23 Z M15.04 20.73 A1.1 1.1 0 1 0 17.24 20.73 A1.1 1.1 0 1 0 15.04 20.73 Z M37.65 8.30 A1.1 1.1 0 1 0 39.85 8.30 A1.1 1.1 0 1 0 37.65 8.30 Z M41.01 11.66 A1.1 1.1 0 1 0 43.21 11.66 A1.1 1.1 0 1 0 41.01 11.66 Z M42.24 16.23 A1.1 1.1 0 1 0 44.44 16.23 A1.1 1.1 0 1 0 42.24 16.23 Z M40.76 20.73 A1.1 1.1 0 1 0 42.96 20.73 A1.1 1.1 0 1 0 40.76 20.73 Z";
+        fill: root.ink(1);
+    }
+
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
+        visible: !root.dots(2);
+        opacity: root.fade(2);
+        commands: "M14.7 5 A 16.25 13.75 0 0 0 14.7 27 M43.3 5 A 16.25 13.75 0 0 1 43.3 27";
+        stroke: root.ink(2); stroke-line-cap: round;
+    }
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
+        visible: root.dots(2);
+        opacity: root.fade(2);
+        commands: "M13.60 5.00 A1.1 1.1 0 1 0 15.80 5.00 A1.1 1.1 0 1 0 13.60 5.00 Z M10.01 8.15 A1.1 1.1 0 1 0 12.21 8.15 A1.1 1.1 0 1 0 10.01 8.15 Z M7.69 12.33 A1.1 1.1 0 1 0 9.89 12.33 A1.1 1.1 0 1 0 7.69 12.33 Z M7.15 17.06 A1.1 1.1 0 1 0 9.35 17.06 A1.1 1.1 0 1 0 7.15 17.06 Z M8.52 21.63 A1.1 1.1 0 1 0 10.72 21.63 A1.1 1.1 0 1 0 8.52 21.63 Z M11.47 25.38 A1.1 1.1 0 1 0 13.67 25.38 A1.1 1.1 0 1 0 11.47 25.38 Z M42.20 5.00 A1.1 1.1 0 1 0 44.40 5.00 A1.1 1.1 0 1 0 42.20 5.00 Z M45.79 8.15 A1.1 1.1 0 1 0 47.99 8.15 A1.1 1.1 0 1 0 45.79 8.15 Z M48.11 12.33 A1.1 1.1 0 1 0 50.31 12.33 A1.1 1.1 0 1 0 48.11 12.33 Z M48.65 17.06 A1.1 1.1 0 1 0 50.85 17.06 A1.1 1.1 0 1 0 48.65 17.06 Z M47.28 21.63 A1.1 1.1 0 1 0 49.48 21.63 A1.1 1.1 0 1 0 47.28 21.63 Z M44.33 25.38 A1.1 1.1 0 1 0 46.53 25.38 A1.1 1.1 0 1 0 44.33 25.38 Z";
+        fill: root.ink(2);
+    }
+
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
+        visible: !root.dots(3);
+        opacity: root.fade(3);
+        commands: "M10.15 1.7 A 21.19 17.93 0 0 0 10.15 30.3 M47.85 1.7 A 21.19 17.93 0 0 1 47.85 30.3";
+        stroke: root.ink(3); stroke-line-cap: round;
+    }
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
+        visible: root.dots(3);
+        opacity: root.fade(3);
+        commands: "M9.05 1.70 A1.1 1.1 0 1 0 11.25 1.70 A1.1 1.1 0 1 0 9.05 1.70 Z M5.35 4.74 A1.1 1.1 0 1 0 7.55 4.74 A1.1 1.1 0 1 0 5.35 4.74 Z M2.53 8.60 A1.1 1.1 0 1 0 4.73 8.60 A1.1 1.1 0 1 0 2.53 8.60 Z M0.92 13.11 A1.1 1.1 0 1 0 3.12 13.11 A1.1 1.1 0 1 0 0.92 13.11 Z M0.76 17.88 A1.1 1.1 0 1 0 2.96 17.88 A1.1 1.1 0 1 0 0.76 17.88 Z M2.08 22.48 A1.1 1.1 0 1 0 4.28 22.48 A1.1 1.1 0 1 0 2.08 22.48 Z M4.66 26.51 A1.1 1.1 0 1 0 6.86 26.51 A1.1 1.1 0 1 0 4.66 26.51 Z M8.20 29.73 A1.1 1.1 0 1 0 10.40 29.73 A1.1 1.1 0 1 0 8.20 29.73 Z M46.75 1.70 A1.1 1.1 0 1 0 48.95 1.70 A1.1 1.1 0 1 0 46.75 1.70 Z M50.45 4.74 A1.1 1.1 0 1 0 52.65 4.74 A1.1 1.1 0 1 0 50.45 4.74 Z M53.27 8.60 A1.1 1.1 0 1 0 55.47 8.60 A1.1 1.1 0 1 0 53.27 8.60 Z M54.88 13.11 A1.1 1.1 0 1 0 57.08 13.11 A1.1 1.1 0 1 0 54.88 13.11 Z M55.04 17.88 A1.1 1.1 0 1 0 57.24 17.88 A1.1 1.1 0 1 0 55.04 17.88 Z M53.72 22.48 A1.1 1.1 0 1 0 55.92 22.48 A1.1 1.1 0 1 0 53.72 22.48 Z M51.14 26.51 A1.1 1.1 0 1 0 53.34 26.51 A1.1 1.1 0 1 0 51.14 26.51 Z M47.60 29.73 A1.1 1.1 0 1 0 49.80 29.73 A1.1 1.1 0 1 0 47.60 29.73 Z";
+        fill: root.ink(3);
+    }
+}
+
+// ── Speaker cone, STEREO / MONO pill (ANDROID §4.1 v1.14.3) ─────────────────
+//
+// Four marks in slight perspective: a magnet block at the narrow end, two cone
+// walls, and an elliptical rim (the cone is turned a few degrees toward the
+// viewer). Mirrored on the left so both cones flare AWAY from the label.
+//
+// BOTH cones draw on mono, not one and not none — mono only thins the stroke to
+// 1.1 and recolours, so it reads as a ghost. Blue is reserved for a stereo lock.
+export component StereoCone {
+    in property <color> color;
+    in property <bool> flip: false;
+    in property <length> w: 20px;
+    in property <length> h: 28px;
+    in property <float> stroke-w: 1.8;
+
+    width: root.w;
+    height: root.h;
+
+    VPath {
+        box-w: root.w; box-h: root.h; vbw: 24; vbh: 30; raw-stroke: root.stroke-w;
+        commands: root.flip
+            ? "M18.8 12.4 h-3.4 v5.2 h3.4 z M7.4 5.4 a2.8 9.6 0 1 1 -0.01 0 M15.4 13 L7.4 5.4 M15.4 17 L7.4 24.6"
+            : "M5.2 12.4 h3.4 v5.2 h-3.4 z M16.6 5.4 a2.8 9.6 0 1 0 0.01 0 M8.6 13 L16.6 5.4 M8.6 17 L16.6 24.6";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// Filled (saved) or outline star — the hero's preset toggle.
+export component StarIcon {
+    in property <length> size: 26px;
+    in property <bool> filled: false;
+    in property <color> color;
+    in property <color> outline;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.7;
+        commands: "M12 17.3 L18.2 21 16.5 13.9 22 9.2 14.8 8.6 12 2 9.2 8.6 2 9.2 7.5 13.9 5.8 21 Z";
+        fill: root.filled ? root.color : transparent;
+        stroke: root.filled ? root.color : root.outline;
+        stroke-line-join: round;
+    }
+}
+
+/// Gear / settings.
+export component GearIcon {
+    in property <length> size: 24px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M9 12 A3 3 0 1 0 15 12 A3 3 0 1 0 9 12 Z M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// Universal power mark — the audio-priority claim/release control (§4.7).
+export component PowerIcon {
+    in property <length> size: 30px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M18.36 6.64a9 9 0 1 1-12.73 0 M12 3 L12 12";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// Rounded warning triangle — the tuner-error pill (§4.1).
+export component WarningTriangle {
+    in property <length> size: 26px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z M12 9 L12 13 M12 17 L12.01 17";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+// ── Nearby: magnifier over a radio tower (§7) ───────────────────────────────
+//
+// A thin-line lens containing a tower — straight A-frame legs widening to the
+// base, one X-brace, an antenna mast and tip dot, and symmetric radiating waves,
+// all bowed by a subtle barrel warp (lens refraction). The warp is why the tower
+// segments below are polylines rather than straight lines.
+export component MagnifierTower {
+    in property <length> size: 92px;
+    in property <color> line;
+    in property <color> glass;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {   // lens glaze
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32;
+        commands: "M3.6 14.3 A11.2 11.2 0 1 0 26 14.3 A11.2 11.2 0 1 0 3.6 14.3 Z";
+        fill: root.glass;
+    }
+    VPath {   // lens rim
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 1.6;
+        commands: "M2.8 14.3 A12 12 0 1 0 26.8 14.3 A12 12 0 1 0 2.8 14.3 Z";
+        stroke: root.line;
+    }
+    VPath {   // A-frame legs
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 1.1;
+        commands: "M10.46 22.56 L10.86 21.40 L11.27 20.20 L11.70 18.97 L12.13 17.71 L12.58 16.44 L13.03 15.16 L13.48 13.87 L13.94 12.58 M19.14 22.56 L18.74 21.40 L18.33 20.20 L17.90 18.97 L17.47 17.71 L17.02 16.44 L16.57 15.16 L16.12 13.87 L15.66 12.58";
+        stroke: root.line; stroke-line-cap: round; stroke-line-join: round;
+    }
+    VPath {   // X-brace
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 1.0;
+        commands: "M12.50 16.65 L13.32 17.35 L14.15 18.04 L14.96 18.72 L15.78 19.40 L16.59 20.07 L17.38 20.72 L18.17 21.36 L18.94 21.98 M17.10 16.65 L16.28 17.35 L15.45 18.04 L14.64 18.72 L13.82 19.40 L13.01 20.07 L12.22 20.72 L11.43 21.36 L10.66 21.98";
+        stroke: root.line; stroke-line-cap: round;
+    }
+    VPath {   // mast
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 1.2;
+        commands: "M14.80 12.58 L14.80 12.10 L14.80 11.62 L14.80 11.14 L14.80 10.67 L14.80 10.19 L14.80 9.72 L14.80 9.25 L14.80 8.78";
+        stroke: root.line; stroke-line-cap: round;
+    }
+    VPath {   // mast tip
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32;
+        commands: "M13.90 8.78 A0.9 0.9 0 1 0 15.70 8.78 A0.9 0.9 0 1 0 13.90 8.78 Z";
+        fill: root.line;
+    }
+    VPath {   // radiating waves
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 1.1;
+        commands: "M13.19 7.07 A 2.6 2.6 0 0 0 13.19 10.50 M12.07 5.88 A 4.4 4.4 0 0 0 12.07 11.69 M16.41 7.07 A 2.6 2.6 0 0 1 16.41 10.50 M17.53 5.88 A 4.4 4.4 0 0 1 17.53 11.69";
+        stroke: root.line; stroke-line-cap: round;
+    }
+    VPath {   // butt-capped handle toward 5 o'clock
+        box-w: root.size; box-h: root.size; vbw: 32; vbh: 32; raw-stroke: 3.2;
+        commands: "M21.3 25.6 L24.5 31.1";
+        stroke: root.line;
+    }
+}
+
+/// GPS lock (§4.6) — an angled satellite: body tilted ~28 degrees, two side
+/// panels, dish, and downward signal arcs. Blue on a fix; the caller dims it to
+/// the disabled-tell look when there is none.
+export component GpsSatellite {
+    in property <length> size: 30px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.5;
+        commands: "M0.86 15.54 L7.31 12.12 L9.28 15.83 L2.83 19.25 Z M2.98 14.42 L4.95 18.13 M5.10 13.29 L7.07 17.00 M1.85 17.40 L8.29 13.97 M14.72 8.17 L21.17 4.75 L23.14 8.46 L16.69 11.88 Z M16.84 7.05 L18.81 10.76 M18.96 5.92 L20.93 9.63 M15.71 10.03 L22.15 6.60 M8.29 13.97 L9.44 13.36 M14.56 10.64 L15.71 10.03 M7.70 10.09 L12.82 7.37 L16.30 13.91 L11.18 16.63 Z M13.74 15.27 L15.19 18.00 M13.29 18.90 A 3 3 0 0 0 17.00 16.93 M12.76 21.11 A 6 6 0 0 0 19.12 17.73";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// Vehicle in motion (§4.6) — a car with three trailing lines. Amber, never the
+/// blue accent: it is in the fixed safety-colour family, like TA. The slow ~2.6s
+/// pulse is applied by the caller.
+export component MotionCar {
+    in property <length> size: 34px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    // The car body is drawn in its own 24-unit space and placed by the SVG's
+    // translate(2.6 1) scale(0.82) — expressed here as a smaller, offset box.
+    VPath {
+        box-w: root.size * 0.82; box-h: root.size * 0.82;
+        ox: root.size * 2.6 / 24; oy: root.size * 1 / 24;
+        vbw: 24; vbh: 24; raw-stroke: 1.7;
+        commands: "M19 17h2a1 1 0 0 0 1-1v-3c0-.9-.7-1.6-1.5-1.9L16 10l-1.9-2.4A2 2 0 0 0 12.5 7H6.2a2 2 0 0 0-1.8 1.1L2.7 11.6A3 3 0 0 0 2 13.5V16a1 1 0 0 0 1 1h1.5 M6 17 A2 2 0 1 0 10 17 A2 2 0 1 0 6 17 Z M15 17 A2 2 0 1 0 19 17 A2 2 0 1 0 15 17 Z M10 17h5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    VPath {   // trailing motion lines (outside the group transform)
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.7;
+        commands: "M0.5 8.5 L3.6 8.5 M0 12 L2.8 12 M1 15.5 L3.4 15.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+    }
+}

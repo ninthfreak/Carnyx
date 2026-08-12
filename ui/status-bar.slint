@@ -1,0 +1,502 @@
+// Status bar (ANDROID §4.1) — three zones: signal, stereo + tells + genre, and
+// the controls. The ARRANGEMENT is track-specific: wide keeps everything inline
+// in a left cluster, tall centres the stereo column between two flexed sides so
+// it is truly centred regardless of the side widths.
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar } from "icons.slint";
+
+// One of the little status letters. Lit = full weight with a soft dark drop; off
+// = 32% with a faint 1px light emboss (an engraved look). §4.7 removes all of it
+// when audio priority is released — the flat, dead state.
+//
+// Slint has no text-shadow, so the emboss is a second Text drawn 1px below.
+component Tell inherits Rectangle {
+    in property <string> label;
+    in property <bool> on: false;
+    in property <bool> pulse: false;
+    in property <bool> dead: false;
+
+    // The TA pulse (~1.1s). Always running; only read when `pulse` is set.
+    property <float> beat: 1.0;
+    init => { self.beat = 0.35; }
+    animate beat {
+        duration: 550ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+    property <float> lit: root.pulse ? root.beat : (root.on ? 1.0 : 0.32);
+
+    width: txt.preferred-width;
+    height: Metrics.tell-font * 12 / 11;
+
+    Text {
+        x: 0; y: 1px;
+        text: root.label;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.tell-font;
+        letter-spacing: 1px;
+        visible: !root.dead;
+        color: (root.pulse || root.on)
+            ? #000000.with-alpha(0.30)
+            : (Pal.dark ? #FFFFFF.with-alpha(0.10) : #FFFFFF.with-alpha(0.9));
+        opacity: root.lit;
+    }
+    txt := Text {
+        x: 0; y: 0;
+        text: root.label;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.tell-font;
+        letter-spacing: 1px;
+        color: root.pulse ? Pal.amber : Pal.text;
+        opacity: root.lit;
+    }
+}
+
+// The broadcast glyph with its level printed INSIDE it, in the ink-free column
+// below the centre dot. The number is absolutely placed and centred, so 2 digits,
+// 3 digits or an em-dash leaves the cluster exactly the glyph's width — nothing
+// to the right of it can ever be pushed.
+export component SignalCluster inherits Rectangle {
+    in property <int> full-pairs: 0;
+    in property <bool> half: false;
+    in property <float> dot-opacity: 1.0;
+    in property <int> dotted-arcs: 0;
+    /// Already formatted by Rust: the bare NWD level, the SDR figure with its
+    /// unit, or an em-dash. No unit is invented for the NWD scale — it is the
+    /// vendor's and unidentified.
+    in property <string> level-text: "—";
+
+    property <length> glyph-h: Metrics.signal-icon * 32 / 58;
+
+    width: Metrics.signal-icon;
+    height: Metrics.tall ? root.glyph-h : Math.max(root.glyph-h, Metrics.stereo-h);
+
+    SignalWaves {
+        x: 0; y: (root.height - root.glyph-h) / 2;
+        size: Metrics.signal-icon;
+        full-pairs: root.full-pairs;
+        half: root.half;
+        dot-opacity: root.dot-opacity;
+        dotted-arcs: root.dotted-arcs;
+        // ALWAYS amber. Grey used to mean "this is an estimate, not a reading",
+        // and there is no such path any more — every number here is measured.
+        on: Pal.amber;
+        off: Pal.meter-empty;
+    }
+    Text {
+        x: 0; width: root.width;
+        y: Metrics.signal-num-top;
+        height: Metrics.signal-num;
+        text: root.level-text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.signal-num;
+        color: Pal.dim;
+        // A background-coloured ring separating the digits from any arc ink
+        // behind them.
+        stroke: Pal.bg;
+        stroke-width: 2px;
+        stroke-style: outside;
+    }
+}
+
+// STEREO / MONO pill with the RDS/HD/TP/AF tell strip beneath it.
+export component StereoCluster inherits VerticalLayout {
+    /// Nothing has reported yet → the pill is EMPTY (outline, no cones, no
+    /// label). Asserting MONO before the tuner speaks would be a guess, and on
+    /// this firmware it was a wrong one.
+    in property <bool> known: false;
+    in property <bool> stereo: false;
+    in property <bool> rds: false;
+    in property <bool> tp: false;
+    in property <bool> ta: false;
+    in property <bool> af: false;
+    in property <bool> dead: false;
+
+    property <bool> locked: root.stereo && root.known && !root.dead;
+    property <bool> blank: root.dead || !root.known;
+
+    spacing: 5px;
+    alignment: start;
+
+    HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            height: Metrics.stereo-h;
+            min-width: Metrics.stereo-min-w;
+            border-radius: Metrics.stereo-radius;
+            border-width: 1.5px;
+            border-color: root.locked ? Pal.blue : Pal.border;
+            background: root.locked ? Pal.blue-fill : transparent;
+
+            HorizontalLayout {
+                padding-left: Metrics.stereo-pad-h;
+                padding-right: Metrics.stereo-pad-h;
+                spacing: 9px;
+                alignment: center;
+
+                // BOTH cones on mono, not one and not none. Mono only changes
+                // their appearance: stroke 1.8 → 1.1, the right cone in the dim
+                // label colour and the left in the pill's own border colour, so
+                // it reads as a ghost. Blue is reserved for a stereo lock. The
+                // blank state keeps the slot so nothing reflows.
+                Rectangle {
+                    width: Metrics.stereo-wave-w;
+                    height: Metrics.stereo-wave-h;
+                    if !root.blank: StereoCone {
+                        flip: true;
+                        color: root.locked ? Pal.blue : Pal.border;
+                        stroke-w: root.locked ? 1.8 : 1.1;
+                        w: Metrics.stereo-wave-w;
+                        h: Metrics.stereo-wave-h;
+                    }
+                }
+                // THE CONES MUST NOT MOVE between states. "MONO" is narrower
+                // than "STEREO" and the row centres its contents, so a naive
+                // label pulls both cones inward on mono. The label sits in a box
+                // the width of the widest string, with the live label centred
+                // over it.
+                Rectangle {
+                    width: reserve.preferred-width;
+                    reserve := Text {
+                        opacity: 0;
+                        text: "STEREO";
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.stereo-font;
+                        letter-spacing: 1px;
+                    }
+                    Text {
+                        x: 0; width: parent.width;
+                        horizontal-alignment: center;
+                        text: root.blank ? "" : (root.stereo ? "STEREO" : "MONO");
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.stereo-font;
+                        letter-spacing: 1px;
+                        color: root.locked ? Pal.blue : Pal.dim;
+                    }
+                }
+                Rectangle {
+                    width: Metrics.stereo-wave-w;
+                    height: Metrics.stereo-wave-h;
+                    if !root.blank: StereoCone {
+                        color: root.locked ? Pal.blue : Pal.dim;
+                        stroke-w: root.locked ? 1.8 : 1.1;
+                        w: Metrics.stereo-wave-w;
+                        h: Metrics.stereo-wave-h;
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        Tell { label: "RDS"; on: !root.dead && root.rds; dead: root.dead; }
+        // HD is never lit — nothing in this pipeline decodes IBOC — but the slot
+        // stays so the strip reads like a factory head unit's.
+        Tell { label: "HD"; on: false; dead: root.dead; }
+        // TA REPLACES TP while an announcement is running, and pulses. One slot,
+        // two states: TP says the station carries traffic at all, TA says one is
+        // happening now, and the second implies the first.
+        Tell {
+            label: (root.ta && !root.dead) ? "TA" : "TP";
+            on: root.ta ? true : (!root.dead && root.tp);
+            pulse: root.ta && !root.dead;
+            dead: root.dead;
+        }
+        Tell { label: "AF"; on: !root.dead && root.af; dead: root.dead; }
+    }
+}
+
+// PTY / genre. The design gives it a 1px emboss; Slint has no text shadow, so
+// the shadow is a second Text one pixel down, the same trick the tells use.
+component GenreText inherits Rectangle {
+    in property <string> text;
+    in property <bool> centered: false;
+    /// Vertical band to centre within. The wide track sits the genre on the
+    /// STEREO pill's own band; the tall track lets it be its own line.
+    in property <length> band-h: 0px;
+
+    // No width binding: the enclosing layout stretches it, which is what lets the
+    // centred variant actually centre. Wide caps it the way the design does.
+    max-width: root.centered ? 100000px : 200px;
+    height: root.band-h > 0px ? root.band-h : live.preferred-height;
+
+    Text {
+        x: 0; width: root.width;
+        y: (root.height - self.preferred-height) / 2 + 1px;
+        text: root.text;
+        overflow: elide;
+        horizontal-alignment: root.centered ? center : left;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.pty-font;
+        letter-spacing: 0.5px;
+        color: Pal.dark ? #000000.with-alpha(0.5) : #FFFFFF.with-alpha(0.95);
+    }
+    live := Text {
+        x: 0; width: root.width;
+        y: (root.height - self.preferred-height) / 2;
+        text: root.text;
+        overflow: elide;
+        horizontal-alignment: root.centered ? center : left;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.pty-font;
+        letter-spacing: 0.5px;
+        color: Pal.dim;
+    }
+}
+
+// Out-of-FM-band warning. The pill text carries no "MHz" label — FM always is.
+component OutOfBandPill inherits Rectangle {
+    border-width: 1.5px;
+    border-radius: 10px;
+    border-color: Pal.amber;
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px;
+        padding-top: 4px; padding-bottom: 4px;
+        Text {
+            text: "⚠ OUT OF FM BAND";
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            color: Pal.amber;
+        }
+    }
+}
+
+// Driving-status icons (§4.6) — wide/landscape tracks only.
+export component DrivingStatus inherits HorizontalLayout {
+    in property <bool> gps-fix: false;
+    in property <bool> in-motion: false;
+
+    // A slow ~2.6s breathe — gentler than TA's 1.1s.
+    property <float> breathe: 1.0;
+    init => { self.breathe = 0.4; }
+    animate breathe {
+        duration: 1300ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+
+    spacing: 12px;
+    alignment: end;
+
+    // The car shows ONLY while moving — absent, not dimmed, when stopped. Amber:
+    // the fixed safety-colour family, like TA, never the blue accent.
+    if root.in-motion: MotionCar {
+        size: 34px;
+        color: Pal.amber;
+        opacity: root.breathe;
+    }
+    // Always present: it communicates lock state. With no fix it is not greyed
+    // but styled like a disabled tell — full text colour at ~32%.
+    Rectangle {
+        width: 30px; height: 30px;
+        GpsSatellite {
+            y: -4px;
+            size: 30px;
+            color: root.gps-fix ? Pal.blue : Pal.text;
+            opacity: root.gps-fix ? 1.0 : 0.32;
+        }
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    in property <int> full-pairs: 0;
+    in property <bool> half: false;
+    in property <float> dot-opacity: 1.0;
+    in property <int> dotted-arcs: 0;
+    in property <string> level-text: "—";
+    in property <bool> stereo-known: false;
+    in property <bool> stereo: false;
+    in property <bool> rds: false;
+    in property <bool> tp: false;
+    in property <bool> ta: false;
+    in property <bool> af: false;
+    in property <string> pty: "";
+    in property <bool> in-band: true;
+    /// No compatible tuner session. This pill REPLACES the whole OK cluster —
+    /// with no tuner there is no signal, RDS, stereo or genre to read, so the
+    /// two never show together.
+    in property <bool> tuner-error: false;
+    in property <bool> dead: false;
+    in property <bool> gps-fix: false;
+    in property <bool> in-motion: false;
+    in property <bool> reordering: false;
+
+    callback open-settings();
+    callback open-nearby();
+    callback done-reordering();
+
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: space-between;
+
+        // ── Left / status ──
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: Metrics.tall ? 1 : 0;
+
+            if root.tuner-error: HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    height: 44px;
+                    border-radius: 10px;
+                    border-width: 1.5px;
+                    border-color: Pal.amber;
+                    background: Pal.amber-fill;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        spacing: 11px;
+                        alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            WarningTriangle { size: 26px; color: Pal.amber; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Failure to connect to tuner.";
+                                font-family: Font.face; font-weight: Font.bold;
+                                font-size: 17px;
+                                letter-spacing: 0.3px;
+                                color: Pal.amber;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Wide / landscape: everything inline in the left cluster, aligned to
+            // the STEREO pill's band — the tell strip hangs BELOW the pill and
+            // must not pull the signal or the genre down with it.
+            if !root.tuner-error && !Metrics.tall: HorizontalLayout {
+                spacing: 14px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: start;
+                    SignalCluster {
+                        full-pairs: root.full-pairs; half: root.half;
+                        dot-opacity: root.dot-opacity; dotted-arcs: root.dotted-arcs;
+                        level-text: root.level-text;
+                    }
+                }
+                VerticalLayout {
+                    alignment: start;
+                    StereoCluster {
+                        known: root.stereo-known; stereo: root.stereo;
+                        rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
+                        dead: root.dead;
+                    }
+                }
+                // PTY: plain dim ellipsized text, no border or fill, on the
+                // pill's own band.
+                if root.pty != "" && !root.dead: GenreText {
+                    text: root.pty;
+                    band-h: Metrics.stereo-h;
+                }
+                if !root.in-band: VerticalLayout {
+                    alignment: start;
+                    OutOfBandPill { }
+                }
+            }
+
+            // Tall: the signal cluster (and any out-of-band pill) hold the left
+            // zone on their own; the stereo column is centred separately.
+            if !root.tuner-error && Metrics.tall: HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                VerticalLayout {
+                    alignment: start;
+                    SignalCluster {
+                        full-pairs: root.full-pairs; half: root.half;
+                        dot-opacity: root.dot-opacity; dotted-arcs: root.dotted-arcs;
+                        level-text: root.level-text;
+                    }
+                }
+                if !root.in-band: VerticalLayout {
+                    alignment: start;
+                    OutOfBandPill { }
+                }
+            }
+        }
+
+        // ── Centre (tall only) — STEREO pill, tells and genre, truly centred ──
+        if Metrics.tall && !root.tuner-error: VerticalLayout {
+            alignment: start;
+            horizontal-stretch: 0;
+            spacing: 5px;
+            StereoCluster {
+                known: root.stereo-known; stereo: root.stereo;
+                rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
+                dead: root.dead;
+            }
+            if root.pty != "" && !root.dead: GenreText { text: root.pty; centered: true; }
+        }
+
+        // ── Right / controls ──
+        VerticalLayout {
+            alignment: start;
+            horizontal-stretch: Metrics.tall ? 1 : 0;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+                if !Metrics.tall: VerticalLayout {
+                    alignment: center;
+                    DrivingStatus { gps-fix: root.gps-fix; in-motion: root.in-motion; }
+                }
+                Rectangle {
+                    width: 44px; height: 44px;
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: Pal.border;
+                    background: Pal.raised;
+                    opacity: gear-touch.pressed ? 0.55 : 1.0;
+                    gear-touch := TouchArea {
+                        clicked => { root.open-settings(); }
+                    }
+                    GearIcon { size: 24px; color: Pal.dim; }
+                }
+            }
+
+            // The nearby disc lives HERE on the tall track (the preset band has
+            // no room for it), and becomes DONE while reordering.
+            if Metrics.tall: HorizontalLayout {
+                alignment: end;
+                Rectangle {
+                    width: Metrics.s(74); height: Metrics.s(74);
+                    border-radius: self.width / 2;
+                    background: root.reordering ? Pal.blue : Pal.nearby-disc;
+                    border-width: root.reordering ? 0px : 1px;
+                    border-color: Pal.border;
+                    opacity: nearby-touch.pressed ? 0.7 : 1.0;
+                    nearby-touch := TouchArea {
+                        clicked => {
+                            if (root.reordering) { root.done-reordering(); } else { root.open-nearby(); }
+                        }
+                    }
+                    if !root.reordering: MagnifierTower {
+                        size: Metrics.s(59);
+                        line: Pal.nearby-line;
+                        glass: Pal.nearby-glass;
+                    }
+                    if root.reordering: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "✓"; horizontal-alignment: center;
+                            color: #FFFFFF; font-size: 22px; font-weight: 700;
+                        }
+                        Text {
+                            text: "DONE"; horizontal-alignment: center;
+                            color: #FFFFFF; font-family: Font.face; font-weight: Font.bold;
+                            font-size: 11px; letter-spacing: 1.5px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

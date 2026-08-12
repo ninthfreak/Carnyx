@@ -756,6 +756,7 @@ dependencies = [
 name = "carnyx"
 version = "0.1.0"
 dependencies = [
+ "png",
  "slint",
  "slint-build",
 ]

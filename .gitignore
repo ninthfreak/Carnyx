@@ -1,1 +1,3 @@
 /target
+# Rendered by `cargo run --example shot` — output, not source.
+/shots

@@ -1,0 +1,460 @@
+// Preset tiles, the preset band, and the prev/next peek cards (ANDROID
+// §4.3/§4.5/§5).
+//
+// A tile shows EITHER a real logo on a borderless transparent plate, OR a wide
+// colored box with the 4 core call letters inside it and the frequency beneath.
+// Both use the same landscape plate, so a logo tile and a no-logo tile occupy
+// identical space. The peek cards use the exact same treatment as the tiles.
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { Preset } from "types.slint";
+import { MagnifierTower } from "icons.slint";
+
+// The colored call-letter box that stands in for a logo. The letters are fitted
+// to the landscape box — bounded by its height AND by width/letter-count, so four
+// letters don't overflow a narrow box.
+component CallSignBox inherits Rectangle {
+    in property <string> label;
+    in property <color> brand;
+    in property <length> radius: 12px;
+
+    border-radius: root.radius;
+    clip: true;
+    background: Pal.flat(root.brand);
+
+    Text {
+        text: root.label == "" ? "·" : root.label;
+        color: #FFFFFF;
+        font-family: Font.face;
+        font-weight: Font.bold;
+        letter-spacing: 0.5px;
+        font-size: Math.max(11px, Math.round(Math.min(
+            root.height / 1px * 0.52,
+            (root.width / 1px * 0.82) / Math.max(root.label.character-count, 1) * 1.55)) * 1px);
+    }
+}
+
+// The plate itself — a real logo, or the colored call-letter box. Separated from
+// the size so the two geometry modes below can share it without either one
+// binding its own height (which is a loop).
+component PlateBox inherits Rectangle {
+    in property <Preset> preset;
+    in property <length> radius: 12px;
+
+    border-radius: root.radius;
+    clip: true;
+    // Real logo → borderless and transparent; the image carries the identity.
+    background: root.preset.has-logo ? transparent : Pal.flat(root.preset.brand);
+
+    if root.preset.has-logo: Image {
+        source: root.preset.logo;
+        // Containment invariant (§4.5): fully visible, never cropped, never
+        // overflowing, centred. The plate owns the geometry; the image scales to
+        // the largest size that fits inside it.
+        image-fit: contain;
+        width: parent.width;
+        height: parent.height;
+    }
+    if !root.preset.has-logo: CallSignBox {
+        width: parent.width;
+        height: parent.height;
+        label: root.preset.call;
+        brand: root.preset.brand;
+        radius: root.radius;
+    }
+}
+
+/// The identity block shared by peek cards and preset tiles: a real logo when one
+/// exists, otherwise the colored call-sign box, with ONE text row beneath — the
+/// call sign for a logo, the frequency for the box.
+export component PresetPlate inherits VerticalLayout {
+    in property <Preset> preset;
+    in property <length> plate-w;
+    in property <length> plate-h;
+    in property <length> radius: 12px;
+    in property <length> freq-size: 16px;
+    /// `fill` mode (preset chips): the plate is the chip's flex-grow child and
+    /// takes all the height left after padding, gap and the text row. Never a
+    /// fixed dp height — the size falls out of the chip's own layout, which is
+    /// what makes the tuned chip's bigger box follow automatically.
+    in property <bool> fill: false;
+
+    spacing: root.fill ? 4px : Math.max(3px, Math.round(root.freq-size / 1px * 0.34) * 1px);
+    alignment: root.fill ? LayoutAlignment.stretch : LayoutAlignment.center;
+
+    if root.fill: PlateBox {
+        vertical-stretch: 1;
+        preset: root.preset;
+        radius: root.radius;
+    }
+    if !root.fill: PlateBox {
+        width: root.plate-w;
+        height: root.plate-h;
+        vertical-stretch: 0;
+        preset: root.preset;
+        radius: root.radius;
+    }
+
+    Text {
+        text: root.preset.has-logo ? root.preset.call : root.preset.freq-label;
+        horizontal-alignment: center;
+        color: Pal.text;
+        font-family: Font.face;
+        font-weight: Font.bold;
+        font-size: root.freq-size;
+        letter-spacing: 0.3px;
+    }
+}
+
+/// One preset chip in the band.
+export component PresetTile inherits Rectangle {
+    in property <Preset> preset;
+    in property <bool> active: false;
+    in property <length> pad-top;
+    in property <length> pad-bottom;
+    in property <length> pad-h;
+    in property <length> logo-radius;
+    in property <length> name-font;
+
+    callback selected();
+
+    border-radius: 16px;
+    background: Pal.panel;
+    border-width: root.active ? 2px : 1px;
+    border-color: root.active ? Pal.blue : Pal.border;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea { clicked => { root.selected(); } }
+
+    VerticalLayout {
+        padding-top: root.pad-top;
+        padding-bottom: root.pad-bottom;
+        padding-left: root.pad-h;
+        padding-right: root.pad-h;
+        PresetPlate {
+            preset: root.preset;
+            fill: true;
+            radius: root.logo-radius;
+            freq-size: root.name-font;
+        }
+    }
+
+    // The tuned tile's amber-blue underline.
+    if root.active: Rectangle {
+        y: root.height - 6px - 3px;
+        width: 26px; height: 3px;
+        border-radius: 2px;
+        background: Pal.blue;
+    }
+}
+
+/// Prev/next peek card. Same treatment as a bottom preset tile, at ~0.88 scale
+/// and 60% opacity, with its inner edge softened so it reads as tucked behind
+/// the hero.
+///
+/// CarFM applies the 0.88 with a transform; here every dimension is simply
+/// authored at 0.88, which lands in the same place and keeps the type crisp
+/// instead of resampling a scaled layer.
+export component PeekCard inherits Rectangle {
+    in property <Preset> preset;
+    /// Unscaled card width — the 20%-of-surface figure from LOGO-SIZING §4.
+    in property <length> card-w;
+    in property <string> side: "left";
+
+    callback selected();
+
+    property <float> scale: 0.88;
+    // Peek plate geometry: 92% of the card, capped at 184, aspect-locked 16/10 —
+    // the SAME landscape box as a real logo and as the call-sign form.
+    property <length> plate-w: Math.min(Math.round(root.card-w / 1px * 0.92) * 1px, Metrics.s(184));
+    property <length> plate-h: Math.round(root.plate-w / 1px * 10 / 16) * 1px;
+    // A flat 16dp card padding and the 92% box are geometrically incompatible on
+    // the narrow tracks, so the inset is derived from the plate instead — floor,
+    // not round, or a 184dp plate clips by 1dp against 183dp of content.
+    property <length> pad: Math.max(Metrics.s(4), Math.floor((root.card-w - root.plate-w) / 2 / 1px) * 1px);
+    property <length> inner-gap: Math.min(Metrics.s(12), Math.round(root.plate-h / 1px * 0.16) * 1px);
+
+    width: root.card-w * root.scale;
+    height: root.card-w * root.scale;
+    opacity: touch.pressed ? 0.35 : 0.6;
+    border-width: 1px;
+    border-color: Pal.border;
+    border-radius: Metrics.s(24) * root.scale;
+    background: Pal.panel;
+
+    touch := TouchArea { clicked => { root.selected(); } }
+
+    VerticalLayout {
+        padding: root.pad * root.scale;
+        alignment: center;
+        PresetPlate {
+            preset: root.preset;
+            plate-w: root.plate-w * root.scale;
+            plate-h: root.plate-h * root.scale;
+            radius: Metrics.s(12) * root.scale;
+            freq-size: Math.max(13px, Metrics.s(16)) * root.scale;
+        }
+    }
+
+    // Inner-edge fade: PREV fades on its RIGHT edge, NEXT on its LEFT, so the
+    // card dissolves into the page where the hero overlaps it.
+    Rectangle {
+        background: root.side == "left"
+            ? @linear-gradient(90deg, transparent 50%, Pal.bg.with-alpha(0.92) 100%)
+            : @linear-gradient(270deg, transparent 50%, Pal.bg.with-alpha(0.92) 100%);
+        border-radius: parent.border-radius;
+    }
+}
+
+// Dashed placeholder for the empty band. Slint has no dashed border, so the
+// dashes are drawn as a run of small rectangles along each edge.
+component DashedBox inherits Rectangle {
+    property <length> dash: 9px;
+    property <length> step: 15px;
+    property <int> h-count: Math.max(1, Math.floor(root.width / root.step));
+    property <int> v-count: Math.max(1, Math.floor(root.height / root.step));
+    property <length> h-step: root.width / root.h-count;
+    property <length> v-step: root.height / root.v-count;
+
+    for i in root.h-count: Rectangle {
+        x: i * root.h-step; y: 0; width: root.dash; height: 1.5px; background: Pal.border;
+    }
+    for i in root.h-count: Rectangle {
+        x: i * root.h-step; y: root.height - 1.5px; width: root.dash; height: 1.5px; background: Pal.border;
+    }
+    for i in root.v-count: Rectangle {
+        x: 0; y: i * root.v-step; width: 1.5px; height: root.dash; background: Pal.border;
+    }
+    for i in root.v-count: Rectangle {
+        x: root.width - 1.5px; y: i * root.v-step; width: 1.5px; height: root.dash; background: Pal.border;
+    }
+}
+
+// The band's ‹ / › page buttons and the NEARBY disc, wide tracks only.
+component NavButton inherits Rectangle {
+    in property <string> glyph;
+    callback clicked();
+    width: Math.max(48px, Metrics.s(56));
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.55 : 1.0;
+    touch := TouchArea { clicked => { root.clicked(); } }
+    Text {
+        text: root.glyph;
+        font-family: Font.face;
+        font-weight: 700;
+        font-size: Metrics.s(30);
+        color: Pal.text;
+    }
+}
+
+export component PresetsBand inherits Rectangle {
+    in property <[Preset]> presets;
+    in property <int> active-index: -1;
+    in property <bool> reordering: false;
+    in property <length> band-height;
+    /// Nav buttons and the in-band nearby disc are hidden on the tall track,
+    /// where nearby lives in the status bar instead.
+    in property <bool> show-nav: true;
+    in property <bool> show-nearby: true;
+
+    callback select(int);
+    callback open-nearby();
+    callback done-reordering();
+
+    height: root.band-height;
+
+    // Per-track tile geometry (CarFM's `tileSizeFor`). The active tile grows only
+    // in the strip tracks; grid and two-row tiles are uniform. The plate itself
+    // has no size here — it is the chip's flex-grow child, so its height falls
+    // out of the chip minus padding, gap and the text row.
+    property <length> gap: 10px;
+    property <length> grid-gap: Metrics.s(12);
+    property <int> n: root.presets.length;
+
+    property <length> strip-w-off: Metrics.s(Metrics.landscape ? 106 : 118);
+    property <length> strip-w-on: Metrics.s(Metrics.landscape ? 134 : 150);
+    property <bool> strip-grow: root.active-index >= 0 && !root.reordering;
+    property <length> strip-delta: root.strip-grow ? (root.strip-w-on - root.strip-w-off) : 0px;
+
+    property <length> tall-tile-w: (rail.width - 2 * root.grid-gap - 8px) / 3;
+    property <length> tall-tile-h: Metrics.s(128);
+    // Two rows plus the row gap inside the rail's own 2px padding.
+    property <length> two-row-h: Math.max(Metrics.s(90),
+        Math.round((rail.height - root.gap - 4px) / 2 / 1px) * 1px);
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        if root.show-nav: NavButton {
+            glyph: "‹";
+            clicked => { rail.viewport-x = Math.min(0px, rail.viewport-x + rail.width * 0.8); }
+        }
+
+        // The scroll surface. Deliberately ONE Flickable with absolutely-placed
+        // tiles rather than a layout per track: tile positions are pure arithmetic
+        // in every track (only the strip's active tile changes width, and that is
+        // a single offset), and it keeps the rail reachable from the scrollbar and
+        // the nav buttons, which a conditional layout would hide in its own scope.
+        Rectangle {
+            horizontal-stretch: 1;
+
+            rail := Flickable {
+                x: 0; y: 0;
+                width: parent.width;
+                // The horizontal tracks reserve the scrollbar's 6px + 6px margin.
+                height: Metrics.tall ? parent.height : parent.height - 12px;
+                interactive: !root.reordering;
+
+                viewport-width: Metrics.tall ? self.width
+                    : Metrics.two-rows
+                        ? Math.ceil(root.n / 2) * (Metrics.s(150) + root.gap) - root.gap
+                        : root.n * (root.strip-w-off + root.gap) - root.gap + root.strip-delta;
+                viewport-height: Metrics.tall
+                    ? Math.ceil(root.n / 3) * (root.tall-tile-h + root.grid-gap) - root.grid-gap + 6px
+                    : self.height;
+
+                // Wide strip: one row, the tuned tile emphasised and enlarged.
+                if !Metrics.tall && !Metrics.two-rows: Rectangle {
+                    for p[i] in root.presets: PresetTile {
+                        property <bool> big: i == root.active-index && !root.reordering;
+                        x: i * (root.strip-w-off + root.gap)
+                            + ((root.strip-grow && i > root.active-index) ? root.strip-delta : 0px);
+                        y: 2px;
+                        width: self.big ? root.strip-w-on : root.strip-w-off;
+                        height: Math.round(rail.height / 1px * (self.big ? 1.0 : 0.8)) * 1px;
+                        preset: p;
+                        active: i == root.active-index;
+                        pad-top: Metrics.s(self.big ? 12 : 8);
+                        pad-bottom: Metrics.s(self.big ? 16 : 12);
+                        pad-h: Metrics.s(self.big ? 8 : 6);
+                        logo-radius: self.big ? 15px : 12px;
+                        name-font: Math.max(12px, Metrics.s(self.big
+                            ? (Metrics.landscape ? 16 : 18)
+                            : (Metrics.landscape ? 13 : 15)));
+                        selected => { root.select(i); }
+                    }
+                }
+
+                // Two-thirds slice: a 2-row horizontal grid, columns of two.
+                if !Metrics.tall && Metrics.two-rows: Rectangle {
+                    for p[i] in root.presets: PresetTile {
+                        x: Math.floor(i / 2) * (Metrics.s(150) + root.gap);
+                        y: Math.mod(i, 2) * (root.two-row-h + root.gap) + 2px;
+                        width: Metrics.s(150);
+                        height: root.two-row-h;
+                        preset: p;
+                        active: i == root.active-index;
+                        pad-top: Metrics.s(8);
+                        pad-bottom: Metrics.s(12);
+                        pad-h: Metrics.s(6);
+                        logo-radius: i == root.active-index ? 15px : 12px;
+                        name-font: Math.max(12px, Metrics.s(15));
+                        selected => { root.select(i); }
+                    }
+                }
+
+                // Tall: a 3-column vertical grid, pinned as a bottom shelf and
+                // scrolling downward.
+                if Metrics.tall: Rectangle {
+                    for p[i] in root.presets: PresetTile {
+                        x: Math.mod(i, 3) * (root.tall-tile-w + root.grid-gap) + 4px;
+                        y: Math.floor(i / 3) * (root.tall-tile-h + root.grid-gap) + 3px;
+                        width: root.tall-tile-w;
+                        height: root.tall-tile-h;
+                        preset: p;
+                        active: i == root.active-index;
+                        pad-top: Metrics.s(8);
+                        pad-bottom: Metrics.s(12);
+                        pad-h: Metrics.s(6);
+                        logo-radius: i == root.active-index ? 15px : 12px;
+                        name-font: Math.max(12px, Metrics.s(15));
+                        selected => { root.select(i); }
+                    }
+                }
+            }
+
+            // The thin drag scrollbar beneath both horizontal layouts.
+            if !Metrics.tall: Rectangle {
+                x: 0;
+                y: parent.height - 6px;
+                width: parent.width;
+                height: 6px;
+                border-radius: 999px;
+                clip: true;
+                background: rail.viewport-width > rail.width ? Pal.meter-empty : transparent;
+                if rail.viewport-width > rail.width: Rectangle {
+                    property <length> thumb-w: Math.max(24px,
+                        rail.width / rail.viewport-width * parent.width);
+                    x: (0px - rail.viewport-x) / (rail.viewport-width - rail.width)
+                        * (parent.width - self.thumb-w);
+                    y: 0;
+                    width: self.thumb-w;
+                    height: 6px;
+                    border-radius: 999px;
+                    background: Pal.scroll-thumb;
+                }
+            }
+
+            // Empty state: a dashed placeholder with the exact copy.
+            if root.n == 0: DashedBox {
+                x: 0; y: 0;
+                width: parent.width;
+                height: parent.height;
+                border-radius: 16px;
+                Text {
+                    text: "No presets yet — tune a station and tap the ★";
+                    horizontal-alignment: center;
+                    font-family: Font.face;
+                    font-size: 17px;
+                    color: Pal.dim;
+                }
+            }
+        }
+
+        if root.show-nav: NavButton {
+            glyph: "›";
+            clicked => {
+                rail.viewport-x = Math.max(rail.width - rail.viewport-width,
+                    rail.viewport-x - rail.width * 0.8);
+            }
+        }
+
+        // NEARBY disc — DONE while reordering.
+        if root.show-nearby: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: Metrics.s(92); height: Metrics.s(92);
+                border-radius: self.width / 2;
+                background: root.reordering ? Pal.blue : Pal.nearby-disc;
+                border-width: root.reordering ? 0px : 1px;
+                border-color: Pal.border;
+                opacity: nearby-touch.pressed ? 0.7 : 1.0;
+                nearby-touch := TouchArea {
+                    clicked => {
+                        if (root.reordering) { root.done-reordering(); } else { root.open-nearby(); }
+                    }
+                }
+                if !root.reordering: MagnifierTower {
+                    size: Metrics.s(64);
+                    line: Pal.nearby-line;
+                    glass: Pal.nearby-glass;
+                }
+                if root.reordering: VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: "✓"; horizontal-alignment: center;
+                        color: #FFFFFF; font-size: 26px; font-weight: 700;
+                    }
+                    Text {
+                        text: "DONE"; horizontal-alignment: center;
+                        color: #FFFFFF; font-family: Font.face; font-weight: Font.bold;
+                        font-size: 13px; letter-spacing: 1.5px;
+                    }
+                }
+            }
+        }
+    }
+}

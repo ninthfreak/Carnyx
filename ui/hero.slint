@@ -1,0 +1,385 @@
+// Hero band (ANDROID §4.2) — the primary readout, plus the RadioText strip that
+// sits BELOW the card as a sibling, not inside it.
+//
+// The station row has two forms, decided by whether the tuned station has a real
+// logo: the logo REPLACES the big call sign and fills the card, or there is no
+// logo and the big call sign stands alone. There is deliberately no monogram tile
+// on the hero — the generated cube adds nothing at this size (it still appears on
+// preset tiles and peek cards).
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { Preset } from "types.slint";
+import { PeekCard } from "presets.slint";
+import { StarIcon, PowerIcon } from "icons.slint";
+
+// RadioText: static and centred when short, a continuous 16s left ticker beyond
+// ~46 characters. Empty shows a dim italic placeholder.
+export component RadioTextStrip inherits Rectangle {
+    in property <string> text;
+
+    property <bool> has-text: root.text != "";
+    property <string> shown: root.has-text ? root.text : "Waiting for RadioText…";
+    property <bool> marquee: root.shown.character-count > 46;
+
+    // One linear pass per loop; x is derived so a text change re-derives the
+    // travel instead of stranding the ticker at a stale offset.
+    property <float> phase: 0;
+    init => { self.phase = 1; }
+    animate phase { duration: 16s; easing: linear; iteration-count: -1; }
+
+    height: Metrics.rt-height;
+    border-width: 1px;
+    border-radius: 16px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    clip: true;
+
+    if !root.marquee: Text {
+        x: 28px;
+        width: parent.width - 56px;
+        height: parent.height;
+        text: root.shown;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        // Clip at the strip edges like the design's overflow:hidden — never an
+        // ellipsis; the references show edge-clipped text, not "…".
+        overflow: clip;
+        font-family: Font.face;
+        font-size: Metrics.rt-font;
+        font-italic: !root.has-text;
+        color: root.has-text ? Pal.text : Pal.dim;
+    }
+
+    // Two copies with a fixed gap, translating left by half the track so the
+    // second copy lands where the first began.
+    if root.marquee: Rectangle {
+        x: 28px - root.phase * (copy-a.preferred-width + 100px);
+        y: 0;
+        width: copy-a.preferred-width * 2 + 100px;
+        height: parent.height;
+        copy-a := Text {
+            x: 0;
+            width: self.preferred-width;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.shown;
+            font-family: Font.face;
+            font-size: Metrics.rt-font;
+            color: Pal.text;
+        }
+        Text {
+            x: copy-a.preferred-width + 100px;
+            width: copy-a.preferred-width;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.shown;
+            font-family: Font.face;
+            font-size: Metrics.rt-font;
+            color: Pal.text;
+        }
+    }
+}
+
+// Audio-priority claim/release (§4.7) — mirrors the star, top-left. A dim outline
+// while this app holds priority; solid amber with a white glyph and a slow
+// expanding ring once it is released, to draw the eye back. This is NOT a mute.
+component PowerButton inherits Rectangle {
+    in property <bool> dead: false;
+    callback toggled();
+
+    property <float> ring: 0;
+    init => { self.ring = 1; }
+    animate ring { duration: 1800ms; easing: ease-out; iteration-count: -1; }
+
+    width: Metrics.star;
+    height: Metrics.star;
+    border-radius: Metrics.s(16);
+    background: root.dead ? Pal.power-on : transparent;
+    border-width: root.dead ? 0px : 1px;
+    border-color: Pal.border;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    if root.dead: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: Metrics.star * (1 + 0.9 * root.ring);
+        height: self.width;
+        border-radius: Metrics.s(16) * (1 + 0.9 * root.ring);
+        background: Pal.power-on;
+        opacity: root.ring < 0.7 ? 0.5 * (1 - root.ring / 0.7) : 0;
+    }
+    touch := TouchArea { clicked => { root.toggled(); } }
+    PowerIcon {
+        size: Math.round(Metrics.star / 1px * 0.58) * 1px;
+        color: root.dead ? #FFFFFF : Pal.dim;
+    }
+}
+
+// A real logo on the hero. Fixed HEIGHT (it grows as the call sign and frequency
+// are hidden); the plate hugs the logo's own width so square badges and wide
+// wordmarks both sit tight instead of floating in an empty box.
+component HeroLogo inherits Rectangle {
+    in property <image> logo;
+    in property <length> logo-h;
+    in property <length> max-w;
+
+    // Before the source is known, assume the 16/10 landscape shape the rest of
+    // the face uses for logo plates, so the plate can never render one frame at
+    // the full card width as a white flash and then snap in.
+    property <float> aspect: (root.logo.height > 0)
+        ? (root.logo.width / root.logo.height) : 1.6;
+
+    width: Math.min(root.max-w, Math.round(root.logo-h / 1px * root.aspect) * 1px) + 16px;
+    height: root.logo-h + 8px;
+    border-radius: Metrics.s(16);
+    background: #FFFFFF;
+    clip: true;
+
+    Image {
+        source: root.logo;
+        image-fit: contain;
+        width: parent.width - 16px;
+        height: root.logo-h;
+    }
+}
+
+export component HeroCard inherits Rectangle {
+    in property <string> ident;
+    in property <string> freq-label;
+    in property <image> logo;
+    in property <bool> has-logo: false;
+    /// Per-station hero options (§6.4). Both default OFF for a station that HAS a
+    /// logo, so the logo fills the card; a no-logo hero always shows both.
+    in property <bool> show-call: true;
+    in property <bool> show-freq: true;
+    in property <bool> saved: false;
+    in property <bool> dead: false;
+    /// The client-side FCC sweep is running: the identity reads "Scanning…" and
+    /// the digits slide as the dial steps.
+    in property <bool> scanning: false;
+    in property <int> scan-dir: 0;
+
+    callback toggle-save();
+    callback open-numpad();
+    callback toggle-audio();
+
+    property <bool> tall: Metrics.tall;
+    property <length> pad-v: Metrics.s(root.tall ? 30 : 24);
+    property <length> pad-h: Metrics.s(root.tall ? 26 : 30);
+    property <length> corner: Metrics.s(root.tall ? 16 : 18);
+
+    // Hero logo growth (LOGO-SIZING §2.1): three tiers, stepping up as the call
+    // sign and frequency rows are hidden. Both hidden is the logo default and the
+    // largest. Landscape is its own branch, not the generic wide one. Capped so a
+    // logo can never eat a short surface's whole card.
+    property <int> hidden: (root.show-call ? 0 : 1) + (root.show-freq ? 0 : 1);
+    property <length> logo-h: Math.min(
+        Metrics.s(root.hidden == 0
+            ? (root.tall ? 108 : Metrics.landscape ? 120 : 144)
+            : root.hidden == 1
+                ? (root.tall ? 152 : Metrics.landscape ? 171 : 205)
+                : (root.tall ? 188 : Metrics.landscape ? 215 : 256)),
+        Math.round(Metrics.h * 0.42) * 1px);
+    property <length> logo-max-w: root.width - Metrics.s(root.tall ? 52 : 60);
+
+    border-width: 1px;
+    border-radius: 28px;
+    border-color: Pal.border;
+    background: Pal.panel;
+    drop-shadow-blur: root.dead ? 0px : 22px;
+    drop-shadow-offset-y: root.dead ? 0px : 14px;
+    drop-shadow-color: #0000002E;
+
+    VerticalLayout {
+        padding-top: root.pad-v;
+        padding-bottom: root.pad-v;
+        padding-left: root.pad-h;
+        padding-right: root.pad-h;
+        spacing: Metrics.s(14);
+        alignment: center;
+
+        if root.scanning: Text {
+            text: "Scanning…";
+            horizontal-alignment: center;
+            font-family: Font.face; font-weight: Font.bold;
+            font-italic: true;
+            font-size: Metrics.call-size;
+            letter-spacing: -1px;
+            color: Pal.dim;
+        }
+
+        // Real logo REPLACES the big call sign; the call sign becomes a small
+        // label beneath it.
+        if !root.scanning && root.has-logo: VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                HeroLogo { logo: root.logo; logo-h: root.logo-h; max-w: root.logo-max-w; }
+            }
+            if root.show-call && root.ident != "": Text {
+                text: root.ident;
+                horizontal-alignment: center;
+                overflow: elide;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.s(root.tall ? 22 : 26);
+                letter-spacing: 0.5px;
+                color: Pal.dim;
+            }
+        }
+
+        // No real logo: the big call sign, no monogram tile. When nothing has
+        // resolved (built-in tuner with no GPS lock yet) this is empty and the
+        // frequency below stands as the identity — never an inaccurate "Tuning…".
+        if !root.scanning && !root.has-logo && root.ident != "": Text {
+            text: root.ident;
+            horizontal-alignment: center;
+            overflow: elide;
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: Metrics.call-size;
+            letter-spacing: -1px;
+            color: Pal.text;
+        }
+
+        // Always show the frequency when there is no name, even if the user turned
+        // the frequency line off — otherwise the hero would be blank.
+        if root.scanning || root.show-freq || root.ident == "": Rectangle {
+            height: freq.preferred-height + 6px;
+            freq := Text {
+                y: 6px;
+                width: parent.width;
+                text: root.freq-label;
+                horizontal-alignment: center;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.freq-size;
+                color: Pal.amber;
+            }
+            TouchArea { clicked => { root.open-numpad(); } }
+        }
+    }
+
+    // The star ALWAYS sits in the card's top-right corner, on both tracks — never
+    // inline with the station identity. It is not part of the centred group.
+    if !root.scanning: Rectangle {
+        x: root.width - root.corner - Metrics.star;
+        y: root.corner;
+        width: Metrics.star;
+        height: Metrics.star;
+        border-radius: Metrics.s(16);
+        background: root.saved ? Pal.blue-fill : transparent;
+        border-width: root.saved ? 0px : 1px;
+        border-color: Pal.border;
+        opacity: star-touch.pressed ? 0.55 : 1.0;
+        star-touch := TouchArea { clicked => { root.toggle-save(); } }
+        StarIcon {
+            size: Metrics.s(30);
+            filled: root.saved;
+            color: Pal.amber;
+            outline: Pal.dim;
+        }
+    }
+
+    // §4.7: a light grey veil over the hero card when priority is released. The
+    // power button is drawn ABOVE it, in full colour — the one element that keeps
+    // its colour on a dead face.
+    if root.dead: Rectangle {
+        border-radius: 28px;
+        background: Pal.hero-veil;
+    }
+
+    if !root.scanning: PowerButton {
+        x: root.corner;
+        y: root.corner;
+        dead: root.dead;
+        toggled => { root.toggle-audio(); }
+    }
+}
+
+// The hero row: the card, flanked by the previous and next presets as peek cards
+// that tuck UNDER it. They flank it on BOTH tracks whenever a previous/next
+// preset exists — tucked in tighter on tall than on wide.
+export component HeroRow inherits Rectangle {
+    in property <Preset> prev-preset;
+    in property <Preset> next-preset;
+    in property <bool> has-prev: false;
+    in property <bool> has-next: false;
+    in property <length> card-w;
+    /// Wide tracks give the row its height and the card fills 98% of it; the tall
+    /// track gives the row nothing and the card sizes to its own content.
+    in property <bool> card-fill: true;
+
+    in property <string> ident;
+    in property <string> freq-label;
+    in property <image> logo;
+    in property <bool> has-logo: false;
+    in property <bool> show-call: true;
+    in property <bool> show-freq: true;
+    in property <bool> saved: false;
+    in property <bool> dead: false;
+    in property <bool> scanning: false;
+
+    callback step(int);
+    callback toggle-save();
+    callback open-numpad();
+    callback toggle-audio();
+
+    property <length> peek-w: Metrics.peek-w;
+    property <length> overlap: Metrics.peek-overlap;
+    // CarFM lays this out as a centred flex row whose peek boxes carry a negative
+    // margin that tucks them under the card. The same arithmetic, done directly:
+    // the row is the two full peek boxes plus the card, less one overlap a side.
+    property <length> total-w: (root.has-prev ? root.peek-w - root.overlap : 0px)
+        + root.card-w
+        + (root.has-next ? root.peek-w - root.overlap : 0px);
+    property <length> start-x: (root.width - root.total-w) / 2;
+    property <length> card-x: root.start-x + (root.has-prev ? root.peek-w - root.overlap : 0px);
+    // A peek is authored at 0.88, so it sits centred inside its own layout box.
+    property <length> peek-inset: root.peek-w * 0.06;
+    property <length> peek-y: (root.height - root.peek-w * 0.88) / 2;
+
+    property <length> resolved-card-h: root.card-fill ? root.height * 0.98 : card.preferred-height;
+    property <length> peek-h: (root.has-prev || root.has-next) ? root.peek-w * 0.88 : 0px;
+    // Content-sized on the tall track, where the parent gives the row no height of
+    // its own. Deliberately reads the card's PREFERRED height, never its resolved
+    // one: the latter is the row's own height on the wide track, and asking a
+    // layout how tall it is in order to tell it how tall to be is a binding loop.
+    min-height: root.card-fill ? root.peek-h : Math.max(card.preferred-height, root.peek-h);
+
+    if root.has-prev: PeekCard {
+        x: root.start-x + root.peek-inset;
+        y: root.peek-y;
+        card-w: root.peek-w;
+        side: "left";
+        preset: root.prev-preset;
+        opacity: root.dead ? 0.28 : 0.6;
+        selected => { root.step(-1); }
+    }
+    if root.has-next: PeekCard {
+        x: root.card-x + root.card-w - root.overlap + root.peek-inset;
+        y: root.peek-y;
+        card-w: root.peek-w;
+        side: "right";
+        preset: root.next-preset;
+        opacity: root.dead ? 0.28 : 0.6;
+        selected => { root.step(1); }
+    }
+    // Above the peeks, so they tuck behind it.
+    card := HeroCard {
+        x: root.card-x;
+        y: (root.height - root.resolved-card-h) / 2;
+        width: root.card-w;
+        height: root.resolved-card-h;
+        ident: root.ident;
+        freq-label: root.freq-label;
+        logo: root.logo;
+        has-logo: root.has-logo;
+        show-call: root.show-call;
+        show-freq: root.show-freq;
+        saved: root.saved;
+        dead: root.dead;
+        scanning: root.scanning;
+        toggle-save => { root.toggle-save(); }
+        open-numpad => { root.open-numpad(); }
+        toggle-audio => { root.toggle-audio(); }
+    }
+}
