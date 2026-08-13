@@ -168,17 +168,15 @@ Causes, in the order worth checking:
 And the two this project can produce, both of which `check-apk.sh` catches:
 
 - **`INSTALL_FAILED_NO_MATCHING_ABIS`** — the APK has no native library for the
-  unit's CPU. `build_targets` here is arm64 only (see the Skia section above).
-  Check the unit and the APK against each other:
-
-  The unit is 32-bit, so `armeabi-v7a` is the one that decides whether it
-  installs at all:
+  unit's CPU. The unit is 32-bit, so `armeabi-v7a` is the one that decides
+  whether it installs at all:
 
   ```sh
   unzip -l target/debug/apk/carnyx.apk | grep 'lib/'
   ```
 
-  A build narrowed with `--target aarch64-linux-android` produces exactly this.
+  A build narrowed with `--target aarch64-linux-android` produces exactly this,
+  which is why narrowing is for iterating only.
 
 - **`INSTALL_PARSE_FAILED_MANIFEST_MALFORMED`** — almost certainly a missing
   `android:exported`. Android 12 refuses any package whose targetSdk is 31+ when
