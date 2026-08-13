@@ -67,6 +67,13 @@ label = "Carnyx"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 
 [package.metadata.android.application.activity]
+# REQUIRED, and cargo-apk will not add it: Android 12 refuses to install a package
+# whose targetSdk is 31+ if a component with an intent-filter does not declare
+# android:exported. cargo-apk defaults Activity::exported to None and emits no
+# attribute (ndk-build::manifest), while always serialising a MAIN/LAUNCHER
+# filter — so the pair is a guaranteed INSTALL_PARSE_FAILED_MANIFEST_MALFORMED,
+# which the on-device installer reports only as "App not installed".
+exported = true
 # DUDU OS resizes the app into vertical thirds, and the face reflows per surface
 # rather than restarting — so it handles these itself.
 config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density"

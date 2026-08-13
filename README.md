@@ -120,6 +120,41 @@ curl -sSI -o /dev/null -w '%{http_code}\n' -L \
 and make sure `python3` is installed. NDK 30 is fine for that path —
 skia-bindings' version gates are `>= 22` and `>= 23` with no upper bound.
 
+### "App not installed"
+
+That is the on-device installer refusing the package, and its dialog never says
+why. `adb install` does:
+
+```sh
+adb install -r target/debug/apk/carnyx.apk
+```
+
+The two failures this project can actually produce:
+
+- **`INSTALL_FAILED_NO_MATCHING_ABIS`** — the APK has no native library for the
+  unit's CPU. `build_targets` here is arm64 only (see the Skia section above).
+  Check the unit and the APK against each other:
+
+  ```sh
+  adb shell getprop ro.product.cpu.abilist
+  unzip -l target/debug/apk/carnyx.apk | grep 'lib/'
+  ```
+
+  If the unit is 32-bit, add `"armv7-linux-androideabi"` back to `build_targets`
+  and accept the Skia source build.
+
+- **`INSTALL_PARSE_FAILED_MANIFEST_MALFORMED`** — almost certainly a missing
+  `android:exported`. Android 12 refuses any package whose targetSdk is 31+ when
+  a component with an intent-filter does not declare it, and cargo-apk defaults
+  `Activity::exported` to `None` while always serialising a MAIN/LAUNCHER filter.
+  `Cargo.toml` now sets `exported = true`; if you are building an older checkout,
+  that is the fix.
+
+Useful when neither is obvious: `adb shell getprop ro.build.version.sdk` for the
+unit's API level against the `min_sdk_version` in `Cargo.toml`, and
+`aapt dump badging target/debug/apk/carnyx.apk` to read back what the APK really
+declares.
+
 ### Release builds need a keystore
 
 `cargo apk build --lib --release` **fails** with `MissingReleaseKey` unless a key
