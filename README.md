@@ -93,24 +93,53 @@ both ABIs, so one APK covers arm64 and armv7. No `cmdline-tools` are needed.
 ### Release builds need a keystore
 
 `cargo apk build --lib --release` **fails** with `MissingReleaseKey` unless a key
-is configured — the debug keystore is only auto-generated for the dev profile,
-where cargo-apk mints `~/.android/debug.keystore` (password `android`) on first
-use. For release, either point at a keystore through the environment:
+is configured. The auto-generated `~/.android/debug.keystore` (password
+`android`) is dev-profile only.
+
+**Keep the keystore outside this repository.** Not in it and gitignored —
+outside it. A key inside the working tree survives only as long as the ignore
+rules stay right, and there is no undo for a signing key that reaches a remote.
+
+Generate one, once, wherever you keep secrets:
 
 ```sh
-CARGO_APK_RELEASE_KEYSTORE=/path/to/release.keystore \
-CARGO_APK_RELEASE_KEYSTORE_PASSWORD=... \
-cargo apk build --lib --release
+mkdir -p ~/.keys
+keytool -genkeypair -v \
+  -keystore ~/.keys/carnyx-release.jks \
+  -storetype PKCS12 -alias carnyx \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -storepass "$PASS" -keypass "$PASS"
 ```
 
-or add a stanza to `Cargo.toml` (path is relative to the crate root, and the file
-itself must never be committed):
+**One key, one password**, and that is not a style preference: cargo-apk shells
+out to `apksigner sign --ks <path> --ks-pass pass:<password>` and passes neither
+`--ks-key-alias` nor `--key-pass` (`ndk-build::apk::UnsignedApk::sign`). A
+keystore holding several aliases, or one whose key password differs from its
+store password, cannot be used this way. PKCS12 with both passwords set the same
+is the shape that fits.
+
+Then build with the path and password in the environment:
+
+```sh
+CARGO_APK_RELEASE_KEYSTORE=~/.keys/carnyx-release.jks \
+CARGO_APK_RELEASE_KEYSTORE_PASSWORD="$PASS" \
+cargo apk build --lib --release
+# -> target/release/apk/carnyx.apk
+```
+
+cargo-apk also accepts a `Cargo.toml` stanza:
 
 ```toml
 [package.metadata.android.signing.release]
-path = "release.keystore"
+path = "release.keystore"        # relative to the crate root, or absolute
 keystore_password = "..."
 ```
+
+**Do not use it.** `keystore_password` is not optional in that struct, so the
+stanza puts a plaintext password in a tracked file. The environment variables
+keep both the path and the password out of the repository entirely.
+
+`*.keystore` and `*.jks` are gitignored as a backstop, not as the plan.
 
 ### Two cargo-apk traps
 
