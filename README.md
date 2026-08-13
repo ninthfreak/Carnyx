@@ -114,6 +114,18 @@ this device compiles Skia from source.** The published `skia-bindings` crate is
 2.3 MB and contains no Skia tree, so the build fetches one; budget accordingly and
 make sure `git` and `python3` are present.
 
+`build_targets` lists both ABIs because that is what the project ships, but a
+first build does not need to pay for both. `--target` overrides the list
+(cargo-apk prefers the flag over the manifest), so build only what the unit runs:
+
+```sh
+cargo apk build --lib --target armv7-linux-androideabi
+```
+
+If the Skia build fails on a very recent NDK, the first thing to try is an older
+one — 27.x is what React Native pins for CarFM, and NDKs install side by side.
+Point both `ANDROID_NDK_ROOT` and `ANDROID_NDK` at it.
+
 Before a first Android build it is worth checking whether the arm64 prebuilt
 exists, because the answer is the difference between a download and an hour:
 
