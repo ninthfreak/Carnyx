@@ -106,8 +106,11 @@ the manifest declares `android:exported` and a launchable activity, and the APK
 is signed.
 
 `--lib` because the crate is a `cdylib` with no `main`: the entry point is
-`android_main`. No `--target` flag: `build_targets` in `Cargo.toml` already lists
-both ABIs, so one APK covers arm64 and armv7. No `cmdline-tools` are needed.
+`android_main`. No `--target` flag, on purpose — `build_targets` in `Cargo.toml`
+lists both ABIs and **both are built every time**. The unit is 32-bit today, but
+an APK is a poor place to discover months later that one architecture was never
+compiled. `tools/check-apk.sh` fails if either is missing. No `cmdline-tools` are
+needed.
 
 ### Skia comes along whether you want it or not
 
@@ -124,13 +127,13 @@ this device compiles Skia from source.** The published `skia-bindings` crate is
 2.3 MB and contains no Skia tree, so the build fetches one; budget accordingly and
 make sure `git` and `python3` are present.
 
-`build_targets` lists both ABIs because that is what the project ships, but a
-first build does not need to pay for both. `--target` overrides the list
-(cargo-apk prefers the flag over the manifest), so build only what the unit runs:
+Skia is resolved **per ABI**, so building both means two answers: armv7 has no
+prebuilt and compiles from source, and arm64 may or may not — the curl above,
+with the triple swapped, says which. Both are cached in `target/` afterwards.
 
-```sh
-cargo apk build --lib --target armv7-linux-androideabi
-```
+`--target armv7-linux-androideabi` narrows a build to the one ABI the unit runs.
+That is for iterating when a full build is in the way, not for anything that
+leaves the machine: what goes on the flash drive should have both.
 
 If the Skia build fails on a very recent NDK, the first thing to try is an older
 one — 27.x is what React Native pins for CarFM, and NDKs install side by side.
@@ -168,13 +171,14 @@ And the two this project can produce, both of which `check-apk.sh` catches:
   unit's CPU. `build_targets` here is arm64 only (see the Skia section above).
   Check the unit and the APK against each other:
 
-  The unit is 32-bit, so `armeabi-v7a` has to be in there:
+  The unit is 32-bit, so `armeabi-v7a` is the one that decides whether it
+  installs at all:
 
   ```sh
   unzip -l target/debug/apk/carnyx.apk | grep 'lib/'
   ```
 
-  Building with `--target aarch64-linux-android` alone produces exactly this.
+  A build narrowed with `--target aarch64-linux-android` produces exactly this.
 
 - **`INSTALL_PARSE_FAILED_MANIFEST_MALFORMED`** — almost certainly a missing
   `android:exported`. Android 12 refuses any package whose targetSdk is 31+ when

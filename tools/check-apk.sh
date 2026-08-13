@@ -11,12 +11,14 @@
 set -uo pipefail
 
 APK="${1:-target/debug/apk/carnyx.apk}"
-# The unit is 32-bit ARM. An APK without this ABI cannot install on it.
-NEED_ABI="armeabi-v7a"
+# Both, always. The unit is 32-bit ARM, so armeabi-v7a is what actually installs
+# today — but the project ships both, and an APK quietly missing one is the kind
+# of thing that is only noticed on different hardware, months later.
+NEED_ABIS=(armeabi-v7a arm64-v8a)
 
 if [[ ! -f "$APK" ]]; then
   echo "No APK at $APK — build one first:" >&2
-  echo "  cargo apk build --lib --target armv7-linux-androideabi" >&2
+  echo "  cargo apk build --lib" >&2
   exit 1
 fi
 
@@ -37,12 +39,17 @@ if [[ -z "$abis" ]]; then
   fail=1
 else
   while read -r abi; do note "" "$abi"; done <<< "$abis"
-  if grep -qx "$NEED_ABI" <<< "$abis"; then
-    note "OK" "$NEED_ABI present"
-  else
-    note "FAIL" "$NEED_ABI MISSING — this will not install on the unit"
-    fail=1
-  fi
+  for need in "${NEED_ABIS[@]}"; do
+    if grep -qx "$need" <<< "$abis"; then
+      note "OK" "$need present"
+    elif [[ "$need" == "armeabi-v7a" ]]; then
+      note "FAIL" "$need MISSING — this will not install on the unit"
+      fail=1
+    else
+      note "FAIL" "$need MISSING — installs on the unit, but the build is short an ABI"
+      fail=1
+    fi
+  done
 fi
 echo
 
