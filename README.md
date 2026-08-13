@@ -76,10 +76,16 @@ cargo install cargo-apk
 
 export ANDROID_HOME=~/Android/Sdk
 export ANDROID_NDK_ROOT=~/Android/Sdk/ndk/<version>
+export ANDROID_NDK="$ANDROID_NDK_ROOT"       # yes, a third one — see below
 export JAVA_HOME=<android-studio>/jbr        # only if javac is not on PATH
 
 cargo apk build --lib
 ```
+
+`ANDROID_NDK` is not a typo for `ANDROID_NDK_ROOT`. cargo-apk reads the latter;
+`skia-bindings` reads `ANDROID_NDK` and nothing else
+(`build_support/platform/android.rs:69`), and panics with `ANDROID_NDK variable
+not set` without it. Both are needed.
 
 The APK lands at **`target/debug/apk/carnyx.apk`**. Copy it to the unit however
 you normally do — `adb install -r target/debug/apk/carnyx.apk`, a USB stick,
@@ -89,6 +95,30 @@ tails logcat; `build` is the one that just produces the file.)
 `--lib` because the crate is a `cdylib` with no `main`: the entry point is
 `android_main`. No `--target` flag: `build_targets` in `Cargo.toml` already lists
 both ABIs, so one APK covers arm64 and armv7. No `cmdline-tools` are needed.
+
+### Skia comes along whether you want it or not
+
+Slint's Android backend depends on `i-slint-renderer-skia` **non-optionally** —
+`i-slint-backend-android-activity`'s manifest declares it under
+`[target.'cfg(target_os = "android")'.dependencies]` with no feature guarding it.
+So an Android build always pulls `skia-bindings`, which first tries to download a
+prebuilt keyed by `<rust-skia-hash>-<target-triple>-<features>` and, failing
+that, compiles Skia from source.
+
+That is why `build_targets` is arm64 only: there is no armv7 prebuilt for
+skia-bindings 0.99, so including that ABI guarantees a full source build.
+
+Before a first Android build it is worth checking whether the arm64 prebuilt
+exists, because the answer is the difference between a download and an hour:
+
+```sh
+curl -sSI -o /dev/null -w '%{http_code}\n' -L \
+  https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-aarch64-linux-android-gl-jpegd-jpege-pdf-vulkan.tar.gz
+```
+
+`200` means it downloads. `404` means Skia builds from source: budget the time,
+and make sure `python3` is installed. NDK 30 is fine for that path —
+skia-bindings' version gates are `>= 22` and `>= 23` with no upper bound.
 
 ### Release builds need a keystore
 

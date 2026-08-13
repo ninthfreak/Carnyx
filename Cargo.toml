@@ -47,7 +47,15 @@ png = "0.18"
 # NDK, so the toolchain path beyond manifest parsing is untested.
 [package.metadata.android]
 package = "com.ninthfreak.carnyx"
-build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+# arm64 ONLY, deliberately. Slint's Android backend has a NON-OPTIONAL dependency
+# on i-slint-renderer-skia (i-slint-backend-android-activity's Cargo.toml has no
+# feature to turn it off), so every Android build drags in skia-bindings, which
+# wants a prebuilt binary keyed by target triple. There is no armv7 prebuilt for
+# skia-bindings 0.99 — the download 404s and it falls back to compiling Skia from
+# source, which is a very long build for an ABI a modern head unit does not run.
+# Check the unit with `adb shell getprop ro.product.cpu.abi`; if it really is
+# armv7-only, add the triple back and budget for the source build.
+build_targets = ["aarch64-linux-android"]
 
 [package.metadata.android.sdk]
 min_sdk_version = 23
