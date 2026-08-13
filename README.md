@@ -90,10 +90,20 @@ cargo apk build --lib
 (`build_support/platform/android.rs:69`), and panics with `ANDROID_NDK variable
 not set` without it. Both are needed.
 
-The APK lands at **`target/debug/apk/carnyx.apk`**. Copy it to the unit however
-you normally do — `adb install -r target/debug/apk/carnyx.apk`, a USB stick,
-whatever. (`cargo apk run` exists but it builds AND installs over adb AND then
-tails logcat; `build` is the one that just produces the file.)
+The APK lands at **`target/debug/apk/carnyx.apk`**, and goes to the unit on a USB
+stick. (`cargo apk run` and `adb install` exist, but this unit is not on adb.)
+
+**Check it before you carry it out:**
+
+```sh
+./tools/check-apk.sh
+```
+
+Without adb there is no install error to read — the unit says "App not
+installed" and stops. That script checks, on the machine that built it, the
+things which produce exactly that message: the `armeabi-v7a` library is present,
+the manifest declares `android:exported` and a launchable activity, and the APK
+is signed.
 
 `--lib` because the crate is a `cdylib` with no `main`: the entry point is
 `android_main`. No `--target` flag: `build_targets` in `Cargo.toml` already lists
@@ -141,25 +151,30 @@ skia-bindings' version gates are `>= 22` and `>= 23` with no upper bound.
 ### "App not installed"
 
 That is the on-device installer refusing the package, and its dialog never says
-why. `adb install` does:
+why. With the unit on adb, `adb install -r <apk>` prints the real code; loading
+from a stick, there is no such luxury — so run `./tools/check-apk.sh` first and
+carry out only an APK that passes.
 
-```sh
-adb install -r target/debug/apk/carnyx.apk
-```
+Causes, in the order worth checking:
 
-The two failures this project can actually produce:
+- **The file manager lacks install permission.** Android requires "Install
+  unknown apps" per app, granted to whatever browses the stick. Nothing about the
+  APK will fix this one.
+- **A truncated copy.** `md5sum` on both sides before unmounting.
+
+And the two this project can produce, both of which `check-apk.sh` catches:
 
 - **`INSTALL_FAILED_NO_MATCHING_ABIS`** — the APK has no native library for the
   unit's CPU. `build_targets` here is arm64 only (see the Skia section above).
   Check the unit and the APK against each other:
 
+  The unit is 32-bit, so `armeabi-v7a` has to be in there:
+
   ```sh
-  adb shell getprop ro.product.cpu.abilist
   unzip -l target/debug/apk/carnyx.apk | grep 'lib/'
   ```
 
-  If the unit is 32-bit, add `"armv7-linux-androideabi"` back to `build_targets`
-  and accept the Skia source build.
+  Building with `--target aarch64-linux-android` alone produces exactly this.
 
 - **`INSTALL_PARSE_FAILED_MANIFEST_MALFORMED`** — almost certainly a missing
   `android:exported`. Android 12 refuses any package whose targetSdk is 31+ when
@@ -168,10 +183,8 @@ The two failures this project can actually produce:
   `Cargo.toml` now sets `exported = true`; if you are building an older checkout,
   that is the fix.
 
-Useful when neither is obvious: `adb shell getprop ro.build.version.sdk` for the
-unit's API level against the `min_sdk_version` in `Cargo.toml`, and
-`aapt dump badging target/debug/apk/carnyx.apk` to read back what the APK really
-declares.
+To read back what the APK actually declares, rather than what `Cargo.toml` asked
+for: `aapt dump badging target/debug/apk/carnyx.apk`.
 
 ### Release builds need a keystore
 
