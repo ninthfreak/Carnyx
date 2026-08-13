@@ -2,6 +2,9 @@
 
 Radio for a NOWADA (NWD) Android head unit. Slint interface, Rust logic.
 
+**The unit is 32-bit ARM** (`armeabi-v7a`). Every build has to produce that ABI;
+an arm64-only APK will not install on it.
+
 The successor to CarFM, which is React Native and is being retired. Carnyx is
 not a port of that codebase — it is a rebuild that salvages the parts worth
 keeping: the RDS decoder, the RBDS station identity and geo maths, and the
@@ -105,8 +108,11 @@ So an Android build always pulls `skia-bindings`, which first tries to download 
 prebuilt keyed by `<rust-skia-hash>-<target-triple>-<features>` and, failing
 that, compiles Skia from source.
 
-That is why `build_targets` is arm64 only: there is no armv7 prebuilt for
-skia-bindings 0.99, so including that ABI guarantees a full source build.
+There is no armv7 prebuilt for skia-bindings 0.99 — the download 404s. Since the
+head unit is 32-bit, that is not avoidable by dropping the ABI: **every build for
+this device compiles Skia from source.** The published `skia-bindings` crate is
+2.3 MB and contains no Skia tree, so the build fetches one; budget accordingly and
+make sure `git` and `python3` are present.
 
 Before a first Android build it is worth checking whether the arm64 prebuilt
 exists, because the answer is the difference between a download and an hour:
