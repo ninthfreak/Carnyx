@@ -58,7 +58,21 @@ package = "com.ninthfreak.carnyx"
 build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
 
 [package.metadata.android.sdk]
-min_sdk_version = 23
+# 26 is NOT a preference, it is skia-bindings' floor. That crate hardcodes API
+# level 26 in three places (build_support/platform/android.rs:10) — `ndk_api=26`
+# for the GN build, and `-D__ANDROID_API__=26` for the four binding .cpp files
+# it compiles itself.
+#
+# cargo-apk turns THIS number into `CXXFLAGS=--target=armv7a-linux-androideabi<n>`,
+# which lands LAST on the compiler line and therefore wins. At 23 the two halves
+# disagreed: Skia's own 1156 targets built at 26, then the bindings compiled at
+# 23 and libc++'s <locale> failed on strtof_l/strtod_l, which bionic marks
+# __INTRODUCED_IN(26). Raising it here is what makes them agree.
+#
+# The cost is a real install floor: Android 8.0. If the head unit is older than
+# that, skia-bindings 0.99 cannot be built for it at all and the way forward is
+# FemtoVG, which carries no such floor — see the README.
+min_sdk_version = 26
 target_sdk_version = 34
 
 [package.metadata.android.application]

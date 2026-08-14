@@ -185,7 +185,40 @@ Any r27 patch works; the whole line predates the bionic change, and r27d
 which is equally sound and saves a 660 MB download. NDKs sit side by side; both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have
 to point at the one you want.
 
-That unblocks the compile, but it does not make armv7 a supported target.
+**Confirmed on r27.3.13750724: Skia itself builds for armv7.** All 1156 ninja
+targets compile and `libskia.a` links, from source, with no unversioned-triple
+error anywhere. Despite the paragraph below, 32-bit ARM Android is not broken in
+skia-bindings 0.99 — it is only unshipped.
+
+**Then set `min_sdk_version = 26`.** After Skia links, skia-bindings compiles
+four binding files of its own (`bindings.cpp`, `gl.cpp`, `vulkan.cpp`,
+`gpu.cpp`) through cc-rs rather than GN, and those failed:
+
+```
+sysroot/usr/include/c++/v1/locale:776:10: error: 'strtof_l' is unavailable: introduced in Android 26
+sysroot/usr/include/c++/v1/locale:781:10: error: 'strtod_l' is unavailable: introduced in Android 26
+```
+
+Three `--target` flags reach that compiler line and the LAST one wins:
+cc-rs contributes `armv7-none-linux-android`, skia-bindings adds its unversioned
+`armv7-linux-androideabi`, and cargo-apk appends
+`CXXFLAGS=--target=armv7a-linux-androideabi23` — built from `min_sdk_version` in
+`Cargo.toml`. So Skia compiled at API 26 (skia-bindings hardcodes `ndk_api=26`)
+while its own bindings compiled at API 23, and libc++'s `<locale>` needs
+`strtof_l`/`strtod_l`, which bionic marks `__INTRODUCED_IN(26)`.
+
+`-D__ANDROID_API__=26` is on that line too and does not help — it draws only a
+macro-redefinition warning, because the availability attributes read
+`__ANDROID_MIN_SDK_VERSION__` from the target triple, not `__ANDROID_API__`.
+
+The floor is skia-bindings', not ours: API 26 is hardcoded at
+`build_support/platform/android.rs:10`. Matching it means the APK will not
+install below Android 8.0. **If the head unit is older than Android 8.0, Skia is
+not available to this project at all** and the way forward is FemtoVG, below,
+which carries no such floor.
+
+The paragraph below is why armv7 was expected to fail, and it is still true of
+what upstream ships — it was simply not what stopped the build.
 **rust-skia has never supported 32-bit ARM Android** — not dropped, never added.
 Its README lists `aarch64-linux-android` and `x86_64-linux-android` only, there
 is no armv7 prebuilt at any version, and rust-skia#850 has been open since
