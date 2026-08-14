@@ -210,6 +210,38 @@ Every problem in the section above comes from one place: Slint's `android-activi
 backend hard-depends on the Skia renderer. Nothing here needs Skia. The face is
 text, rectangles and a few paths, on a 32-bit head unit.
 
+Dropping Skia does NOT mean dropping the GPU. Slint's third renderer, FemtoVG, is
+pure Rust over OpenGL ES — `femtovg` and `glow`, no C++ anywhere — and unlike the
+software renderer it implements `draw_box_shadow` and radius-aware `combine_clip`
+properly, so nothing on this face renders differently.
+
+Upstream excludes it from Android, but as wiring, not as a limitation:
+`i-slint-renderer-femtovg` is declared under
+`[target.'cfg(not(target_os = "android"))'.dependencies]` in both `slint`
+(Cargo.toml:353) and `i-slint-backend-selector` (Cargo.toml:154), so the feature
+simply is not offered there. Depending on the renderer crate directly sidesteps
+that, and it works — checked, not assumed:
+
+```sh
+rustup target add armv7-linux-androideabi
+# with i-slint-renderer-femtovg = { version = "=1.17.1", features = ["opengl"] }
+# under [target.'cfg(target_os = "android")'.dependencies]:
+cargo check --target armv7-linux-androideabi
+```
+
+`i-slint-renderer-femtovg` 1.17.1, `femtovg` 0.25.1 and `glow` 0.17.0 all compile
+clean for `armv7-linux-androideabi`, with no `skia-bindings` anywhere in the
+dependency graph. A custom `WindowAdapter` returning `&FemtoVGOpenGLRenderer` as
+its `&dyn Renderer` type-checks: version pinning puts `slint` and the renderer on
+the same `i-slint-core`, so the sealed `Renderer` trait unifies.
+
+What is NOT yet proven is the EGL side. `FemtoVGRenderer::new` takes an
+`impl OpenGLInterface` — the caller supplies the context — so this route needs an
+EGL context and surface built against the `ANativeWindow` that `android-activity`
+hands over, plus correct teardown and recreation across suspend/resume. That is
+ordinary Android GL plumbing, but it is the part that has to be written and it
+has not been.
+
 Slint's software renderer is already driven directly by `examples/shot.rs`, which
 renders every layout track headlessly through a custom `Platform`. The same shape
 on Android — `android-activity` for the window and events, `MinimalSoftwareWindow`
