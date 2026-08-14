@@ -176,9 +176,13 @@ because that macro is an alias of the one being tested.
 **Use NDK r27 LTS.** The `#error` was added to bionic in November 2025 and first
 ships in r30 (30.0.15729638 is r30 Beta 2, which is what produced the failure
 above), but unversioned triples were already silently mis-compiling in r28 and
-r29 — see android/ndk#2206. r27 is the last release where this is sound, and it
-is also what React Native pins for CarFM (27.1.12297006), so the same NDK builds
-both apps. NDKs sit side by side; both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have
+r29 — see android/ndk#2206. r27 is the last release where this is sound.
+
+Any r27 patch works; the whole line predates the bionic change, and r27d
+(27.3.13750724) shipped 15 July 2025, four months before it landed. Install
+**27.3.13750724** unless CarFM has already put one on the machine — React Native
+0.86 pins 27.1.12297006 (`node_modules/react-native/gradle/libs.versions.toml`),
+which is equally sound and saves a 660 MB download. NDKs sit side by side; both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have
 to point at the one you want.
 
 That unblocks the compile, but it does not make armv7 a supported target.
