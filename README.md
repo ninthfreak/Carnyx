@@ -150,18 +150,43 @@ leaves the machine: what goes on the flash drive should have both.
 **skia-bindings 0.99 does not build against a recent NDK.** Skia's own toolchain
 picks a VERSIONED compiler wrapper — `armv7a-linux-androideabi26-clang++`, which
 already carries its target — and then skia-bindings appends an UNVERSIONED
-`--target=armv7-linux-androideabi` on top of it
-(`build_support/platform/android.rs:131`). A modern sysroot refuses that:
+`--target=armv7-linux-androideabi` on top of it. A modern sysroot refuses that:
 
 ```
 sysroot/usr/include/sys/cdefs.h:365:2: error: Unversioned target triples are not supported!
 ```
 
-Observed with NDK 30.0.15729638. Nothing in the project causes it and nothing in
-the project can configure it away — the flag is unconditional. Install an older
-NDK; they sit side by side, and both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have to
-point at the one you want. r26 is the era skia-bindings 0.99 was built against;
-r25 if r26 still refuses.
+The flag is emitted in TWO places, and both are unconditional:
+
+- `build_support/platform.rs:156-159`, in `GnArgsBuilder::into_gn_args()`, which
+  pushes `--target=<triple>` into both `extra_cflags` and `extra_asmflags`. This
+  is the one that reaches the C++ compile and produces the error above.
+- `build_support/platform/android.rs:131`, in `additional_clang_args()`, which
+  feeds bindgen only.
+
+Neither can be configured away. `SKIA_GN_ARGS` is appended after the generated
+args (`build_support/skia/config.rs:326`) so it could re-assign the C++ flags,
+but bindgen has no such escape: `BindgenArgsBuilder::set_target_override`
+(`platform.rs:252`) exists and is never called by anything in the crate.
+
+The `#error` tests `__ANDROID_MIN_SDK_VERSION__`, which Clang defines only from
+a versioned triple suffix — `-D__ANDROID_API__=26` cannot substitute for it,
+because that macro is an alias of the one being tested.
+
+**Use NDK r27 LTS.** The `#error` was added to bionic in November 2025 and first
+ships in r30 (30.0.15729638 is r30 Beta 2, which is what produced the failure
+above), but unversioned triples were already silently mis-compiling in r28 and
+r29 — see android/ndk#2206. r27 is the last release where this is sound, and it
+is also what React Native pins for CarFM (27.1.12297006), so the same NDK builds
+both apps. NDKs sit side by side; both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have
+to point at the one you want.
+
+That unblocks the compile, but it does not make armv7 a supported target.
+**rust-skia has never supported 32-bit ARM Android** — not dropped, never added.
+Its README lists `aarch64-linux-android` and `x86_64-linux-android` only, there
+is no armv7 prebuilt at any version, and rust-skia#850 has been open since
+October 2023 asking for it. A source build on r27 is therefore unexplored ground,
+not a documented path.
 
 If NDK archaeology stops being worth it, the way out is to stop depending on
 Skia at all — see "No Skia at all" below.
@@ -175,8 +200,9 @@ curl -sSI -o /dev/null -w '%{http_code}\n' -L \
 ```
 
 `200` means it downloads. `404` means Skia builds from source: budget the time,
-and make sure `python3` is installed. NDK 30 is fine for that path —
-skia-bindings' version gates are `>= 22` and `>= 23` with no upper bound.
+and make sure `python3` is installed. skia-bindings' own version gates are
+`>= 22` and `>= 23` with no upper bound, so it will happily *start* on any recent
+NDK — the failure above comes from the sysroot, not from a version check.
 
 ### No Skia at all
 
@@ -189,6 +215,40 @@ renders every layout track headlessly through a custom `Platform`. The same shap
 on Android — `android-activity` for the window and events, `MinimalSoftwareWindow`
 for the drawing — drops `i-slint-backend-android-activity`, and with it Skia, the
 C++ toolchain, the NDK version constraint and most of the APK's size.
+`i-slint-backend-android-activity` is an OPTIONAL dependency of `slint`, pulled
+in only by the `backend-android-activity-06` feature, so not enabling that
+feature is all it takes to keep skia-bindings out of the build entirely.
+Upstream's own adapter is 1019 lines and touches the renderer in exactly two
+places; the 747-line Java/IME helper beside it is for text input, which this face
+does not have.
+
+**Every screenshot in `shots/` is already software-rendered.** `examples/shot.rs`
+is the only way this face has ever been looked at, so the face that has been
+reviewed and signed off IS the software-rendered face — the software renderer is
+the known quantity here and Skia is the one that has never run.
+
+What the software renderer actually costs, measured against
+`i-slint-renderer-software` 1.17.1 rather than against the documentation:
+
+- **Drop shadows are not drawn.** `draw_box_shadow` (lib.rs:3088) has an empty
+  body and a `// TODO`. This is real and visible: `ui/hero.slint:198-200` puts a
+  22px/14px `#0000002E` shadow under the hero card, and it is absent from every
+  shot. It is also fixable without Skia — a pre-blurred PNG behind the card via
+  `@image-url("...", nine-slice(...))`, which the software renderer does support
+  (lib.rs:2697).
+- **Clipping ignores the corner radius.** `combine_clip` (lib.rs:3097)
+  intersects rectangles and carries a `// TODO: handle radius and border`. Five
+  sites set `clip: true` with a radius — `ui/presets.slint:22,45,411` and
+  `ui/hero.slint:44,145` — but in all five the rounded *background* is drawn by
+  the Rectangle itself, which does honour the radius, and the clipped children
+  are inset from the corners. No visible difference in any current shot.
+- **Text stroking works.** This was previously listed here as a loss and that was
+  wrong. `platform_text_stroke_brush` is implemented (lib.rs:3306) and the shared
+  parley text path calls it (`i-slint-core/textlayout/sharedparley.rs:1229`); the
+  halo on the signal readout (`ui/status-bar.slint:98-100`) is visible in
+  `shots/head-unit-light.png` under magnification.
+- **Path fill and stroke work**, behind the `path` feature, which `std` enables
+  by default. Nothing in `ui/icons.slint` is affected.
 
 Not done, and not a small change: roughly 200-300 lines of window and event
 plumbing, unproven on the device until it is flashed.
