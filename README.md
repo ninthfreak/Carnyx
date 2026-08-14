@@ -147,9 +147,24 @@ with the triple swapped, says which. Both are cached in `target/` afterwards.
 That is for iterating when a full build is in the way, not for anything that
 leaves the machine: what goes on the flash drive should have both.
 
-If the Skia build fails on a very recent NDK, the first thing to try is an older
-one — 27.x is what React Native pins for CarFM, and NDKs install side by side.
-Point both `ANDROID_NDK_ROOT` and `ANDROID_NDK` at it.
+**skia-bindings 0.99 does not build against a recent NDK.** Skia's own toolchain
+picks a VERSIONED compiler wrapper — `armv7a-linux-androideabi26-clang++`, which
+already carries its target — and then skia-bindings appends an UNVERSIONED
+`--target=armv7-linux-androideabi` on top of it
+(`build_support/platform/android.rs:131`). A modern sysroot refuses that:
+
+```
+sysroot/usr/include/sys/cdefs.h:365:2: error: Unversioned target triples are not supported!
+```
+
+Observed with NDK 30.0.15729638. Nothing in the project causes it and nothing in
+the project can configure it away — the flag is unconditional. Install an older
+NDK; they sit side by side, and both `ANDROID_NDK_ROOT` and `ANDROID_NDK` have to
+point at the one you want. r26 is the era skia-bindings 0.99 was built against;
+r25 if r26 still refuses.
+
+If NDK archaeology stops being worth it, the way out is to stop depending on
+Skia at all — see "No Skia at all" below.
 
 Before a first Android build it is worth checking whether the arm64 prebuilt
 exists, because the answer is the difference between a download and an hour:
@@ -162,6 +177,21 @@ curl -sSI -o /dev/null -w '%{http_code}\n' -L \
 `200` means it downloads. `404` means Skia builds from source: budget the time,
 and make sure `python3` is installed. NDK 30 is fine for that path —
 skia-bindings' version gates are `>= 22` and `>= 23` with no upper bound.
+
+### No Skia at all
+
+Every problem in the section above comes from one place: Slint's `android-activity`
+backend hard-depends on the Skia renderer. Nothing here needs Skia. The face is
+text, rectangles and a few paths, on a 32-bit head unit.
+
+Slint's software renderer is already driven directly by `examples/shot.rs`, which
+renders every layout track headlessly through a custom `Platform`. The same shape
+on Android — `android-activity` for the window and events, `MinimalSoftwareWindow`
+for the drawing — drops `i-slint-backend-android-activity`, and with it Skia, the
+C++ toolchain, the NDK version constraint and most of the APK's size.
+
+Not done, and not a small change: roughly 200-300 lines of window and event
+plumbing, unproven on the device until it is flashed.
 
 ### "App not installed"
 
