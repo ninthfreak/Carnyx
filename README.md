@@ -124,8 +124,20 @@ that, compiles Skia from source.
 There is no armv7 prebuilt for skia-bindings 0.99 — the download 404s. Since the
 head unit is 32-bit, that is not avoidable by dropping the ABI: **every build for
 this device compiles Skia from source.** The published `skia-bindings` crate is
-2.3 MB and contains no Skia tree, so the build fetches one; budget accordingly and
-make sure `git` and `python3` are present.
+2.3 MB and contains no Skia tree, so the build fetches one.
+
+**Install the source-build tools first**, or the build gets as far as generating
+the ninja files and then dies:
+
+```sh
+sudo apt install ninja-build      # Debian/Ubuntu/Pop!_OS; the binary is `ninja`
+```
+
+`git` and `python3` are needed too, and are usually already there — skia-bindings
+probes for `python`/`python3` and syncs the Skia tree with git before it builds.
+`gn` comes with that sync; only `ninja` has to be on PATH yourself.
+`SKIA_NINJA_COMMAND` and `SKIA_GN_COMMAND` override both if they live somewhere
+unusual.
 
 Skia is resolved **per ABI**, so building both means two answers: armv7 has no
 prebuilt and compiles from source, and arm64 may or may not — the curl above,
