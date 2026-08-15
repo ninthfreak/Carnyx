@@ -61,6 +61,8 @@ export component Face inherits Rectangle {
     callback open-settings();
     callback open-nearby();
     callback open-numpad();
+    /// The reorder-mode logo badge on preset `i` (§6.4).
+    callback open-logo-search(int);
     callback claim-audio();
     callback release-audio();
     callback select-preset(int);
@@ -146,6 +148,7 @@ export component Face inherits Rectangle {
             select(i) => { root.select-preset(i); }
             open-nearby => { root.open-nearby(); }
             done-reordering => { root.done-reordering(); }
+            open-logo-search(i) => { root.open-logo-search(i); }
         }
     }
 

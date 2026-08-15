@@ -1,0 +1,1451 @@
+// Preset logo-search window (ANDROID §6.4) — the modal card that assigns a
+// station's logo, opened by the per-tile logo-search badge in reorder mode.
+//
+// It is the ONLY way a logo is ever assigned: there is no automatic or background
+// fetch (§6.4, and the header comment on LogoSearchOverlay.tsx says the same). It
+// also opens on a LANDING view, never straight into a search — the current logo
+// plus the two per-station hero display toggles — and the search runs only when
+// the Search button is pressed.
+//
+// FIVE BODIES, one at a time: landing (with a logo / without one), loading,
+// results (the 2×2 grid), no-results, error. `saving` is not a sixth: Confirm
+// spins while the results grid stays on screen underneath (the dc.html folds
+// saving into `isResults`, LogoSearchOverlay.dc.html:187).
+//
+// WHERE THE NUMBERS COME FROM. `LogoSearchOverlay.dc.html` is the built reference
+// and §6.4 calls it "the exact reference", so it wins on appearance;
+// `src/components/carfm/LogoSearchOverlay.tsx` is the shipping code and wins on
+// behaviour. Every value below cites one of them by line. The places where the
+// two disagree are called out where they bite rather than quietly resolved.
+//
+// DESIGN SIZE 720×560 IS NOT IN THE PROSE. §6's preamble lists design sizes for
+// the numpad, the nearby picker and settings and simply omits this window. Both
+// references state it and agree: the dc.html's `$preview` is {720, 560} and
+// LogoSearchOverlay.tsx:47-48 caps at `Math.min(720, width − 32)` /
+// `Math.min(560, height − 32)`. That TSX line is also the only one of the four
+// overlays that implements §6's `screenW − 32dp` rule literally, which is where
+// OverlayCard's 16px `edge-margin` came from in the first place.
+//
+// TYPE FLOORS. The references never ramp — a 13sp caption is 13sp on every
+// surface. Carnyx ramps every design dimension through `Metrics.s()`, which at
+// k = 0.68 would put that caption at 9px. Small type is therefore floored at 12px
+// exactly the way `Metrics.pty-font`, `signal-num` and `stereo-font` already floor
+// theirs (§10, "nothing critical below ~15sp"): the floor moves this file TOWARD
+// the reference, not away from it. Hit targets floor at a real 48px for the same
+// reason `CloseButton` and `NavButton` do.
+//
+// LETTER-SPACING STAYS RAW. `Metrics.s(0.3)` is `round(0.3 × k) × 1px` = 0px — the
+// ramp destroys sub-pixel tracking. presets.slint (0.3/0.5) and status-bar.slint
+// (1px) already keep theirs raw for the same reason.
+
+import { Pal, Metrics } from "tokens.slint";
+import { OverlayCard, OverlayHeader, OverlayFooter } from "overlay.slint";
+
+// ── Data the Rust side fills in ──────────────────────────────────────────────
+
+/// Which of the five mutually exclusive bodies is showing.
+///
+/// An enum rather than the dc.html's five overlapping booleans (`isLanding`,
+/// `isLoading`, `isResults`, `isEmpty`, `isError`), which can contradict each
+/// other and are all derived from ONE upstream question — has a search been run,
+/// did it return anything, did it throw. Rust answers it once.
+///
+/// `saving` is deliberately NOT a member: it is a separate flag, because the grid
+/// stays visible underneath it (dc.html:187, `isResults = 'results' || 'saving'`).
+export enum LogoSearchState {
+    /// The window as it opens. Shows the current logo + display toggles, or the
+    /// "No Logo Installed" message. `has-logo` picks between the two.
+    landing,
+    /// A search is in flight.
+    loading,
+    /// Four candidates to choose from. The only state with a grid.
+    results,
+    /// The search returned nothing — the references' `empty`. Named for what it
+    /// means rather than for the absent array.
+    no-results,
+    /// The search threw, or a save failed. `error-title` / `error-body` carry
+    /// which of the two, already worded.
+    error,
+}
+
+/// One image candidate, already fetched, already filtered, already formatted.
+///
+/// §6.4: "the first four image candidates". Rust filters to results whose image
+/// URL matches `^https?://`, takes the first four IN ARRIVAL ORDER and re-sorts
+/// nothing (services/logoDuckDuckGo.ts:82-84). Nothing here joins, rounds or
+/// classifies anything.
+export struct LogoCandidate {
+    /// The thumbnail to draw. DDG's proxied thumbnail is what both references
+    /// show (`r.thumbnail`, LogoSearchOverlay.tsx:269) — the full-size image is
+    /// only fetched on Confirm, and frequently 403s.
+    thumb: image,
+    /// The registrable-ish host — "wikipedia.org", not "en.wikipedia.org" and not
+    /// DDG's "Bing" provider label (logoDuckDuckGo.ts:53-58). Falls back to the
+    /// literal "image" (LogoSearchOverlay.tsx:279); Rust does that substitution,
+    /// so an empty string here means an empty caption, not a bug to paper over.
+    domain: string,
+    /// "512×512" with U+00D7 MULTIPLICATION SIGN, or EMPTY when either dimension
+    /// is missing. Formatted per cell in Rust — Slint's float-to-string has no
+    /// precision control and no way to pick a separator.
+    dims: string,
+    /// §6.4: "the candidate art on its own background". The dc.html gives every
+    /// cell its own `imgBg` (dc.html:209); the TSX hard-codes '#FFFFFF'
+    /// (styles.imgWrap:420). The prose backs the dc.html, so this is a per-
+    /// candidate colour Rust must derive from the art (sample the corner, or fall
+    /// back to white — which is what the shipping build effectively does).
+    background: color,
+    /// "Logo option 3 from wikipedia.org", already assembled — the " from …" half
+    /// is dropped when the domain is empty (LogoSearchOverlay.tsx:266). A screen
+    /// reader label is still a formatted string, so Rust builds it.
+    alt: string,
+}
+
+// ── Icons ────────────────────────────────────────────────────────────────────
+
+// icons.slint's `VPath`, copied verbatim because it is private there. Slint's
+// Path fits its geometry into (element size − stroke width), nudges it back by
+// half a stroke, and does NOT scale stroke width with the viewbox — all three
+// differ from SVG, and this cancels the difference. Hand-rolling a Path instead
+// is the documented way to get this wrong.
+//
+// Whoever consolidates should move this and the four glyphs below into
+// icons.slint and delete them from here, from nearby.slint and from numpad.slint,
+// which all carry the same copy for the same one-file reason.
+component VPath inherits Path {
+    in property <length> box-w;
+    in property <length> box-h;
+    in property <float> vbw;
+    in property <float> vbh;
+    /// Stroke width in VIEWBOX units, as written in the SVG.
+    in property <float> raw-stroke: 0;
+
+    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
+    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
+
+    viewbox-width: root.vbw;
+    viewbox-height: root.vbh;
+    stroke-width: root.raw-stroke * root.sc * 1px;
+    x: 0px - self.stroke-width / 2;
+    y: 0px - self.stroke-width / 2;
+    width: root.box-w + self.stroke-width;
+    height: root.box-h + self.stroke-width;
+}
+
+/// Magnifier over a picture — the empty/no-logo mark (dc.html `emptyGlyph`:258).
+///
+/// Five parts: a rounded frame, a sun, a hill, the lens and its handle. The SVG's
+/// `<rect x=3 y=4 width=14 height=12 rx=2>` is written out as the arc-cornered
+/// subpath it compiles to; `<circle>` becomes the two-arc idiom already used
+/// throughout icons.slint.
+///
+/// DISAGREEMENT, resolved for the dc.html. It uses this ONE glyph for both the
+/// landing-no-logo view and the no-results view. LogoSearchOverlay.tsx:228-232
+/// draws only the first THREE parts on landing — frame, sun, hill, no lens and no
+/// handle — and the full five at :290-296. The dc.html wins on appearance, so both
+/// states get all five; the landing view keeps the dc's 0.85 container opacity
+/// (`noLogoGlyphStyle`:275), which the no-results view does not have.
+///
+/// This is NOT the §6.4 trigger badge's glyph. That one (icons.tsx:327-337) is a
+/// different drawing at a different weight — 12×10 frame, a FILLED sun, a 4.2
+/// lens, stroke 2 — and it lives with the preset band, not here.
+component PictureLens {
+    in property <length> size: 46px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.8;
+        commands: "M5 4 H15 A2 2 0 0 1 17 6 V14 A2 2 0 0 1 15 16 H5 A2 2 0 0 1 3 14 V6 A2 2 0 0 1 5 4 Z M6.1 8.5 A1.4 1.4 0 1 0 8.9 8.5 A1.4 1.4 0 1 0 6.1 8.5 Z M3.5 14 L8 9.5 L12 13 M13 17 A4 4 0 1 0 21 17 A4 4 0 1 0 13 17 Z M20 20 L22.5 22.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// The plain lens on the query chip row (dc.html `queryIcon`:252).
+///
+/// Deliberately NOT the §7 magnifier-over-tower and NOT the picture-lens above:
+/// three different magnifiers do three different jobs in this design, and §6.4 is
+/// explicit that the logo mark must be distinguishable from the Nearby one.
+component QueryLens {
+    in property <length> size: 16px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2.2;
+        commands: "M4 11 A7 7 0 1 0 18 11 A7 7 0 1 0 4 11 Z M20.5 20.5 L16.65 16.65";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// The white check, on the option checkboxes and on the selected cell's badge
+/// (dc.html `checkIcon`:255 — polyline "5 12.5 10 17.5 19 6.5").
+///
+/// The ONLY mark that carries selection state in this window. §6 and §6.4 both
+/// restate the colourblind rule: blue fill and this check, never red or green.
+///
+/// It has to be drawn rather than typed. U+2713/U+2714 are absent from BOTH
+/// bundled Atkinson cuts (I read the cmaps of ui/fonts/AtkinsonHyperlegible-
+/// {Regular,Bold}.ttf: · × … ' — are present; ✓ ✕ ★ ⚠ are not), and the software
+/// renderer that produces our screenshots has no fallback stack to lean on.
+component CheckMark {
+    in property <length> size: 17px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 3;
+        commands: "M5 12.5 L10 17.5 L19 6.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// The error mark (dc.html `errorGlyph`:262).
+///
+/// NOT icons.slint's `WarningTriangle`. That one is the Feather glyph — rounded
+/// corners baked into the path, stroke 2, and a "M12 17 L12.01 17" dot. This one
+/// is a sharp-cornered triangle at stroke 1.9 with a real filled dot, and the two
+/// are visibly different marks. Amber is the fixed §3 safety colour and is right
+/// here; it is not part of the accent system and never themes.
+component ErrorTriangle {
+    in property <length> size: 46px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.9;
+        commands: "M12 3 L22 20 H2 Z M12 9.5 L12 14.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    // The dot is `<circle r=0.6 fill stroke>` — filled AND stroked at the svg's
+    // 1.9, so it renders about 3.1 units across. Separate because one Path cannot
+    // fill one subpath and not the others.
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.9;
+        commands: "M11.4 17.4 A0.6 0.6 0 1 0 12.6 17.4 A0.6 0.6 0 1 0 11.4 17.4 Z";
+        fill: root.color;
+        stroke: root.color;
+    }
+}
+
+/// The busy ring — 44dp on the loading view, 18dp inside Confirm while saving
+/// (dc.html `spinnerStyle`:297 and `confirmSpinnerStyle`:307, both 0.8s linear
+/// infinite).
+///
+/// Slint ships no spinner, and the dc's is a CSS border trick with no direct
+/// equivalent: a full ring in the track colour with `border-top-color` swapped for
+/// the accent, rotated. So the track is a bordered Rectangle and the leading
+/// quarter is a Path arc whose ENDPOINTS move.
+///
+/// WHY NOT JUST ROTATE IT. `rotation-angle` exists on Image and Text but not on
+/// Path (i-slint-compiler-1.17.1/builtins.slint:375, 561; the Path at 2288 has
+/// none), and the `transform-rotation` reserved property that IS available on
+/// every element (typeregister.rs:234) is dropped by the SOFTWARE renderer —
+/// its `current_transform` returns a translation and nothing else
+/// (i-slint-renderer-software-1.17.1/lib.rs:3125-3127). A transform-spun ring
+/// would sit frozen on every software-rendered surface. Moving the endpoints is
+/// correct on both renderers.
+///
+/// Math.sin/Math.cos do exist (i-slint-compiler-1.17.1/lookup.rs:797-798), and
+/// path ELEMENTS keep their bindings as live expressions rather than being folded
+/// to a constant (passes/compile_paths.rs:95-105), which is what makes a moving
+/// arc possible at all. icons.slint's header note that Slint has "no trig" is out
+/// of date; what it does not have is loops and stroke-dasharray.
+component SpinnerRing inherits Rectangle {
+    in property <length> size: 44px;
+    /// Ring thickness — 4 at 44dp, 3 at 18dp.
+    in property <length> ring: 4px;
+    in property <color> track;
+    in property <color> arc;
+
+    width: root.size;
+    height: root.size;
+
+    // 0 → 360 forever. `animate` only runs on a CHANGE, so `init` supplies one —
+    // the same shape status-bar.slint's `Tell` uses to start its TA pulse.
+    property <angle> spin: 0deg;
+    init => { self.spin = 360deg; }
+    animate spin { duration: 800ms; easing: linear; iteration-count: -1; }
+
+    // Arc radius in viewbox units, inset by half the stroke so the ring's OUTER
+    // edge lands on the box — which is where a CSS `border` on a 50%-radius box
+    // puts it, and the track below is drawn exactly that way.
+    property <float> r: 50 - 50 * root.ring / root.size;
+
+    Rectangle {
+        width: root.size;
+        height: root.size;
+        border-radius: root.size / 2;
+        border-width: root.ring;
+        border-color: root.track;
+    }
+
+    Path {
+        // VPath's correction, applied by hand: VPath takes `commands`, and this
+        // arc has to be built from path ELEMENTS because its endpoints move every
+        // frame. Same arithmetic — the geometry is fitted into (element − stroke)
+        // and offset by stroke/2, and stroke-width is not scaled by the viewbox.
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 100;
+        viewbox-height: 100;
+        x: 0px - root.ring / 2;
+        y: 0px - root.ring / 2;
+        width: root.size + root.ring;
+        height: root.size + root.ring;
+        stroke: root.arc;
+        stroke-width: root.ring;
+
+        MoveTo {
+            x: 50 + root.r * Math.cos(root.spin);
+            y: 50 + root.r * Math.sin(root.spin);
+        }
+        // A quarter turn, clockwise in screen coordinates (y grows downward, so
+        // an increasing angle IS clockwise and `sweep` is true). 90° is what
+        // `border-top-color` on a circle paints.
+        ArcTo {
+            x: 50 + root.r * Math.cos(root.spin + 90deg);
+            y: 50 + root.r * Math.sin(root.spin + 90deg);
+            radius-x: root.r;
+            radius-y: root.r;
+            sweep: true;
+        }
+    }
+}
+
+// ── Pieces of the window ─────────────────────────────────────────────────────
+
+/// The square in the header: the station's real logo, or its monogram cube.
+///
+/// TWO renderings, and the split is the same one PlateBox makes in presets.slint.
+/// With a logo the plate is transparent and the image is contained INSIDE it — the
+/// plate owns the geometry, which is what keeps a wide wordmark or a tall lockup
+/// from overflowing (§4.5's containment invariant, LogoTile.tsx:451-460). Without
+/// one it is a solid cube in the hashed station colour with a white monogram
+/// (LogoTile.tsx:466-483).
+///
+/// DISAGREEMENT, split. The dc.html only ever draws the cube — it has no image
+/// loader — so it hard-codes the monogram at `narrow ? 16 : 19` with 0.5 tracking
+/// (dc.html:279). The TSX draws the real logo when there is one and derives the
+/// monogram size as `round(box × (len > 3 ? 0.26 : 0.34))`, with no tracking.
+/// Behaviour is the TSX's, so a real logo wins; the derived size is kept because
+/// it EQUALS the dc's hard-coded 19 and 16 at 56dp and 48dp for the ≤3-character
+/// case and, unlike the constant, still fits four letters. The 0.5 tracking is the
+/// dc's and is kept — presets.slint's CallSignBox tracks its letters the same way.
+component StationTile inherits Rectangle {
+    in property <image> logo;
+    in property <bool> has-logo: false;
+    /// The ≤4-character monogram, already reduced in Rust (tokens.ts `monogram`:
+    /// upper-case, split on '-', a leading K/W dropped from a 4-letter base).
+    in property <string> mono;
+    in property <color> brand;
+
+    border-radius: Metrics.s(14);
+    clip: true;
+    background: root.has-logo ? transparent : Pal.flat(root.brand);
+
+    if root.has-logo: Image {
+        source: root.logo;
+        image-fit: contain;
+        width: parent.width;
+        height: parent.height;
+        // LIMIT OF THE §4.7 DEAD FACE, as noted on presets.slint's PlateBox: the
+        // palette's desaturation cannot reach an image, so a released-audio face
+        // still shows logo art in full colour. The fix is a desaturated variant at
+        // load time, not a filter Slint does not have.
+    }
+    if !root.has-logo: Text {
+        text: root.mono;
+        color: Pal.flat(#FFFFFF);
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        // Branching on the string's own length, which is what presets.slint's
+        // CallSignBox already does to fit its call letters. This reads a length,
+        // it does not decide anything: the monogram itself arrived finished.
+        font-size: Math.round(root.width / 1px
+            * (root.mono.character-count > 3 ? 0.26 : 0.34)) * 1px;
+    }
+}
+
+/// One of the two landing-view display rows, "Display Call Sign" and "Display
+/// Frequency" (dc.html `optRowStyle`:272, TSX `styles.optRow`:407).
+///
+/// §6.4: these affect the HERO CARD ONLY. They never touch preset tiles, peek
+/// cards or Nearby, they are saved per station, and a freshly-assigned logo
+/// forces both OFF so the hero is logo-only.
+///
+/// The height is a MINIMUM. The dc reaches ~52 through 13dp of vertical padding
+/// and the TSX states `minHeight: 52` outright; §10 requires ×1.5 font scale
+/// without overlap, so it has to be able to grow. The 48px floor under it is §10's
+/// hit-target rule in real dp, as on CloseButton.
+component OptionRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked: false;
+
+    callback toggled();
+
+    min-height: Math.max(48px, Metrics.s(52));
+    border-radius: Metrics.s(12);
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.7 : 1.0;
+
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+
+    touch := TouchArea { clicked => { root.toggled(); } }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(18);
+        padding-right: Metrics.s(18);
+        padding-top: Metrics.s(13);
+        padding-bottom: Metrics.s(13);
+        spacing: Metrics.s(14);
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            // 26dp box, 7dp corner, a 2dp border. OFF is the border colour on no
+            // fill; ON is blue on blue — the check is carried by the fill alone,
+            // never by a hue change (§6's colourblind rule).
+            Rectangle {
+                width: Metrics.s(26);
+                height: Metrics.s(26);
+                border-radius: Metrics.s(7);
+                border-width: 2px;
+                border-color: root.checked ? Pal.blue : Pal.border;
+                background: root.checked ? Pal.blue : transparent;
+
+                if root.checked: CheckMark {
+                    // 17dp inside the 26dp box — the dc's shared `checkIcon`. The
+                    // TSX draws 15 here and 17 on the result badge; the dc uses
+                    // one mark at one size for both, and wins on appearance.
+                    size: Metrics.s(17);
+                    color: Pal.flat(#FFFFFF);
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.label;
+                font-size: Math.max(12px, Metrics.s(17));
+                font-weight: 700;
+                color: Pal.text;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+/// The blue-outline action: "Search for a …" on the landing view and "Search
+/// again" on the no-results / error views.
+///
+/// One component, two sizes, because the references give it two. The retry button
+/// is genuinely SMALLER than the landing one — 48dp tall at 15sp against 54 at 16
+/// (dc.html `retryStyle`:298 vs `searchBtnStyle`:274) — and both references agree
+/// on both, so the difference is intended and not a rounding.
+component AccentButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-height;
+    in property <length> pad-h;
+    in property <length> label-size;
+    in property <length> corner;
+    in property <length> tracking: 0px;
+
+    callback clicked();
+
+    min-height: Math.max(48px, root.button-height);
+    // Wide enough for the label plus its side padding, whatever the label says —
+    // "Search for a different logo" is a long string and neither reference gives
+    // the button a width.
+    min-width: label-text.preferred-width + 2 * root.pad-h;
+    border-radius: root.corner;
+    // 1.5, not 1: the accent buttons are a heavier weight than the neutral ones,
+    // and it is a stroke weight, so it stays raw like every other hairline here.
+    border-width: 1.5px;
+    border-color: Pal.blue;
+    background: Pal.blue-fill;
+    opacity: touch.pressed ? 0.7 : 1.0;
+
+    accessible-role: button;
+    accessible-label: root.label;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    label-text := Text {
+        text: root.label;
+        font-size: root.label-size;
+        font-weight: 700;
+        letter-spacing: root.tracking;
+        color: Pal.blue;
+        horizontal-alignment: center;
+    }
+}
+
+/// One result cell (dc.html `cellStyle`:220 / `imgWrapStyle`:221 / `metaStyle`:224).
+///
+/// Single-select: tapping selects and deselects any other, and selecting is what
+/// enables Confirm. Selected is 2dp blue on a blue tint plus the check badge —
+/// blue only, never red or green (§6.4 restates §6's rule at exactly this control).
+///
+/// Absolutely positioned by the grid, so it takes its box rather than asking for
+/// one; see the note on `cell-h` in the overlay.
+component ResultCell inherits Rectangle {
+    in property <LogoCandidate> candidate;
+    in property <bool> selected: false;
+    /// Floor for the art well — dc.html's `minHeight: narrow ? 58 : 70`.
+    in property <length> well-min-h;
+    in property <length> caption-font;
+    in property <length> dims-font;
+
+    callback clicked();
+
+    border-radius: Metrics.s(16);
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Pal.blue : Pal.border;
+    background: root.selected ? Pal.blue-fill : Pal.raised;
+    opacity: touch.pressed ? 0.7 : 1.0;
+    // dc.html transitions background and border over 0.12s ease. Only the colour
+    // animates — the border WIDTH also changes, and animating that would move the
+    // art inside the cell while the eye is on it.
+    animate background, border-color { duration: 120ms; easing: ease; }
+
+    accessible-role: button;
+    accessible-label: root.candidate.alt;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    VerticalLayout {
+        padding: Metrics.s(8);
+        spacing: Metrics.s(8);
+
+        // The art well. It takes the cell's remaining height (dc's `flex: 1`),
+        // which is what makes the grid's 1fr rows read as one block instead of
+        // four content-sized boxes; the TSX's fixed 88dp is the simplification.
+        well := Rectangle {
+            vertical-stretch: 1;
+            min-height: root.well-min-h;
+            border-radius: Metrics.s(10);
+            clip: true;
+            // §6.4: "the candidate art on its own background". Per candidate, from
+            // Rust — the TSX hard-codes white and loses the distinction.
+            background: Pal.flat(root.candidate.background);
+
+            // x/y stated, not defaulted. An Image is an implicit-size builtin, so
+            // a child Image WITHOUT an x/y binding folds its SOURCE pixel size
+            // into this Rectangle's layout info (compiler pass
+            // default_geometry.rs:170 filters on exactly that binding, and
+            // layout.rs:736's SkipNonImplicit lets an Image through where it skips
+            // a Rectangle) — a 512×512 thumbnail would then demand a 512dp cell.
+            // Positioning it explicitly takes it out of the measurement, which is
+            // what `if`-wrapping does for the same Image in presets.slint.
+            Image {
+                x: 0;
+                y: 0;
+                source: root.candidate.thumb;
+                image-fit: contain;
+                width: parent.width;
+                height: parent.height;
+            }
+
+            // dc.html's `inset 0 0 0 1px rgba(0,0,0,0.05)` — a hairline that keeps
+            // a white-on-white logo from bleeding into a light cell. A border on
+            // the well itself, since Slint has no inset shadow.
+            Rectangle {
+                border-radius: parent.border-radius;
+                border-width: 1px;
+                border-color: Pal.flat-a(#000000, 0.05);
+            }
+
+            if root.selected: Rectangle {
+                // Inside the well at 8/8, so it sits ON the art rather than on the
+                // cell — the reference positions it against `imgWrap`, not `cell`.
+                // Reached by id: this element IS the conditional, and a repeated
+                // element states its own geometry rather than inheriting a default.
+                x: well.width - Metrics.s(28) - Metrics.s(8);
+                y: Metrics.s(8);
+                width: Metrics.s(28);
+                height: Metrics.s(28);
+                border-radius: self.width / 2;
+                background: Pal.blue;
+                // The dc's `0 2px 8px rgba(0,0,0,0.25)` is omitted: the software
+                // renderer draws no shadow (draw_box_shadow is an empty TODO), and
+                // the badge is legible without one — solid blue on the art.
+                CheckMark {
+                    size: Metrics.s(17);
+                    color: Pal.flat(#FFFFFF);
+                }
+            }
+        }
+
+        // Caption: source domain left, pixel dimensions right.
+        HorizontalLayout {
+            padding-left: Metrics.s(4);
+            padding-right: Metrics.s(4);
+            spacing: Metrics.s(8);
+            vertical-stretch: 0;
+
+            Text {
+                text: root.candidate.domain;
+                font-size: root.caption-font;
+                font-weight: 700;
+                color: Pal.dim;
+                horizontal-stretch: 1;
+                // Elide is load-bearing, not decoration: an un-elided Text reports
+                // its full width as its MINIMUM, and a long host would then refuse
+                // to let the cell shrink and push the dimensions out of the cell.
+                overflow: elide;
+            }
+            Text {
+                text: root.candidate.dims;
+                font-size: root.dims-font;
+                font-weight: 400;
+                color: Pal.dim;
+                horizontal-stretch: 0;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
+/// Cancel and Confirm (dc.html `cancelBtnStyle`:303 / `confirmBtnStyle`:304).
+///
+/// Three paints, not two. ENABLED is a filled blue button with a 1.5dp blue edge
+/// and white type. DISABLED is a 1dp neutral outline with dim type at 0.55.
+/// SAVING keeps the disabled outline but at full opacity and adds the ring — that
+/// odd combination is the dc's own (`opacity: saving ? 1 : 0.55`) and it is what
+/// tells a held Confirm apart from a dead one.
+component FooterButton inherits Rectangle {
+    in property <string> label;
+    in property <string> a11y-label;
+    /// Cancel is the neutral one: no fill in any state, dim type, 1dp edge.
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    in property <bool> busy: false;
+    in property <length> min-w;
+    in property <length> button-height;
+
+    callback clicked();
+
+    property <bool> lit: root.primary && root.enabled && !root.busy;
+
+    min-width: root.min-w;
+    min-height: Math.max(48px, root.button-height);
+    border-radius: Metrics.s(14);
+    border-width: root.lit ? 1.5px : 1px;
+    border-color: root.lit ? Pal.blue : Pal.border;
+    background: root.lit ? Pal.blue : transparent;
+    opacity: (root.enabled || root.busy)
+        ? (touch.pressed && root.enabled ? 0.7 : 1.0)
+        : 0.55;
+
+    accessible-role: button;
+    accessible-label: root.a11y-label;
+    accessible-enabled: root.enabled;
+
+    touch := TouchArea {
+        // A held Confirm swallows its own taps, and a disabled one is not a
+        // control at all — the reference passes `disabled` to the Pressable.
+        enabled: root.enabled && !root.busy;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(22);
+        padding-right: Metrics.s(22);
+        spacing: Metrics.s(10);
+        alignment: center;
+
+        if root.busy: VerticalLayout {
+            alignment: center;
+            SpinnerRing {
+                size: Metrics.s(18);
+                ring: Metrics.s(3);
+                track: Pal.meter-empty;
+                // The dc draws this ring in white-on-40%-white, which was written
+                // for the BLUE-FILLED button — but `saving` takes the disabled
+                // outline, so on a light card it would be a white ring on a near
+                // white background, i.e. invisible. §10 makes legibility a safety
+                // constraint, so the ring follows the label's own colour instead.
+                // Flagged rather than copied: this is a contradiction inside the
+                // reference, not a place where the TSX and the dc.html disagree.
+                arc: root.lit ? Pal.flat(#FFFFFF) : Pal.dim;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                font-size: Math.max(12px, Metrics.s(16));
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                color: root.lit ? Pal.flat(#FFFFFF) : Pal.dim;
+            }
+        }
+    }
+}
+
+// ── The window ───────────────────────────────────────────────────────────────
+
+export component LogoSearchOverlay inherits Rectangle {
+    // ── The station ──
+    /// Display name, straight from the preset. The header title.
+    in property <string> name;
+    /// "{callsign}  ·  {freq} MHz", assembled in Rust. The callsign half plus its
+    /// separator is included ONLY when the callsign is non-empty AND differs from
+    /// the name (LogoSearchOverlay.tsx:161); the frequency is always one decimal.
+    /// The separator is TWO spaces, U+00B7, TWO spaces — not the single-spaced
+    /// interpunct the Nearby rows use. All five characters are in the bundled
+    /// Atkinson cuts, so this renders as written.
+    in property <string> subtitle;
+    /// The station's current logo. Drawn in the header tile and, on the landing
+    /// view, large on its white plate.
+    in property <image> logo;
+    /// Whether that logo exists. It also picks between the two landing views, so
+    /// there is one flag here and not two.
+    in property <bool> has-logo: false;
+    /// The monogram for the no-logo tile — tokens.ts `monogram`, already reduced.
+    in property <string> mono;
+    /// The station colour, hashed from the callsign in Rust (tokens.ts
+    /// `brandColor`). Arrives finished; Slint still passes it through Pal.flat.
+    in property <color> brand;
+
+    // ── The search ──
+    /// Which body is showing. `saving` is separate, below.
+    in property <LogoSearchState> state: LogoSearchState.landing;
+    /// The exact string that was searched, for the chip: "radio 98.1 wmgn logo".
+    /// Built in Rust (logoDuckDuckGo.ts:23-27) — one decimal on the frequency, the
+    /// callsign forced LOWER-CASE, whitespace collapsed, then trimmed, so a
+    /// missing frequency yields "radio wmgn logo" and never junk. §6.4's reason
+    /// for showing it at all is that the driver can trust the results.
+    in property <string> query;
+    /// Exactly the first four candidates, in arrival order.
+    in property <[LogoCandidate]> candidates;
+    /// Which cell is picked, or −1. Rust holds the selection, the way it holds the
+    /// Nearby picker's genre — `pick()` reports the tap and nothing here toggles.
+    in property <int> selected-index: -1;
+    /// Confirm is held. The results grid stays on screen underneath and every
+    /// control is inert until it resolves.
+    in property <bool> saving: false;
+    /// Which error, already worded. There are TWO: the dc.html's search failure
+    /// ("Search couldn't finish" / "Something went wrong reaching the logo search.
+    /// Check your connection and try again.") and a save failure the TSX adds at
+    /// :305-312 ("Couldn't save that logo" / "Couldn't save this logo — {reason}.
+    /// Try a different result.", em dash, reason interpolated). Rust picks and
+    /// formats; the no-results copy below is fixed and is written inline.
+    in property <string> error-title;
+    in property <string> error-body;
+
+    // ── The landing view ──
+    /// The two hero display flags. Rust resolves them BEFORE the window opens:
+    /// the saved per-station preference if there is one, else a logo-dependent
+    /// default — a station WITH a logo defaults both OFF, which is §6.4's
+    /// logo-only hero; a station without one defaults both ON
+    /// (LogoSearchOverlay.tsx:90).
+    in property <bool> show-call: false;
+    in property <bool> show-freq: false;
+    /// "Search for a different logo" when a logo exists, "Search for a logo" when
+    /// none does. A property and not a ternary here, because the copy is the
+    /// reference's and belongs with the rest of the strings Rust owns.
+    in property <string> search-label;
+
+    // ── The footer ──
+    /// `!saving && (landing || (results && a cell is picked))` (dc.html:231).
+    in property <bool> can-confirm: false;
+    /// "Save" on the landing view, "Confirm" in results, "Saving…" while saving.
+    /// DISAGREEMENT: that three-way is the dc.html's (:247); the TSX hard-codes
+    /// "Confirm" everywhere and, while saving, drops the label entirely for a bare
+    /// spinner. The dc.html wins on appearance, so the label is always drawn and
+    /// Rust supplies which of the three it is.
+    in property <string> confirm-label;
+    /// The footer hint — a five-way selection over (state, has-logo, can-confirm)
+    /// yielding one of four strings or nothing, resolved in Rust:
+    ///   landing + logo   "Display options apply to the main card"  (dc.html:248)
+    ///                    "Choose what shows on the hero"           (TSX:329)
+    ///   landing, no logo empty
+    ///   confirmable      "Saved as this station's logo"
+    ///   results, no pick "Pick the correct logo"
+    ///   otherwise        empty
+    /// DISAGREEMENT, unresolved: the two references word the first case
+    /// differently and neither is obviously wrong — the dc.html is the exact
+    /// reference, the TSX's wording matches §6.4's own name for the surface. It is
+    /// one string either way, so the choice stays with Rust.
+    in property <string> hint;
+
+    // ── What the user can do ──
+    /// A display row was tapped. Rust owns the flag and does the toggle.
+    callback toggle-call();
+    callback toggle-freq();
+    /// The landing view's Search button — the ONLY thing that starts a search
+    /// (§6.4: no query field, no submit).
+    callback search();
+    /// "Search again", from no-results or error. Separate from `search()` so Rust
+    /// can tell the entry points apart: retry also clears the selection and the
+    /// error before it runs (LogoSearchOverlay.tsx:71).
+    callback retry();
+    /// A result cell was tapped. Single-select; Rust moves the selection.
+    callback pick(int);
+    callback confirm();
+    /// The ✕, Cancel, and the scrim. All three close and change nothing (§6.4).
+    callback close();
+
+    // ── Per-instance metrics ─────────────────────────────────────────────────
+    //
+    // Everything below follows §6.2's width track, read off the RESOLVED card the
+    // way Metrics.tall / .landscape / .two-rows are read off the surface. Both
+    // references test the same threshold (LogoSearchOverlay.tsx:49, `cardW < 620`),
+    // which is exactly OverlayCard.narrow, so nothing here recomputes it.
+    //
+    // The narrow deltas, exhaustively — header padding and gap, the station tile,
+    // the title, the query row's padding, the body's padding, the landing gap and
+    // padding, the landing art's cap, the grid gap, the art well's floor, the
+    // footer's padding, and the two footer buttons' width and height. NOTHING else
+    // changes: the close button, the checkbox, the check badge, every radius, all
+    // body typography and every string are identical on both tracks.
+    property <length> body-pad-h: Metrics.s(card.narrow ? 16 : 22);
+    property <length> body-pad-top: Metrics.s(4);
+    // dc.html's `bodyStyle` bottom is narrow ? 8 : 10; the TSX uses 10 on both.
+    // One dp on one track, taken from the reference.
+    property <length> body-pad-bottom: Metrics.s(card.narrow ? 8 : 10);
+
+    property <length> landing-pad-h: Metrics.s(card.narrow ? 18 : 34);
+    /// Width available to the landing column's own children, derived from the
+    /// resolved card rather than read back off a layout — reading a layout's width
+    /// and feeding it into that layout's children is the loop this codebase has
+    /// already hit twice.
+    property <length> landing-w: Math.max(0px,
+        card.card-w - 2 * root.body-pad-h - 2 * root.landing-pad-h);
+
+    property <length> center-pad-h: Metrics.s(40);
+    property <length> center-w: Math.max(0px,
+        card.card-w - 2 * root.body-pad-h - 2 * root.center-pad-h);
+    /// dc.html `centerSubStyle.maxWidth`. The paragraph wraps inside it.
+    property <length> center-sub-w: Math.min(Metrics.s(420), root.center-w);
+
+    // ── The landing plate ──
+    //
+    // dc.html:269-270: a white plate that WRAPS the art — `padding: 14px 22px`,
+    // `maxWidth: 82%`, and an image at `maxHeight: narrow ? 112 : 148` with
+    // `width/height: auto`, so the plate is exactly as big as the logo needs.
+    // (The TSX ships a fixed 70%-wide, 320-capped, 120-tall box with no ring
+    // instead — a different sizing model, a different radius and a missing ring.
+    // The dc.html is the reference and wins on appearance.)
+    //
+    // "Auto" needs the art's own aspect ratio, which `image.width`/`image.height`
+    // supply (i-slint-compiler-1.17.1/lookup.rs:1097-1117). A missing or
+    // still-unloaded image reports 0, so the ratio falls back to square rather
+    // than dividing by it.
+    property <length> plate-pad-h: Metrics.s(22);
+    property <length> plate-pad-v: Metrics.s(14);
+    property <length> plate-inner-w: Math.max(0px,
+        Math.round(root.landing-w / 1px * 0.82) * 1px - 2 * root.plate-pad-h);
+    property <float> logo-aspect: root.logo.height > 0
+        ? root.logo.width / root.logo.height
+        : 1.0;
+    property <length> art-h: Math.min(Metrics.s(card.narrow ? 112 : 148),
+        root.plate-inner-w / root.logo-aspect);
+    property <length> art-w: root.art-h * root.logo-aspect;
+
+    // ── The 2×2 grid ──
+    //
+    // dc.html:291 is a real grid: `1fr 1fr` by `1fr 1fr` with ONE gap on both
+    // axes, so the four cells fill the band as a block. (The TSX is a wrapping
+    // flex row of 48%-wide cells, which makes the column gap whatever 4% of the
+    // width happens to be and leaves the cells content-tall. The dc.html is the
+    // reference.) §6.4 requires it to fit the narrow track with NO horizontal
+    // scroll, so the columns are derived from the band's width and only the
+    // vertical axis can ever scroll.
+    //
+    // The cells are absolutely positioned inside the Flickable rather than laid
+    // out, for the reason presets.slint's band gives: ids declared inside an `if`
+    // are not visible outside it, and the arithmetic is trivial. The Flickable is
+    // what cuts the loop — a child that reads its parent's height and reports that
+    // height back as its own minimum is exactly the poison, and a Flickable's
+    // layout info does not come from its viewport.
+    property <length> grid-gap: Metrics.s(card.narrow ? 10 : 14);
+    property <length> grid-pad-h: Metrics.s(2);
+    property <length> grid-pad-v: Metrics.s(6);
+    property <length> well-min-h: Metrics.s(card.narrow ? 58 : 70);
+    property <length> caption-font: Math.max(12px, Metrics.s(13));
+    property <length> dims-font: Math.max(12px, Metrics.s(12));
+    /// The shortest a cell may be: 8dp padding, the art well's own floor, the 8dp
+    /// gap, one caption line, 8dp padding. The caption is budgeted at 1.24× its
+    /// font size, which is Atkinson's own line height (hhea ascender 950,
+    /// descender −290 over a 1000 upem, in ui/fonts) — Slint cannot be asked for
+    /// the height of an element it has not placed, and these cells are placed by
+    /// hand.
+    property <length> min-cell-h: 2 * Metrics.s(8) + root.well-min-h + Metrics.s(8)
+        + Math.ceil(root.caption-font / 1px * 1.24) * 1px;
+    property <length> band-w: Math.max(0px, body.width - 2 * root.body-pad-h);
+    property <length> band-h: Math.max(0px,
+        body.height - root.body-pad-top - root.body-pad-bottom);
+    property <length> cell-w: Math.max(0px,
+        (root.band-w - 2 * root.grid-pad-h - root.grid-gap) / 2);
+    property <length> cell-h: Math.max(root.min-cell-h,
+        (root.band-h - 2 * root.grid-pad-v - root.grid-gap) / 2);
+    /// Two columns, so the row count is the candidate count halved and rounded up.
+    /// Integer arithmetic here is float-based — `4 / 2` really is 2.0 — which is
+    /// why the ceiling is explicit.
+    property <int> grid-rows: Math.max(1, Math.ceil(root.candidates.length / 2));
+
+    card := OverlayCard {
+        width: root.width;
+        height: root.height;
+        // 720 × 560, capped to the surface less 32dp a side and centred. Corner,
+        // card background and scrim all stay at their defaults: this overlay is
+        // one of the three that use Pal.bg (dc.html `containerStyle`:266 and
+        // LogoSearchOverlay.tsx:150), and only the numpad wants Pal.panel.
+        design-width: 720;
+        design-height: 560;
+        // §6.4 lists the scrim beside Cancel and the ✕ as a way out, and it stays
+        // one — except while a save is in flight, where the window is inert until
+        // it resolves. Neither reference settles that case: the TSX's scrim has no
+        // press handler at all (styles.scrim:376), so tapping outside does nothing
+        // in the shipping build and there is no saving behaviour to copy.
+        dismiss-on-scrim: !root.saving;
+        close => { root.close(); }
+
+        // ONE child, not four, for the reason the picker gives: the query band is
+        // conditional, and a conditional element handed through another
+        // component's @children is a shape nothing in this tree has compiled.
+        // Keeping the conditionals in a layout declared HERE puts them in the same
+        // scope as face.slint's and presets.slint's. The bands' own stretch
+        // factors still decide who grows.
+        VerticalLayout {
+
+            // ── Header: station tile · name · callsign·freq · ✕ ──
+            //
+            // `head-height: 0` because this header is content-driven — the dc's
+            // `headerStyle` has no height, only padding, and the tile is the
+            // tallest thing in it. OverlayHeader's own 12dp spacing is the dc's
+            // `gap: 12` between the left group and the ✕.
+            OverlayHeader {
+                head-height: 0px;
+                pad-h: Metrics.s(card.narrow ? 16 : 22);
+                pad-v: Metrics.s(card.narrow ? 14 : 16);
+                close => { root.close(); }
+
+                HorizontalLayout {
+                    spacing: Metrics.s(card.narrow ? 12 : 16);
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        StationTile {
+                            width: Metrics.s(card.narrow ? 48 : 56);
+                            height: self.width;
+                            logo: root.logo;
+                            has-logo: root.has-logo;
+                            mono: root.mono;
+                            brand: root.brand;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        spacing: Metrics.s(3);
+
+                        Text {
+                            text: root.name;
+                            font-size: Metrics.s(card.narrow ? 22 : 26);
+                            font-weight: 700;
+                            color: Pal.text;
+                            // Both lines elide. An un-elided Text reports its full
+                            // width as its minimum, so a long station name would
+                            // refuse to shrink and push the ✕ off the card.
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.subtitle;
+                            font-size: Math.max(12px, Metrics.s(15));
+                            font-weight: 400;
+                            letter-spacing: 0.3px;
+                            color: Pal.dim;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+
+            // ── Query chip, every state except landing ──
+            //
+            // A SIBLING band between the header and the body, not a row inside it
+            // (dc.html `queryRowStyle` carries `flexShrink: 0` and sits outside
+            // `bodyStyle`), so the searched string never scrolls away with the
+            // results. No rule and no fill of its own.
+            if root.state != LogoSearchState.landing: Rectangle {
+                vertical-stretch: 0;
+
+                HorizontalLayout {
+                    padding-left: Metrics.s(card.narrow ? 16 : 22);
+                    padding-right: Metrics.s(card.narrow ? 16 : 22);
+                    padding-top: Metrics.s(card.narrow ? 10 : 12);
+                    padding-bottom: Metrics.s(card.narrow ? 10 : 12);
+                    spacing: Metrics.s(10);
+                    // Default (stretch) alignment on purpose: `alignment: start`
+                    // would hand every child its preferred width and IGNORE the
+                    // stretch factors, which is exactly the shrink the chip needs.
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        QueryLens {
+                            size: Metrics.s(16);
+                            color: Pal.dim;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
+                        Text {
+                            // The dc.html holds "Searched" and upper-cases it in
+                            // CSS; the TSX writes "SEARCHED" directly. Same
+                            // rendered result, and Slint has no text-transform.
+                            text: "SEARCHED";
+                            font-size: Math.max(12px, Metrics.s(12));
+                            font-weight: 700;
+                            letter-spacing: 1.5px;
+                            color: Pal.dim;
+                        }
+                    }
+
+                    // The chip is the one thing in the row that shrinks. It takes
+                    // the slack so it can be squeezed BELOW its content width on a
+                    // narrow card, and `max-width` caps it at that content width so
+                    // it never draws as an over-wide raised box — which is exactly
+                    // what a CSS flex item with `flex-shrink: 1` does.
+                    chip := Rectangle {
+                        horizontal-stretch: 1;
+                        max-width: query-text.preferred-width + 2 * Metrics.s(12);
+                        border-radius: Metrics.s(8);
+                        border-width: 1px;
+                        border-color: Pal.border;
+                        background: Pal.raised;
+
+                        HorizontalLayout {
+                            padding-left: Metrics.s(12);
+                            padding-right: Metrics.s(12);
+                            padding-top: Metrics.s(5);
+                            padding-bottom: Metrics.s(5);
+                            query-text := Text {
+                                text: root.query;
+                                font-size: Math.max(12px, Metrics.s(15));
+                                font-weight: 700;
+                                color: Pal.text;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Body ──
+            //
+            // NOT OverlayBody. Three of the five bodies must be CENTRED in the
+            // band and the results grid must FILL it, and OverlayBody's viewport is
+            // its content's preferred height — which top-aligns short content and
+            // gives a stretching child nothing to stretch into. So the band is
+            // opened out here: the same Flickable-inside-a-Rectangle shape, with
+            // the viewport floored at the band's own height so `alignment: center`
+            // has slack to centre in and the grid has room to fill. Everything else
+            // matches OverlayBody, scrollbar included — there isn't one, because
+            // every reference hides its own.
+            //
+            // Two Flickables under two `if`s rather than one with the states
+            // inside, because the column states need a content-measured viewport
+            // (`col.preferred-height`) and the grid needs an arithmetic one, and an
+            // id declared inside an `if` is not visible outside it.
+            body := Rectangle {
+                vertical-stretch: 1;
+                min-height: 0px;
+
+                // Landing / loading / no-results / error — a centred column.
+                if root.state != LogoSearchState.results: Flickable {
+                    x: root.body-pad-h;
+                    y: root.body-pad-top;
+                    width: root.band-w;
+                    height: root.band-h;
+                    // Vertical only: the viewport is exactly as wide as the band.
+                    viewport-width: self.width;
+                    // Floored at the band so a short body has slack to be centred
+                    // in; taller content scrolls. Reads the content's PREFERRED
+                    // height, never its resolved one.
+                    viewport-height: Math.max(self.height, col.preferred-height);
+
+                    col := VerticalLayout {
+                        alignment: center;
+
+                        // ── Landing, station HAS a logo ──
+                        if root.state == LogoSearchState.landing && root.has-logo: VerticalLayout {
+                            spacing: Metrics.s(card.narrow ? 18 : 24);
+                            padding-left: root.landing-pad-h;
+                            padding-right: root.landing-pad-h;
+                            padding-top: Metrics.s(card.narrow ? 8 : 10);
+                            padding-bottom: Metrics.s(card.narrow ? 8 : 10);
+
+                            // The white plate. White is deliberate and is NOT a
+                            // theme colour: logo art is composited on white in both
+                            // themes because that is what the art expects. It still
+                            // goes through Pal.flat — a no-op on white by
+                            // construction, but no colour bypasses the function.
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: root.art-w + 2 * root.plate-pad-h;
+                                    height: root.art-h + 2 * root.plate-pad-v;
+                                    border-radius: Metrics.s(16);
+                                    background: Pal.flat(#FFFFFF);
+                                    // dc.html's `inset 0 0 0 1px t.border` — a real
+                                    // 1dp ring, missing from the shipping TSX.
+                                    border-width: 1px;
+                                    border-color: Pal.border;
+
+                                    // Placed by hand rather than centred by
+                                    // default, for the reason spelled out on the
+                                    // result cell's art: an Image with no x/y
+                                    // binding folds its source pixel size into the
+                                    // plate's layout info. The plate is exactly
+                                    // the art plus its padding, so the offset IS
+                                    // the padding.
+                                    Image {
+                                        x: root.plate-pad-h;
+                                        y: root.plate-pad-v;
+                                        source: root.logo;
+                                        image-fit: contain;
+                                        width: root.art-w;
+                                        height: root.art-h;
+                                    }
+                                }
+                            }
+
+                            // The two hero display toggles.
+                            HorizontalLayout {
+                                alignment: center;
+                                VerticalLayout {
+                                    // dc.html's `maxWidth: 400` (the TSX says 420
+                                    // and puts it on the list rather than the row);
+                                    // spacing 12 (the TSX says 10).
+                                    width: Math.min(Metrics.s(400), root.landing-w);
+                                    spacing: Metrics.s(12);
+
+                                    OptionRow {
+                                        label: "Display Call Sign";
+                                        checked: root.show-call;
+                                        toggled => { root.toggle-call(); }
+                                    }
+                                    OptionRow {
+                                        label: "Display Frequency";
+                                        checked: root.show-freq;
+                                        toggled => { root.toggle-freq(); }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                AccentButton {
+                                    label: root.search-label;
+                                    button-height: Metrics.s(54);
+                                    pad-h: Metrics.s(26);
+                                    corner: Metrics.s(13);
+                                    label-size: Math.max(12px, Metrics.s(16));
+                                    tracking: 0.3px;
+                                    clicked => { root.search(); }
+                                }
+                            }
+                        }
+
+                        // ── Landing, NO logo ──
+                        if root.state == LogoSearchState.landing && !root.has-logo: VerticalLayout {
+                            spacing: Metrics.s(card.narrow ? 18 : 24);
+                            padding-left: root.landing-pad-h;
+                            padding-right: root.landing-pad-h;
+                            padding-top: Metrics.s(card.narrow ? 8 : 10);
+                            padding-bottom: Metrics.s(card.narrow ? 8 : 10);
+
+                            HorizontalLayout {
+                                alignment: center;
+                                PictureLens {
+                                    size: Metrics.s(46);
+                                    color: Pal.dim;
+                                    // dc.html `noLogoGlyphStyle` — this view's
+                                    // glyph is at 0.85, the no-results one is not.
+                                    opacity: 0.85;
+                                }
+                            }
+                            Text {
+                                text: "No Logo Installed";
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                // Curly apostrophe, U+2019 — in both bundled cuts.
+                                text: "This station doesn’t have a logo yet.";
+                                font-size: Math.max(12px, Metrics.s(15));
+                                font-weight: 400;
+                                color: Pal.dim;
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                AccentButton {
+                                    label: root.search-label;
+                                    button-height: Metrics.s(54);
+                                    pad-h: Metrics.s(26);
+                                    corner: Metrics.s(13);
+                                    label-size: Math.max(12px, Metrics.s(16));
+                                    tracking: 0.3px;
+                                    clicked => { root.search(); }
+                                }
+                            }
+                        }
+
+                        // ── Loading ──
+                        if root.state == LogoSearchState.loading: VerticalLayout {
+                            spacing: Metrics.s(14);
+                            padding-left: root.center-pad-h;
+                            padding-right: root.center-pad-h;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                SpinnerRing {
+                                    size: Metrics.s(44);
+                                    ring: Metrics.s(4);
+                                    // The dc's track is `t.track` — rgba(20,30,45,
+                                    // 0.10) light / rgba(255,255,255,0.10) dark,
+                                    // which is Pal.meter-empty exactly.
+                                    track: Pal.meter-empty;
+                                    arc: Pal.blue;
+                                }
+                            }
+                            Text {
+                                text: "Searching for logos…";
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    width: root.center-sub-w;
+                                    text: "Looking up brand art for this station.";
+                                    font-size: Math.max(12px, Metrics.s(15));
+                                    font-weight: 400;
+                                    color: Pal.dim;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // ── No results ──
+                        if root.state == LogoSearchState.no-results: VerticalLayout {
+                            spacing: Metrics.s(14);
+                            padding-left: root.center-pad-h;
+                            padding-right: root.center-pad-h;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                PictureLens {
+                                    size: Metrics.s(46);
+                                    color: Pal.dim;
+                                }
+                            }
+                            Text {
+                                text: "No logos found";
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    width: root.center-sub-w;
+                                    text: "The search came back empty. You can try again or keep the current monogram.";
+                                    font-size: Math.max(12px, Metrics.s(15));
+                                    font-weight: 400;
+                                    color: Pal.dim;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                // dc.html's `marginTop: 4` on the retry button, on
+                                // top of the column's own 14dp gap.
+                                padding-top: Metrics.s(4);
+                                AccentButton {
+                                    label: "Search again";
+                                    button-height: Metrics.s(48);
+                                    pad-h: Metrics.s(22);
+                                    corner: Metrics.s(12);
+                                    label-size: Math.max(12px, Metrics.s(15));
+                                    clicked => { root.retry(); }
+                                }
+                            }
+                        }
+
+                        // ── Error: the search threw, or a save failed ──
+                        if root.state == LogoSearchState.error: VerticalLayout {
+                            spacing: Metrics.s(14);
+                            padding-left: root.center-pad-h;
+                            padding-right: root.center-pad-h;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                ErrorTriangle {
+                                    size: Metrics.s(46);
+                                    color: Pal.amber;
+                                }
+                            }
+                            Text {
+                                text: root.error-title;
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    width: root.center-sub-w;
+                                    text: root.error-body;
+                                    font-size: Math.max(12px, Metrics.s(15));
+                                    font-weight: 400;
+                                    color: Pal.dim;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                padding-top: Metrics.s(4);
+                                AccentButton {
+                                    label: "Search again";
+                                    button-height: Metrics.s(48);
+                                    pad-h: Metrics.s(22);
+                                    corner: Metrics.s(12);
+                                    label-size: Math.max(12px, Metrics.s(15));
+                                    clicked => { root.retry(); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Results: the 2×2 grid ──
+                if root.state == LogoSearchState.results: Flickable {
+                    x: root.body-pad-h;
+                    y: root.body-pad-top;
+                    width: root.band-w;
+                    height: root.band-h;
+                    // Horizontal scroll is forbidden by §6.4, and the viewport is
+                    // exactly as wide as the band, so it cannot happen.
+                    viewport-width: self.width;
+                    viewport-height: root.grid-rows * root.cell-h
+                        + (root.grid-rows - 1) * root.grid-gap
+                        + 2 * root.grid-pad-v;
+
+                    for c[i] in root.candidates: ResultCell {
+                        x: Math.mod(i, 2) * (root.cell-w + root.grid-gap) + root.grid-pad-h;
+                        y: Math.floor(i / 2) * (root.cell-h + root.grid-gap) + root.grid-pad-v;
+                        width: root.cell-w;
+                        height: root.cell-h;
+                        candidate: c;
+                        selected: i == root.selected-index;
+                        well-min-h: root.well-min-h;
+                        caption-font: root.caption-font;
+                        dims-font: root.dims-font;
+                        // A held Confirm ignores every input until it resolves.
+                        clicked => { if (!root.saving) { root.pick(i); } }
+                    }
+                }
+            }
+
+            // ── Footer: hint · Cancel · Confirm ──
+            //
+            // `foot-height: 0` because this footer is content-driven — the dc's
+            // `footerStyle` states padding only, and the 50/56dp buttons are the
+            // tallest things in it. OverlayFooter's 16dp spacing is the dc's gap
+            // between the hint and the button pair.
+            OverlayFooter {
+                foot-height: 0px;
+                pad-h: Metrics.s(card.narrow ? 16 : 22);
+                pad-v: Metrics.s(card.narrow ? 12 : 14);
+                spacing: Metrics.s(16);
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.hint;
+                        font-size: Math.max(12px, Metrics.s(14));
+                        font-weight: 700;
+                        color: Pal.dim;
+                        horizontal-alignment: left;
+                        overflow: elide;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    HorizontalLayout {
+                        spacing: Metrics.s(12);
+
+                        FooterButton {
+                            label: "Cancel";
+                            a11y-label: "Cancel";
+                            min-w: Metrics.s(card.narrow ? 96 : 120);
+                            button-height: Metrics.s(card.narrow ? 50 : 56);
+                            clicked => { root.close(); }
+                        }
+                        FooterButton {
+                            label: root.confirm-label;
+                            // The reference's label differs from the visible one:
+                            // "Confirm logo" (LogoSearchOverlay.tsx:351), because
+                            // "Confirm" alone says nothing out of context.
+                            a11y-label: "Confirm logo";
+                            primary: true;
+                            enabled: root.can-confirm;
+                            busy: root.saving;
+                            min-w: Metrics.s(card.narrow ? 120 : 148);
+                            button-height: Metrics.s(card.narrow ? 50 : 56);
+                            clicked => { root.confirm(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

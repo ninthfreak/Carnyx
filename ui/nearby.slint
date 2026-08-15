@@ -1,0 +1,924 @@
+// Nearby-stations picker (ANDROID §6.2) — the modal list of receivable stations,
+// best-signal-first, over the dimmed face.
+//
+// Four bands inside the shared card: header, ONE optional filter band, the
+// station list, and the FCC-snapshot footer. Only the list scrolls vertically;
+// the filter band scrolls HORIZONTALLY inside its own fixed-height strip and is a
+// SIBLING of the list, not a row inside it — both references are explicit about
+// that (`flexShrink: 0` outside `listStyle` in the dc.html, rendered outside the
+// <ScrollView> in the TSX), so the chips never scroll away with the rows.
+//
+// WHERE THE NUMBERS COME FROM. `NearbyPicker.dc.html` is the built reference and
+// wins on appearance; `src/components/carfm/NearbyPicker.tsx` is the shipping code
+// and wins on behaviour. Every value below cites one of them. The disagreements
+// between the two are called out at the point they bite, not silently resolved.
+//
+// NO LOGO COLUMN. §4.5 line 317 and §6.2 line 424 both say so, and neither
+// reference renders one — the `logo: 60/46` entries still sitting in the dc.html's
+// `M` map and the TSX's `RowMetrics` are dead, as are `styles.logo`/`logoText`.
+// §6.2's narrow-track prose ("smaller logo, freq, callsign…") is stale text.
+//
+// TYPE FLOORS. The references never ramp: a 13sp chip is 13sp on every surface.
+// Carnyx ramps every design dimension through `Metrics.s()`, which at k=0.68 would
+// put that chip at 9px. Small type is therefore floored at 12px the way
+// `Metrics.pty-font` / `signal-num` / `stereo-font` already floor theirs (§10,
+// "nothing critical below ~15sp") — the floor moves this file TOWARD the
+// reference, not away from it.
+
+import { Pal, Metrics } from "tokens.slint";
+import { OverlayCard, OverlayHeader, OverlayBody, OverlayFooter } from "overlay.slint";
+import { SignalWaves, StarIcon } from "icons.slint";
+
+/// Which of the five mutually exclusive bodies the picker is showing.
+///
+/// An enum rather than the references' four overlapping booleans (`showList`,
+/// `showEmpty`, `showNoGps` + a separate `loading`): those can contradict each
+/// other, and they are all derived from ONE upstream question — is there a fix, is
+/// there a database, are there rows. Rust answers it once and hands the answer
+/// over; nothing here re-derives it.
+export enum NearbyState {
+    /// The fetch is in flight and there is no previous result to show
+    /// (NearbyPicker.tsx:199 — `loading && !res`). The dc.html has no such state.
+    loading,
+    /// Rows to draw. The ONLY state with a filter band, a list or a footer.
+    list,
+    /// A result came back with `location === null` (NearbyPicker.tsx:144).
+    no-gps,
+    /// A result with a location but no rows AND no snapshot date — the FCC dataset
+    /// was never installed (NearbyPicker.tsx:213, the `res?.snapshotDate` false arm).
+    no-database,
+    /// A result with a location and a snapshot date, but nothing within range.
+    /// TSX-only; the dc.html's fixed props never reach it.
+    no-stations,
+}
+
+/// One row of the list, already filtered, already sorted, already formatted.
+///
+/// Everything here is a finished value. The picker draws these in arrival order
+/// and never sorts, joins, rounds or classifies.
+export struct NearbyStation {
+    /// The dial frequency at one decimal, no unit — "98.1". §6.2 is explicit that
+    /// this list carries no "MHz" label. (`st.frequencyMhz.toFixed(1)`; Slint's
+    /// float-to-string has no precision control, which is why this is a string,
+    /// exactly as `Preset.freq-label` is.)
+    freq: string,
+    /// Call sign with a SEPARATED, TRAILING band suffix stripped — tokens.ts
+    /// `cleanCall`, /[\s-]+(fm|am)\s*$/i. Not the dc.html's older regex, which
+    /// matched anywhere and amputated real signs ("WHAM" → "WH", "KJFM" → "KJ");
+    /// tokens.ts carries a comment naming that as the bug it fixed, and behaviour
+    /// is the TSX's call.
+    call: string,
+    /// The service badge text — "FX" (translator) or "FL" (LPFM). EMPTY for plain
+    /// FM, which is what hides the badge; the picker does not compare it to "FM".
+    service: string,
+    /// "<city> · <genre>", already joined with the empty parts dropped. Empty when
+    /// neither exists, which drops the second line entirely (see the row).
+    meta: string,
+    /// "<km> km", already rounded. Rust also decides what an unknown distance
+    /// reads as; the dc.html renders "-- km".
+    distance: string,
+    /// Lit arc pairs, 0–4 — `discreteLit(strength).fullPairs`, i.e. strength − 1
+    /// where strength is `strengthOf()`'s 1–5 RANK WITHIN THE DISPLAYED LIST, not a
+    /// measurement. Filtering the list re-normalises every meter, so Rust must
+    /// recompute this whenever the filter changes.
+    signal-pairs: int,
+    /// This frequency is already a preset — `presetMHz.has(round(mhz * 10))`.
+    saved: bool,
+}
+
+/// One column of the genre grid, packed COLUMN-MAJOR: chip 0 top-left, chip 1
+/// directly below it, chip 2 at the top of column 2, and so on.
+///
+/// Slint 1.17 has no `grid-auto-flow: column`, and doing the 2c / 2c+1 arithmetic
+/// here would be this file deciding something. Rust packs the columns; the picker
+/// draws them.
+export struct GenreColumn {
+    top: string,
+    bottom: string,
+    /// False for the last column when the genre count is odd — that column is one
+    /// chip tall and sits in the first row, as `grid-template-rows: repeat(2, auto)`
+    /// gives it.
+    has-bottom: bool,
+}
+
+// ── Back arrow ───────────────────────────────────────────────────────────────
+//
+// icons.tsx's `BackArrowIcon`, the icon-only "back to all stations" chip in the
+// genre band. It is the tenth icon in this design and it is NOT in ui/icons.slint,
+// which is where it belongs — but icons.slint is another agent's file this pass,
+// so it lives here for now. Whoever consolidates should move `BackArrow` (and the
+// wrapper below) into icons.slint and delete both from this file.
+
+// icons.slint's `VPath`, copied verbatim because it is private there. Slint's Path
+// fits its geometry into (element size − stroke width), nudges it back by half a
+// stroke, and does NOT scale stroke width with the viewbox — all three differ from
+// SVG, and this cancels the difference. Hand-rolling a Path instead is the
+// documented way to get this wrong.
+component VPath inherits Path {
+    in property <length> box-w;
+    in property <length> box-h;
+    in property <float> vbw;
+    in property <float> vbh;
+    /// Stroke width in VIEWBOX units, as written in the SVG.
+    in property <float> raw-stroke: 0;
+
+    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
+
+    viewbox-width: root.vbw;
+    viewbox-height: root.vbh;
+    stroke-width: root.raw-stroke * root.sc * 1px;
+    x: 0px - self.stroke-width / 2;
+    y: 0px - self.stroke-width / 2;
+    width: root.box-w + self.stroke-width;
+    height: root.box-h + self.stroke-width;
+}
+
+component BackArrow {
+    in property <length> size: 22px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2.2;
+        commands: "M11 5 L4 12 L11 19 M4 12 H19";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+// ── Filter chips ─────────────────────────────────────────────────────────────
+
+/// A filter chip — the same pill in both filter rows (dc.html `chipBase`, TSX
+/// `styles.chip`, which agree value for value).
+///
+/// 32dp tall. §10 asks for ≥48dp hit targets and BOTH references ship 32, so this
+/// is a live conflict, not an oversight: growing the pill would be a silent
+/// redesign and growing only the touch area would reach down into the first list
+/// row. Left at 32 and flagged.
+component FilterChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+
+    callback clicked();
+
+    // Width is the label plus dc.html's `padding: '0 13px'`. The height is 32 with
+    // NO vertical padding in either reference, so the label's own height is the
+    // only floor under it.
+    min-width: label-text.preferred-width + 2 * Metrics.s(13);
+    min-height: Math.max(Metrics.s(32), label-text.preferred-height);
+    border-radius: Metrics.s(8);
+    // Hairlines, the stated exception to the Metrics.s rule. The active chip's
+    // 1.5 is the reference's own weight, not a rounding of anything.
+    border-width: root.active ? 1.5px : 1px;
+    border-color: root.active ? Pal.blue : Pal.border;
+    background: root.active ? Pal.blue-fill : transparent;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    // Placed rather than centred: a chip in a two-chip genre column is stretched to
+    // that column's max-content width, and the reference's `display:flex` with no
+    // justifyContent leaves the label at the leading padding when that happens.
+    // Reading `preferred-width` above while binding `width` here is safe — a
+    // no-wrap Text measures its implicit size without consulting its own width.
+    label-text := Text {
+        x: Metrics.s(13);
+        y: (parent.height - self.height) / 2;
+        width: Math.max(0px, parent.width - 2 * Metrics.s(13));
+        text: root.label;
+        font-size: Math.max(12px, Metrics.s(13));
+        font-weight: 700;
+        // Sub-pixel tracking: Metrics.s(0.3) rounds to 0px, so it stays raw.
+        letter-spacing: 0.3px;
+        color: root.active ? Pal.blue : Pal.dim;
+        // The chip never wraps and never elides (`whiteSpace: 'nowrap'`); it is
+        // sized to its label, so this only bites if one is absurd.
+        overflow: clip;
+    }
+}
+
+/// The icon-only "back to All" chip that leads the genre band. The ONE chip in the
+/// picker with a fill (dc.html `allResetStyle`, `backgroundColor: t.raised`), and
+/// the only way out of a bucket once the bucket row has hidden itself.
+///
+/// It stretches to the full height of the genre grid — one chip row or two — which
+/// falls out of the band's HorizontalLayout rather than being stated here.
+component ResetChip inherits Rectangle {
+    callback clicked();
+
+    // dc.html `padding: '0 12px'` around a 22dp glyph.
+    min-width: Metrics.s(22) + 2 * Metrics.s(12);
+    border-radius: Metrics.s(8);
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    // Centred by hand: a user component's root is not one of the builtins the
+    // compiler auto-centres, unlike the Text in a chip.
+    BackArrow {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        size: Metrics.s(22);
+        color: Pal.dim;
+    }
+}
+
+// ── Station row ──────────────────────────────────────────────────────────────
+
+/// One station. Left to right: the info column, the saved ★, the spacer, the
+/// signal/distance column, the chevron.
+///
+/// The §6.2 slack rule is the spacer's job, not the info column's:
+///   WIDE   info shrinks to its content, the spacer eats everything left over and
+///          pins signal/distance/chevron hard right.
+///   NARROW info takes the slack, the spacer collapses to a fixed 8dp.
+/// (dc.html `mainStyle.flex` '0 1 auto' / '1 1 auto' against `spacerStyle.flex`
+/// 1 / '0 0 8px'; TSX `styles.info` + `styles.spacer` / `spacerNarrow`. Identical.)
+component StationRow inherits Rectangle {
+    in property <NearbyStation> station;
+    /// The §6.2 width track, handed down from the card. Not re-derived here.
+    in property <bool> narrow: false;
+
+    /// A short tap.
+    callback tapped();
+    /// Pointer down / pointer released-or-cancelled, for the caller's hold timer.
+    callback press-began();
+    callback press-ended();
+
+    property <length> freq-font: Metrics.s(root.narrow ? 23 : 32);
+    property <length> call-font: Math.max(12px, Metrics.s(root.narrow ? 15 : 20));
+    property <length> meta-font: Math.max(12px, Metrics.s(root.narrow ? 13 : 15));
+    property <length> badge-font: Math.max(12px, Metrics.s(12));
+
+    // BASELINE ALIGNMENT, line 1. Both references set `alignItems: 'baseline'`, so
+    // the 32dp frequency and the 20dp call sign sit on one line, not on a common
+    // centre or a common bottom. Slint has no baseline alignment in any layout, so
+    // each item is dropped by the difference between its own ascent and the
+    // frequency's, and the drop is exact rather than eyeballed: Atkinson
+    // Hyperlegible's hhea/OS2 ascender is 950 per 1000 upem in BOTH cuts (checked
+    // against the two .ttf files in ui/fonts), so a text box's first baseline sits
+    // 0.95em below its top in every renderer.
+    property <length> baseline: Math.round(root.freq-font / 1px * 0.95) * 1px;
+    property <length> call-drop:
+        Math.max(0px, root.baseline - Math.round(root.call-font / 1px * 0.95) * 1px);
+    // The badge's own baseline is inset by its 1px border and its 2dp top padding
+    // before its text even starts (dc.html `svcStyle`, `padding: '2px 7px'`).
+    property <length> badge-drop: Math.max(0px,
+        root.baseline - 1px - Metrics.s(2) - Math.round(root.badge-font / 1px * 0.95) * 1px);
+
+    // A MINIMUM, never a fixed height: §10 wants font scale to ×1.5 without
+    // overlap, and the row has ~30dp of slack at design scale to absorb it.
+    min-height: Metrics.s(root.narrow ? 74 : 92);
+    border-radius: Metrics.s(16);
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea {
+        // The tap has to come from `clicked`, not from a pointer-up: once pressed,
+        // a TouchArea grabs the pointer and still receives the up event after the
+        // finger has slid off the row. `clicked` fires only when the release lands
+        // inside — and it fires BEFORE pointer-event(up), which is why the hold
+        // flag is reset on DOWN and never on the way out.
+        clicked => { root.tapped(); }
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                root.press-began();
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                root.press-ended();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        // dc.html `rowPad` is '0 18px' / '0 13px' — no vertical padding at all; the
+        // min-height does that work. (TSX adds `paddingVertical: 14`, which at
+        // design scale is invisible under the 92/74 floor but makes a narrow row
+        // 1.6dp taller. The dc.html wins on appearance.)
+        padding-left: Metrics.s(root.narrow ? 13 : 18);
+        padding-right: Metrics.s(root.narrow ? 13 : 18);
+        spacing: Metrics.s(root.narrow ? 11 : 18);
+
+        // ── info column ──
+        VerticalLayout {
+            horizontal-stretch: root.narrow ? 1 : 0;
+            alignment: center;
+            spacing: Metrics.s(root.narrow ? 3 : 5);
+
+            HorizontalLayout {
+                // `start`, not the default stretch: with every item shrink-to-content
+                // a stretched row would share the surplus out equally between the
+                // frequency, the call sign and the badge and open gaps between them.
+                // Packed left, the surplus stays at the right and only the call sign
+                // — the one item with an elide minimum — gives way when cramped.
+                alignment: start;
+                spacing: Metrics.s(root.narrow ? 6 : 8);
+
+                VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: start;
+                    Text {
+                        text: root.station.freq;
+                        font-size: root.freq-font;
+                        font-weight: 700;
+                        // Tight tracking on the big figures, dc.html `freqStyle`
+                        // (the TSX has none). Sub-pixel, so raw.
+                        letter-spacing: -0.5px;
+                        // NOT amber. §10's always-amber rule is about the face's
+                        // readout; both references print this list in `t.text`.
+                        color: Pal.text;
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: start;
+                    // dc.html `callStyle.marginLeft`, 6/3 ON TOP of the row gap.
+                    padding-left: Metrics.s(root.narrow ? 3 : 6);
+                    padding-top: root.call-drop;
+                    Text {
+                        text: root.station.call;
+                        font-size: root.call-font;
+                        font-weight: 700;
+                        color: Pal.text;
+                        // One line, ellipsised, never wrapped. This is also what
+                        // lets the row shrink at all: an elided Text's minimum width
+                        // is one "…", so it is the item the layout takes from.
+                        overflow: elide;
+                    }
+                }
+
+                // Rendered only for a service that is not plain FM — Rust says so by
+                // sending an empty string, which is why nothing here compares to "FM".
+                if root.station.service != "": VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: start;
+                    padding-left: Metrics.s(2);
+                    padding-top: root.badge-drop;
+                    Rectangle {
+                        min-width: badge-text.preferred-width + 2 * Metrics.s(7) + 2px;
+                        min-height: badge-text.preferred-height + 2 * Metrics.s(2) + 2px;
+                        // 6dp rounded rectangle, dc.html `svcStyle`. (The TSX makes
+                        // it a 999 pill; the dc.html wins on appearance.)
+                        border-radius: Metrics.s(6);
+                        border-width: 1px;
+                        border-color: Pal.border;
+                        badge-text := Text {
+                            text: root.station.service;
+                            font-size: root.badge-font;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                            color: Pal.dim;
+                        }
+                    }
+                }
+            }
+
+            // Line 2. The dc.html gates the whole line on `hasMeta` and lets the row
+            // collapse to one line; the TSX always renders it, falling back to a
+            // single space to hold the two-line height. They are visibly different —
+            // the info column is vertically centred, so a blank second line lifts the
+            // frequency by half a line — and the dc.html wins on appearance.
+            if root.station.meta != "": Text {
+                text: root.station.meta;
+                font-size: root.meta-font;
+                font-weight: 400;
+                color: Pal.dim;
+                overflow: elide;
+            }
+        }
+
+        // ── saved ★ ──
+        //
+        // dc.html hangs an extra 10/6 marginLeft on it, on top of the row gap (the
+        // TSX has none). Carnyx's StarIcon is the same path at stroke 1.7, where the
+        // dc.html draws 1.4; icons.slint is shared and not this pass's file.
+        if root.station.saved: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            padding-left: Metrics.s(root.narrow ? 6 : 10);
+            StarIcon {
+                size: Metrics.s(26);
+                filled: true;
+                color: Pal.amber;
+                outline: Pal.amber;
+            }
+        }
+
+        // ── the slack ──
+        Rectangle {
+            horizontal-stretch: root.narrow ? 0 : 1;
+            // `minWidth: 8` in the dc.html on both tracks; on the narrow track that
+            // minimum IS the whole spacer.
+            min-width: Metrics.s(8);
+        }
+
+        // ── signal + distance ──
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            // dc.html `trailingStyle`: gap 8 and right-aligned, so the distance sits
+            // under the glyph's right edge. (TSX centres them 2 apart.)
+            spacing: Metrics.s(8);
+
+            HorizontalLayout {
+                alignment: end;
+                SignalWaves {
+                    size: Metrics.s(30);
+                    // discreteLit(): no half-step and no sub-floor ramp — those
+                    // belong to the face's measured level, and this is a rank.
+                    // `strengthOf` never returns 0, so the dot is always lit.
+                    full-pairs: root.station.signal-pairs;
+                    half: false;
+                    dot-opacity: 1.0;
+                    dotted-arcs: 0;
+                    on: Pal.amber;
+                    off: Pal.meter-empty;
+                }
+            }
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: root.station.distance;
+                    font-size: Math.max(12px, Metrics.s(15));
+                    font-weight: 700;
+                    color: Pal.dim;
+                }
+            }
+        }
+
+        // ── chevron ──
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            // dc.html `chevStyle.marginLeft` 2 (the TSX uses 4).
+            padding-left: Metrics.s(2);
+            Text {
+                text: "›";
+                font-size: Metrics.s(26);
+                // 700 per the dc.html; the TSX leaves it at 400.
+                font-weight: 700;
+                color: Pal.dim;
+            }
+        }
+    }
+}
+
+// ── Waiting indicator ────────────────────────────────────────────────────────
+
+/// One dot of the busy indicator.
+component PulseDot inherits Rectangle {
+    in property <duration> phase;
+
+    // Same shape as the TA pulse in status-bar.slint: an always-running animation
+    // whose value is only ever read, kicked off from `init`.
+    property <float> beat: 1.0;
+    init => { self.beat = 0.2; }
+    animate beat {
+        delay: root.phase;
+        duration: 460ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+
+    border-radius: self.width / 2;
+    background: Pal.dim;
+    opacity: root.beat;
+}
+
+/// The busy state. NearbyPicker.tsx:200 puts a large `ActivityIndicator` here;
+/// Slint has no spinner primitive and the software renderer the screenshots come
+/// from does not rotate, so this is three pulsing dots instead — a SUBSTITUTION,
+/// not the reference. Sized to sit where the 52dp ⌖ / ▤ glyphs of the other
+/// centred states sit, so the frame does not jump between them.
+component Waiting inherits Rectangle {
+    property <length> dot: Metrics.s(12);
+
+    min-width: 3 * root.dot + 2 * Metrics.s(10);
+    min-height: Metrics.s(52);
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Metrics.s(10);
+        VerticalLayout {
+            alignment: center;
+            PulseDot { width: root.dot; height: root.dot; phase: 0ms; }
+        }
+        VerticalLayout {
+            alignment: center;
+            PulseDot { width: root.dot; height: root.dot; phase: 155ms; }
+        }
+        VerticalLayout {
+            alignment: center;
+            PulseDot { width: root.dot; height: root.dot; phase: 310ms; }
+        }
+    }
+}
+
+// ── The picker ───────────────────────────────────────────────────────────────
+
+export component NearbyOverlay inherits Rectangle {
+    // ── Data ──
+    /// The rows to draw: already filtered to the current bucket and genre, already
+    /// sorted best-signal-first by `rankNearby`'s score. Drawn in arrival order.
+    in property <[NearbyStation]> stations;
+    in property <NearbyState> state: NearbyState.list;
+    /// The FCC snapshot date, already formatted — "2026-06-14". Empty when there
+    /// is none, which is also what hides the footer band.
+    in property <string> snapshot;
+
+    // ── Filter ──
+    /// `['All'] + (any music ? ['Music'] : []) + (any talk ? ['Talk'] : [])`. In
+    /// practice always those three, because the bar only shows when both flags are
+    /// set — but the list is Rust's, not a literal here.
+    in property <[string]> bucket-chips;
+    /// The active bucket's label, matched against `bucket-chips`.
+    in property <string> bucket;
+    /// The current bucket's genres, packed into two rows column-major.
+    in property <[GenreColumn]> genre-columns;
+    /// The active genre, or empty for none. Already validated against the current
+    /// bucket's genre list.
+    in property <string> genre;
+    /// `showBucketBar` — rows exist AND both buckets are represented AND the bucket
+    /// is All. Drilling into Music or Talk hides this row entirely (§6.2).
+    in property <bool> show-bucket-bar: false;
+    /// `showGenreBar` — rows exist AND the bucket is not All. Both references show
+    /// it whatever the genre count, because the back-arrow inside it is the only
+    /// way back to All; §6.2's "only … when >1 genre exists" is stale.
+    in property <bool> show-genre-bar: false;
+
+    // ── What the user can do ──
+    /// A tap on a row: tune it AND dismiss. The reference closes the picker itself
+    /// (NearbyPicker.tsx:269, `onTune(st); onClose();`), so `close()` follows.
+    callback tune(int);
+    /// A ~550ms hold on a row: save it as a preset. The picker STAYS OPEN and the
+    /// row's ★ appears.
+    callback save-preset(int);
+    callback pick-bucket(string);
+    /// Tapping the active genre clears it — Rust holds the selection, so Rust does
+    /// the toggle (NearbyPicker.tsx:253, dc.html `pickSub`).
+    callback pick-genre(string);
+    /// The back-arrow chip: bucket back to All, genre cleared. A callback of its
+    /// own rather than `pick-bucket("All")`, so no bucket label is written down here.
+    callback reset-bucket();
+    /// The ✕, the scrim, and every row tap.
+    callback close();
+
+    // Per-instance metrics that follow the §6.2 width track. `narrow` is decided
+    // from the RESOLVED card width, where the geometry is — a layout track like
+    // Metrics.tall / .landscape / .two-rows, not a content decision.
+    property <length> side-pad: Metrics.s(card.narrow ? 13 : 22);
+    // The grid is two rows tall exactly when a column has a bottom chip, and
+    // column-major packing means column 0 is the one that can answer that: it gets
+    // a bottom as soon as there are two genres at all.
+    property <bool> genre-two-rows:
+        root.genre-columns.length > 0 && root.genre-columns[0].has-bottom;
+    property <length> chip-h: Metrics.s(32);
+    property <length> genre-grid-h:
+        root.genre-two-rows ? 2 * root.chip-h + Metrics.s(8) : root.chip-h;
+
+    // ── Long press ──
+    //
+    // HOLD_MS, NearbyPicker.tsx:16, and the dc.html's own 550ms `setTimeout`. ONE
+    // timer for the whole list rather than one per row: a Timer inside a repeated
+    // element is a shape nothing in this tree has compiled, and the menu popup in
+    // Slint's own widget library keeps its single hover timer at the root exactly
+    // like this.
+    //
+    // Worth knowing on device: a press inside a Flickable is withheld from the
+    // inner TouchArea for FORWARD_DELAY (100ms) before it is forwarded, so the felt
+    // hold is ~650ms, not 550ms. That is Slint's scroll disambiguation, not a
+    // mistake here; shortening the interval to compensate would break the moment
+    // the constant changes.
+    property <int> hold-index: -1;
+    property <bool> hold-fired: false;
+
+    hold := Timer {
+        interval: 550ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if (root.hold-index >= 0) {
+                root.hold-fired = true;
+                root.save-preset(root.hold-index);
+            }
+        }
+    }
+
+    function hold-begin(i: int) {
+        root.hold-index = i;
+        root.hold-fired = false;
+        hold.running = true;
+    }
+    function hold-stop() {
+        hold.running = false;
+    }
+    function row-tapped(i: int) {
+        hold.running = false;
+        // A hold that already fired consumes the release, the way RN's Pressable
+        // swallows onPress after onLongPress.
+        if (!root.hold-fired) {
+            root.tune(i);
+            root.close();
+        }
+    }
+
+    card := OverlayCard {
+        width: root.width;
+        height: root.height;
+        // §6 preamble: 900 × 600, capped to the surface less 32dp and centred.
+        // `card-background` stays at its Pal.bg default — the picker's dc.html
+        // `containerStyle` and its TSX card both use it — and so does `corner`,
+        // which is 24 here as on every overlay.
+        design-width: 900;
+        design-height: 600;
+        close => { root.close(); }
+
+        // ONE child, not four. OverlayCard stacks whatever it is given vertically,
+        // but three of this picker's bands are conditional, and a conditional
+        // element handed through another component's @children is a shape nothing
+        // in this tree has compiled yet. Keeping the conditionals inside a layout
+        // declared here puts them in the same scope as presets.slint's and
+        // face.slint's, which are proven. The bands' own stretch factors still
+        // decide who grows: inside here the body is still the only band with a
+        // stretch factor. Stated on this layout rather than left to the sum of its
+        // children, because every band under it except the header is conditional.
+        VerticalLayout {
+            vertical-stretch: 1;
+
+            // ── header ──
+            OverlayHeader {
+                // A MINIMUM (see OverlayHeader) — dc.html `headerStyle.height`.
+                head-height: Metrics.s(card.narrow ? 62 : 78);
+                pad-h: Metrics.s(card.narrow ? 18 : 28);
+                pad-v: 0px;
+                close => { root.close(); }
+
+                VerticalLayout {
+                    // dc.html `headerLeftStyle.gap`; the TSX uses a 1dp margin.
+                    spacing: Metrics.s(4);
+
+                    Text {
+                        text: "Nearby stations";
+                        font-size: Metrics.s(card.narrow ? 21 : 26);
+                        font-weight: 700;
+                        color: Pal.text;
+                        // Both title and subtitle elide. Not decoration: an
+                        // un-elided Text reports its full width as its MINIMUM, so
+                        // on a narrow card the header would refuse to shrink and
+                        // push the ✕ off the end.
+                        overflow: elide;
+                    }
+                    Text {
+                        // Single spaces around the interpunct, per §6.2 and the TSX.
+                        // The dc.html doubles them; two sources to one.
+                        text: "Tap to tune · hold to save a preset · best signal first";
+                        font-size: Math.max(12px, Metrics.s(14));
+                        font-weight: 400;
+                        letter-spacing: 0.3px;
+                        color: Pal.dim;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // ── bucket filter: All / Music / Talk ──
+            //
+            // dc.html `filterBarStyle`: padding '14px <sidePad>px 0', a 10dp gap,
+            // horizontally scrolling with its scrollbar hidden. Bottom padding is
+            // deliberately 0 — the list's own top padding supplies the gap to the
+            // first row.
+            if root.show-bucket-bar: Rectangle {
+                vertical-stretch: 0;
+                min-height: Metrics.s(14) + root.chip-h;
+
+                // Absolutely placed inside the band, as `rail` is in presets.slint:
+                // a Flickable reports no size of its own, so it must be given one
+                // rather than asked for one.
+                Flickable {
+                    x: root.side-pad;
+                    y: Metrics.s(14);
+                    width: parent.width - 2 * root.side-pad;
+                    height: root.chip-h;
+                    viewport-width: bucket-row.preferred-width;
+                    // Horizontal only: the viewport is exactly as tall as the strip.
+                    viewport-height: self.height;
+
+                    bucket-row := HorizontalLayout {
+                        alignment: start;
+                        spacing: Metrics.s(10);
+                        for b in root.bucket-chips: FilterChip {
+                            label: b;
+                            active: b == root.bucket;
+                            clicked => { root.pick-bucket(b); }
+                        }
+                    }
+                }
+            }
+
+            // ── genre filter: [back][divider][2-row grid] ──
+            //
+            // Replaces the bucket bar entirely; the two are never on screen at once.
+            // dc.html `genreBarStyle`: padding '10px <sidePad>px 0', 12dp between
+            // the three parts, everything stretched to the grid's height.
+            if root.show-genre-bar: Rectangle {
+                vertical-stretch: 0;
+                min-height: Metrics.s(10) + root.genre-grid-h;
+
+                HorizontalLayout {
+                    padding-left: root.side-pad;
+                    padding-right: root.side-pad;
+                    padding-top: Metrics.s(10);
+                    spacing: Metrics.s(12);
+
+                    ResetChip {
+                        horizontal-stretch: 0;
+                        clicked => { root.reset-bucket(); }
+                    }
+
+                    // Hairline rule between the way out and the genres.
+                    Rectangle {
+                        horizontal-stretch: 0;
+                        width: 1px;
+                        background: Pal.border;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        Flickable {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            viewport-width: genre-row.preferred-width;
+                            viewport-height: self.height;
+
+                            genre-row := HorizontalLayout {
+                                alignment: start;
+                                spacing: Metrics.s(8);
+                                for col in root.genre-columns: VerticalLayout {
+                                    // `start`, so the lone chip of an odd last
+                                    // column stays one row tall at the top instead
+                                    // of stretching across both rows.
+                                    alignment: start;
+                                    spacing: Metrics.s(8);
+                                    FilterChip {
+                                        label: col.top;
+                                        active: col.top == root.genre;
+                                        clicked => { root.pick-genre(col.top); }
+                                    }
+                                    if col.has-bottom: FilterChip {
+                                        label: col.bottom;
+                                        active: col.bottom == root.genre;
+                                        clicked => { root.pick-genre(col.bottom); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── the list ──
+            //
+            // The only band that scrolls vertically. Padding is symmetric top and
+            // bottom in both references, so the shared body's 26dp bottom default is
+            // overridden back down to match its top.
+            //
+            // That bottom padding is less than the card's 24dp corner, which the
+            // house note about the software renderer's square clipping warns about —
+            // harmless here because the footer covers the bottom corners. It is only
+            // exposed in the one case where the footer is absent (a list with no
+            // snapshot date), and only in a screenshot; Skia clips correctly.
+            if root.state == NearbyState.list: OverlayBody {
+                pad-h: root.side-pad;
+                pad-top: Metrics.s(card.narrow ? 12 : 16);
+                pad-bottom: Metrics.s(card.narrow ? 12 : 16);
+                spacing: Metrics.s(card.narrow ? 8 : 10);
+
+                for st[i] in root.stations: StationRow {
+                    station: st;
+                    narrow: card.narrow;
+                    tapped => { root.row-tapped(i); }
+                    press-began => { root.hold-begin(i); }
+                    press-ended => { root.hold-stop(); }
+                }
+            }
+
+            // ── the states that replace the list ──
+            //
+            // dc.html `centerStyle`: centred column, 14dp gaps, 80dp side padding,
+            // everything centre-aligned. The 80 is unconditional in both references
+            // even though it leaves a narrow card very little room — faithful, not
+            // an oversight.
+            //
+            // Each line is centred by a HorizontalLayout rather than by a cross-axis
+            // alignment, because that is also what caps the body at 520dp AND lets
+            // it fall back to the full width when the card is narrower than the cap.
+            if root.state != NearbyState.list: Rectangle {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    alignment: center;
+                    padding-left: Metrics.s(80);
+                    padding-right: Metrics.s(80);
+                    spacing: Metrics.s(14);
+
+                    if root.state == NearbyState.loading: HorizontalLayout {
+                        alignment: center;
+                        Waiting { }
+                    }
+
+                    if root.state != NearbyState.loading: HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            // ⌖ U+2316 for no fix, ▤ U+25A4 for an empty database —
+                            // plain glyphs in both references, not SVG.
+                            //
+                            // NEITHER is in Atkinson Hyperlegible (checked against the
+                            // two .ttf files in ui/fonts), so both come from the
+                            // renderer's font fallback. That is already true of the
+                            // ✕ in overlay.slint's CloseButton and the ✓ in
+                            // presets.slint, so it is a property of the whole tree,
+                            // not of this file — but it is why these two can render as
+                            // tofu in a software-renderer screenshot while looking
+                            // right on the device.
+                            text: root.state == NearbyState.no-gps ? "⌖" : "▤";
+                            font-size: Metrics.s(52);
+                            color: Pal.dim;
+                        }
+                    }
+
+                    if root.state != NearbyState.loading: HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.state == NearbyState.no-gps
+                                ? "Waiting for GPS…"
+                                : root.state == NearbyState.no-stations
+                                    ? "No stations in range"
+                                    : "Station database not installed yet";
+                            font-size: Metrics.s(24);
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            color: Pal.text;
+                        }
+                    }
+
+                    if root.state != NearbyState.loading: HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.state == NearbyState.no-gps
+                                ? "No position fix yet. Waiting for a location fix to list nearby stations."
+                                : root.state == NearbyState.no-stations
+                                    ? "No FM stations within range of this location."
+                                    : "Install the FCC dataset via tools/build_station_db to list nearby stations here.";
+                            font-size: Math.max(12px, Metrics.s(16));
+                            font-weight: 400;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            // dc.html `centerSubStyle.maxWidth`. Above this the block
+                            // stays 520 and centres; below it the layout shrinks it
+                            // to the card and the text wraps, which is what the CSS
+                            // does too.
+                            max-width: Metrics.s(520);
+                            color: Pal.dim;
+                        }
+                    }
+                }
+            }
+
+            // ── footer ──
+            //
+            // dc.html `showFooter = showList && !!snapshot`: no rows or no date and
+            // the whole band, top rule included, is gone. (The TSX keeps a 48dp band
+            // with a single space in it. The dc.html wins on appearance.)
+            //
+            // The 48dp height and 28dp side padding are OverlayFooter's defaults —
+            // taken from this very file — and are restated rather than inherited, so
+            // another overlay retuning the shared default cannot move this one.
+            if root.state == NearbyState.list && root.snapshot != "": OverlayFooter {
+                foot-height: Metrics.s(48);
+                pad-h: Metrics.s(28);
+                pad-v: 0px;
+
+                Text {
+                    text: "FCC data as of " + root.snapshot;
+                    font-size: Math.max(12px, Metrics.s(14));
+                    font-weight: 400;
+                    // The footer row is 48dp tall and this is its only child, so the
+                    // Text is stretched to it and has to say where it sits.
+                    vertical-alignment: center;
+                    color: Pal.dim;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

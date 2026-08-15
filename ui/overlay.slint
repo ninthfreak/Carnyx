@@ -1,0 +1,350 @@
+// Shared modal chrome (ANDROID §6) — the scrim, the centred card, and the three
+// bands every overlay is built out of.
+//
+// Four overlays sit in this frame: the tune numpad (§6.1), the nearby picker
+// (§6.2), settings (§6.3) and the logo-search window (§6.4). Three of the four
+// scroll. Nothing here knows what any of them contain; an overlay supplies its
+// own design size and its own children and gets the frame for free.
+//
+// WHERE THE NUMBERS COME FROM. The sizing rule is §6's preamble verbatim. The
+// chrome — card radius, scrim, header rule, close button, padding — is read off
+// the built references and the shipping TSX, cited inline. The dc.html files
+// render the card CONTENT at 100%×100% of a preview frame, so they carry the
+// header/body/footer treatment but say nothing about the scrim or the card's own
+// corner; those come from the four overlay TSX files, which agree exactly:
+//
+//   scrim  rgba(0,0,0,0.45)                     Numpad.tsx:144, NearbyPicker.tsx:290,
+//                                               SettingsPanel.tsx:653, LogoSearchOverlay.tsx:376
+//   card   borderRadius 24, overflow hidden,    same four lines
+//          shadow 0.35 / blur 50 / offset-y 20
+//
+// This component does NOT gate its own visibility. The caller wraps it in an
+// `if`, the way Face wraps its own conditional regions.
+
+import { Pal, Metrics } from "tokens.slint";
+
+/// The ✕ that closes an overlay.
+///
+/// 52dp square, 12dp corner, a 1dp border and a dim glyph on NO fill. All three
+/// dc.html references agree on that exactly (`closeStyle`, SettingsPanel:253,
+/// NearbyPicker:220, LogoSearchOverlay:285) and so do SettingsPanel.tsx and
+/// LogoSearchOverlay.tsx. NearbyPicker.tsx alone adds `backgroundColor: pal.raised`
+/// and a `pal.text` glyph — a disagreement, resolved the way the house rule says:
+/// the dc.html wins on appearance, so there is no fill and the glyph is Pal.dim.
+///
+/// Floored at 48px of REAL dp rather than scaled all the way down, because §10
+/// makes hit targets ≥48dp a safety constraint "in real dp (not a scaled-down
+/// canvas)". Same shape as `NavButton` in presets.slint, which floors the same way.
+export component CloseButton inherits Rectangle {
+    callback clicked();
+
+    width: Math.max(48px, Metrics.s(52));
+    height: self.width;
+    // Small-chrome radius stays raw, as on NavButton (14px) and PresetTile (16px):
+    // the box floors at 48px, so a radius that kept shrinking under it would bow
+    // the corners in at exactly the sizes where the floor is doing its work.
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Pal.border;
+    opacity: touch.pressed ? 0.55 : 1.0;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    // Glyph tied to the resolved box the way PowerButton ties its icon to
+    // Metrics.star — 22/52 of the button, so the floor carries the glyph with it.
+    // No font-family: the Window sets the family once, and a glyph Text carries
+    // none anywhere else in ui/ either (presets.slint's ✓).
+    Text {
+        text: "✕";
+        font-size: Math.round(root.width / 1px * 0.42) * 1px;
+        font-weight: 700;
+        color: Pal.dim;
+    }
+}
+
+/// The header band: a slot for whatever identifies the overlay, the ✕ on the
+/// right, and the 1dp rule beneath.
+///
+/// `@children` is the slot. It is laid out as a centred vertical group taking the
+/// row's slack, which is the shape all three references need: Settings puts one
+/// title in it, Nearby a title over a subtitle, LogoSearch a horizontal row of
+/// logo tile + two text lines.
+///
+/// Heights and paddings differ per overlay, so both are properties rather than
+/// constants (dc.html `headerStyle`):
+///   Settings     head-height s(76)              pad-h s(26)   pad-v 0
+///   Nearby       head-height s(narrow?62:78)    pad-h s(narrow?18:28)   pad-v 0
+///   LogoSearch   head-height 0                  pad-h s(narrow?16:22)   pad-v s(narrow?14:16)
+/// `head-height` is a MINIMUM, not a fixed height — §10 requires font scale to
+/// ×1.5 without overlap, so a header must be able to grow past its design height.
+export component OverlayHeader inherits Rectangle {
+    in property <length> pad-h: Metrics.s(26);
+    in property <length> pad-v: 0px;
+    in property <length> head-height: Metrics.s(78);
+    in property <bool> show-close: true;
+
+    callback close();
+
+    vertical-stretch: 0;
+    min-height: root.head-height;
+
+    HorizontalLayout {
+        padding-left: root.pad-h;
+        padding-right: root.pad-h;
+        padding-top: root.pad-v;
+        padding-bottom: root.pad-v;
+        spacing: Metrics.s(12);
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            @children
+        }
+
+        if root.show-close: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            CloseButton { clicked => { root.close(); } }
+        }
+    }
+
+    // `borderBottom: 1px solid t.border` on every reference header. A hairline, so
+    // it stays at 1px — the stated exception to the Metrics.s rule.
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Pal.border;
+    }
+}
+
+/// The scrolling body. This is the band §6 means by "let the BODY scroll rather
+/// than truncate": it takes all the height the card has left after the header and
+/// footer, and its content scrolls inside that.
+///
+/// Padding defaults are Settings' (`bodyStyle`, SettingsPanel.dc.html:255 —
+/// `padding: '18px 26px 26px'`). Nearby's list is s(16)/s(22)/s(16) wide and
+/// s(12)/s(13)/s(12) narrow; LogoSearch's is s(4)/s(22)/s(10).
+///
+/// NO scrollbar is drawn. That is the references' decision, not an omission: every
+/// one of them hides it (`scrollbarWidth:'none'` and the `::-webkit-scrollbar`
+/// rules in the dc.html helmets, `showsVerticalScrollIndicator={false}` in
+/// SettingsPanel.tsx). `scrollable` is exposed for an overlay that wants to add an
+/// edge fade — there is no drop shadow to lean on in the software renderer.
+export component OverlayBody inherits Rectangle {
+    in property <length> pad-h: Metrics.s(26);
+    in property <length> pad-top: Metrics.s(18);
+    in property <length> pad-bottom: Metrics.s(26);
+    in property <length> spacing: 0px;
+
+    /// True when the content is taller than the band. A read only — never feed it
+    /// back into this component's own height.
+    out property <bool> scrollable: flick.viewport-height > flick.height;
+
+    vertical-stretch: 1;
+    // The Flickable is absolutely placed inside this Rectangle rather than being a
+    // layout child, exactly as `rail` is in presets.slint, so the scroll surface
+    // cannot report a content-sized minimum back up into the card's layout.
+    min-height: 0px;
+
+    flick := Flickable {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+
+        // Vertical scroll only: the viewport is exactly as wide as the band, so a
+        // wide child clips instead of dragging the column sideways.
+        viewport-width: self.width;
+        viewport-height: col.preferred-height;
+
+        col := VerticalLayout {
+            padding-left: root.pad-h;
+            padding-right: root.pad-h;
+            padding-top: root.pad-top;
+            padding-bottom: root.pad-bottom;
+            spacing: root.spacing;
+            @children
+        }
+    }
+}
+
+/// The footer band, with its 1dp rule on TOP. Nearby's "FCC data as of …" line
+/// (48dp tall, s(28) side padding — NearbyPicker.dc.html:234) and LogoSearch's
+/// Cancel/Confirm row (padding s(14)/s(22), height from content) are both this.
+export component OverlayFooter inherits Rectangle {
+    in property <length> pad-h: Metrics.s(28);
+    in property <length> pad-v: 0px;
+    in property <length> foot-height: Metrics.s(48);
+    in property <length> spacing: Metrics.s(16);
+
+    vertical-stretch: 0;
+    min-height: root.foot-height;
+
+    HorizontalLayout {
+        padding-left: root.pad-h;
+        padding-right: root.pad-h;
+        padding-top: root.pad-v;
+        padding-bottom: root.pad-v;
+        spacing: root.spacing;
+        @children
+    }
+
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Pal.border;
+    }
+}
+
+/// Scrim + centred card. Give it the WHOLE surface — it is meant to be a sibling
+/// of Face sized to the window, not a child of anything inside the face — and it
+/// dims everything behind it and centres the card in what is left.
+///
+/// The children are stacked vertically inside the card, so an overlay reads as
+///
+///     nearby := OverlayCard {
+///         design-width: 900; design-height: 600;
+///         close => { root.close-nearby(); }
+///         OverlayHeader { head-height: Metrics.s(nearby.narrow ? 62 : 78); … }
+///         OverlayBody { … }
+///         OverlayFooter { … }
+///     }
+///
+/// Reach the width track through the instance id, as above — `@children` are
+/// reparented into the card's own column, so `parent` is that column, not the
+/// OverlayCard.
+///
+/// with OverlayBody already carrying `vertical-stretch: 1` and the header/footer
+/// already carrying 0, so the caller does not have to remember which band grows.
+export component OverlayCard inherits Rectangle {
+    /// The overlay's DESIGN size in design dp — the raw §6 numbers, not lengths:
+    /// numpad 440 (wrap-height), nearby 900×600, settings 700×576. LogoSearch is
+    /// 720×560 (LogoSearchOverlay.tsx:47). They are ramped through Metrics.s here,
+    /// like every other design dimension on the face, and then capped below.
+    in property <float> design-width: 700;
+    in property <float> design-height: 576;
+
+    /// §6.1's "height wraps content" — the numpad. The card takes its children's
+    /// preferred height instead of `design-height`, still capped by the surface.
+    ///
+    /// THE ONE PLACE A BINDING LOOP COULD APPEAR IN THIS FILE. It reads the
+    /// content's PREFERRED height, never its resolved one, which is the same move
+    /// HeroRow makes for its content-sized tall track; the content's measuring
+    /// width comes from `card-w`, which depends on nothing vertical. If this ever
+    /// does loop, the fix is for the numpad to state a `design-height` and leave
+    /// this false — do not try to read `card.height` back out.
+    ///
+    /// DO NOT COMBINE `wrap-height` WITH AN `OverlayBody`. A body that stretches
+    /// to fill the card while the card sizes itself to the body is the loop this
+    /// property is one step away from. Wrapping is for a fixed-metric column (the
+    /// numpad's display + seek row + keypad + actions); anything that can outgrow
+    /// the surface states a `design-height` and scrolls instead.
+    in property <bool> wrap-height: false;
+
+    /// Per-side surface inset. §6: `width = min(designW, screenW − 32dp)`, i.e.
+    /// 16dp a side. Deliberately RAW px and not Metrics.s(16): this is not a design
+    /// dimension that ramps, it is the gap between the card and the physical screen
+    /// edge, and §10 asks for that kind of distance "in real dp (not a scaled-down
+    /// canvas)". LogoSearchOverlay.tsx:47 implements it the same way, `width − 32`
+    /// against the real surface. (Numpad's host passes `dim.h − 24` instead —
+    /// CarFmFace.tsx:1686. The spec's 32 wins; it is the section that governs.)
+    in property <length> edge-margin: 16px;
+
+    /// 24dp on all four overlays; the numpad's compact variant drops to 20
+    /// (Numpad.tsx:34).
+    in property <length> corner: Metrics.s(24);
+
+    /// Pal.bg on the picker, settings and logo search (their dc.html
+    /// `containerStyle` and their TSX cards). The numpad alone uses Pal.panel
+    /// (Numpad.tsx:65) — a real disagreement between the numpad and the other
+    /// three, and the numpad has no dc.html to settle it, so it stays the caller's
+    /// choice with the three-of-four value as the default.
+    in property <color> card-background: Pal.bg;
+
+    /// rgba(0,0,0,0.45), identical in all four TSX overlays and NOT themed.
+    ///
+    /// NOTE FOR THE PALETTE. Neither existing veil token fits: Pal.screen-veil is
+    /// #00000080 / #18202E57 and Pal.hero-veil #0000006B / #48526042 — those are
+    /// the §4.7 audio-released veils, a different job at different values in both
+    /// themes. This is a modal scrim. It belongs in tokens.slint as
+    /// `out property <color> scrim: Pal.flat-a(#000000, 0.45);` and it is only a
+    /// local default here because this pass was scoped to one file; promoting it
+    /// is a two-line change and this property then just reads `Pal.scrim`.
+    /// It still goes through flat-a, per the house rule — a no-op on black by
+    /// construction, but the rule is that no colour bypasses it.
+    in property <color> scrim-color: Pal.flat-a(#000000, 0.45);
+
+    /// §6.4 says the scrim closes the logo-search window and changes nothing.
+    /// Numpad.tsx:64 is the only TSX that actually wires it (the other three wrap
+    /// the card in a plain View); the spec wins, so it is on by default and an
+    /// overlay that must not be dismissed this way sets it false.
+    in property <bool> dismiss-on-scrim: true;
+
+    /// The resolved card box, for children that need to size against it.
+    out property <length> card-w: Math.max(0px,
+        Math.min(Metrics.s(root.design-width), root.width - 2 * root.edge-margin));
+    out property <length> max-card-h: Math.max(0px, root.height - 2 * root.edge-margin);
+    out property <length> card-h: root.wrap-height
+        ? Math.min(content.preferred-height, root.max-card-h)
+        : Math.min(Metrics.s(root.design-height), root.max-card-h);
+
+    /// The overlay width track from §6.2 — "clamped below ~620dp wide". Both
+    /// NearbyPicker.tsx:125 and LogoSearchOverlay.tsx:49 test the resolved card
+    /// width against a raw 620, so this does too. It is a layout track, decided
+    /// where the geometry is, exactly like Metrics.tall / .landscape / .two-rows —
+    /// not a content decision, and nothing here computes a string or a colour.
+    out property <bool> narrow: root.card-w < 620px;
+
+    callback close();
+
+    background: root.scrim-color;
+
+    // Dismiss, and — just as important — swallow every tap so nothing reaches the
+    // face behind the scrim. Declared before the card, so the card is above it.
+    TouchArea {
+        clicked => {
+            if (root.dismiss-on-scrim) { root.close(); }
+        }
+    }
+
+    card := Rectangle {
+        x: (root.width - root.card-w) / 2;
+        y: (root.height - root.card-h) / 2;
+        width: root.card-w;
+        height: root.card-h;
+        background: root.card-background;
+        border-radius: root.corner;
+        // The references' `overflow: 'hidden'`. Correct on the device (Skia), but
+        // the SOFTWARE renderer ignores the corner radius when clipping, so a
+        // screenshot will show body content squared off into the corners. Per the
+        // house note, keep clipped children inset: an OverlayBody whose bottom
+        // padding is at least `corner` never puts anything there at rest.
+        clip: true;
+        // No border on the card in any reference — the scrim is what separates it
+        // from the face. Shadow is 0.35/50/20 from the four TSX cards; raw px and a
+        // raw literal, as on HeroCard, and it draws on Skia only.
+        drop-shadow-blur: 50px;
+        drop-shadow-offset-y: 20px;
+        drop-shadow-color: #00000059;
+
+        // Taps on the card must not fall through to the scrim's dismiss (the
+        // references' `onPress={() => {}}` on the card). Declared FIRST, so every
+        // TouchArea the children bring is above it and still gets its own clicks.
+        TouchArea {
+            clicked => { }
+        }
+
+        // A Rectangle wrapping the column, not the column itself: `wrap-height`
+        // reads `content.preferred-height`, and a Rectangle-around-a-layout is the
+        // shape HeroCard/HeroRow already prove reports a content height correctly
+        // in this codebase.
+        content := Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+
+            VerticalLayout { @children }
+        }
+    }
+}

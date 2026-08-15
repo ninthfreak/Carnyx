@@ -1,0 +1,813 @@
+// The direct-entry tune numpad (ANDROID §6.1) — the card you get by tapping the
+// hero's frequency (hero.slint:266 → face.slint's `open-numpad`).
+//
+// A single top-packed column: TUNE title, the amber display, a ‹‹SEEK / SEEK››
+// row, an optional amber error line, the 3×4 keypad, and CANCEL / TUNE. One size
+// branch, keyed off surface HEIGHT: `compact` below 560dp, which drops the title
+// and shrinks every box.
+//
+// WHERE THE NUMBERS COME FROM. The brief said there is no built reference for the
+// numpad. There is: it lives inside `CarFmLive.dc.html` (markup 78-111, styles
+// 328-334 and 402-414, logic 277-301), and the bundle's own README.md:161 titles
+// that section
+// "3. Direct-entry Numpad (modal) — in CarFmLive.dc.html". VERSION:181-184 records
+// that the numpad SCREENSHOT was withdrawn in 1.2.3 and that the documented
+// substitute is "render live from CarFmLive.dc.html; spec in ANDROID §6". So the
+// house rule applies in full: appearance is read off CarFmLive.dc.html, behaviour
+// off `src/components/carfm/Numpad.tsx`, and every place the two disagree is
+// called out inline rather than quietly resolved.
+//
+// The one class of exception is where the dc.html is demonstrably OLDER than the
+// shipping app: it never sets `npError` (grep: assigned false at 277/293/295 and
+// true nowhere), so it has no error state to draw, no band check, and no disabled
+// TUNE — and its error string still carries the "MHz" that VERSION 1.10.0 stripped
+// everywhere but the display unit. Behaviour there comes from the TSX because the
+// dc.html has nothing to say, not because the TSX was preferred.
+//
+// SLINT DECIDES NOTHING HERE. No string is formatted, no value parsed, no band
+// compared, no colour hashed. `compact` is a layout track derived from measured
+// geometry, exactly like Metrics.tall / .landscape / .two-rows. Everything else
+// arrives finished; see the property comments for the contract.
+//
+// TWO THINGS THIS FILE DOES NOT MATCH, both because the fix belongs to shared
+// chrome this pass was not allowed to touch, and both wrong in overlay.slint's own
+// notes rather than in the references:
+//
+//  1. THE CARD HAS NO BORDER. CarFmLive.dc.html:402 gives the numpad card
+//     `border: 1px solid t.border`, and :397-400 give every other overlay wrapper
+//     the same. overlay.slint:324-325 states "No border on the card in any
+//     reference", which is not true of this file. OverlayCard exposes no border
+//     property, and drawing one on the numpad alone would make it the only one of
+//     four overlays with a hairline. It belongs on OverlayCard, for all four.
+//  2. THE SCRIM IS NOT THEMED. CarFmLive.dc.html:305-306 themes it —
+//     light rgba(20,28,40,0.42), dark rgba(6,10,16,0.55) — while all four overlay
+//     TSX files use an unthemed rgba(0,0,0,0.45), which is what OverlayCard
+//     defaults to and what overlay.slint:264-275 documents as unanimous. Its
+//     `scrim-color` property would take the themed pair in one line, but a numpad
+//     whose scrim differs from the other three overlays' is worse than a scrim
+//     that is 0.03 off. Same conclusion: fix it once, in the palette.
+//
+// Also not implemented: the open/close fade. RN uses `animationType="fade"`
+// (Numpad.tsx:63); §8 specifies no overlay entry motion; and a caller-side `if`
+// cannot animate, so it needs an `open` bool plus `animate opacity` on OverlayCard.
+// Unowned, as overlay.slint already noted.
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { OverlayCard } from "overlay.slint";
+
+// ── The backspace glyph ─────────────────────────────────────────────────────
+//
+// U+232B ERASE TO THE LEFT is NOT in either bundled Atkinson cut — I read the
+// cmaps of ui/fonts/AtkinsonHyperlegible-{Regular,Bold}.ttf: ‹ › – . are present,
+// ⚠ ⌫ ✕ ✓ ★ are not. CarFmLive.dc.html:333 renders "⌫" as text and only got a
+// glyph because a browser fallback font supplied one; the software renderer that
+// produces our screenshots has no fallback stack to lean on. So the key draws the
+// icon, which is what Numpad.tsx:110 does anyway (`<BackspaceIcon size={30} …>`).
+//
+// This is the TENTH icon and it belongs in icons.slint beside the other nine, with
+// icons.slint's `VPath` wrapper. Both are duplicated here ONLY because this pass
+// was scoped to one file and icons.slint belongs to another agent — see the report.
+// The wrapper below is icons.slint:19-40 verbatim; do not let the two drift.
+
+// Slint's Path fits its geometry into (element size − stroke width) and then nudges
+// it back by half a stroke, and it does NOT scale stroke width with the viewbox —
+// both differ from SVG. This wrapper cancels the difference.
+component VPath inherits Path {
+    in property <length> box-w;
+    in property <length> box-h;
+    in property <float> vbw;
+    in property <float> vbh;
+    /// Stroke width in VIEWBOX units, as written in the SVG.
+    in property <float> raw-stroke: 0;
+
+    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
+    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
+
+    viewbox-width: root.vbw;
+    viewbox-height: root.vbh;
+    stroke-width: root.raw-stroke * root.sc * 1px;
+    x: 0px - self.stroke-width / 2;
+    y: 0px - self.stroke-width / 2;
+    width: root.box-w + self.stroke-width;
+    height: root.box-h + self.stroke-width;
+}
+
+/// Backspace — the keypad's twelfth key.
+///
+/// Exact port of CarFM's `icons.tsx:350-359`: viewBox 24×24, stroke 1.8, no fill.
+/// The SVG splits it into a closed body (round joins) and two crossing lines (round
+/// caps); one Path carries both correctly, because the body is closed with `z` so
+/// its caps never show and the two lines have no joins.
+component BackspaceIcon {
+    in property <length> size: 30px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.8;
+        commands: "M8.2 5h11.3A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5H8.2a1.5 1.5 0 0 1-1.1-.5L2 12l5.1-6.5a1.5 1.5 0 0 1 1.1-.5z M11 9.5 L16 14.5 M16 9.5 L11 14.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+// ── Rounded warning triangle ────────────────────────────────────────────────
+//
+// Same story as the backspace glyph: both references lead the error line with a
+// literal "⚠", and U+26A0 is absent from the app font. Carnyx already ships the
+// mark drawn (icons.slint's WarningTriangle, used by the tuner-error pill at
+// status-bar.slint:360) as well as typed (status-bar.slint:265's literal
+// "⚠ OUT OF FM BAND"). Drawn is the only one that survives the software renderer,
+// so the numpad draws it — and `error-text` therefore arrives WITHOUT the mark.
+//
+// Duplicated from icons.slint:236-250 for the same one-file reason as VPath.
+component WarnMark {
+    in property <length> size: 26px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z M12 9 L12 13 M12 17 L12.01 17";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+// ── The three button shapes ─────────────────────────────────────────────────
+//
+// All three dim to 0.55 while held. That is Numpad.tsx (76, 84, 104, 118, 129) and
+// only the TSX — the dc.html is a web demo and carries nothing but `cursor:pointer`
+// — so it is behaviour, and it is the same 0.55 CloseButton already uses
+// (overlay.slint:49).
+
+/// One keypad key. Twelve of these, row-major.
+component NumpadKey inherits Rectangle {
+    /// The literal character, and its own accessibility label (Numpad.tsx:107).
+    in property <string> label;
+    /// The backspace key draws the icon instead of a character.
+    in property <bool> erase: false;
+    in property <length> box-h;
+    in property <length> radius;
+    in property <length> label-size;
+    /// 30dp in BOTH branches (Numpad.tsx:110) — the icon is one of the three things
+    /// the compact branch leaves alone, along with the "MHz" unit and, in the TSX
+    /// only, the seek button's radius. It still rides the k ramp, like every other
+    /// design dimension.
+    in property <length> icon-size: Metrics.s(30);
+
+    callback clicked();
+
+    // Equal thirds. The references get there two different ways — `width:'30.5%'`
+    // plus flexGrow (Numpad.tsx:169) and `calc((100% − 24px)/3)`
+    // (CarFmLive.dc.html:328) — and the dc.html's fixed 24 is stale in the compact
+    // branch, where the gap is 9 and its keys come out ~2dp narrow. An equal share
+    // of the row does it with no card width in any binding at all, which also keeps
+    // the grid out of the width-dependency graph.
+    horizontal-stretch: 1;
+    min-width: 0px;
+
+    vertical-stretch: 0;
+    height: root.box-h;
+    border-radius: root.radius;
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.55 : 1.0;
+
+    accessible-role: button;
+    accessible-label: root.erase ? "Delete" : root.label;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    if !root.erase: Text {
+        text: root.label;
+        font-family: Font.face;
+        font-weight: Font.bold;
+        font-size: root.label-size;
+        color: Pal.text;
+    }
+    if root.erase: BackspaceIcon {
+        size: root.icon-size;
+        color: Pal.text;
+    }
+}
+
+/// One of the two seek buttons. `up` picks the direction AND the glyph order:
+/// chevron-then-label going down, label-then-chevron going up (Numpad.tsx:79-88).
+component SeekButton inherits Rectangle {
+    in property <bool> up: false;
+    in property <length> box-h;
+    in property <length> radius;
+    in property <length> glyph-size;
+    in property <length> label-size;
+    in property <length> inner-gap;
+
+    callback clicked();
+
+    horizontal-stretch: 1;
+    min-width: 0px;
+    vertical-stretch: 0;
+    height: root.box-h;
+    border-radius: root.radius;
+    border-width: 1px;
+    border-color: Pal.border;
+    background: Pal.raised;
+    opacity: touch.pressed ? 0.55 : 1.0;
+
+    accessible-role: button;
+    accessible-label: root.up ? "Seek up to next station" : "Seek down to previous station";
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: root.inner-gap;
+
+        // "‹‹" and "››" are two U+2039 / U+203A SINGLE ANGLE QUOTATION MARKs each,
+        // not guillemets and not an icon. I checked the cmaps: both codepoints are
+        // in the bundled Regular and Bold, so they render from the app font and no
+        // path is needed. Blue, per CarFmLive.dc.html:406 — see the disagreement
+        // note on the root; the TSX draws them in Pal.text.
+        if !root.up: Text {
+            text: "‹‹";
+            font-family: Font.face;
+            font-weight: Font.bold;
+            font-size: root.glyph-size;
+            // Inherited from the button in the dc.html, which applies it to the
+            // chevron pair too. Letter-spacing stays raw px everywhere in ui/
+            // (presets.slint:29/479, status-bar.slint:37).
+            letter-spacing: 1.5px;
+            color: Pal.blue;
+        }
+
+        Text {
+            text: "SEEK";
+            font-family: Font.face;
+            font-weight: Font.bold;
+            font-size: root.label-size;
+            letter-spacing: 1.5px;
+            color: Pal.text;
+        }
+
+        if root.up: Text {
+            text: "››";
+            font-family: Font.face;
+            font-weight: Font.bold;
+            font-size: root.glyph-size;
+            letter-spacing: 1.5px;
+            color: Pal.blue;
+        }
+    }
+}
+
+/// CANCEL and TUNE. Same box; TUNE takes the blue border, the blue fill and the
+/// disabled state.
+component ActionButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    /// TUNE only: false while the buffer is empty (Numpad.tsx:125-128), which dims
+    /// the button to 0.4 and swallows the tap.
+    in property <bool> enabled: true;
+    in property <length> box-h;
+    in property <length> radius;
+    in property <length> label-size;
+
+    callback clicked();
+
+    horizontal-stretch: 1;
+    min-width: 0px;
+    vertical-stretch: 0;
+    height: root.box-h;
+    border-radius: root.radius;
+    // 1.5px on TUNE (CarFmLive.dc.html:414), 1px on CANCEL. A border weight, so it
+    // stays raw px like the 1.5px pill borders in status-bar.slint:258/351.
+    border-width: root.primary ? 1.5px : 1px;
+    border-color: root.primary ? Pal.blue : Pal.border;
+    // CANCEL has no fill in either reference; only TUNE does.
+    background: root.primary ? Pal.blue-fill : transparent;
+    opacity: !root.enabled ? 0.4 : (touch.pressed ? 0.55 : 1.0);
+
+    accessible-role: button;
+    accessible-label: root.label;
+
+    touch := TouchArea {
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+
+    Text {
+        text: root.label;
+        font-family: Font.face;
+        font-weight: Font.bold;
+        font-size: root.label-size;
+        letter-spacing: 1px;
+        color: root.primary ? Pal.blue : Pal.dim;
+    }
+}
+
+// ── The overlay ─────────────────────────────────────────────────────────────
+
+/// Scrim + numpad card. Give it the whole surface, as a sibling of Face, and wrap
+/// it in the caller's own `if` — OverlayCard has no visibility gate.
+export component Numpad inherits Rectangle {
+    // ── What Rust supplies ──────────────────────────────────────────────────
+    //
+    // Nothing below is computed here. The buffer, the band check, the formatting
+    // and the sweep all live on the Rust side; this component reads finished
+    // values and reports taps.
+
+    /// The whole display string, already chosen and already formatted: the typed
+    /// buffer when it is non-empty, otherwise the live or sweeping frequency at one
+    /// decimal (`Numpad.tsx:69` `{buf || currentMHz}`, `CarFmFace.tsx:1683`
+    /// `fmt(scan ? scan.display : mhz)`, and `fmt` is `toFixed(1)` at :150).
+    /// Carnyx already has the formatter as `station.rs`'s `format_mhz`.
+    ///
+    /// Mid-typing this is the raw buffer, so "1", "10", "104", "104." and "104.5"
+    /// are all legitimate values — do NOT normalise it before it gets here.
+    in property <string> display;
+
+    /// True when `display` is the CURRENT station rather than something the user
+    /// typed or a sweep in flight, i.e. buffer empty AND no sweep running. It only
+    /// picks 0.45 vs 1.0 opacity (Numpad.tsx:68). The decision is Rust's because it
+    /// reads the buffer, which Rust owns.
+    in property <bool> display-dim: true;
+
+    /// Band validation failed on the last TUNE. Turns the display border amber and
+    /// reveals the error line; the buffer is KEPT so the value can be edited
+    /// (Numpad.tsx:57). Cleared by any key, by backspace and by either seek
+    /// (Numpad.tsx:42/45) — all of which are Rust's to clear, not this file's.
+    in property <bool> error: false;
+
+    /// The error line, finished, and WITHOUT a leading "⚠": the mark is drawn (see
+    /// WarnMark above), not typed. Built from the band ends at one decimal —
+    /// `Outside 87.5–108.0 band`, separator U+2013 EN DASH, from
+    /// `Numpad.tsx:92-94`. Carnyx has the ends as Band.min-mhz / Band.max-mhz, but
+    /// the formatting and the concatenation are Rust's.
+    in property <string> error-text;
+
+    /// TUNE is live only with something in the buffer (Numpad.tsx:125).
+    in property <bool> can-tune: false;
+
+    // ── What the user can do ────────────────────────────────────────────────
+
+    /// A keypad character: "1".."9", "0" or "." (U+002E FULL STOP, not U+00B7).
+    /// Rust applies the input rules — the two references disagree on them, so pick
+    /// one and record which; see `decisions` in the report.
+    callback enter(string);
+    /// The twelfth key. A callback of its own rather than `enter("⌫")`, because the
+    /// sentinel character in `Numpad.tsx:14`'s KEYS array is one the app font
+    /// cannot draw and Carnyx never renders it.
+    callback backspace();
+    /// −1 down / +1 up. Starts a station-to-station sweep with the card OPEN; the
+    /// card stays open when the sweep lands (CarFmFace.tsx:917-953).
+    callback seek(int);
+    /// Commit. Rust parses, rounds to 0.1 and checks the band; on rejection it sets
+    /// `error` and leaves the card up, on acceptance it tunes and closes.
+    callback tune();
+    /// The single dismissal. All three of the TSX's paths land on the same thing —
+    /// the scrim tap (Numpad.tsx:64), CANCEL (:117) and the Android back button
+    /// (:63) — and all three clear the buffer and the error first (:41).
+    callback cancel();
+
+    // ── Tracks and metrics ──────────────────────────────────────────────────
+
+    /// §6.1's "compact variant on short surfaces (< ~560dp tall)". A RAW-dp height
+    /// test taken before the k ramp, exactly like Metrics.tall/.landscape/.two-rows
+    /// (Numpad.tsx:24-26, CarFmFace.tsx:1685, CarFmLive.dc.html:329 all test the
+    /// surface height against a bare 560).
+    ///
+    /// NOT `OverlayCard.narrow`. That is §6.2's WIDTH track (card-w < 620px) and a
+    /// 440dp card is under it on every surface, so `narrow` is permanently true here
+    /// and means nothing.
+    out property <bool> compact: Metrics.h < 560;
+
+    /// §10 makes "hit targets ≥ 48dp in real dp (not a scaled-down canvas)" a
+    /// safety constraint that must hold, and the same floor is already on
+    /// CloseButton (overlay.slint:41) and NavButton (presets.slint:247). Applied
+    /// here it OVERRIDES the ramp on the keys, the seek buttons and the actions.
+    ///
+    /// On the product surface it is a NO-OP: at k=1 the keys are already 64dp, the
+    /// seek row 56 and the actions 60. It only bites where the ramp would otherwise
+    /// break the constraint — s(64) is 47dp on a 360×800 phone and s(46) is 34dp on
+    /// an 800×360 one, and CarFM's own 46dp compact key is 2dp under even unramped.
+    ///
+    /// The cost is real and lands on 800×360: floored, the compact column is ~447dp
+    /// against a 328dp cap, where unfloored it fits by 8dp. So the floor is what
+    /// makes that one surface scroll to reach CANCEL / TUNE. Exposed as a property
+    /// rather than baked in, so the trade-off can be re-decided in one line; 0px
+    /// gives CarFM's geometry back exactly.
+    in property <length> tap-floor: 48px;
+
+    // Per-size metrics. The compact column is Numpad.tsx:32-38 and
+    // CarFmLive.dc.html:328-334 and 402-414, which agree on every one of these.
+    property <length> pad-v: Metrics.s(root.compact ? 16 : 24);
+    property <length> pad-h: Metrics.s(root.compact ? 18 : 24);
+    // The CARD's column gap: 14 regular / 9 compact (CarFmLive.dc.html:402's
+    // `gap`). The TSX instead hangs per-block margins off each child — 12 under the
+    // title, g above the seek row, 6 above the error, g+4 above the keypad and the
+    // actions — which comes out ~12dp shorter overall. Appearance, so the dc.html
+    // wins; see the report for the exact TSX numbers if it should be flipped back.
+    property <length> col-gap: Metrics.s(root.compact ? 9 : 14);
+    // The gap INSIDE the seek row, the grid and the actions row — 12 / 9, and NOT
+    // the same as the column gap in the regular branch (`npGap`,
+    // CarFmLive.dc.html:332).
+    property <length> g: Metrics.s(root.compact ? 9 : 12);
+
+    property <length> disp-h: Metrics.s(root.compact ? 60 : 78);
+    property <length> value-size: Metrics.s(root.compact ? 38 : 46);
+    // The unit never compacts, in either reference.
+    property <length> unit-size: Metrics.s(18);
+    property <length> box-radius: Metrics.s(root.compact ? 12 : 14);
+    property <length> seek-h: Math.max(root.tap-floor, Metrics.s(root.compact ? 46 : 56));
+    property <length> key-h: Math.max(root.tap-floor, Metrics.s(root.compact ? 46 : 64));
+    property <length> key-font: Metrics.s(root.compact ? 22 : 26);
+    property <length> action-h: Math.max(root.tap-floor, Metrics.s(root.compact ? 52 : 60));
+
+    OverlayCard {
+        width: parent.width;
+        height: parent.height;
+
+        // §6: 440dp wide, "height wraps content", capped to the surface with a
+        // 16dp margin a side. The two CarFM sizings both differ and both lose to
+        // the section that governs overlays: Numpad.tsx:148 is `width 440,
+        // maxWidth '92%'`, CarFmLive.dc.html:330 is `max(320, min(440, w − 36))`
+        // with a 320dp floor §6 does not mention, and both cap the height at
+        // surfaceH − 24 rather than − 32.
+        design-width: 440;
+        wrap-height: true;
+        corner: Metrics.s(root.compact ? 20 : 24);
+        // The one overlay of the four that is panel and not bg. Numpad.tsx:65 and
+        // CarFmLive.dc.html:402 agree.
+        card-background: Pal.panel;
+        // §6.4's tap-outside, which Numpad.tsx:64 is the only TSX overlay to
+        // actually wire. It is the same dismissal as CANCEL.
+        close => { root.cancel(); }
+
+        // The scroll band.
+        //
+        // §6 says "let the BODY scroll rather than truncate" and §11 says the
+        // numpad must never be clipped — and the column does NOT fit on every
+        // surface. At k=1 the regular column is ~612dp against a 582dp cap on the
+        // 1024×614 primary surface, so it overflows there at rest, before the
+        // error row and before the 48dp floor (which is a no-op at k=1). CarFM has
+        // the same overflow — 599 against its own 590 cap — and simply clips.
+        // Something has to give, and the spec says which: it scrolls.
+        //
+        // overlay.slint:237-241 forbids combining `wrap-height` with an
+        // `OverlayBody`, and this is deliberately NOT that. The loop it warns about
+        // is a body that takes its height from the card while the card takes its
+        // height from the body's RESOLVED size. Here the card reads this
+        // rectangle's PREFERRED height, which is bound straight through to the
+        // column's own preferred height — a value that depends on Metrics and font
+        // metrics and on nothing vertical below it. Every row inside carries a
+        // fixed height or plain text metrics; nothing measures the card back.
+        //
+        // The explicit preferred-height is mandatory, not decorative: the Flickable
+        // is placed with explicit x/y (as in OverlayBody), which takes it out of
+        // this rectangle's implicit layout info, so without the binding the card
+        // would wrap to zero.
+        //
+        // IF THE COMPILER DISAGREES. A Flickable that is given no explicit `height`
+        // forwards its layout children's preferred-height and derives its own
+        // viewport-height from their min-height (i-slint-compiler's flickable pass,
+        // `fixup_geometry`, which runs before lower_layout). So the fallback shape
+        // is to drop `height`/`viewport-height` here and let it forward — at the
+        // cost of losing the wrapper, and with it the edge fade below, which has to
+        // be a non-layout sibling of the scroll surface.
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 0px;
+            preferred-height: col.preferred-height;
+
+            flick := Flickable {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+
+                // Vertical only — a keypad has no horizontal travel.
+                viewport-width: self.width;
+                viewport-height: col.preferred-height;
+                // Nothing to scroll means nothing to drag: a keypad that slid a
+                // few dp under a fingertip in a moving car would swallow the tap.
+                interactive: self.viewport-height > self.height;
+
+                col := VerticalLayout {
+                    // The card's OWN padding — OverlayCard adds none. 24 uniform
+                    // regular / 16 vertical, 18 horizontal compact
+                    // (CarFmLive.dc.html:402). The TSX uses 20/20 in the regular
+                    // branch and agrees exactly in compact.
+                    padding-left: root.pad-h;
+                    padding-right: root.pad-h;
+                    padding-top: root.pad-v;
+                    padding-bottom: root.pad-v;
+                    spacing: root.col-gap;
+                    alignment: start;
+
+                    // ── Title ──
+                    //
+                    // Dropped ENTIRELY in the compact branch, not shrunk — both
+                    // references remove it (Numpad.tsx:66 renders null,
+                    // CarFmLive.dc.html:403 sets display:'none').
+                    if !root.compact: Text {
+                        text: "TUNE";
+                        horizontal-alignment: center;
+                        font-family: Font.face;
+                        font-weight: Font.bold;
+                        font-size: Metrics.s(14);
+                        // 2px per CarFmLive.dc.html:403; the TSX has 3.
+                        letter-spacing: 2px;
+                        color: Pal.dim;
+                    }
+
+                    // ── Display ──
+                    //
+                    // The value and the unit are placed by hand rather than laid
+                    // out, for two reasons. The dc.html aligns them on their
+                    // BASELINES (`alignItems:'baseline'`, :407) and Slint has no
+                    // baseline alignment; and a literal reading of that CSS pins
+                    // the pair to the TOP of the 78dp box, leaving 21dp of slack
+                    // beneath, which is not what the card looks like. So the PAIR's
+                    // relationship comes from the dc.html — true baseline alignment
+                    // — and the pair's placement in the box comes from the TSX,
+                    // which centres it (`alignItems:'center'`, Numpad.tsx:155).
+                    // (`disp`, not `display` — the id must not shade the in-property
+                    // of that name inside this scope.)
+                    disp := Rectangle {
+                        vertical-stretch: 0;
+                        // `flexShrink: 0` in the dc.html: the display is the one
+                        // row that must never give up height.
+                        height: root.disp-h;
+                        border-radius: root.box-radius;
+                        background: Pal.raised;
+                        // A hairline — the stated exception to the Metrics.s rule.
+                        border-width: 1px;
+                        // The amber error border is TSX-only (Numpad.tsx:67). The
+                        // dc.html's border is always t.border because it has no
+                        // error state to enter at all.
+                        border-color: root.error ? Pal.amber : Pal.border;
+                        clip: true;
+
+                        // 10 in the dc.html (:407), 8 in the TSX.
+                        property <length> pair-gap: Metrics.s(10);
+                        property <length> pair-w: val.width + self.pair-gap + unit.width;
+
+                        val := Text {
+                            x: (parent.width - parent.pair-w) / 2;
+                            y: (parent.height - self.height) / 2;
+                            text: root.display;
+                            font-family: Font.face;
+                            font-weight: Font.bold;
+                            font-size: root.value-size;
+                            // Fixed safety colour, both themes, never re-themed (§10).
+                            color: Pal.amber;
+                            // CarFmLive.dc.html:408. Absent from the TSX.
+                            letter-spacing: -1px;
+                            // 0.45 when this is the station you are ON rather than
+                            // something you typed. TSX-only (Numpad.tsx:68) — the
+                            // dc.html never dims — and kept, because without it a
+                            // freshly opened card looks as though the current
+                            // frequency had already been entered.
+                            opacity: root.display-dim ? 0.45 : 1.0;
+                        }
+
+                        // "MHz". §10: the ONLY place this string is allowed
+                        // anywhere in the app — "the label appears only in the tune
+                        // numpad" — which is also why status-bar.slint's
+                        // out-of-band pill carries no unit.
+                        //
+                        // Baseline-matched to the value. Atkinson's ascender is
+                        // 950/1000 upem in both cuts (I read hhea off the bundled
+                        // TTFs; typo and win agree), so a top-aligned line box puts
+                        // its baseline 0.95em down, and the drop that lines the two
+                        // up is 0.95 × the size difference: 26.6dp regular, 19dp
+                        // compact. The TSX cannot do this in RN and approximates it
+                        // with a flat `marginTop: 14` (styles.unit:158), which
+                        // leaves the unit ~4.8dp low regular and ~7.4dp low compact.
+                        unit := Text {
+                            x: val.x + val.width + parent.pair-gap;
+                            y: val.y + Math.round((root.value-size - root.unit-size) / 1px * 0.95) * 1px;
+                            text: "MHz";
+                            font-family: Font.face;
+                            font-weight: Font.bold;
+                            font-size: root.unit-size;
+                            color: Pal.dim;
+                        }
+                    }
+
+                    // ── Seek row ──
+                    //
+                    // LEFT is down (−1), RIGHT is up (+1). Both references put the
+                    // seek pair inside the card; it left the face's side columns in
+                    // the v2 redesign (Numpad.tsx's header comment).
+                    HorizontalLayout {
+                        spacing: root.g;
+
+                        SeekButton {
+                            up: false;
+                            box-h: root.seek-h;
+                            // The dc.html compacts this radius to 12 (:405); the
+                            // TSX leaves styles.seekBtn at 14 in both branches
+                            // because only the height is overridden — every other
+                            // radius compacts in both files, so that reads as an
+                            // oversight rather than intent.
+                            radius: root.box-radius;
+                            glyph-size: Metrics.s(22);
+                            label-size: Metrics.s(15);
+                            inner-gap: Metrics.s(10);
+                            clicked => { root.seek(-1); }
+                        }
+                        SeekButton {
+                            up: true;
+                            box-h: root.seek-h;
+                            radius: root.box-radius;
+                            glyph-size: Metrics.s(22);
+                            label-size: Metrics.s(15);
+                            inner-gap: Metrics.s(10);
+                            clicked => { root.seek(1); }
+                        }
+                    }
+
+                    // ── Error line ──
+                    //
+                    // Between the seek row and the keypad, which is the markup order
+                    // in both references. The card is never closed by an error and
+                    // the buffer is never cleared by one.
+                    if root.error: HorizontalLayout {
+                        alignment: center;
+                        // Sized off the one warning-mark-beside-amber-text pairing
+                        // the codebase already ships: status-bar.slint:354-367 puts
+                        // a 26dp triangle beside 17dp bold amber text with 11dp
+                        // between them. At this line's 14dp that is 21dp and 9dp.
+                        spacing: Metrics.s(9);
+
+                        VerticalLayout {
+                            alignment: center;
+                            WarnMark { size: Metrics.s(21); color: Pal.amber; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.error-text;
+                                horizontal-alignment: center;
+                                font-family: Font.face;
+                                font-weight: Font.bold;
+                                // 14 / 0.5 from CarFmLive.dc.html:410's npErrStyle;
+                                // the TSX has 13 and no letter-spacing. The dc.html
+                                // can never reach this state, so those values are
+                                // written but unexercised — flagged in the report.
+                                font-size: Metrics.s(14);
+                                letter-spacing: 0.5px;
+                                color: Pal.amber;
+                            }
+                        }
+                    }
+
+                    // ── Keypad ──
+                    //
+                    // Exactly 12 keys, 4 rows × 3 columns, row-major:
+                    // [1 2 3] [4 5 6] [7 8 9] [. 0 ⌫] (Numpad.tsx:14,
+                    // CarFmLive.dc.html:333). Written out as four rows because
+                    // Slint has no flex-wrap, and because an `if`-free explicit grid
+                    // keeps every id in scope.
+                    VerticalLayout {
+                        spacing: root.g;
+
+                        HorizontalLayout {
+                            spacing: root.g;
+                            NumpadKey {
+                                label: "1"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("1"); }
+                            }
+                            NumpadKey {
+                                label: "2"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("2"); }
+                            }
+                            NumpadKey {
+                                label: "3"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("3"); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: root.g;
+                            NumpadKey {
+                                label: "4"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("4"); }
+                            }
+                            NumpadKey {
+                                label: "5"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("5"); }
+                            }
+                            NumpadKey {
+                                label: "6"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("6"); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: root.g;
+                            NumpadKey {
+                                label: "7"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("7"); }
+                            }
+                            NumpadKey {
+                                label: "8"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("8"); }
+                            }
+                            NumpadKey {
+                                label: "9"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("9"); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: root.g;
+                            // U+002E FULL STOP, not a middle dot.
+                            NumpadKey {
+                                label: "."; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("."); }
+                            }
+                            NumpadKey {
+                                label: "0"; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.enter("0"); }
+                            }
+                            // KEYS' twelfth slot. It carries no `label`: the "⌫" in
+                            // Numpad.tsx:14 is a sentinel the TSX never renders
+                            // either, and the app font has no glyph for it.
+                            NumpadKey {
+                                erase: true; box-h: root.key-h;
+                                radius: root.box-radius; label-size: root.key-font;
+                                clicked => { root.backspace(); }
+                            }
+                        }
+                    }
+
+                    // ── Actions ──
+                    //
+                    // CANCEL left, TUNE right, with 4dp (2dp compact) MORE space
+                    // above them than the column's own gap — CarFmLive.dc.html:412's
+                    // `marginTop`. The TSX gets to the same idea with `gap + 4`.
+                    HorizontalLayout {
+                        padding-top: Metrics.s(root.compact ? 2 : 4);
+                        spacing: root.g;
+
+                        ActionButton {
+                            label: "CANCEL";
+                            box-h: root.action-h;
+                            radius: root.box-radius;
+                            // 16 / letter-spacing 1 (CarFmLive.dc.html:413); the TSX
+                            // has 17 / 2. Note styles.action's `height: 58`
+                            // (Numpad.tsx:175) is dead code — S.actionH always wins.
+                            label-size: Metrics.s(16);
+                            clicked => { root.cancel(); }
+                        }
+                        ActionButton {
+                            label: "TUNE";
+                            primary: true;
+                            enabled: root.can-tune;
+                            box-h: root.action-h;
+                            radius: root.box-radius;
+                            label-size: Metrics.s(16);
+                            clicked => { root.tune(); }
+                        }
+                    }
+                }
+            }
+
+            // Scroll affordance. There is no drop shadow to lean on — the software
+            // renderer's `draw_box_shadow` is an empty TODO — and a keypad whose
+            // CANCEL/TUNE row has fallen below the fold with nothing to say so is
+            // the worst failure this card has. overlay.slint:131-132 anticipates
+            // exactly this and exposes `scrollable` for it; the same test is done
+            // locally here because this band is not an OverlayBody.
+            //
+            // Explicit x/y keeps it out of the parent's layout info, so it costs the
+            // column nothing. It fades to the card fill, which is Pal.panel.
+            Rectangle {
+                x: 0;
+                y: parent.height - root.pad-v;
+                width: parent.width;
+                height: root.pad-v;
+                // Only while something is still below: viewport-y is ≤ 0, so this
+                // goes false exactly at the bottom of the travel.
+                visible: flick.viewport-height + flick.viewport-y > flick.height;
+                background: @linear-gradient(180deg, Pal.panel.with-alpha(0.0) 0%, Pal.panel 100%);
+            }
+        }
+    }
+}

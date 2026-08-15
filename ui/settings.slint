@@ -1,0 +1,1303 @@
+// Settings panel (ANDROID §6.3) — a header over a scrolling body of grouped
+// sections, in the shared modal card.
+//
+// Four groups, in this order and no other: TUNER (connection status, an optional
+// diagnostics panel, the four-row source picker, the boot-autostart switch),
+// APPEARANCE (the theme segmented control), SYSTEM (battery exemption, the
+// station-logos switch, the clear-logos row) and ADVANCED (the escape hatch to
+// the stock SDR interface). One centred about line closes the body.
+//
+// THE TWO-TONE STRUCTURE IS THE WHOLE PANEL. The card is Pal.bg and every group
+// inside it is Pal.panel over a 1dp Pal.border — that relationship is what makes
+// the sections read as sections, and it is the one thing here that must not
+// collapse. Nothing else in this file is load-bearing in the same way.
+//
+// WHERE THE NUMBERS COME FROM. `SettingsPanel.dc.html` is the built reference and
+// wins on appearance; `src/components/carfm/SettingsPanel.tsx` is the shipping
+// code and wins on behaviour. Every value below cites one of them by its style
+// name. Where they disagree the disagreement is called out at the point it bites.
+//
+// NOTHING HERE DECIDES ANYTHING. Every string that varies — the status title and
+// subtitle, the Details/Hide details label, the source badges, the battery
+// sub-line, the about line — arrives finished from Rust, and so does every
+// tri-state that would otherwise be re-derived from two booleans. The panel draws
+// what it is handed. The one thing decided here is the width TRACK, which is
+// geometry, exactly like Metrics.tall / .landscape / .two-rows.
+//
+// TYPE FLOORS. The references never ramp: a 14sp sub-line is 14sp on every
+// surface. Carnyx ramps every design dimension through Metrics.s(), which at
+// k=0.68 would put that sub-line at 10px. Small type is therefore floored the way
+// Metrics.pty-font / tell-font already floor theirs (§10, "nothing critical below
+// ~15sp"): body copy at 12px, the two all-caps label styles at 10px so they stay
+// BELOW the body copy and the hierarchy does not invert. The floors move this
+// file toward the reference, not away from it.
+
+import { Pal, Metrics } from "tokens.slint";
+import { OverlayCard, OverlayHeader, OverlayBody } from "overlay.slint";
+import { SignalWaves, WarningTriangle } from "icons.slint";
+
+// ── What Rust supplies ───────────────────────────────────────────────────────
+
+/// One row of the tuner-source picker, already resolved.
+///
+/// Always exactly four of these, always in this order: RTL-SDR, NWD / NOWADA,
+/// FYT / DuduOS, Auto (dc.html `backendDefs`:184-189, SettingsPanel.tsx:291-303).
+/// The order is Rust's, not a literal here, because availability and detection
+/// are probe results and the badge text is derived from both.
+export struct TunerSource {
+    /// "RTL-SDR", "NWD / NOWADA built-in radio", …
+    name: string,
+    /// The second line — "USB software-defined radio", "Integrated head-unit FM
+    /// tuner", "Probe all sources".
+    kind: string,
+    /// "Detected" / "Not detected" / "Unavailable", or EMPTY, which is what
+    /// renders no badge at all (Auto). `badgeFor`, SettingsPanel.tsx:311-312:
+    /// detected == null → ""; detected → "Detected"; available → "Not detected";
+    /// else "Unavailable". The panel never compares this string to anything.
+    badge: string,
+    /// The badge is Pal.blue when the source is DETECTED and Pal.dim otherwise
+    /// (dc.html `badgeStyle`:203). A separate flag rather than `badge == "Detected"`,
+    /// so no copy is load-bearing.
+    badge-lit: bool,
+    /// FYT is always false; NWD follows the async `isNwdAvailable()` probe. Drives
+    /// the 0.5 row opacity AND swallows the tap.
+    available: bool,
+    selected: bool,
+}
+
+/// One key/value line of the RTL-SDR diagnostics panel. Constants today, but they
+/// name real hardware, so a different dongle can report itself without this file
+/// changing (dc.html:45-47).
+export struct TunerDetail {
+    key: string,
+    value: string,
+}
+
+/// Which glyph the status row draws. An enum, not a bool: the two icons are
+/// different sizes and different components, and both take Pal.amber, so a
+/// boolean would encode the wrong thing.
+export enum TunerGlyph {
+    /// Connected — the broadcast waves, fully lit.
+    waves,
+    /// Errored — the warning triangle.
+    warning,
+}
+
+/// Which trailing control the status row shows. Rust owns the whole predicate:
+/// RETRY needs `tunerError && a retry handler exists` (dc.html `showRetry`:230,
+/// SettingsPanel.tsx:350); Details needs `!tunerError && the RTL path is selected`
+/// (SettingsPanel.tsx:358 — the dc.html's `showDiag: !err` has no backend arm).
+/// A third state exists in the TSX and nowhere else: connected on a built-in
+/// tuner shows NO trailing control at all.
+export enum TunerAction {
+    none,
+    retry,
+    details,
+}
+
+/// The battery-optimization exemption. Three states, not a bool: the native probe
+/// is async and starts at `null` (SettingsPanel.tsx:78), and that initial state
+/// has its own copy and its own (absent) trailing control.
+export enum BatteryState {
+    checking,
+    not-exempt,
+    exempt,
+}
+
+// ── Battery glyph ────────────────────────────────────────────────────────────
+//
+// icons.tsx's `BatteryBolt` (:251-259) and the dc.html's `battGlyph` (:178-182),
+// which are the same three marks at the same coordinates. It is the eleventh icon
+// in this design and it BELONGS IN ui/icons.slint — but icons.slint is another
+// agent's file this pass, so it lives here for now, exactly as nearby.slint's
+// BackArrow does. Whoever consolidates should move `BatteryBolt` (and the wrapper
+// below) into icons.slint and delete both from this file.
+
+// icons.slint's `VPath`, copied verbatim because it is private there. Slint's Path
+// fits its geometry into (element size − stroke width), nudges it back by half a
+// stroke, and does NOT scale stroke width with the viewbox — all three differ from
+// SVG, and this cancels the difference. Hand-rolling a Path instead is the
+// documented way to get this wrong.
+component VPath inherits Path {
+    in property <length> box-w;
+    in property <length> box-h;
+    in property <float> vbw;
+    in property <float> vbh;
+    /// Stroke width in VIEWBOX units, as written in the SVG.
+    in property <float> raw-stroke: 0;
+
+    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
+    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
+
+    viewbox-width: root.vbw;
+    viewbox-height: root.vbh;
+    stroke-width: root.raw-stroke * root.sc * 1px;
+    x: 0px - self.stroke-width / 2;
+    y: 0px - self.stroke-width / 2;
+    width: root.box-w + self.stroke-width;
+    height: root.box-h + self.stroke-width;
+}
+
+/// A battery with a lightning bolt through it — the SYSTEM group's Doze row.
+/// Blue when the app is exempt, amber when it is not; never red, per §6's
+/// colourblind rule and the panel's no-red-vs-green note (SettingsPanel.tsx:8).
+component BatteryBolt {
+    in property <length> size: 32px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    // TWO paths because the stroke weights differ (2 for the shell, 1.6 for the
+    // bolt) and one Path carries one stroke-width.
+    //
+    // The shell is `<Rect x=3 y=8 width=15 height=9 rx=2>` written out as an
+    // explicit rounded rectangle — Slint's Path has no rect command — plus the
+    // terminal pip, `<Line x1=20.5 y1=11 x2=20.5 y2=14>`. The rectangle is closed
+    // (Z) so the round cap only ever applies to the pip, which is what the SVG
+    // says too (`strokeLinecap: round` on the line, `strokeLinejoin: round` on
+    // the rect).
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M5 8 H16 A2 2 0 0 1 18 10 V15 A2 2 0 0 1 16 17 H5 A2 2 0 0 1 3 15 V10 A2 2 0 0 1 5 8 Z M20.5 11 L20.5 14";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.6;
+        commands: "M10.5 9.5 L8.5 12.5 L11 12.5 L9.5 15.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+// ── The pieces every section is built from ───────────────────────────────────
+
+/// The all-caps label above a group — TUNER, APPEARANCE, SYSTEM, ADVANCED.
+///
+/// dc.html `sectionLabelStyle`:256 `{fontSize:12, fontWeight:700, letterSpacing:2,
+/// color:t.dim, margin:'14px 4px 8px'}`. A VerticalLayout rather than a bare Text
+/// because a Slint layout child has no margin; the CSS margin becomes padding on
+/// a wrapper, and that 14/8 pair is the ONLY gap between one group and the next.
+component SectionLabel inherits VerticalLayout {
+    in property <string> label;
+
+    padding-top: Metrics.s(14);
+    padding-bottom: Metrics.s(8);
+    padding-left: Metrics.s(4);
+    padding-right: Metrics.s(4);
+
+    Text {
+        text: root.label;
+        // Floored BELOW the 12px body floor, at 10px, exactly as Metrics.tell-font
+        // is. A common 12px floor would make these labels the same size as the
+        // sub-lines they head and invert the hierarchy on the phone surfaces.
+        font-size: Math.max(10px, Metrics.s(12));
+        font-weight: 700;
+        letter-spacing: Metrics.s(2);
+        color: Pal.dim;
+    }
+}
+
+/// "Tuner source" — the label INSIDE the TUNER group, above the picker.
+///
+/// dc.html `subLabelStyle`:259. Note the tracking is 1 here against the section
+/// label's 2, and the insets are 4/12 against 14/4/8: they are not the same style
+/// and must not be merged.
+component SubLabel inherits VerticalLayout {
+    in property <string> label;
+
+    padding-top: Metrics.s(4);
+    padding-bottom: Metrics.s(4);
+    padding-left: Metrics.s(12);
+    padding-right: Metrics.s(12);
+
+    Text {
+        text: root.label;
+        font-size: Math.max(10px, Metrics.s(12));
+        font-weight: 700;
+        letter-spacing: Metrics.s(1);
+        color: Pal.dim;
+    }
+}
+
+/// One section group: the Pal.panel plate the rows sit on.
+///
+/// dc.html `groupStyle`:257 `{backgroundColor:t.panel, border:'1px solid '+t.border,
+/// borderRadius:18, padding:10}` with NO row gap — rows abut and the dividers do
+/// all the separating. The border is a hairline, so it stays at a raw 1px.
+component GroupCard inherits Rectangle {
+    /// s(10) wide, s(8) narrow. The reduction is an ADDITION — neither reference
+    /// is responsive — and it buys back ~4dp of row width per side on the phone
+    /// surfaces, the way Nearby's list padding already drops from 22 to 13.
+    in property <length> pad: Metrics.s(10);
+
+    background: Pal.panel;
+    border-width: 1px;
+    border-color: Pal.border;
+    border-radius: Metrics.s(18);
+
+    VerticalLayout {
+        padding: root.pad;
+        spacing: 0px;
+        @children
+    }
+}
+
+/// The rule between two rows inside a group.
+///
+/// dc.html `dividerStyle`:258 `{height:1, backgroundColor:t.border, margin:'6px 6px'}`.
+/// The 1dp line plus its two 6dp margins is the whole element's height; the line
+/// itself is absolutely placed inside it, which is also what keeps it out of the
+/// wrapper's layout info.
+component RowDivider inherits Rectangle {
+    height: 1px + 2 * Metrics.s(6);
+
+    Rectangle {
+        x: Metrics.s(6);
+        y: Metrics.s(6);
+        width: parent.width - 2 * Metrics.s(6);
+        height: 1px;
+        background: Pal.border;
+    }
+}
+
+/// The title + sub-line pair that six of this panel's rows are built around.
+///
+/// dc.html `statusTextWrapStyle`/`switchTextWrapStyle`/`textWrapStyle` — all three
+/// are `{flex:1, minWidth:0, gap:2}` — over `rowTitleStyle`:276 and
+/// `rowSubStyle`:277.
+///
+/// BOTH LINES WRAP. That is not a fallback: on a 360dp-wide surface the source
+/// row leaves about 135dp for this column, so "NWD / NOWADA built-in radio" takes
+/// two lines and the row grows past its minimum. `wrap: word-wrap` is also what
+/// gives the column a minimum width of ZERO (i-slint-core text_layout_info), which
+/// is what lets it give way to the badge instead of shoving it off the card. An
+/// elided single line would keep the callsign readable but lose the second half of
+/// every sub-line, which is worse; §10 wants growth, not truncation.
+///
+/// No explicit `min-width: 0` — word-wrap already reports 0, and declaring both a
+/// width and a min-width on one element is a compiler error here.
+component RowText inherits VerticalLayout {
+    in property <string> title;
+    in property <string> sub;
+    /// s(19) on the status row (dc.html `statusTitleStyle`:264), s(18) on every
+    /// switch row and picker row, s(17) on the deliberately quiet ADVANCED row.
+    in property <length> title-size: Math.max(12px, Metrics.s(18));
+    /// Pal.text everywhere EXCEPT the ADVANCED row, which is Pal.dim on purpose —
+    /// it is an escape hatch, not a setting (dc.html `advTitleStyle`:291).
+    in property <color> title-color: Pal.text;
+
+    horizontal-stretch: 1;
+    // The column takes the row's height (cross-axis stretch is Slint's default)
+    // and centres its two lines inside it, which is `alignItems: center` on the
+    // row plus a two-line child.
+    alignment: center;
+    spacing: Metrics.s(2);
+
+    Text {
+        text: root.title;
+        font-size: root.title-size;
+        font-weight: 700;
+        color: root.title-color;
+        wrap: word-wrap;
+    }
+    Text {
+        text: root.sub;
+        font-size: Math.max(12px, Metrics.s(14));
+        font-weight: 400;
+        color: Pal.dim;
+        wrap: word-wrap;
+    }
+}
+
+/// The trailing pill: RETRY, Details / Hide details, FIX, EXEMPT.
+///
+/// One shape, four dressings, because the references give them one geometry —
+/// height 44, radius 12, centred label — and vary only the padding, the ink and
+/// the outline (dc.html `retryBtnStyle`:266, `diagBtnStyle`:267, `fixBtnStyle`:284,
+/// `okBadgeStyle`:285). Background, border-width and border-color are Rectangle's
+/// own properties and are set at each call site; what is fixed here is the box.
+///
+///   RETRY    pad 22  font 15  track 1    1.5dp Pal.blue    Pal.blue-fill
+///   FIX      pad 22  font 15  track 1    1.5dp Pal.amber   Pal.amber-fill
+///   Details  pad 18  font 14  track 0.5  1dp Pal.border    no fill
+///   EXEMPT   pad 18  font 14  track 1    no border         Pal.blue-fill
+///
+/// HEIGHT. The references say 44. §10 says hit targets are ≥48dp "in real dp (not
+/// a scaled-down canvas)" and lists it under constraints that must hold, so the
+/// box floors at 48 the way CloseButton and NavButton already do. That is 4dp
+/// taller than the reference at design scale — a deliberate, reported deviation —
+/// and it costs nothing: the rows it sits in are 62dp tall with 6dp of padding a
+/// side, so a 48dp pill still does not grow them. The floor is what does the real
+/// work at k=0.74, where s(44) is 33dp and the button would otherwise be a miss.
+/// EXEMPT is not interactive but takes the same box, so the battery row does not
+/// change height when the exemption is granted.
+component Pill inherits Rectangle {
+    in property <string> label;
+    in property <color> ink;
+    in property <length> pad-h;
+    in property <length> label-size;
+    in property <length> tracking;
+    /// False for the EXEMPT badge — a state readout, not a control.
+    in property <bool> interactive: true;
+
+    callback clicked();
+
+    min-height: Math.max(48px, Metrics.s(44));
+    border-radius: Metrics.s(12);
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    // Declared unconditionally and gated with `enabled`, never wrapped in an `if`:
+    // an id declared inside an `if` is invisible outside it, and `touch.pressed`
+    // above needs to see this one. A disabled TouchArea is transparent to input.
+    touch := TouchArea {
+        enabled: root.interactive;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: root.pad-h;
+        padding-right: root.pad-h;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: root.label-size;
+            font-weight: 700;
+            letter-spacing: root.tracking;
+            color: root.ink;
+            // The pill is taller than its text (48 against ~19), and a Text in a
+            // HorizontalLayout is stretched to the row height, so it has to say
+            // where in that height it sits.
+            vertical-alignment: center;
+        }
+    }
+}
+
+/// The 60×34 switch. Two of them: "Start radio on boot" and "Station logos".
+///
+/// dc.html `trackStyle`/`knobStyle`:220-221. Both transitions are 180ms, which is
+/// the `.18s` in the CSS; the knob travels 3 → 29, which is 60 − 3 − 28.
+///
+/// The switch is only 34dp tall and therefore NOT a hit target on its own. It does
+/// not need to be: the whole row carries the TouchArea (see SwitchRow), which is
+/// 62dp and full width. This element has no TouchArea at all.
+component Toggle inherits Rectangle {
+    in property <bool> on: false;
+
+    width: Metrics.s(60);
+    height: Metrics.s(34);
+    // Bound to half its OWN box, not an independent Metrics.s(17): the two round
+    // separately at k=0.74 and a 1dp desync shows as a flat spot on a pill.
+    border-radius: self.height / 2;
+    // The dc.html defines a dedicated `track` token for the off state —
+    // rgba(20,30,45,0.16) light / rgba(255,255,255,0.18) dark (:157-158) — used by
+    // nothing else. SettingsPanel.tsx:43 uses pal.meterEmpty instead, which is 0.10
+    // in both themes, and Carnyx has meter-empty and no `track`. Taking the TSX so
+    // that one element does not mint a palette entry; the off state is a shade
+    // fainter than the built reference. Flagged, not settled.
+    background: root.on ? Pal.blue : Pal.meter-empty;
+    animate background { duration: 180ms; }
+
+    Rectangle {
+        x: root.on ? Metrics.s(29) : Metrics.s(3);
+        y: Metrics.s(3);
+        width: Metrics.s(28);
+        height: Metrics.s(28);
+        border-radius: self.height / 2;
+        // A literal white knob in both themes, still routed through flat() so the
+        // §4.7 desaturation is not bypassed (a no-op on white, but the rule is
+        // that no colour skips it).
+        background: Pal.flat(#FFFFFF);
+        animate x { duration: 180ms; }
+        // The dc.html gives the knob `boxShadow: '0 1px 3px rgba(0,0,0,0.3)'` and
+        // the TSX gives it none. Omitted: the software renderer's draw_box_shadow
+        // is an empty TODO, so it would appear on the device and never in a
+        // screenshot, which is the worst of both.
+    }
+}
+
+/// The picker's radio ring and its dot (dc.html `radioStyle`/`dotStyle`:198-199).
+///
+/// The dc.html always renders the dot div and fills it transparent when inactive;
+/// the TSX renders it conditionally. Same pixels, so the dot is unconditional here
+/// and the fill does the switching.
+component RadioMark inherits Rectangle {
+    in property <bool> on: false;
+
+    width: Metrics.s(24);
+    height: Metrics.s(24);
+    border-radius: self.height / 2;
+    // A border WEIGHT, like the 1.5dp chip outline — raw, not ramped.
+    border-width: 2px;
+    border-color: root.on ? Pal.blue : Pal.dim;
+
+    Rectangle {
+        width: Metrics.s(12);
+        height: Metrics.s(12);
+        border-radius: self.height / 2;
+        background: root.on ? Pal.blue : transparent;
+    }
+}
+
+/// One of the three theme chips: SYSTEM / LIGHT / DARK.
+///
+/// dc.html `chipBase`:208 + the selected/unselected pair at :212-213. The
+/// unselected outline is 1dp there and 1.5dp in SettingsPanel.tsx:700; both are
+/// border-box so nothing shifts either way, and the dc.html wins on appearance.
+///
+/// EQUAL WIDTHS. CSS `flex: 1` is `flex: 1 1 0%` — a zero basis, so three chips of
+/// different label widths come out identical. Slint distributes only the SURPLUS
+/// over each item's PREFERRED size, so the same result needs the preferred width
+/// zeroed; without this "SYSTEM" would be wider than "DARK" by the difference in
+/// their text. Declared on the component's own root so it survives being a
+/// repeated element.
+component ThemeChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on: false;
+
+    callback clicked();
+
+    preferred-width: 0px;
+    horizontal-stretch: 1;
+    // 44 in both references; floored at 48 for the same §10 reason as Pill, and
+    // this is the control the floor was most needed for — at k=0.74 a chip is
+    // 74 × 33dp.
+    min-height: Math.max(48px, Metrics.s(44));
+    border-radius: Metrics.s(10);
+    border-width: root.on ? 1.5px : 1px;
+    border-color: root.on ? Pal.blue : Pal.border;
+    background: root.on ? Pal.blue-fill : transparent;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(4);
+        padding-right: Metrics.s(4);
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: Math.max(12px, Metrics.s(14));
+            font-weight: 700;
+            letter-spacing: Metrics.s(1);
+            color: root.on ? Pal.blue : Pal.dim;
+            vertical-alignment: center;
+            // The chip is sized by the layout, not by this text, so the text is
+            // what gives when three chips have to share a narrow row.
+            overflow: elide;
+        }
+    }
+}
+
+/// The three chips as one strip (dc.html `segWrapStyle`:282, `gap: 8`). A
+/// component rather than a repeated `for` written twice, because the theme row has
+/// two arrangements and both need the identical strip.
+component ThemeSegments inherits HorizontalLayout {
+    /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in RUST. `v.toUpperCase()` over
+    /// ['system','light','dark'] (SettingsPanel.tsx:439) is a decision about copy,
+    /// and Slint does not make those.
+    in property <[string]> chips;
+    /// The active chip's label, matched against `chips` — the same shape Nearby's
+    /// bucket bar uses.
+    in property <string> current;
+
+    callback pick(string);
+
+    spacing: Metrics.s(8);
+
+    for c in root.chips: ThemeChip {
+        label: c;
+        on: c == root.current;
+        clicked => { root.pick(c); }
+    }
+}
+
+// ── The rows ─────────────────────────────────────────────────────────────────
+
+/// TUNER: the connection status row.
+///
+/// dc.html `statusRowStyle`:261 `{gap:16, minHeight:62, padding:'6px 12px'}`. The
+/// height is a MINIMUM: on a narrow card "Local hardware · RTL-SDR (RTL2832U)"
+/// takes two lines and the row must grow rather than clip (§10).
+component StatusRow inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <TunerGlyph> glyph;
+    in property <TunerAction> action;
+    /// "Details" or "Hide details" — chosen in Rust (dc.html `diagBtnLabel`:232).
+    in property <string> details-label;
+
+    callback retry();
+    callback toggle-details();
+
+    min-height: Metrics.s(62);
+
+    HorizontalLayout {
+        padding-left: Metrics.s(12);
+        padding-right: Metrics.s(12);
+        padding-top: Metrics.s(6);
+        padding-bottom: Metrics.s(6);
+        spacing: Metrics.s(16);
+
+        // ── glyph slot ──
+        //
+        // Both references set this wrap to 36 × 36 (dc.html `statusIconWrapStyle`:262,
+        // SettingsPanel.tsx:674) and then SettingsPanel.tsx:340 puts a size-44
+        // SignalWaves in it, which is 44 × 24.3 after the 32/58 aspect and hangs 4dp
+        // over each side. React Native does not clip, so it goes unnoticed there; a
+        // sized Rectangle here would cut it. The slot is therefore 44 wide and 36
+        // tall — the rendered result the TSX actually produces, and wide enough for
+        // the 32dp triangle too.
+        //
+        // Vertical centring needs its own wrapper: a HorizontalLayout stretches its
+        // children to the full row height by default, which would drop the glyph's
+        // box to the top. This is OverlayHeader's idiom for the ✕.
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Rectangle {
+                width: Metrics.s(44);
+                height: Metrics.s(36);
+
+                // The dc.html draws a bespoke 34×24 wave here (`wave`:164-172):
+                // three arc pairs at stroke 2.4 around a r=2.7 dot, in amber,
+                // everything unconditionally lit. SettingsPanel.tsx:340 uses the
+                // SHIPPING SignalWaves — four elliptical pairs in a 58×32 box — at
+                // size 44 with discreteLit(5), which is {fullPairs:4, half:false,
+                // dotOpacity:1}: every element lit, so `off` is never taken and is
+                // supplied only because the component requires it. Taking the TSX
+                // glyph against the house rule, and saying so: it is already ported
+                // (icons.slint:57), it is the same glyph the face's status bar
+                // draws, and the dc.html's three-pair wave appears nowhere else in
+                // the system.
+                if root.glyph == TunerGlyph.waves: SignalWaves {
+                    size: Metrics.s(44);
+                    full-pairs: 4;
+                    half: false;
+                    dot-opacity: 1.0;
+                    dotted-arcs: 0;
+                    on: Pal.amber;
+                    off: Pal.meter-empty;
+                }
+                // Amber, not red — §6's colourblind rule and the panel's own
+                // "no red-vs-green state" note (SettingsPanel.tsx:8).
+                if root.glyph == TunerGlyph.warning: WarningTriangle {
+                    size: Metrics.s(32);
+                    color: Pal.amber;
+                }
+            }
+        }
+
+        // The dc.html sets this title to 19 (`statusTitleStyle`:264); the TSX
+        // reuses styles.rowTitle at 18. One dp, and appearance is the dc.html's.
+        RowText {
+            title: root.title;
+            sub: root.sub;
+            title-size: Math.max(12px, Metrics.s(19));
+        }
+
+        // ── trailing control ──
+        if root.action == TunerAction.retry: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Pill {
+                label: "RETRY";
+                ink: Pal.blue;
+                pad-h: Metrics.s(22);
+                label-size: Math.max(12px, Metrics.s(15));
+                tracking: Metrics.s(1);
+                border-width: 1.5px;
+                border-color: Pal.blue;
+                background: Pal.blue-fill;
+                clicked => { root.retry(); }
+            }
+        }
+        if root.action == TunerAction.details: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Pill {
+                label: root.details-label;
+                ink: Pal.dim;
+                pad-h: Metrics.s(18);
+                label-size: Math.max(12px, Metrics.s(14));
+                // Sub-pixel tracking, so raw — Metrics.s(0.5) rounds to 0.
+                tracking: 0.5px;
+                border-width: 1px;
+                border-color: Pal.border;
+                background: transparent;
+                clicked => { root.toggle-details(); }
+            }
+        }
+    }
+}
+
+/// TUNER: the RTL-SDR diagnostics, between the status row and the first divider.
+///
+/// dc.html `diagPanelStyle`:269 — `margin:'2px 12px 8px'`, `padding:'12px 16px'`,
+/// radius 12, Pal.raised on a 1dp border, 8dp between lines. (SettingsPanel.tsx:683
+/// uses a uniform 14dp padding; the dc.html's asymmetric 12/16 wins on appearance.)
+/// The CSS margin becomes this wrapper's padding, since a layout child has none.
+component DiagPanel inherits VerticalLayout {
+    in property <[TunerDetail]> lines;
+
+    padding-left: Metrics.s(12);
+    padding-right: Metrics.s(12);
+    padding-top: Metrics.s(2);
+    padding-bottom: Metrics.s(8);
+
+    Rectangle {
+        background: Pal.raised;
+        border-width: 1px;
+        border-color: Pal.border;
+        border-radius: Metrics.s(12);
+
+        VerticalLayout {
+            padding-left: Metrics.s(16);
+            padding-right: Metrics.s(16);
+            padding-top: Metrics.s(12);
+            padding-bottom: Metrics.s(12);
+            spacing: Metrics.s(8);
+
+            for d in root.lines: HorizontalLayout {
+                // `justifyContent: space-between` with a 16dp floor: Slint spreads
+                // the surplus when there is any and falls back to `spacing` when
+                // the line is tight, which is what the CSS pair does.
+                alignment: space-between;
+                spacing: Metrics.s(16);
+
+                Text {
+                    text: d.key;
+                    font-size: Math.max(12px, Metrics.s(14));
+                    font-weight: 400;
+                    color: Pal.dim;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: d.value;
+                    font-size: Math.max(12px, Metrics.s(15));
+                    font-weight: 700;
+                    color: Pal.text;
+                    vertical-alignment: center;
+                    // dc.html `diagValStyle`:272 asks for tabular numerals and
+                    // Slint's Text has no font-feature control, so this is a
+                    // LOSSY element. Atkinson Hyperlegible's default figures are
+                    // proportional (checked against the two .ttf files in
+                    // ui/fonts: digit advances run 402–648 per 1000 upem, and the
+                    // `tnum` feature that would fix it is unreachable). It costs
+                    // nothing here — these three values are static and nothing
+                    // below them has to line up — but a live numeric readout must
+                    // not be built on this Text.
+                }
+            }
+        }
+    }
+}
+
+/// TUNER: one row of the source picker.
+///
+/// dc.html `rowStyle`:197 `{gap:16, minHeight:60, padding:'8px 16px', borderRadius:14}`.
+/// The border is 1dp ALWAYS — transparent when unselected — so selecting a row
+/// never shifts the column by a pixel.
+component SourceRow inherits Rectangle {
+    in property <TunerSource> source;
+
+    callback clicked();
+
+    min-height: Metrics.s(60);
+    border-radius: Metrics.s(14);
+    border-width: 1px;
+    border-color: root.source.selected ? Pal.blue : transparent;
+    background: root.source.selected ? Pal.blue-fill : transparent;
+    // The unavailable 0.5 wins over the pressed 0.65 — in the TSX the two land in
+    // that order in the style array (SettingsPanel.tsx:388-392) and the press is
+    // guarded by `b.available` anyway, since an unavailable row swallows the tap.
+    opacity: !root.source.available ? 0.5 : (touch.pressed ? 0.65 : 1.0);
+
+    touch := TouchArea {
+        enabled: root.source.available;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(16);
+        padding-right: Metrics.s(16);
+        padding-top: Metrics.s(8);
+        padding-bottom: Metrics.s(8);
+        spacing: Metrics.s(16);
+
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            RadioMark { on: root.source.selected; }
+        }
+
+        RowText {
+            title: root.source.name;
+            sub: root.source.kind;
+        }
+
+        // An empty badge renders NOTHING — no box, no gap. That is how Auto has no
+        // badge, and it is why nothing here compares the string to a label.
+        if root.source.badge != "": VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Text {
+                text: root.source.badge;
+                font-size: Math.max(12px, Metrics.s(13));
+                font-weight: 700;
+                // Sub-pixel, so raw.
+                letter-spacing: 0.4px;
+                color: root.source.badge-lit ? Pal.blue : Pal.dim;
+                // Deliberately NOT wrapping and NOT stretching: the badge is the
+                // one thing in this row that must keep its full width, so the name
+                // column is what gives way when the card is narrow.
+            }
+        }
+    }
+}
+
+/// A plain switch row — "Start radio on boot" and "Station logos".
+///
+/// dc.html `switchRowStyle`:274. THE WHOLE ROW IS THE TARGET, not the 34dp switch:
+/// that is what satisfies §10's 48dp floor here, and it is what the TSX does
+/// (SettingsPanel.tsx:412/478 wrap the row in the Pressable). The pressed
+/// Pal.raised wash is the TSX's; the dc.html has no pressed state.
+component SwitchRow inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> on: false;
+
+    callback toggled(bool);
+
+    min-height: Metrics.s(62);
+    background: touch.pressed ? Pal.raised : transparent;
+
+    touch := TouchArea {
+        clicked => { root.toggled(!root.on); }
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(12);
+        padding-right: Metrics.s(12);
+        padding-top: Metrics.s(6);
+        padding-bottom: Metrics.s(6);
+        spacing: Metrics.s(16);
+
+        RowText {
+            title: root.title;
+            sub: root.sub;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+            Toggle { on: root.on; }
+        }
+    }
+}
+
+/// SYSTEM: the battery-optimization row.
+///
+/// Switch-row geometry with a glyph slot in front and a tri-state trailing control
+/// (dc.html:91-103). The row itself is NOT tappable — neither reference gives it a
+/// handler; only the FIX button is.
+component BatteryRow inherits Rectangle {
+    in property <BatteryState> battery: BatteryState.checking;
+    /// "Checking…" / "Not exempt — Doze may stop the boot-started radio" /
+    /// "Exempt — the radio can run in the background", chosen in Rust.
+    in property <string> sub;
+
+    callback fix();
+
+    min-height: Metrics.s(62);
+
+    HorizontalLayout {
+        padding-left: Metrics.s(12);
+        padding-right: Metrics.s(12);
+        padding-top: Metrics.s(6);
+        padding-bottom: Metrics.s(6);
+        spacing: Metrics.s(16);
+
+        // 36 × 36, the references' slot unchanged — a 32dp glyph fits it, unlike
+        // the status row's 44dp waves. The two slots are in different groups, so
+        // nothing has to line up between them.
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Rectangle {
+                width: Metrics.s(36);
+                height: Metrics.s(36);
+
+                BatteryBolt {
+                    // dc.html `battGlyph`:178 draws it at 32; SettingsPanel.tsx:452
+                    // passes 30. The path data is identical, so this is a pure
+                    // appearance value with nothing behind the TSX's number, and
+                    // the house rule sends those to the dc.html.
+                    size: Metrics.s(32);
+                    // Blue once exempt, amber while it is not — including during
+                    // the probe, which is the TSX's behaviour (batteryExempt is
+                    // null, so the `? :` falls to amber).
+                    color: root.battery == BatteryState.exempt ? Pal.blue : Pal.amber;
+                }
+            }
+        }
+
+        RowText {
+            title: "Battery optimization";
+            sub: root.sub;
+        }
+
+        // Same box as RETRY, amber instead of blue (dc.html `fixBtnStyle`:284).
+        // Pal.amber-fill is 0.08/0.10 here against the bundle's 0.12/0.15 — a
+        // difference tokens.slint already resolved in the app's favour, with a
+        // header comment naming this very value; not reopened.
+        if root.battery == BatteryState.not-exempt: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Pill {
+                label: "FIX";
+                ink: Pal.amber;
+                pad-h: Metrics.s(22);
+                label-size: Math.max(12px, Metrics.s(15));
+                tracking: Metrics.s(1);
+                border-width: 1.5px;
+                border-color: Pal.amber;
+                background: Pal.amber-fill;
+                clicked => { root.fix(); }
+            }
+        }
+        // A readout, not a control: filled, unbordered, and inert
+        // (dc.html `okBadgeStyle`:285).
+        if root.battery == BatteryState.exempt: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Pill {
+                label: "EXEMPT";
+                ink: Pal.blue;
+                pad-h: Metrics.s(18);
+                label-size: Math.max(12px, Metrics.s(14));
+                tracking: Metrics.s(1);
+                border-width: 0px;
+                background: Pal.blue-fill;
+                interactive: false;
+            }
+        }
+        // BatteryState.checking shows no trailing control at all.
+    }
+}
+
+/// A one-line row with a trailing chevron: "Clear all station logos" and
+/// "Advanced SDR view".
+///
+/// Two shapes in one component because they differ only in what fills the left
+/// slot — a single blue label at 50dp (dc.html `clearRowStyle`:287) or a dim
+/// title over a sub-line at 60dp (`advRowStyle`:290). Both press to Pal.blue-fill.
+///
+/// › is U+203A and IS in Atkinson Hyperlegible (checked against both .ttf files),
+/// unlike the ✕ in overlay.slint's CloseButton — this one does not fall back.
+component ChevronRow inherits Rectangle {
+    in property <string> label;
+    /// Empty on the clear row, which is what selects the single-line form.
+    in property <string> sub;
+    /// False while the logo wipe runs, which is the TSX's `disabled={clearing}`.
+    in property <bool> interactive: true;
+
+    callback clicked();
+
+    min-height: root.sub == "" ? Metrics.s(50) : Metrics.s(60);
+    background: touch.pressed ? Pal.blue-fill : transparent;
+
+    touch := TouchArea {
+        enabled: root.interactive;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(12);
+        padding-right: Metrics.s(12);
+        padding-top: Metrics.s(6);
+        padding-bottom: Metrics.s(6);
+        // The clear row is `justifyContent: space-between` with no gap; the
+        // advanced row is a 16dp gap with the text column taking the slack. Both
+        // land in the same place with the text column stretching, so the spacing
+        // is the only difference.
+        spacing: root.sub == "" ? 0px : Metrics.s(16);
+
+        if root.sub == "": Text {
+            text: root.label;
+            horizontal-stretch: 1;
+            font-size: Math.max(12px, Metrics.s(16));
+            font-weight: 700;
+            color: Pal.blue;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+        if root.sub != "": RowText {
+            title: root.label;
+            sub: root.sub;
+            title-size: Math.max(12px, Metrics.s(17));
+            // The ONE title in this panel that is not Pal.text. Deliberate: it
+            // leaves the panel rather than changing a setting.
+            title-color: Pal.dim;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            Text {
+                text: "›";
+                font-size: Metrics.s(26);
+                font-weight: 700;
+                color: Pal.dim;
+            }
+        }
+    }
+}
+
+// ── The panel ────────────────────────────────────────────────────────────────
+
+export component SettingsOverlay inherits Rectangle {
+    // ── TUNER: status ──
+    /// "Connected" or "Not connected" — finished in Rust, not a bool branched on
+    /// here (dc.html `statusTitle`:228).
+    in property <string> status-title;
+    /// Three-way, chosen in Rust: "No USB tuner found" when errored, "Local
+    /// hardware · RTL-SDR (RTL2832U)" when the RTL path is live, "Built-in hardware
+    /// · NWD/NOWADA FM tuner" otherwise (SettingsPanel.tsx:344-348; the dc.html has
+    /// only the first two).
+    in property <string> status-sub;
+    in property <TunerGlyph> status-glyph: TunerGlyph.waves;
+    in property <TunerAction> status-action: TunerAction.none;
+    /// "Details" or "Hide details".
+    in property <string> details-label;
+    /// `diagOpen && !tunerError && !nwdActive` — three inputs, one decision, taken
+    /// in Rust (SettingsPanel.tsx:369).
+    in property <bool> details-open: false;
+    /// Device / USB ID / Sample rate, as finished pairs.
+    in property <[TunerDetail]> tuner-details;
+
+    // ── TUNER: source picker ──
+    /// Exactly four rows, in the reference's order.
+    in property <[TunerSource]> sources;
+
+    // ── TUNER: autostart ──
+    in property <bool> autostart: false;
+
+    // ── APPEARANCE ──
+    /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in Rust.
+    in property <[string]> theme-chips;
+    /// The active chip's label, matched against `theme-chips`.
+    in property <string> theme;
+
+    // ── SYSTEM ──
+    in property <BatteryState> battery: BatteryState.checking;
+    in property <string> battery-sub;
+    in property <bool> logos-on: false;
+    /// "Auto-download station artwork over Wi-Fi" when on, "Off — assign logos
+    /// manually from a station (auto-download in redesign)" when off.
+    in property <string> logos-sub;
+    /// "Clear all station logos", or "Clearing…" while the wipe runs.
+    in property <string> clear-logos-label;
+    /// True while clearing, which disables the row (SettingsPanel.tsx:494).
+    in property <bool> clearing-logos: false;
+
+    // ── ADVANCED ──
+    /// Whether the section renders at all. §6.3 and the dc.html both carry it
+    /// unconditionally, so it defaults on; the shipping TSX has no such section
+    /// and no stock SDR interface to open, so a host without one turns it off.
+    in property <bool> show-advanced: true;
+
+    /// One finished string: "CarFM  ·  v0.9.2  ·  FCC station data as of 2026-06-14",
+    /// with the double spaces around each interpunct and the '—' fallback when
+    /// there is no snapshot date (SettingsPanel.tsx:314). Never assembled here.
+    in property <string> about;
+
+    // ── What the user can do ──
+    callback retry-tuner();
+    callback toggle-details();
+    /// The index into `sources`. Rust holds the selection and the persistence.
+    callback pick-source(int);
+    /// The NEW value, as the references' `onSetAutostart(!autostart)`.
+    callback set-autostart(bool);
+    /// The chosen chip's label, matched back to the enum in Rust — the shape
+    /// Nearby's `pick-bucket(string)` already uses.
+    callback set-theme(string);
+    callback fix-battery();
+    callback set-logos(bool);
+    /// Opens the host's confirm dialog; the wipe, the pluralised result alert and
+    /// the busy flag are all Rust's.
+    callback clear-logos();
+    callback open-advanced();
+    /// The ✕ and the Android back button. NOT the scrim — see below.
+    callback close();
+
+    card := OverlayCard {
+        width: root.width;
+        height: root.height;
+
+        // §6 preamble: 700 × 576, capped to the surface less 32dp a side and
+        // centred. `corner` stays at the shared 24 and `card-background` at the
+        // shared Pal.bg — settings, nearby and logo search all use it, and passing
+        // Pal.panel here would collapse the two-tone structure the groups depend
+        // on. That is the numpad's variant, not this one.
+        design-width: 700;
+        design-height: 576;
+
+        // AGAINST THE SHARED DEFAULT, deliberately. OverlayCard defaults
+        // dismiss-on-scrim to true, citing §6.4 — but §6.4's scrim sentence is
+        // about the LOGO-SEARCH window specifically, §6's preamble says nothing
+        // about tap-to-dismiss, and SettingsPanel.tsx:318 wraps the card in a plain
+        // View with no Pressable, so tapping outside the settings card does not
+        // close it today. Behaviour is the TSX's. This wants reconciling across all
+        // four overlays rather than per overlay.
+        dismiss-on-scrim: false;
+        close => { root.close(); }
+
+        // Both bands are unconditional, so they are handed to the card directly and
+        // its own column stacks them; the header already carries vertical-stretch 0
+        // and the body vertical-stretch 1.
+        OverlayHeader {
+            // dc.html `headerStyle`:251. A MINIMUM, not a fixed height — §10 wants
+            // font scale to ×1.5 without overlap, and the header must grow.
+            head-height: Metrics.s(76);
+            pad-h: Metrics.s(26);
+            pad-v: 0px;
+            close => { root.close(); }
+
+            // The only thing in the header's left slot — no subtitle, unlike Nearby.
+            Text {
+                text: "Settings";
+                font-size: Metrics.s(26);
+                font-weight: 700;
+                color: Pal.text;
+                // An un-elided Text reports its full width as its MINIMUM, which on
+                // the narrowest card would refuse to shrink and push the ✕ off the
+                // end. Same reason as Nearby's header.
+                overflow: elide;
+            }
+        }
+
+        OverlayBody {
+            // dc.html `bodyStyle`:255 `padding: '18px 26px 26px'`. Taken literally,
+            // so the gap above TUNER is 18 + the label's own 14 = 32.
+            // (SettingsPanel.tsx:667 uses paddingTop 4 for a total of 18 — the TSX
+            // author appears to have read 18 as the intended total. The dc.html is
+            // the exact reference; the ambiguity is real and visible.)
+            //
+            // The narrow side padding is an ADDITION — neither source is responsive
+            // — worth ~20dp of row width on the phone surfaces, and in keeping with
+            // Nearby's 22/13 pair.
+            pad-h: Metrics.s(card.narrow ? 16 : 26);
+            pad-top: Metrics.s(18);
+            // ≥ the card's 24dp corner on every surface, which is what keeps
+            // content out of the corners the software renderer clips square.
+            pad-bottom: Metrics.s(26);
+            // Zero: the labels' 14/8 paddings are the only gaps between groups, and
+            // the rows inside a group abut on purpose.
+            spacing: 0px;
+
+            // ── TUNER ──
+            SectionLabel { label: "TUNER"; }
+            GroupCard {
+                pad: Metrics.s(card.narrow ? 8 : 10);
+
+                StatusRow {
+                    title: root.status-title;
+                    sub: root.status-sub;
+                    glyph: root.status-glyph;
+                    action: root.status-action;
+                    details-label: root.details-label;
+                    retry => { root.retry-tuner(); }
+                    toggle-details => { root.toggle-details(); }
+                }
+
+                if root.details-open: DiagPanel { lines: root.tuner-details; }
+
+                RowDivider { }
+                SubLabel { label: "Tuner source"; }
+
+                for src[i] in root.sources: SourceRow {
+                    source: src;
+                    clicked => { root.pick-source(i); }
+                }
+
+                RowDivider { }
+
+                SwitchRow {
+                    title: "Start radio on boot";
+                    sub: "Resume FM automatically when the head unit powers up";
+                    on: root.autostart;
+                    toggled(v) => { root.set-autostart(v); }
+                }
+            }
+
+            // ── APPEARANCE ──
+            SectionLabel { label: "APPEARANCE"; }
+            GroupCard {
+                pad: Metrics.s(card.narrow ? 8 : 10);
+
+                // THE ONE ROW THAT CHANGES SHAPE, and the arithmetic forces it.
+                // The segmented control is a FIXED 300dp in both references. The
+                // width left for this row is
+                //   card-w − 2·body-pad − 2·1dp group border − 2·group pad − 2·row pad,
+                // which is 602dp on the full Dudu7 — 300 for the strip, 20 for the
+                // gap, 282 for the word "Theme", comfortable. On a 360dp phone the
+                // same sum is 256dp, and 300 does not fit in it at all; on the
+                // Dudu7's ⅓ slice it is 33dp short. So below the §6.2 width track
+                // the label goes on its own line and the strip takes the full row
+                // width beneath it. Neither source specifies this — both are fixed
+                // width — but nothing else fits.
+                if !card.narrow: Rectangle {
+                    min-height: Metrics.s(62);
+
+                    HorizontalLayout {
+                        padding-left: Metrics.s(12);
+                        padding-right: Metrics.s(12);
+                        padding-top: Metrics.s(6);
+                        padding-bottom: Metrics.s(6);
+                        // 20, not the 16 every other row uses — this row alone
+                        // (dc.html `themeRowStyle`:281).
+                        spacing: Metrics.s(20);
+
+                        RowText {
+                            title: "Theme";
+                            sub: "Overrides the system colour scheme on the radio";
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 0;
+                            alignment: center;
+
+                            ThemeSegments {
+                                width: Metrics.s(300);
+                                chips: root.theme-chips;
+                                current: root.theme;
+                                pick(v) => { root.set-theme(v); }
+                            }
+                        }
+                    }
+                }
+
+                if card.narrow: Rectangle {
+                    min-height: Metrics.s(62);
+
+                    VerticalLayout {
+                        padding-left: Metrics.s(12);
+                        padding-right: Metrics.s(12);
+                        padding-top: Metrics.s(6);
+                        padding-bottom: Metrics.s(6);
+                        spacing: Metrics.s(12);
+
+                        RowText {
+                            title: "Theme";
+                            sub: "Overrides the system colour scheme on the radio";
+                        }
+
+                        // No width: the strip takes the row, and the three chips
+                        // divide it equally between them.
+                        ThemeSegments {
+                            chips: root.theme-chips;
+                            current: root.theme;
+                            pick(v) => { root.set-theme(v); }
+                        }
+                    }
+                }
+            }
+
+            // ── SYSTEM ──
+            SectionLabel { label: "SYSTEM"; }
+            GroupCard {
+                pad: Metrics.s(card.narrow ? 8 : 10);
+
+                BatteryRow {
+                    battery: root.battery;
+                    sub: root.battery-sub;
+                    fix => { root.fix-battery(); }
+                }
+
+                RowDivider { }
+
+                SwitchRow {
+                    title: "Station logos";
+                    sub: root.logos-sub;
+                    on: root.logos-on;
+                    toggled(v) => { root.set-logos(v); }
+                }
+
+                // UNCONDITIONAL, and no divider above it. The dc.html:112 shows this
+                // row only while the logos toggle is ON; SettingsPanel.tsx:488-501
+                // shows it always and carries a comment calling the gating a bug —
+                // logos are assigned by hand, so with auto-download off the row was
+                // not even on screen. Behaviour is the TSX's, and so is the copy
+                // ("Clear all station logos", supplied by Rust), because a row
+                // labelled "Clear downloaded logos" when nothing was ever downloaded
+                // is worse than either source alone.
+                ChevronRow {
+                    label: root.clear-logos-label;
+                    interactive: !root.clearing-logos;
+                    clicked => { root.clear-logos(); }
+                }
+            }
+
+            // ── ADVANCED ──
+            //
+            // Wrapped so the label and the group come and go together as ONE
+            // conditional child of the body's column.
+            if root.show-advanced: VerticalLayout {
+                SectionLabel { label: "ADVANCED"; }
+                GroupCard {
+                    pad: Metrics.s(card.narrow ? 8 : 10);
+
+                    ChevronRow {
+                        label: "Advanced SDR view";
+                        sub: "Opens the stock SDR interface (waterfall, gain, raw controls)";
+                        clicked => { root.open-advanced(); }
+                    }
+                }
+            }
+
+            // ── about ──
+            //
+            // The last child INSIDE the scrolling body, not a footer band — the
+            // dc.html:131 puts it inside `bodyStyle` and SettingsPanel.tsx:618
+            // inside the ScrollView, which is why this overlay has no OverlayFooter.
+            // dc.html `aboutStyle`:294 `padding:'20px 0 4px'`.
+            //
+            // (SettingsPanel.tsx also makes this line a six-tap target that reveals
+            // a hidden band-theme group. That is in neither §6.3 nor the dc.html, so
+            // it is not built here.)
+            VerticalLayout {
+                padding-top: Metrics.s(20);
+                padding-bottom: Metrics.s(4);
+
+                Text {
+                    text: root.about;
+                    horizontal-alignment: center;
+                    font-size: Math.max(12px, Metrics.s(13));
+                    font-weight: 400;
+                    // Sub-pixel, so raw.
+                    letter-spacing: 0.3px;
+                    // SettingsPanel.tsx:713 hard-codes '#888' in the stylesheet and
+                    // then overrides it inline with pal.dim at :618. The inline
+                    // wins, so the effective colour is the dc.html's t.dim; the
+                    // '#888' is dead and is not ported.
+                    color: Pal.dim;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

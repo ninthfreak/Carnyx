@@ -352,3 +352,28 @@ export component MotionCar {
         stroke-line-cap: round;
     }
 }
+
+/// Magnifier-over-picture — the reorder-mode "find a logo for this station" badge
+/// (icons.tsx `LogoSearchIcon`, 24-unit viewbox, stroke 2). Deliberately a
+/// different drawing from `MagnifierTower`: a framed picture with a lens at the
+/// lower right, not a lens over a transmitter.
+///
+/// The picture's sun is a filled r=1.15 circle in the SVG. Slint's Path takes ONE
+/// fill for the whole command string, so it is drawn the way `WarningTriangle`
+/// already draws its dot — a zero-length round-capped segment, which puts down a
+/// disc of the stroke width (2 units against the SVG's 2.3).
+export component LogoSearchIcon {
+    in property <length> size: 26px;
+    in property <color> color: #FFFFFF;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M4.5 3.5 H12.5 A2 2 0 0 1 14.5 5.5 V11.5 A2 2 0 0 1 12.5 13.5 H4.5 A2 2 0 0 1 2.5 11.5 V5.5 A2 2 0 0 1 4.5 3.5 Z M6 7 L6.01 7 M3 12 L6.8 8.3 L10 11 M12.3 16 A4.2 4.2 0 1 0 20.7 16 A4.2 4.2 0 1 0 12.3 16 Z M19.6 19.1 L22 21.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}

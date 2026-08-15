@@ -8,7 +8,7 @@
 
 import { Pal, Metrics, Font } from "tokens.slint";
 import { Preset } from "types.slint";
-import { MagnifierTower } from "icons.slint";
+import { MagnifierTower, LogoSearchIcon } from "icons.slint";
 
 // The colored call-letter box that stands in for a logo. The letters are fitted
 // to the landscape box — bounded by its height AND by width/letter-count, so four
@@ -122,14 +122,18 @@ export component PresetTile inherits Rectangle {
     in property <length> pad-h;
     in property <length> logo-radius;
     in property <length> name-font;
+    in property <bool> reordering: false;
 
     callback selected();
+    /// The reorder-mode badge — §6.4's entry point. A callback of its own, not
+    /// `selected()`, because it opens the logo window instead of tuning.
+    callback logo-badge();
 
     border-radius: 16px;
     background: Pal.panel;
     border-width: root.active ? 2px : 1px;
     border-color: root.active ? Pal.blue : Pal.border;
-    opacity: touch.pressed ? 0.6 : 1.0;
+    opacity: touch.pressed && !root.reordering ? 0.6 : 1.0;
 
     touch := TouchArea { clicked => { root.selected(); } }
 
@@ -152,6 +156,28 @@ export component PresetTile inherits Rectangle {
         width: 26px; height: 3px;
         border-radius: 2px;
         background: Pal.blue;
+    }
+
+    // Reorder mode only: the logo-search badge (PresetsBand.tsx:145-155,
+    // `styles.logoEdit`:624 — 42dp disc, top 8 / left 8, a 2dp Pal.panel ring,
+    // a 26dp white glyph). The ✕ remove badge that used to sit beside it was
+    // dropped in the reference; a preset is removed from the hero ★ instead.
+    //
+    // Declared LAST so it is above the tile's own TouchArea and takes the tap.
+    if root.reordering: Rectangle {
+        x: 8px;
+        y: 8px;
+        width: 42px;
+        height: 42px;
+        border-radius: 21px;
+        border-width: 2px;
+        border-color: Pal.panel;
+        background: Pal.blue;
+        opacity: badge.pressed ? 0.6 : 1.0;
+
+        badge := TouchArea { clicked => { root.logo-badge(); } }
+
+        LogoSearchIcon { size: 26px; }
     }
 }
 
@@ -273,6 +299,8 @@ export component PresetsBand inherits Rectangle {
     callback select(int);
     callback open-nearby();
     callback done-reordering();
+    /// The reorder-mode logo badge on tile `i` (§6.4).
+    callback open-logo-search(int);
 
     height: root.band-height;
 
@@ -359,7 +387,9 @@ export component PresetsBand inherits Rectangle {
                         name-font: Math.max(12px, Metrics.s(self.big
                             ? (Metrics.landscape ? 16 : 18)
                             : (Metrics.landscape ? 13 : 15)));
+                        reordering: root.reordering;
                         selected => { root.select(i); }
+                        logo-badge => { root.open-logo-search(i); }
                     }
                 }
 
@@ -377,7 +407,9 @@ export component PresetsBand inherits Rectangle {
                         pad-h: Metrics.s(6);
                         logo-radius: i == root.active-index ? 15px : 12px;
                         name-font: Math.max(12px, Metrics.s(15));
+                        reordering: root.reordering;
                         selected => { root.select(i); }
+                        logo-badge => { root.open-logo-search(i); }
                     }
                 }
 
@@ -396,7 +428,9 @@ export component PresetsBand inherits Rectangle {
                         pad-h: Metrics.s(6);
                         logo-radius: i == root.active-index ? 15px : 12px;
                         name-font: Math.max(12px, Metrics.s(15));
+                        reordering: root.reordering;
                         selected => { root.select(i); }
+                        logo-badge => { root.open-logo-search(i); }
                     }
                 }
             }

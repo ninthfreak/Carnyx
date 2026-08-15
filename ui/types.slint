@@ -24,3 +24,18 @@ export struct Preset {
     logo: image,
     has-logo: bool,
 }
+
+/// Which modal is up (ANDROID §6). One value, not four booleans: the four
+/// overlays are mutually exclusive, and four flags can contradict each other the
+/// way `NearbyState` replaced the picker's overlapping ones.
+export enum Overlay {
+    none,
+    /// §6.1 direct-entry numpad.
+    numpad,
+    /// §6.2 nearby-stations picker.
+    nearby,
+    /// §6.3 settings panel.
+    settings,
+    /// §6.4 preset logo-search window.
+    logo-search,
+}

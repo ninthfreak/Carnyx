@@ -1,8 +1,17 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset } from "types.slint";
+import { Preset, Overlay } from "types.slint";
 import { Face } from "face.slint";
+import { Numpad } from "numpad.slint";
+import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn } from "nearby.slint";
+import {
+    SettingsOverlay, TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState
+} from "settings.slint";
+import { LogoSearchOverlay, LogoSearchState, LogoCandidate } from "logo-search.slint";
 
-export { Pal, Metrics, Preset }
+export { Pal, Metrics, Preset, Overlay }
+export { NearbyState, NearbyStation, GenreColumn }
+export { TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState }
+export { LogoSearchState, LogoCandidate }
 
 export component AppWindow inherits Window {
     in property <string> ident;
@@ -39,11 +48,120 @@ export component AppWindow inherits Window {
     callback open-settings();
     callback open-nearby();
     callback open-numpad();
+    /// The per-tile logo badge, reorder mode only (§6.4 block 0). Carries the
+    /// preset index so Rust can resolve the call sign before the window opens.
+    callback open-logo-search(int);
     callback claim-audio();
     callback release-audio();
     callback select-preset(int);
     callback step-preset(int);
     callback done-reordering();
+
+    // ── Overlays (ANDROID §6) ───────────────────────────────────────────────
+    //
+    // ONE property, not four booleans — the four modals are mutually exclusive
+    // and four flags can contradict each other. It is `in-out` because both
+    // sides write it: a tap on the face opens the overlay here, and Rust closes
+    // it (or opens one itself) after it has prepared the data.
+    //
+    // Everything an overlay draws is still a finished value from Rust; the
+    // property below is navigation state, the same class of thing as the
+    // picker's own `hold-index`, not a formatted string or a hashed colour.
+    in-out property <Overlay> overlay: Overlay.none;
+    /// The ✕, CANCEL, the scrim — every overlay's single dismissal. Rust resets
+    /// whatever that overlay was holding; the `overlay` property is already back
+    /// to `none` by the time this fires.
+    callback close-overlay();
+
+    // §6.1 numpad.
+    in property <string> numpad-display;
+    in property <bool> numpad-display-dim: true;
+    in property <bool> numpad-error: false;
+    in property <string> numpad-error-text;
+    in property <bool> numpad-can-tune: false;
+    callback numpad-enter(string);
+    callback numpad-backspace();
+    callback numpad-seek(int);
+    callback numpad-tune();
+
+    // §6.2 nearby picker.
+    in property <[NearbyStation]> nearby-stations;
+    in property <NearbyState> nearby-state: NearbyState.list;
+    in property <string> nearby-snapshot;
+    in property <[string]> nearby-bucket-chips;
+    in property <string> nearby-bucket;
+    in property <[GenreColumn]> nearby-genre-columns;
+    in property <string> nearby-genre;
+    in property <bool> nearby-show-bucket-bar: false;
+    in property <bool> nearby-show-genre-bar: false;
+    callback nearby-tune(int);
+    callback nearby-save-preset(int);
+    callback nearby-pick-bucket(string);
+    callback nearby-pick-genre(string);
+    callback nearby-reset-bucket();
+
+    // §6.3 settings.
+    in property <string> settings-status-title;
+    in property <string> settings-status-sub;
+    in property <TunerGlyph> settings-status-glyph: TunerGlyph.waves;
+    in property <TunerAction> settings-status-action: TunerAction.none;
+    in property <string> settings-details-label;
+    in property <bool> settings-details-open: false;
+    in property <[TunerDetail]> settings-tuner-details;
+    in property <[TunerSource]> settings-sources;
+    in property <bool> settings-autostart: false;
+    in property <[string]> settings-theme-chips;
+    in property <string> settings-theme;
+    in property <BatteryState> settings-battery: BatteryState.checking;
+    in property <string> settings-battery-sub;
+    in property <bool> settings-logos-on: false;
+    in property <string> settings-logos-sub;
+    in property <string> settings-clear-logos-label;
+    in property <bool> settings-clearing-logos: false;
+    in property <bool> settings-show-advanced: true;
+    in property <string> settings-about;
+    callback settings-retry-tuner();
+    callback settings-toggle-details();
+    callback settings-pick-source(int);
+    callback settings-set-autostart(bool);
+    callback settings-set-theme(string);
+    callback settings-fix-battery();
+    callback settings-set-logos(bool);
+    callback settings-clear-logos();
+    callback settings-open-advanced();
+
+    // §6.4 logo search.
+    in property <string> logo-search-name;
+    in property <string> logo-search-subtitle;
+    in property <image> logo-search-logo;
+    in property <bool> logo-search-has-logo: false;
+    in property <string> logo-search-mono;
+    in property <color> logo-search-brand;
+    in property <LogoSearchState> logo-search-state: LogoSearchState.landing;
+    in property <string> logo-search-query;
+    in property <[LogoCandidate]> logo-search-candidates;
+    in property <int> logo-search-selected-index: -1;
+    in property <bool> logo-search-saving: false;
+    in property <string> logo-search-error-title;
+    in property <string> logo-search-error-body;
+    in property <bool> logo-search-show-call: false;
+    in property <bool> logo-search-show-freq: false;
+    in property <string> logo-search-search-label;
+    in property <bool> logo-search-can-confirm: false;
+    in property <string> logo-search-confirm-label;
+    in property <string> logo-search-hint;
+    callback logo-search-toggle-call();
+    callback logo-search-toggle-freq();
+    callback logo-search-search();
+    callback logo-search-retry();
+    callback logo-search-pick(int);
+    callback logo-search-confirm();
+
+    /// Every overlay's dismissal lands here: drop the modal, then tell Rust.
+    function dismiss() {
+        root.overlay = Overlay.none;
+        root.close-overlay();
+    }
 
     title: "Carnyx";
     background: Pal.bg;
@@ -84,13 +202,124 @@ export component AppWindow inherits Window {
         scanning: root.scanning;
         reordering: root.reordering;
         toggle-save => { root.toggle-save(); }
-        open-settings => { root.open-settings(); }
-        open-nearby => { root.open-nearby(); }
-        open-numpad => { root.open-numpad(); }
+        open-settings => { root.overlay = Overlay.settings; root.open-settings(); }
+        open-nearby => { root.overlay = Overlay.nearby; root.open-nearby(); }
+        open-numpad => { root.overlay = Overlay.numpad; root.open-numpad(); }
+        open-logo-search(i) => { root.overlay = Overlay.logo-search; root.open-logo-search(i); }
         claim-audio => { root.claim-audio(); }
         release-audio => { root.release-audio(); }
         select-preset(i) => { root.select-preset(i); }
         step-preset(d) => { root.step-preset(d); }
         done-reordering => { root.done-reordering(); }
+    }
+
+    // ── The modal layer ─────────────────────────────────────────────────────
+    //
+    // Declared AFTER the Face, so it draws over it, and each overlay is given
+    // the whole surface: its scrim covers the face and its own TouchArea
+    // swallows every tap, so nothing behind it can be reached while it is up.
+    // None of the four gates its own visibility — the `if` here is the gate,
+    // exactly as OverlayCard's own docs ask for.
+
+    if root.overlay == Overlay.numpad: Numpad {
+        width: root.width;
+        height: root.height;
+        display: root.numpad-display;
+        display-dim: root.numpad-display-dim;
+        error: root.numpad-error;
+        error-text: root.numpad-error-text;
+        can-tune: root.numpad-can-tune;
+        enter(c) => { root.numpad-enter(c); }
+        backspace => { root.numpad-backspace(); }
+        seek(d) => { root.numpad-seek(d); }
+        // TUNE commits; whether the card then closes is Rust's — a rejected
+        // value keeps it up with the buffer intact (Numpad.tsx:57).
+        tune => { root.numpad-tune(); }
+        cancel => { root.dismiss(); }
+    }
+
+    if root.overlay == Overlay.nearby: NearbyOverlay {
+        width: root.width;
+        height: root.height;
+        stations: root.nearby-stations;
+        state: root.nearby-state;
+        snapshot: root.nearby-snapshot;
+        bucket-chips: root.nearby-bucket-chips;
+        bucket: root.nearby-bucket;
+        genre-columns: root.nearby-genre-columns;
+        genre: root.nearby-genre;
+        show-bucket-bar: root.nearby-show-bucket-bar;
+        show-genre-bar: root.nearby-show-genre-bar;
+        tune(i) => { root.nearby-tune(i); }
+        save-preset(i) => { root.nearby-save-preset(i); }
+        pick-bucket(b) => { root.nearby-pick-bucket(b); }
+        pick-genre(g) => { root.nearby-pick-genre(g); }
+        reset-bucket => { root.nearby-reset-bucket(); }
+        close => { root.dismiss(); }
+    }
+
+    if root.overlay == Overlay.settings: SettingsOverlay {
+        width: root.width;
+        height: root.height;
+        status-title: root.settings-status-title;
+        status-sub: root.settings-status-sub;
+        status-glyph: root.settings-status-glyph;
+        status-action: root.settings-status-action;
+        details-label: root.settings-details-label;
+        details-open: root.settings-details-open;
+        tuner-details: root.settings-tuner-details;
+        sources: root.settings-sources;
+        autostart: root.settings-autostart;
+        theme-chips: root.settings-theme-chips;
+        theme: root.settings-theme;
+        battery: root.settings-battery;
+        battery-sub: root.settings-battery-sub;
+        logos-on: root.settings-logos-on;
+        logos-sub: root.settings-logos-sub;
+        clear-logos-label: root.settings-clear-logos-label;
+        clearing-logos: root.settings-clearing-logos;
+        show-advanced: root.settings-show-advanced;
+        about: root.settings-about;
+        retry-tuner => { root.settings-retry-tuner(); }
+        toggle-details => { root.settings-toggle-details(); }
+        pick-source(i) => { root.settings-pick-source(i); }
+        set-autostart(v) => { root.settings-set-autostart(v); }
+        set-theme(t) => { root.settings-set-theme(t); }
+        fix-battery => { root.settings-fix-battery(); }
+        set-logos(v) => { root.settings-set-logos(v); }
+        clear-logos => { root.settings-clear-logos(); }
+        open-advanced => { root.settings-open-advanced(); }
+        close => { root.dismiss(); }
+    }
+
+    if root.overlay == Overlay.logo-search: LogoSearchOverlay {
+        width: root.width;
+        height: root.height;
+        name: root.logo-search-name;
+        subtitle: root.logo-search-subtitle;
+        logo: root.logo-search-logo;
+        has-logo: root.logo-search-has-logo;
+        mono: root.logo-search-mono;
+        brand: root.logo-search-brand;
+        state: root.logo-search-state;
+        query: root.logo-search-query;
+        candidates: root.logo-search-candidates;
+        selected-index: root.logo-search-selected-index;
+        saving: root.logo-search-saving;
+        error-title: root.logo-search-error-title;
+        error-body: root.logo-search-error-body;
+        show-call: root.logo-search-show-call;
+        show-freq: root.logo-search-show-freq;
+        search-label: root.logo-search-search-label;
+        can-confirm: root.logo-search-can-confirm;
+        confirm-label: root.logo-search-confirm-label;
+        hint: root.logo-search-hint;
+        toggle-call => { root.logo-search-toggle-call(); }
+        toggle-freq => { root.logo-search-toggle-freq(); }
+        search => { root.logo-search-search(); }
+        retry => { root.logo-search-retry(); }
+        pick(i) => { root.logo-search-pick(i); }
+        confirm => { root.logo-search-confirm(); }
+        close => { root.dismiss(); }
     }
 }
