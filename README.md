@@ -267,11 +267,23 @@ what upstream ships — it was simply not what stopped the build.
 **rust-skia has never supported 32-bit ARM Android** — not dropped, never added.
 Its README lists `aarch64-linux-android` and `x86_64-linux-android` only, there
 is no armv7 prebuilt at any version, and rust-skia#850 has been open since
-October 2023 asking for it. A source build on r27 is therefore unexplored ground,
-not a documented path.
+October 2023 asking for it.
 
-If NDK archaeology stops being worth it, the way out is to stop depending on
-Skia at all — see "No Skia at all" below.
+**It works anyway.** The APK installed on the head unit and the face rendered
+correctly — so 32-bit ARM Android is unsupported by rust-skia in the sense that
+nobody publishes a binary or promises it keeps working, not in the sense that it
+does not work. Slint on Skia on armv7 Android is a real, running configuration on
+this hardware. The install also settles the API 26 floor from the other
+direction: the unit accepted the package, so it is Android 8.0 or newer.
+
+What "unsupported" costs us is a version pin, not a rewrite. Nothing in CI
+upstream tests this target, so a future skia-bindings could break it without
+anyone noticing; that is an argument for changing the Skia version deliberately
+rather than for avoiding it.
+
+The two Skia-free routes below are therefore contingency, not plan. Keep them
+because the reasoning is expensive to rebuild, not because anything currently
+needs them.
 
 Before a first Android build it is worth checking whether the arm64 prebuilt
 exists, because the answer is the difference between a download and an hour:
@@ -286,7 +298,12 @@ and make sure `python3` is installed. skia-bindings' own version gates are
 `>= 22` and `>= 23` with no upper bound, so it will happily *start* on any recent
 NDK — the failure above comes from the sysroot, not from a version check.
 
-### No Skia at all
+### No Skia at all (contingency, not the current plan)
+
+Skia now builds and runs on the unit, so nothing below is needed today. It is
+kept because the research behind it was expensive and the situation that would
+call for it — a skia-bindings release that drops armv7, or an NDK requirement we
+cannot meet — is one bad upgrade away.
 
 Every problem in the section above comes from one place: Slint's `android-activity`
 backend hard-depends on the Skia renderer. Nothing here needs Skia. The face is
