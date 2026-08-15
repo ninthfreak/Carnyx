@@ -35,7 +35,9 @@ fn main() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless { window: window.clone() })).unwrap();
 
-    let ui = carnyx::build().unwrap();
+    // `_driver` owns every callback; it is unused here but must outlive the
+    // render, since dropping it leaves a face that draws and answers nothing.
+    let (ui, _driver) = carnyx::build().unwrap();
     window.set_size(PhysicalSize::new(w, h));
     ui.show().unwrap();
 

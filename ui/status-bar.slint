@@ -123,7 +123,15 @@ export component StereoCluster inherits VerticalLayout {
     HorizontalLayout {
         alignment: center;
         Rectangle {
-            height: Metrics.stereo-h;
+            // A MINIMUM, as CarFmFace.tsx:1219 writes it (`minHeight: L.stereoH`)
+            // and as the token itself is documented in tokens.slint — a large system
+            // font scale has to grow the pill rather than clip the label. It was a
+            // fixed `height`, which is the one shape that cannot honour either.
+            // Inert at every current metric: the tallest thing inside is the 28dp
+            // cone against a 36dp pill (20/34 on the tall track, and the same
+            // ordering at every k), so the pill resolves to stereo-h exactly as
+            // before and the sibling bands that align to that token still line up.
+            min-height: Metrics.stereo-h;
             min-width: Metrics.stereo-min-w;
             border-radius: Metrics.stereo-radius;
             border-width: 1.5px;
@@ -135,6 +143,27 @@ export component StereoCluster inherits VerticalLayout {
                 padding-right: Metrics.stereo-pad-h;
                 spacing: 9px;
                 alignment: center;
+                // THE PILL'S CONTENTS SAT HIGH, AND THIS IS WHY.
+                //
+                // `alignItems: 'center'` on CarFmFace's `stereoRow` (:1776) centres
+                // all three children on the cross axis. Slint's box layouts default
+                // to cross-axis STRETCH, which sizes a child to the layout's full
+                // height CLAMPED to its own min/max and then places it at the START
+                // of the box. The two cone slots state an explicit 20 × 28, so they
+                // were clamped to 28 and pinned to the TOP of a 36dp pill — 4dp
+                // high on the wide track, 2dp on the tall one. Measured off
+                // shots/head-unit-light.png: pill 18..53, cone ink 23..40, i.e. a
+                // centre of 31.5 against the pill's 35.5.
+                //
+                // The label did NOT move with them, which is what made it read as a
+                // misalignment rather than a shift: its box states no height, so it
+                // stretched to the full 36 and the compiler's own
+                // `maybe_center_in_parent` centred the two Texts inside it. Cones
+                // top-aligned, label centred, one pill.
+                //
+                // Centring the cross axis here fixes the cones and leaves the label
+                // exactly where it already was.
+                cross-axis-alignment: center;
 
                 // BOTH cones on mono, not one and not none. Mono only changes
                 // their appearance: stroke 1.8 → 1.1, the right cone in the dim
@@ -157,8 +186,16 @@ export component StereoCluster inherits VerticalLayout {
                 // label pulls both cones inward on mono. The label sits in a box
                 // the width of the widest string, with the live label centred
                 // over it.
+                //
+                // The HEIGHT is stated for the same reason the width is. With the
+                // cross axis centred, every child is sized to its preferred size
+                // and centred; saying this one outright keeps that from depending
+                // on which children the compiler folds into a bare Rectangle's
+                // implicit size — the live label is excluded from that fold
+                // because it sets `x`, leaving only the invisible reserve.
                 Rectangle {
                     width: reserve.preferred-width;
+                    height: reserve.preferred-height;
                     reserve := Text {
                         opacity: 0;
                         text: "STEREO";
@@ -286,6 +323,13 @@ export component DrivingStatus inherits HorizontalLayout {
 
     spacing: 12px;
     alignment: end;
+    // `alignItems: 'center'` on CarFmFace's DrivingStatusIcons row (:247). The
+    // SAME defect the stereo pill had, and found looking for it: the car states
+    // 34dp and the satellite's wrapper 30dp, so under Slint's default cross-axis
+    // stretch the satellite was clamped to 30 and pinned to the top of a 34dp row —
+    // 2dp high whenever both are on screen. It has no effect when the car is
+    // absent, which is why it reads as intermittent.
+    cross-axis-alignment: center;
 
     // The car shows ONLY while moving — absent, not dimmed, when stopped. Amber:
     // the fixed safety-colour family, like TA, never the blue accent.

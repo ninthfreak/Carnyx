@@ -19,7 +19,9 @@ use slint::{
     ComponentHandle, LogicalPosition, Model, ModelRc, PhysicalSize, PlatformError, VecModel,
 };
 
-use carnyx::{LogoSearchState, NearbyState, Overlay, TunerAction};
+use carnyx::app::App;
+use carnyx::fake::FakeLocation;
+use carnyx::{GenreColumn, LogoSearchState, NearbyState, Overlay};
 
 /// The five first-class surfaces of ANDROID §2, plus the states worth a second
 /// look: (name, width, height, dark, state).
@@ -43,6 +45,14 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("no-callsign", 1024, 614, false, State::NoCallsign),
     ("stereo-unknown", 1024, 614, false, State::StereoUnknown),
     ("long-genre", 1024, 614, false, State::LongGenre),
+    // The satellite icon has two states and only one of them was ever shot. Both
+    // go through `App::set_position`, which is the seam a real LocationManager
+    // callback lands on — not a property override.
+    // Tuned OFF the strip: the unsaved star, and the peek cards falling back to
+    // last/first because no tile is active.
+    ("unsaved-dial", 1024, 614, false, State::UnsavedDial),
+    ("gps-no-fix", 1024, 614, false, State::NoGpsFix),
+    ("gps-no-fix-portrait", 360, 800, false, State::NoGpsFix),
 ];
 
 /// The four overlays of ANDROID §6, and the states each one reports.
@@ -83,7 +93,10 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-head-unit-dark", 1024, 614, true, State::Settings, 0.0),
     ("settings-scrolled-mid", 1024, 614, false, State::Settings, -2.0),
     ("settings-scrolled-end", 1024, 614, false, State::Settings, -8.0),
-    ("settings-diagnostics-open", 1024, 614, false, State::SettingsDiag, 0.0),
+    ("settings-diagnostics-open", 1024, 614, false, State::SettingsDiag, -7.0),
+    ("settings-diagnostics-full", 1024, 614, false, State::SettingsDiagFull, -9.0),
+    ("settings-band-themes", 1024, 614, false, State::SettingsEgg, -8.0),
+    ("settings-diagnostics-portrait", 360, 800, false, State::SettingsDiag, -11.0),
     ("settings-phone-portrait", 360, 800, false, State::Settings, 0.0),
     ("settings-phone-portrait-scrolled", 360, 800, false, State::Settings, -8.0),
     // §6.4 logo search: both landing views, the grid, and the two dead ends.
@@ -131,6 +144,10 @@ enum State {
     LongGenre,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
+    /// No position: the satellite icon's other state.
+    NoGpsFix,
+    /// A dial that is not one of the six saved slots.
+    UnsavedDial,
 
     // ── §6 overlays ──
     /// §6.1 as it opens: nothing typed, so the display is the live dial, dimmed.
@@ -151,8 +168,15 @@ enum State {
     NearbyLoading,
     /// §6.3 as it opens.
     Settings,
-    /// The RTL path selected, with its diagnostics panel open.
+    /// DIAGNOSTICS on: the four nested switches, the log well with real lines in
+    /// it, and the action rows the log's own state decides.
     SettingsDiag,
+    /// The same with raw capture on too, which is what adds the export row and
+    /// is the only way to see a second action row at all without a head unit.
+    SettingsDiagFull,
+    /// The hidden BAND THEMES group, opened the way the driver opens it: six
+    /// taps on the about line, through the real counter.
+    SettingsEgg,
     /// §6.4 landing on a station with no logo.
     LogoLanding,
     /// §6.4 landing on a station that already has one.
@@ -183,9 +207,16 @@ fn main() {
 
     let face = SURFACES.iter().map(|&(n, w, h, d, s)| (n, w, h, d, s, 0.0));
     for (name, w, h, dark, state, scroll) in face.chain(OVERLAYS.iter().copied()) {
-        let ui = carnyx::build().expect("build window");
+        // A whole application per shot, driven by the real services: the station
+        // database is opened and queried, the RDS decoder is fed until its
+        // consensus gates clear, the signal maths runs, and the settings panel is
+        // derived. The arms below push only what makes THIS shot different.
+        //
+        // `driver` must outlive the render — it owns every callback, and a face
+        // whose callbacks have been dropped still draws but answers nothing.
+        let (ui, driver) = carnyx::build().expect("build window");
         ui.global::<carnyx::Pal>().set_dark(dark);
-        apply(&ui, state);
+        apply(&ui, &driver, state);
         window.set_size(PhysicalSize::new(w, h));
         ui.show().expect("show");
 
@@ -224,13 +255,21 @@ fn main() {
 }
 
 /// Push one of the states the face has to be able to draw.
-fn apply(ui: &carnyx::AppWindow, state: State) {
+///
+/// Every arm that CAN reach the real services does — a preset tap goes through
+/// the real tune path, a position change goes through `App::set_position`, the
+/// diagnostics switches go through their own callbacks. The handful that cannot
+/// say why in place.
+fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
     match state {
         State::Normal => {}
         State::AudioReleased => ui.set_audio_active(false),
         State::TunerError => ui.set_tuner_error(true),
         State::Driving => {
-            ui.set_in_motion(true);
+            // The fix and the motion go through the real position seam; TP/TA
+            // are pushed, because a traffic announcement needs a broadcaster
+            // sending one and the replayed corpus has none.
+            driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
             ui.set_tp(true);
             ui.set_ta(true);
         }
@@ -262,12 +301,21 @@ fn apply(ui: &carnyx::AppWindow, state: State) {
         State::StereoUnknown => ui.set_stereo_known(false),
         State::LongGenre => ui.set_pty("Adult Album Alternative and Classic Rock".into()),
         State::Reordering => ui.set_reordering(true),
+        State::NoGpsFix => driver.set_position(FakeLocation::no_fix()),
+        State::UnsavedDial => {
+            // Through the numpad's own callbacks, so the band check, the buffer
+            // rules and the tune all run rather than a property being set.
+            for c in ["1", "0", "5", ".", "1"] {
+                ui.invoke_numpad_enter(c.into());
+            }
+            ui.invoke_numpad_tune();
+        }
 
         // ── §6 overlays ────────────────────────────────────────────────────
         //
-        // `demo::install_overlays` has already filled every one of these with
-        // the state it would have on a working head unit, so each arm below
-        // only pushes what makes ITS shot different and then raises the modal.
+        // The App has already filled every one of these from the real services,
+        // so each arm below only pushes what makes ITS shot different and then
+        // raises the modal.
         State::Numpad => ui.set_overlay(Overlay::Numpad),
         State::NumpadTyping => {
             // A raw mid-entry buffer. Rust owns the input rules and hands the
@@ -286,51 +334,72 @@ fn apply(ui: &carnyx::AppWindow, state: State) {
         }
         State::Nearby => ui.set_overlay(Overlay::Nearby),
         State::NearbyGenre => {
-            // Drilled into Music: §6.2 hides the bucket row and shows the genre
-            // row with the back-arrow chip that is the only way out of it.
+            // THE ONLY NEARBY SHOT THAT IS NOT THE REAL QUERY, and it cannot be:
+            // `station_class` and the genre column are NULL in all 20,733 shipped
+            // rows, so every station classifies as Music, `has_talk` is false and
+            // NEITHER filter bar can ever appear on real data. The filter is
+            // implemented and tested in src/stations.rs; it has no data source.
+            // Pushed here so the drilled-in layout is still inspected.
             ui.set_nearby_bucket("Music".into());
             ui.set_nearby_genre("Classic Hits".into());
             ui.set_nearby_show_bucket_bar(false);
             ui.set_nearby_show_genre_bar(true);
-            // The list is already filtered when it arrives, and the meters are
-            // re-normalised over what is left.
+            ui.set_nearby_genre_columns(ModelRc::from(Rc::new(VecModel::from(vec![
+                genre_col("Adult Contemporary", "Active Rock"),
+                genre_col("Classic Hits", "Classical"),
+                genre_col("Alternative", "Soft AC"),
+                genre_col("Public Radio", ""),
+            ]))));
+            // The list arrives already filtered and its meters already
+            // re-normalised over what is left, which is what Rust owes it.
             retain_nearby(ui, &["102.1", "88.7", "105.5"]);
             ui.set_overlay(Overlay::Nearby);
         }
         State::NearbyNoGps => {
-            ui.set_nearby_state(NearbyState::NoGps);
-            ui.set_nearby_show_bucket_bar(false);
+            // Through the real seam: no fix means the picker itself reports
+            // NoGps, rather than the property being overwritten to say so.
+            driver.set_position(FakeLocation::no_fix());
             ui.set_overlay(Overlay::Nearby);
         }
         State::NearbyLoading => {
+            // ALSO UNREACHABLE IN PRACTICE, and pushed for that reason: the
+            // query measures 0.77 ms against the real file, so the picker never
+            // produces Loading. The body exists for a slower device.
             ui.set_nearby_state(NearbyState::Loading);
             ui.set_nearby_show_bucket_bar(false);
             ui.set_overlay(Overlay::Nearby);
         }
         State::Settings => ui.set_overlay(Overlay::Settings),
         State::SettingsDiag => {
-            // The RTL path selected instead of the built-in tuner, which is the
-            // only combination that offers Details at all.
-            let sources: Vec<_> = ui
-                .get_settings_sources()
-                .iter()
-                .enumerate()
-                .map(|(i, mut s)| {
-                    s.selected = i == 0;
-                    s
-                })
-                .collect();
-            ui.set_settings_sources(ModelRc::from(Rc::new(VecModel::from(sources))));
-            ui.set_settings_status_sub("Local hardware · RTL-SDR (RTL2832U)".into());
-            ui.set_settings_status_action(TunerAction::Details);
-            ui.set_settings_details_label("Hide details".into());
-            ui.set_settings_details_open(true);
+            // Through the real callback, so the nested switches, the action rows
+            // and the log all come from `settings::Settings` deciding.
+            ui.invoke_settings_set_diag(true);
+            ui.set_overlay(Overlay::Settings);
+        }
+        State::SettingsDiagFull => {
+            ui.invoke_settings_set_diag(true);
+            // Raw capture on is what adds the export row — the only second
+            // action row reachable without a head unit, since the four vendor
+            // probes need a live NWD service.
+            ui.invoke_settings_set_rds_capture(true);
+            ui.invoke_settings_set_diag_overlay(true);
+            // Two real tunes, so the log has more in it than the connect line.
+            ui.invoke_select_preset(1);
+            ui.invoke_select_preset(3);
+            ui.set_overlay(Overlay::Settings);
+        }
+        State::SettingsEgg => {
+            // Six taps, counted in Rust exactly as a driver's six taps are.
+            for _ in 0..6 {
+                ui.invoke_settings_tap_about();
+            }
+            ui.invoke_settings_pick_egg(2);
             ui.set_overlay(Overlay::Settings);
         }
         State::LogoLanding => ui.set_overlay(Overlay::LogoSearch),
         State::LogoLandingHasLogo => {
             ui.set_logo_search_has_logo(true);
-            ui.set_logo_search_logo(carnyx::demo::logo_candidates()[0].thumb.clone());
+            ui.set_logo_search_logo(logo_art(0));
             // §6.4's logo-only hero: a station WITH a logo defaults both off.
             ui.set_logo_search_show_call(false);
             ui.set_logo_search_show_freq(false);
@@ -338,14 +407,14 @@ fn apply(ui: &carnyx::AppWindow, state: State) {
             ui.set_overlay(Overlay::LogoSearch);
         }
         State::LogoResults => {
-            ui.set_logo_search_state(LogoSearchState::Results);
-            ui.set_logo_search_candidates(ModelRc::from(Rc::new(VecModel::from(
-                carnyx::demo::logo_candidates(),
-            ))));
-            ui.set_logo_search_selected_index(1);
-            ui.set_logo_search_can_confirm(true);
-            ui.set_logo_search_confirm_label("Confirm".into());
-            ui.set_logo_search_hint("Saved as this station's logo".into());
+            // The real state machine, run against `fake::FakeLogoSearch` because
+            // `logos::LogoNet` and `logos::ImageCodec` have no implementations in
+            // this crate. The generation counter, the arrival order, the captions
+            // and the selection are all shipping code; only the pixels are made
+            // up. Every string below therefore comes from `logos::search::View`.
+            ui.invoke_open_logo_search(0);
+            ui.invoke_logo_search_search();
+            ui.invoke_logo_search_pick(1);
             ui.set_overlay(Overlay::LogoSearch);
         }
         State::LogoLoading => {
@@ -363,18 +432,36 @@ fn apply(ui: &carnyx::AppWindow, state: State) {
             ui.set_overlay(Overlay::LogoSearch);
         }
         State::LogoError => {
-            ui.set_logo_search_state(LogoSearchState::Error);
-            ui.set_logo_search_error_title("Couldn't save that logo".into());
-            ui.set_logo_search_error_body(
-                "Couldn't save this logo — the image was too large. Try a different result."
-                    .into(),
-            );
-            ui.set_logo_search_can_confirm(false);
-            ui.set_logo_search_confirm_label("Confirm".into());
-            ui.set_logo_search_hint("".into());
+            // The SAVE-failure wording, reached the way a driver reaches it:
+            // pick a result and confirm it, with no image decoder behind the
+            // Confirm. The two error wordings are different strings and this is
+            // the second of them.
+            ui.invoke_open_logo_search(0);
+            ui.invoke_logo_search_search();
+            ui.invoke_logo_search_pick(1);
+            ui.invoke_logo_search_confirm();
             ui.set_overlay(Overlay::LogoSearch);
         }
     }
+}
+
+/// One column of the pushed genre grid. See the `NearbyGenre` arm for why this
+/// grid cannot come from the shipped database.
+fn genre_col(top: &str, bottom: &str) -> GenreColumn {
+    GenreColumn {
+        top: top.into(),
+        bottom: bottom.into(),
+        has_bottom: !bottom.is_empty(),
+    }
+}
+
+/// One piece of the fake search's generated art, as a `slint::Image`.
+///
+/// NOT A LOGO. There is no image decoder in this crate, so the "already has a
+/// logo" landing view is shown with the same flat plate the fake search
+/// produces, through the same `logos::ui::to_image` the real path uses.
+fn logo_art(index: usize) -> slint::Image {
+    carnyx::logos::ui::to_image(&carnyx::fake::FakeLogoSearch::art(index, 192))
 }
 
 /// Keep only the rows on these dial frequencies, and re-rank what is left.

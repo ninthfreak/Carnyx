@@ -1,28 +1,52 @@
 // Settings panel (ANDROID §6.3) — a header over a scrolling body of grouped
 // sections, in the shared modal card.
 //
-// Four groups, in this order and no other: TUNER (connection status, an optional
-// diagnostics panel, the four-row source picker, the boot-autostart switch),
-// APPEARANCE (the theme segmented control), SYSTEM (battery exemption, the
-// station-logos switch, the clear-logos row) and ADVANCED (the escape hatch to
-// the stock SDR interface). One centred about line closes the body.
+// FIVE sections, in this order and no other: TUNER (connection status, an
+// optional diagnostics panel, the four-row source picker, the boot-autostart
+// switch), APPEARANCE (the theme segmented control), SYSTEM (battery exemption,
+// the station-logos switch, the clear-logos row), DIAGNOSTICS (the tuner-log
+// switch, three switches nested under it, the log itself and a Rust-built list of
+// action rows) and — only once the about line has been tapped six times — BAND
+// THEMES. The centred about line sits between the fourth section and the fifth,
+// because it is the fifth one's key.
+//
+// THE DESIGN BUNDLE IS STALE FOR CONTENT, AND THIS FILE WAS BUILT FROM IT.
+// `SettingsPanel.dc.html` carries an ADVANCED group whose one row opens the stock
+// SDR interface. CarFM DELETED that row on 2026-07-21 — docs/CARFM-STRIP-PLAN.md
+// item 19 removes the `advancedOpen` state, the `onOpenAdvanced` prop, the
+// SettingsPanel row and the "◂ FM" return button together — and the bundle
+// predates DIAGNOSTICS and the band-theme egg entirely. So
+// `src/components/carfm/SettingsPanel.tsx` is the truth for WHAT IS HERE and WHAT
+// IT SAYS, top to bottom. The dc.html is kept only for the visual language of the
+// pieces both still share, and is cited by style name where it still wins.
 //
 // THE TWO-TONE STRUCTURE IS THE WHOLE PANEL. The card is Pal.bg and every group
 // inside it is Pal.panel over a 1dp Pal.border — that relationship is what makes
 // the sections read as sections, and it is the one thing here that must not
-// collapse. Nothing else in this file is load-bearing in the same way.
+// collapse. The BAND THEMES group is the single deliberate exception (Pal.raised,
+// a tighter corner, no inner padding); it is an egg, and it is meant to look like
+// one. Nothing else in this file is load-bearing in the same way.
 //
-// WHERE THE NUMBERS COME FROM. `SettingsPanel.dc.html` is the built reference and
-// wins on appearance; `src/components/carfm/SettingsPanel.tsx` is the shipping
-// code and wins on behaviour. Every value below cites one of them by its style
-// name. Where they disagree the disagreement is called out at the point it bites.
+// WHERE THE NUMBERS COME FROM. `SettingsPanel.dc.html` wins on appearance for
+// anything it still describes; `SettingsPanel.tsx` wins on behaviour, on copy,
+// and outright on anything the bundle no longer has. Every value below cites one
+// of them by its style name. Where they disagree the disagreement is called out
+// at the point it bites.
 //
 // NOTHING HERE DECIDES ANYTHING. Every string that varies — the status title and
 // subtitle, the Details/Hide details label, the source badges, the battery
-// sub-line, the about line — arrives finished from Rust, and so does every
-// tri-state that would otherwise be re-derived from two booleans. The panel draws
-// what it is handed. The one thing decided here is the width TRACK, which is
-// geometry, exactly like Metrics.tall / .landscape / .two-rows.
+// sub-line, the about line, every diagnostics log line, every band-theme label —
+// arrives finished from Rust, and so does every tri-state that would otherwise be
+// re-derived from two booleans. So does the SHAPE of the two variable lists: which
+// diagnostics actions exist and where their rules fall is Rust's, not a pair of
+// booleans tested here. The panel draws what it is handed. The one thing decided
+// here is the width TRACK, which is geometry, exactly like Metrics.tall /
+// .landscape / .two-rows.
+//
+// Copy that cannot vary stays a literal, as "Start radio on boot" and "Tuner
+// source" always have: the four DIAGNOSTICS switch labels and the log's
+// "No events yet — tune a station." are fixed strings in the TSX with no branch
+// behind them, and routing them through a property would buy nothing but wiring.
 //
 // TYPE FLOORS. The references never ramp: a 14sp sub-line is 14sp on every
 // surface. Carnyx ramps every design dimension through Metrics.s(), which at
@@ -30,7 +54,8 @@
 // Metrics.pty-font / tell-font already floor theirs (§10, "nothing critical below
 // ~15sp"): body copy at 12px, the two all-caps label styles at 10px so they stay
 // BELOW the body copy and the hierarchy does not invert. The floors move this
-// file toward the reference, not away from it.
+// file toward the reference, not away from it. The diagnostics log is the one
+// documented exception at 11px, argued at the point it is set.
 
 import { Pal, Metrics } from "tokens.slint";
 import { OverlayCard, OverlayHeader, OverlayBody } from "overlay.slint";
@@ -104,6 +129,25 @@ export enum BatteryState {
     exempt,
 }
 
+/// One action row at the foot of DIAGNOSTICS, already selected and already
+/// ordered.
+///
+/// The shipping list is between two and nine rows long and its shape is decided by
+/// two booleans that this panel must never see (SettingsPanel.tsx:565-610):
+/// "Save to file" is unconditional, "Export raw RDS capture" needs the raw-capture
+/// toggle, the four NWD probes need the built-in tuner to be the live source, and
+/// "Clear log" is unconditional and last. RUST decides which rows exist and where
+/// the rules fall, exactly as it decides `sources`; this file draws the list it is
+/// handed and reports an index.
+export struct DiagAction {
+    /// "Save to file", "Probe NwdFmManager (signal · raw RDS · stereo)", …
+    label: string,
+    /// A RowDivider immediately above this row. False on "Save to file" — the log
+    /// runs straight into it with no rule — and true on every other row, which is
+    /// the TSX's dividers read off one by one rather than re-derived.
+    divider-above: bool,
+}
+
 // ── Battery glyph ────────────────────────────────────────────────────────────
 //
 // icons.tsx's `BatteryBolt` (:251-259) and the dc.html's `battGlyph` (:178-182),
@@ -173,9 +217,39 @@ component BatteryBolt {
     }
 }
 
+/// The tick beside the chosen band theme.
+///
+/// SettingsPanel.tsx:638 TYPES it — `<Text>✓</Text>` at bold 16 — and that does not
+/// survive the port: U+2713 is in NEITHER bundled Atkinson cut. I read the cmaps of
+/// ui/fonts/AtkinsonHyperlegible-{Regular,Bold}.ttf myself rather than trusting the
+/// note in logo-search.slint: · — … ' › are all there, ✓ ✕ → are not, and the
+/// software renderer that makes every screenshot has no fallback stack to reach
+/// past them. So it is drawn.
+///
+/// Same path and same stroke as logo-search.slint's private `CheckMark`
+/// (:198-212), copied for the reason `VPath` and `BatteryBolt` above are copied:
+/// ui/icons.slint is another agent's file this pass. Whoever consolidates should
+/// export ONE CheckMark from icons.slint and delete both copies.
+component CheckMark {
+    in property <length> size: 17px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 3;
+        commands: "M5 12.5 L10 17.5 L19 6.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
 // ── The pieces every section is built from ───────────────────────────────────
 
-/// The all-caps label above a group — TUNER, APPEARANCE, SYSTEM, ADVANCED.
+/// The all-caps label above a group — TUNER, APPEARANCE, SYSTEM, DIAGNOSTICS and
+/// the egg's BAND THEMES.
 ///
 /// dc.html `sectionLabelStyle`:256 `{fontSize:12, fontWeight:700, letterSpacing:2,
 /// color:t.dim, margin:'14px 4px 8px'}`. A VerticalLayout rather than a bare Text
@@ -228,16 +302,24 @@ component SubLabel inherits VerticalLayout {
 /// dc.html `groupStyle`:257 `{backgroundColor:t.panel, border:'1px solid '+t.border,
 /// borderRadius:18, padding:10}` with NO row gap — rows abut and the dividers do
 /// all the separating. The border is a hairline, so it stays at a raw 1px.
+///
+/// The plate and the corner are properties for ONE caller: the BAND THEMES group
+/// is deliberately built the other way round — Pal.raised, an 14dp corner and no
+/// inner padding at all, so its rows run edge to edge behind a clip
+/// (SettingsPanel.tsx:627). Every other group takes the defaults, which are the
+/// dc.html's.
 component GroupCard inherits Rectangle {
     /// s(10) wide, s(8) narrow. The reduction is an ADDITION — neither reference
     /// is responsive — and it buys back ~4dp of row width per side on the phone
     /// surfaces, the way Nearby's list padding already drops from 22 to 13.
     in property <length> pad: Metrics.s(10);
+    in property <color> plate: Pal.panel;
+    in property <length> corner: Metrics.s(18);
 
-    background: Pal.panel;
+    background: root.plate;
     border-width: 1px;
     border-color: Pal.border;
-    border-radius: Metrics.s(18);
+    border-radius: root.corner;
 
     VerticalLayout {
         padding: root.pad;
@@ -284,10 +366,12 @@ component RowText inherits VerticalLayout {
     in property <string> title;
     in property <string> sub;
     /// s(19) on the status row (dc.html `statusTitleStyle`:264), s(18) on every
-    /// switch row and picker row, s(17) on the deliberately quiet ADVANCED row.
+    /// switch row and picker row.
     in property <length> title-size: Math.max(12px, Metrics.s(18));
-    /// Pal.text everywhere EXCEPT the ADVANCED row, which is Pal.dim on purpose —
-    /// it is an escape hatch, not a setting (dc.html `advTitleStyle`:291).
+    /// Pal.text on every row the shipping panel has. The property survives the
+    /// removal of the one row that dimmed its title (the dc.html's ADVANCED escape
+    /// hatch, `advTitleStyle`:291) because it costs nothing and the next quiet row
+    /// will want it; nothing sets it today.
     in property <color> title-color: Pal.text;
 
     horizontal-stretch: 1;
@@ -898,25 +982,40 @@ component BatteryRow inherits Rectangle {
     }
 }
 
-/// A one-line row with a trailing chevron: "Clear all station logos" and
-/// "Advanced SDR view".
+/// A one-line blue label with a trailing chevron. Eleven of these in the shipping
+/// panel: "Clear all station logos" in SYSTEM, and every action row in
+/// DIAGNOSTICS.
 ///
-/// Two shapes in one component because they differ only in what fills the left
-/// slot — a single blue label at 50dp (dc.html `clearRowStyle`:287) or a dim
-/// title over a sub-line at 60dp (`advRowStyle`:290). Both press to Pal.blue-fill.
+/// dc.html `clearRowStyle`:287 — 50dp tall, 12dp side padding, `justifyContent:
+/// space-between`, the label bold 16 in Pal.blue, pressing to Pal.blue-fill.
+/// (SettingsPanel.tsx:492 adds `opacity: 0.9` to the pressed state of the SYSTEM
+/// clear row alone; the ten DIAGNOSTICS rows at :565-607 do not. One shape here,
+/// without it — a 10% wash on top of a fill, on one row, is below the noise floor
+/// and is not worth a property.)
+///
+/// ONE SHAPE NOW. It used to carry a second, taller form with a dim title over a
+/// sub-line (`advRowStyle`:290), whose only caller was the ADVANCED escape hatch
+/// CarFM deleted; it went with the row. Every caller left is single-line and the
+/// labels are long — "Probe vendor-app replacement (read-only; may prompt for
+/// root)" — so the label wraps and the row grows, per §10.
+///
+/// HEIGHT. 50 in the reference, floored at 48dp of real dp the way Pill,
+/// ThemeChip and CloseButton already floor theirs (§10, hit targets "in real dp,
+/// not a scaled-down canvas"). At design scale the floor never fires; at k=0.74 it
+/// is the difference between a 37dp row and a reachable one. The pre-existing
+/// clear-logos row inherits the floor, which is a change to that row on the phone
+/// tracks and is meant.
 ///
 /// › is U+203A and IS in Atkinson Hyperlegible (checked against both .ttf files),
 /// unlike the ✕ in overlay.slint's CloseButton — this one does not fall back.
 component ChevronRow inherits Rectangle {
     in property <string> label;
-    /// Empty on the clear row, which is what selects the single-line form.
-    in property <string> sub;
     /// False while the logo wipe runs, which is the TSX's `disabled={clearing}`.
     in property <bool> interactive: true;
 
     callback clicked();
 
-    min-height: root.sub == "" ? Metrics.s(50) : Metrics.s(60);
+    min-height: Math.max(48px, Metrics.s(50));
     background: touch.pressed ? Pal.blue-fill : transparent;
 
     touch := TouchArea {
@@ -929,13 +1028,11 @@ component ChevronRow inherits Rectangle {
         padding-right: Metrics.s(12);
         padding-top: Metrics.s(6);
         padding-bottom: Metrics.s(6);
-        // The clear row is `justifyContent: space-between` with no gap; the
-        // advanced row is a 16dp gap with the text column taking the slack. Both
-        // land in the same place with the text column stretching, so the spacing
-        // is the only difference.
-        spacing: root.sub == "" ? 0px : Metrics.s(16);
+        // `justifyContent: space-between` with no gap: the label stretches and the
+        // chevron keeps its own width, which puts them at the two ends.
+        spacing: 0px;
 
-        if root.sub == "": Text {
+        Text {
             text: root.label;
             horizontal-stretch: 1;
             font-size: Math.max(12px, Metrics.s(16));
@@ -943,14 +1040,6 @@ component ChevronRow inherits Rectangle {
             color: Pal.blue;
             vertical-alignment: center;
             wrap: word-wrap;
-        }
-        if root.sub != "": RowText {
-            title: root.label;
-            sub: root.sub;
-            title-size: Math.max(12px, Metrics.s(17));
-            // The ONE title in this panel that is not Pal.text. Deliberate: it
-            // leaves the panel rather than changing a setting.
-            title-color: Pal.dim;
         }
 
         VerticalLayout {
@@ -962,6 +1051,182 @@ component ChevronRow inherits Rectangle {
                 font-size: Metrics.s(26);
                 font-weight: 700;
                 color: Pal.dim;
+            }
+        }
+    }
+}
+
+/// DIAGNOSTICS: the tuner log itself — the head unit's substitute for `adb
+/// logcat`, since there is no dev machine in the car.
+///
+/// SettingsPanel.tsx:554-564 + `diagLog`/`diagLogLine`:706-707: a nested scroller
+/// inset 10dp a side and 2dp down, capped at 240dp tall, 12dp corner, 1dp border
+/// over Pal.raised, 10dp of inner padding, its lines monospace 12 on a 17dp line
+/// with font scaling explicitly disabled.
+///
+/// THREE THINGS ARE LOST IN THE PORT, AND ALL THREE ARE VISIBLE ON THE DEVICE.
+///
+/// 1. NO MONOSPACE FACE IS BUNDLED. The lines are `HH:MM:SS␣␣text`, and the point
+///    of a mono face is that the stamps form a column. Carnyx ships Atkinson only,
+///    whose digit advances run 402–648 per 1000 upem, and Slint's Text cannot
+///    reach the `tnum` feature that would fix it (already recorded on DiagPanel's
+///    value Text). Asking for family "monospace" here would ask the SOFTWARE
+///    renderer for a face it does not have, which is worse than ragged. So: the
+///    stamps do not align, and bundling a mono cut is the only real fix.
+/// 2. NO LINE HEIGHT. Slint's Text has no `line-height`, so the 12/17 pair becomes
+///    a fixed row box of `row-h` with the text drawn inside it. That is why the
+///    rows are placed by hand rather than stacked in a layout.
+/// 3. NO WRAP. React Native's <Text> wraps; a fixed row box cannot. A long probe
+///    line elides instead of running to two lines. The alternative — a wrapping
+///    column whose preferred height feeds this box's own height — is the binding
+///    loop this codebase keeps warning about (OverlayCard's `wrap-height` note),
+///    and a dense debug dump is the wrong place to take that risk.
+///
+/// THE FONT FLOOR IS 11px, NOT THE FILE'S 12px, and this is the one place that
+/// deviates. It is a dense mono dump the TSX deliberately exempts from font
+/// scaling; at k=0.68 a 12px floor fits four lines in the 240dp well, and four
+/// lines is not a log. The row box floors with it, at Atkinson's own 1.24× line
+/// box, so an 11px line is never drawn into a 12px slot.
+component DiagLog inherits VerticalLayout {
+    /// Already stamped and already ordered, oldest first — `diagLines()`,
+    /// diag.ts:49-61. The ring is 2000 lines and Rust owns it.
+    in property <[string]> lines;
+
+    property <length> pad: Metrics.s(10);
+    property <length> line-font: Math.max(11px, Metrics.s(12));
+    /// The TSX's `lineHeight: 17`, floored at the font's own line box (hhea
+    /// ascender 950 + descender 290 over a 1000 upem = 1.24×, the same budget
+    /// logo-search.slint uses for its captions).
+    property <length> row-h: Math.max(Metrics.s(17),
+        Math.ceil(root.line-font / 1px * 1.24) * 1px);
+    /// The empty state is ONE line in the same style (SettingsPanel.tsx:562), so
+    /// the well never collapses to its padding.
+    property <int> rows: Math.max(1, root.lines.length);
+
+    // `marginHorizontal: 10, marginTop: 2` — a Slint layout child has no margin,
+    // so it becomes this wrapper's padding, as on DiagPanel.
+    padding-left: Metrics.s(10);
+    padding-right: Metrics.s(10);
+    padding-top: Metrics.s(2);
+
+    Rectangle {
+        // A STATED height, never a measured one. `maxHeight: 240` over content
+        // that is exactly `rows × row-h` plus the padding, which is arithmetic
+        // this file can do without asking the layout for anything back.
+        height: Math.min(Metrics.s(240), 2 * root.pad + root.rows * root.row-h);
+        background: Pal.raised;
+        border-width: 1px;
+        border-color: Pal.border;
+        border-radius: Metrics.s(12);
+        // Correct on Skia; the software renderer ignores the corner when clipping,
+        // so a screenshot squares the four corners of the well. Same note as the
+        // card's own clip in overlay.slint.
+        clip: true;
+
+        // Absolutely placed, as `rail` is in presets.slint and the results grid is
+        // in logo-search.slint: a Flickable reports no size of its own, so it is
+        // given one rather than asked for one — and its layout info does not come
+        // from its viewport, which is what keeps the height above from looping.
+        //
+        // NESTED INSIDE THE BODY'S OWN Flickable, deliberately. That is the TSX's
+        // `nestedScrollEnabled` ScrollView, and it has the same consequence: a drag
+        // that starts over the log scrolls the log, not the panel.
+        Flickable {
+            x: root.pad;
+            y: root.pad;
+            width: parent.width - 2 * root.pad;
+            height: parent.height - 2 * root.pad;
+            // Vertical only. A debug line that runs off the right elides; it never
+            // drags the column sideways.
+            viewport-width: self.width;
+            viewport-height: root.rows * root.row-h;
+
+            for l[i] in root.lines: Text {
+                x: 0;
+                y: i * root.row-h;
+                width: parent.width;
+                height: root.row-h;
+                text: l;
+                font-size: root.line-font;
+                font-weight: 400;
+                color: Pal.dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if root.lines.length == 0: Text {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: root.row-h;
+                text: "No events yet — tune a station.";
+                font-size: root.line-font;
+                font-weight: 400;
+                color: Pal.dim;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+/// BAND THEMES: one row of the egg's picker.
+///
+/// SettingsPanel.tsx:628-641. Nothing else in the panel is shaped like this — no
+/// sub-line, no divider element, no radio ring; the rows are separated by their
+/// own 1dp top edge and the choice is carried by a trailing tick and a blue label.
+///
+/// Height is content-driven in the TSX (13dp of padding either side of a 16dp
+/// label, so ~46dp) and floored at 48dp here for the same §10 reason as everything
+/// else that is tapped.
+component EggRow inherits Rectangle {
+    /// The pun, not the id — "Hammer of the Gods", not "Led Zeppelin". Matching
+    /// always uses the id, which never leaves Rust (bandThemes.ts:215-221).
+    in property <string> label;
+    in property <bool> on: false;
+    /// The first row has no top edge; every row after it does.
+    in property <bool> first: false;
+
+    callback clicked();
+
+    min-height: Math.max(48px, Metrics.s(46));
+    opacity: touch.pressed ? 0.7 : 1.0;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    // `borderTopWidth: 1` on `i > 0`. A hairline, so raw 1px, and placed the way
+    // OverlayHeader places its own rule rather than being a border on the row (a
+    // real border would inset the row's content by a pixel on one side only).
+    if !root.first: Rectangle {
+        y: 0;
+        height: 1px;
+        background: Pal.border;
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(16);
+        padding-right: Metrics.s(16);
+        padding-top: Metrics.s(13);
+        padding-bottom: Metrics.s(13);
+        spacing: Metrics.s(12);
+
+        Text {
+            text: root.label;
+            horizontal-stretch: 1;
+            font-size: Math.max(12px, Metrics.s(16));
+            font-weight: 700;
+            color: root.on ? Pal.blue : Pal.text;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        if root.on: VerticalLayout {
+            horizontal-stretch: 0;
+            alignment: center;
+
+            CheckMark {
+                size: Math.max(12px, Metrics.s(16));
+                color: Pal.blue;
             }
         }
     }
@@ -985,6 +1250,14 @@ export component SettingsOverlay inherits Rectangle {
     in property <string> details-label;
     /// `diagOpen && !tunerError && !nwdActive` — three inputs, one decision, taken
     /// in Rust (SettingsPanel.tsx:369).
+    ///
+    /// AND IT DOES NOT MATCH THE BUTTON THAT DRIVES IT. The Details button appears
+    /// on `!tunerError && backend == 'rtl'` (:358); this panel opens on
+    /// `!tunerError && !nwdActive`. Select RTL-SDR in the picker while the built-in
+    /// tuner is the live source and the button is there, tappable, and opens
+    /// nothing. That is a CarFM defect and it is reproduced here on purpose — the
+    /// port is not the place to change behaviour the owner has not seen. It wants
+    /// raising with him, not fixing quietly.
     in property <bool> details-open: false;
     /// Device / USB ID / Sample rate, as finished pairs.
     in property <[TunerDetail]> tuner-details;
@@ -1014,16 +1287,56 @@ export component SettingsOverlay inherits Rectangle {
     /// True while clearing, which disables the row (SettingsPanel.tsx:494).
     in property <bool> clearing-logos: false;
 
-    // ── ADVANCED ──
-    /// Whether the section renders at all. §6.3 and the dc.html both carry it
-    /// unconditionally, so it defaults on; the shipping TSX has no such section
-    /// and no stock SDR interface to open, so a host without one turns it off.
-    in property <bool> show-advanced: true;
+    // ── DIAGNOSTICS ──
+    //
+    // THE STATE HERE IS HYDRATED, NOT PROBED. The TSX seeds all four of these from
+    // `useState(isXEnabled())` at panel MOUNT, which is app launch, while diag.ts
+    // and debugMode.ts restore their AsyncStorage values ASYNCHRONOUSLY at import —
+    // and the panel never subscribes to `subscribeDiagPrefs`, which diag.ts:100
+    // exports for exactly this and which nothing calls. A cold launch can therefore
+    // show every one of these OFF while capture is running. Rust reads the
+    // preferences synchronously before first paint, so the bug has nowhere to live;
+    // it is a deliberate divergence from the shipping app, not an oversight.
+    //
+    // The second one is worse and goes the same way: `isDiagOverlayEnabled()`
+    // returns `overlay && enabled` while its setter writes `overlay` alone
+    // (diag.ts:74-79), so the row's shown state and its stored state use different
+    // rules. One value, one rule, held in Rust.
+    in property <bool> diag-on: false;
+    in property <bool> diag-overlay-on: false;
+    in property <bool> rds-capture-on: false;
+    in property <bool> debug-on: false;
+    /// The ring, oldest first, each line already `HH:MM:SS␣␣text`. Only read while
+    /// `diag-on` — the TSX renders the log inside the same conditional.
+    in property <[string]> diag-lines;
+    /// Which action rows exist, in order, with their rules. Rust's decision; see
+    /// DiagAction.
+    in property <[DiagAction]> diag-actions;
 
     /// One finished string: "CarFM  ·  v0.9.2  ·  FCC station data as of 2026-06-14",
     /// with the double spaces around each interpunct and the '—' fallback when
     /// there is no snapshot date (SettingsPanel.tsx:314). Never assembled here.
+    ///
+    /// The product name and the version are the HOST's: src/demo.rs currently hands
+    /// in "Carnyx  ·  v0.1.0  ·  …" against the TSX's "CarFM  ·  v0.9.2  ·  …".
+    /// Whichever wins, the load-bearing part is the shape — two spaces either side
+    /// of each U+00B7 — and that belongs in a byte-exact Rust test, not here.
     in property <string> about;
+
+    // ── BAND THEMES (the egg) ──
+    /// Six taps on the about line. The COUNTER lives in Rust; this file only
+    /// reports taps and draws what it is told. It never resets and it is not
+    /// persisted, so the section stays for the life of the process and is gone on
+    /// the next launch — the shipping behaviour (SettingsPanel.tsx:88-89).
+    in property <bool> show-band-themes: false;
+    /// ["Off (auto-detect)", "Powerage", "The Walrus was Paul", "Hammer of the
+    /// Gods", "Smells Like Gen X", "Now I’m Nothing"] — the puns, in registry
+    /// order, with the "off" head in front (bandThemes.ts:215-221 via
+    /// SettingsPanel.tsx:628). The ids they map to never reach this file.
+    in property <[string]> egg-labels;
+    /// Index of the ticked row, 0 being "Off (auto-detect)". An index rather than a
+    /// label because the labels are puns and two could one day rhyme.
+    in property <int> egg-index: 0;
 
     // ── What the user can do ──
     callback retry-tuner();
@@ -1039,8 +1352,32 @@ export component SettingsOverlay inherits Rectangle {
     callback set-logos(bool);
     /// Opens the host's confirm dialog; the wipe, the pluralised result alert and
     /// the busy flag are all Rust's.
+    ///
+    /// DESTRUCTIVE, AND THE CONFIRM DOES NOT EXIST YET. SettingsPanel.tsx:261-287
+    /// puts an "Clear all logos?" Alert in front of this, with a Cancel and a
+    /// destructive "Clear all"; wiping every assigned logo, every dark variant and
+    /// every per-station call/frequency choice on ONE tap with no undo is not the
+    /// shipping behaviour. Until that dialog exists, this callback must not do the
+    /// work.
     callback clear-logos();
-    callback open-advanced();
+    /// The NEW value of each DIAGNOSTICS switch. Four callbacks and not one with a
+    /// key, because the side effects differ: turning capture on appends a marker
+    /// line, the raw-RDS one pushes a flag to the native pump, and reception
+    /// testing implies capture (SettingsPanel.tsx:107-114).
+    callback set-diag(bool);
+    callback set-diag-overlay(bool);
+    callback set-rds-capture(bool);
+    callback set-debug(bool);
+    /// The index into `diag-actions`. Every one of these crosses the framework
+    /// edge — a native file write, a vendor-service probe, a read-only root
+    /// recon — and none of it is decided or described here.
+    callback pick-diag-action(int);
+    /// One tap on the about line. Rust counts them and flips `show-band-themes` at
+    /// six.
+    callback tap-about();
+    /// The index into `egg-labels`; 0 is "off (auto-detect)". Picking FORCES that
+    /// theme regardless of what is playing (bandThemes.ts:196-197).
+    callback pick-egg(int);
     /// The ✕ and the Android back button. NOT the scrim — see below.
     callback close();
 
@@ -1252,19 +1589,71 @@ export component SettingsOverlay inherits Rectangle {
                 }
             }
 
-            // ── ADVANCED ──
+            // ── DIAGNOSTICS ──
             //
-            // Wrapped so the label and the group come and go together as ONE
-            // conditional child of the body's column.
-            if root.show-advanced: VerticalLayout {
-                SectionLabel { label: "ADVANCED"; }
-                GroupCard {
-                    pad: Metrics.s(card.narrow ? 8 : 10);
+            // WHERE THE ADVANCED GROUP USED TO BE, and nothing about the two is
+            // related. This is the head unit's stand-in for `adb logcat`: the unit
+            // is not networked to a dev machine, so every event a developer would
+            // read in a terminal has to be readable from the driver's seat instead
+            // (diag.ts's own header). SettingsPanel.tsx:504-613.
+            //
+            // The whole section is ONE GroupCard with no dividers between the four
+            // switches and none around the log. The rules only appear between the
+            // action rows at the foot, and Rust places those.
+            SectionLabel { label: "DIAGNOSTICS"; }
+            GroupCard {
+                pad: Metrics.s(card.narrow ? 8 : 10);
 
-                    ChevronRow {
-                        label: "Advanced SDR view";
-                        sub: "Opens the stock SDR interface (waterfall, gain, raw controls)";
-                        clicked => { root.open-advanced(); }
+                SwitchRow {
+                    title: "Tuner log";
+                    sub: "Capture tuner events — connect, signal (arg), RDS/RadioText, stereo, audio — for troubleshooting on the head unit.";
+                    on: root.diag-on;
+                    toggled(v) => { root.set-diag(v); }
+                }
+
+                // Everything below the master switch is nested under it, exactly as
+                // the TSX nests it: the three switches show nothing useful without
+                // capture, and the log shows nothing at all.
+                if root.diag-on: VerticalLayout {
+                    // The log is worth capturing on every drive; the on-face tail
+                    // only when watching for something specific — an unnamed panel
+                    // key, the headlights, a dropout.
+                    SwitchRow {
+                        title: "Show the log on the radio";
+                        sub: "Mirror the last few events onto the face itself, so you can see them as they happen. Unexplained events are highlighted.";
+                        on: root.diag-overlay-on;
+                        toggled(v) => { root.set-diag-overlay(v); }
+                    }
+
+                    // Raw INPUT, where the two above record decoded output. Its
+                    // value is that the decoders can be replayed against real air
+                    // afterwards; it writes continuously, which is why the copy says
+                    // to turn it off again.
+                    SwitchRow {
+                        title: "Raw RDS capture";
+                        sub: "Write every raw RDS group to a file for later analysis. Built-in tuner only. Leave off unless a drive is being recorded — it writes continuously.";
+                        on: root.rds-capture-on;
+                        toggled(v) => { root.set-rds-capture(v); }
+                    }
+
+                    SwitchRow {
+                        title: "Reception testing mode";
+                        sub: "Records signal level, position and RDS health every 15 seconds, and puts four audio-quality buttons on the radio. Quiets the routine RDS chatter. Each reading commands the tuner.";
+                        on: root.debug-on;
+                        toggled(v) => { root.set-debug(v); }
+                    }
+
+                    DiagLog { lines: root.diag-lines; }
+
+                    // No rule between the log and the first action — the TSX runs
+                    // them together (:564-568) and only starts dividing at the
+                    // conditional rows below. Each row carries its own.
+                    for a[i] in root.diag-actions: VerticalLayout {
+                        if a.divider-above: RowDivider { }
+                        ChevronRow {
+                            label: a.label;
+                            clicked => { root.pick-diag-action(i); }
+                        }
                     }
                 }
             }
@@ -1276,26 +1665,72 @@ export component SettingsOverlay inherits Rectangle {
             // inside the ScrollView, which is why this overlay has no OverlayFooter.
             // dc.html `aboutStyle`:294 `padding:'20px 0 4px'`.
             //
-            // (SettingsPanel.tsx also makes this line a six-tap target that reveals
-            // a hidden band-theme group. That is in neither §6.3 nor the dc.html, so
-            // it is not built here.)
-            VerticalLayout {
-                padding-top: Metrics.s(20);
-                padding-bottom: Metrics.s(4);
+            // AND IT IS A TAP TARGET. SettingsPanel.tsx:617 wraps it in a Pressable
+            // that counts taps; at six the BAND THEMES group below appears. No
+            // pressed state, no ripple, no hint — the TSX gives it none, and an egg
+            // that advertises itself is not one. The Rectangle is what carries the
+            // TouchArea; declared before the column so the text draws over it, which
+            // is OverlayCard's own idiom.
+            Rectangle {
+                TouchArea {
+                    clicked => { root.tap-about(); }
+                }
 
-                Text {
-                    text: root.about;
-                    horizontal-alignment: center;
-                    font-size: Math.max(12px, Metrics.s(13));
-                    font-weight: 400;
-                    // Sub-pixel, so raw.
-                    letter-spacing: 0.3px;
-                    // SettingsPanel.tsx:713 hard-codes '#888' in the stylesheet and
-                    // then overrides it inline with pal.dim at :618. The inline
-                    // wins, so the effective colour is the dc.html's t.dim; the
-                    // '#888' is dead and is not ported.
-                    color: Pal.dim;
-                    wrap: word-wrap;
+                VerticalLayout {
+                    padding-top: Metrics.s(20);
+                    padding-bottom: Metrics.s(4);
+
+                    Text {
+                        text: root.about;
+                        horizontal-alignment: center;
+                        font-size: Math.max(12px, Metrics.s(13));
+                        font-weight: 400;
+                        // Sub-pixel, so raw.
+                        letter-spacing: 0.3px;
+                        // SettingsPanel.tsx:713 hard-codes '#888' in the stylesheet
+                        // and then overrides it inline with pal.dim at :618. The
+                        // inline wins, so the effective colour is the dc.html's
+                        // t.dim; the '#888' is dead and is not ported.
+                        color: Pal.dim;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // ── BAND THEMES (the egg) ──
+            //
+            // Wrapped so the label and the group come and go together as ONE
+            // conditional child of the body's column — the shape the ADVANCED block
+            // used, reused for the thing that replaced it.
+            //
+            // The 14dp here is ON TOP OF the SectionLabel's own 14 (the TSX's
+            // `marginTop: 14` at :625 wrapping a SectionLabel that already carries
+            // one), which is what sets this section further off the about line than
+            // any two groups are from each other.
+            if root.show-band-themes: VerticalLayout {
+                padding-top: Metrics.s(14);
+
+                SectionLabel { label: "BAND THEMES"; }
+
+                // NOT the standard plate: Pal.raised, a 14dp corner and no inner
+                // padding, so the rows run edge to edge and their own top edges do
+                // the dividing (SettingsPanel.tsx:627).
+                GroupCard {
+                    plate: Pal.raised;
+                    corner: Metrics.s(14);
+                    pad: 0px;
+                    clip: true;
+
+                    // `m`, not `label` — an unqualified name on the right of a
+                    // binding resolves against the element's OWN properties first,
+                    // so `label: label` on a component that has a `label` would be
+                    // a self-reference, not a read of the loop variable.
+                    for m[i] in root.egg-labels: EggRow {
+                        label: m;
+                        on: i == root.egg-index;
+                        first: i == 0;
+                        clicked => { root.pick-egg(i); }
+                    }
                 }
             }
         }

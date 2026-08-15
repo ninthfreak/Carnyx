@@ -19,12 +19,58 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 slint = "1.17"
+# The bundled FCC station table (`assets/db/stations.sqlite`, 20,733 rows) is a
+# SQLite file, so something has to read SQLite.
+#
+# `bundled` compiles the amalgamation from source with `cc` rather than linking
+# the platform's, and that is not a preference: Android's /system/lib/libsqlite.so
+# is not an NDK public library and the linker namespace has rejected it since API
+# 24, so on the head unit there is nothing to link against. Building it also pins
+# the version, which is worth something for a file this app only ever reads.
+#
+# THE ARMV7 COMPILE OF THIS ONE C LIBRARY IS UNVERIFIED, because there is no NDK
+# in the container it was written in and dl.google.com is refused by the proxy, so
+# none could be fetched. What was actually established, rather than assumed:
+#
+#   * rusqlite 0.37 and libsqlite3-sys 0.35 — the Rust half — `cargo check` clean
+#     for armv7-linux-androideabi with the C build satisfied out of band.
+#   * the amalgamation compiles for the host, and all 38 tests in src/stations.rs
+#     run against the real 20,733-row file through it.
+#   * with CC set, the build gets as far as compiling sqlite3.c for
+#     armv7a-linux-androideabi26 and stops only on the sysroot, which is the one
+#     thing an NDK supplies. That is the whole of what is left unknown.
+#
+# BARE `cargo check --target armv7-linux-androideabi` WILL FAIL EVEN WITH AN NDK
+# INSTALLED, and the README recommends that command, so: cc-rs falls back to a
+# tool named `arm-linux-androideabi-clang`, which NDK r23 removed. `cargo apk`
+# does not hit this — it exports CC_/CFLAGS_ for the triple itself
+# (ndk-build-0.10.0 src/cargo.rs:58-59) — but a plain cargo invocation needs them:
+#
+#   export CC_armv7_linux_androideabi="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+#   export CFLAGS_armv7_linux_androideabi="--target=armv7a-linux-androideabi26"
+#
+# If it still fails there, the fallback is baking the table into a flat array in
+# `build.rs` (~780 KB, no C anywhere) — a design change, to be taken as one rather
+# than worked around.
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [build-dependencies]
 slint-build = "1.17"
+# javac and d8, for the Java half of the NWD tuner. `build.rs` imports it at the
+# top rather than behind a cfg — the Android-only work is gated inside `main` —
+# so it is a build dependency of every target, the host included. It costs
+# nothing there: the two types are only constructed on the Android branch.
+#
+# This is the crate Slint's own Android backend dexes with; see build.rs's header
+# for why a build script compiles Java at all.
+android-build = "0.1.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.17", features = ["backend-android-activity-06"] }
+# The binder edge. 0.22 is not a free choice: Slint's Android backend already
+# depends on it, so any other major would put a SECOND jni crate in the tree and
+# its `Env` would not be the same type as the one Slint hands out.
+jni = "0.22"
 
 # Screenshots. There is no desktop app, but the face still has to be LOOKED at
 # without a car: `cargo run --example shot` renders every layout track headless
@@ -64,6 +110,22 @@ build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
 # `split` rather than `strip`: same APK, but objcopy also writes the symbols
 # beside it as a .dwarf, so a native crash can still be symbolicated later.
 strip = "split"
+# Ships `assets/` into the APK. cargo-apk resolves this against the crate
+# directory and hands it to `aapt package -A <dir>` (cargo-apk-0.10.0
+# src/apk.rs:186-190, ndk-build-0.10.0 src/apk.rs:95-96), so
+# `assets/db/stations.sqlite` arrives at the APK path `db/stations.sqlite`.
+#
+# MUST STAY ABOVE the `[package.metadata.android.*]` sub-tables below: in TOML a
+# bare key after a table header belongs to that table, and cargo-apk's metadata
+# struct does not reject unknown keys, so misplacing it would silently ship an
+# APK with no database in it.
+#
+# The extraction on the other end is `stations::install`, and it exists because
+# cargo-apk ties `disable_aapt_compression` to the build profile (src/apk.rs:214):
+# a debug APK stores this file, a release APK DEFLATES it, and a deflated asset
+# has no file descriptor to hand SQLite. Copying it out once sidesteps a bug that
+# would otherwise appear only in release.
+assets = "assets"
 
 [package.metadata.android.sdk]
 # 26 is NOT a preference, it is skia-bindings' floor. That crate hardcodes API
@@ -82,6 +144,19 @@ strip = "split"
 # FemtoVG, which carries no such floor — see the README.
 min_sdk_version = 26
 target_sdk_version = 34
+
+# PACKAGE VISIBILITY, and it is load-bearing rather than defensive. From
+# targetSdk 30 onwards a package cannot see another package it has not declared,
+# and the filtering is SILENT: `resolveService` returns null and `bindService`
+# returns false on a unit that plainly has the vendor radio installed, so the
+# tuner would report itself absent on the one device this app is for.
+#
+# Verified rather than assumed, because `ndk_build::manifest::AndroidManifest`
+# has no `deny_unknown_fields` and would drop a wrong key without a word: this
+# stanza was deserialized through that struct and serialized back out, and it
+# emits `<queries><package android:name="com.nwd.radio.service"/></queries>`.
+[[package.metadata.android.queries.package]]
+name = "com.nwd.radio.service"
 
 [package.metadata.android.application]
 label = "Carnyx"

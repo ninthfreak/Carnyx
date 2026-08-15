@@ -4,13 +4,14 @@ import { Face } from "face.slint";
 import { Numpad } from "numpad.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn } from "nearby.slint";
 import {
-    SettingsOverlay, TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState
+    SettingsOverlay, TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState,
+    DiagAction
 } from "settings.slint";
 import { LogoSearchOverlay, LogoSearchState, LogoCandidate } from "logo-search.slint";
 
 export { Pal, Metrics, Preset, Overlay }
 export { NearbyState, NearbyStation, GenreColumn }
-export { TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState }
+export { TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState, DiagAction }
 export { LogoSearchState, LogoCandidate }
 
 export component AppWindow inherits Window {
@@ -118,8 +119,20 @@ export component AppWindow inherits Window {
     in property <string> settings-logos-sub;
     in property <string> settings-clear-logos-label;
     in property <bool> settings-clearing-logos: false;
-    in property <bool> settings-show-advanced: true;
+    // DIAGNOSTICS. The section the design bundle does not document and the
+    // shipping SettingsPanel.tsx does; four switches, a log ring and a list of
+    // action rows whose membership and dividers Rust decides.
+    in property <bool> settings-diag-on: false;
+    in property <bool> settings-diag-overlay-on: false;
+    in property <bool> settings-rds-capture-on: false;
+    in property <bool> settings-debug-on: false;
+    in property <[string]> settings-diag-lines;
+    in property <[DiagAction]> settings-diag-actions;
     in property <string> settings-about;
+    // The BAND THEMES egg: six taps on the about line. The counter is Rust's.
+    in property <bool> settings-show-band-themes: false;
+    in property <[string]> settings-egg-labels;
+    in property <int> settings-egg-index: 0;
     callback settings-retry-tuner();
     callback settings-toggle-details();
     callback settings-pick-source(int);
@@ -128,7 +141,13 @@ export component AppWindow inherits Window {
     callback settings-fix-battery();
     callback settings-set-logos(bool);
     callback settings-clear-logos();
-    callback settings-open-advanced();
+    callback settings-set-diag(bool);
+    callback settings-set-diag-overlay(bool);
+    callback settings-set-rds-capture(bool);
+    callback settings-set-debug(bool);
+    callback settings-pick-diag-action(int);
+    callback settings-tap-about();
+    callback settings-pick-egg(int);
 
     // §6.4 logo search.
     in property <string> logo-search-name;
@@ -278,8 +297,16 @@ export component AppWindow inherits Window {
         logos-sub: root.settings-logos-sub;
         clear-logos-label: root.settings-clear-logos-label;
         clearing-logos: root.settings-clearing-logos;
-        show-advanced: root.settings-show-advanced;
+        diag-on: root.settings-diag-on;
+        diag-overlay-on: root.settings-diag-overlay-on;
+        rds-capture-on: root.settings-rds-capture-on;
+        debug-on: root.settings-debug-on;
+        diag-lines: root.settings-diag-lines;
+        diag-actions: root.settings-diag-actions;
         about: root.settings-about;
+        show-band-themes: root.settings-show-band-themes;
+        egg-labels: root.settings-egg-labels;
+        egg-index: root.settings-egg-index;
         retry-tuner => { root.settings-retry-tuner(); }
         toggle-details => { root.settings-toggle-details(); }
         pick-source(i) => { root.settings-pick-source(i); }
@@ -288,7 +315,13 @@ export component AppWindow inherits Window {
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }
         clear-logos => { root.settings-clear-logos(); }
-        open-advanced => { root.settings-open-advanced(); }
+        set-diag(v) => { root.settings-set-diag(v); }
+        set-diag-overlay(v) => { root.settings-set-diag-overlay(v); }
+        set-rds-capture(v) => { root.settings-set-rds-capture(v); }
+        set-debug(v) => { root.settings-set-debug(v); }
+        pick-diag-action(i) => { root.settings-pick-diag-action(i); }
+        tap-about => { root.settings-tap-about(); }
+        pick-egg(i) => { root.settings-pick-egg(i); }
         close => { root.dismiss(); }
     }
 
