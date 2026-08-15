@@ -126,11 +126,27 @@ head unit is 32-bit, that is not avoidable by dropping the ABI: **every build fo
 this device compiles Skia from source.** The published `skia-bindings` crate is
 2.3 MB and contains no Skia tree, so the build fetches one.
 
-**Install the source-build tools first**, or the build gets as far as generating
-the ninja files and then dies:
+**Install the source-build tools first.** Both of these fail LATE — `ninja` after
+GN has generated, `libclang` after the entire Skia tree has compiled — so a
+missing one costs the whole build before it says anything:
 
 ```sh
-sudo apt install ninja-build      # Debian/Ubuntu/Pop!_OS; the binary is `ninja`
+sudo apt install ninja-build libclang-dev   # Debian/Ubuntu/Pop!_OS
+```
+
+`ninja` builds Skia. `libclang` is what bindgen loads to read Skia's headers, and
+without it the build script panics at the very last step:
+
+```
+Unable to find libclang: "couldn't find any valid shared libraries matching:
+['libclang.so', ...], set the `LIBCLANG_PATH` environment variable"
+```
+
+The NDK ships its own copy if you would rather not install the distro package:
+
+```sh
+export LIBCLANG_PATH=$(dirname "$(find "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64" \
+  -name 'libclang.so*' | head -1)")
 ```
 
 `git` and `python3` are needed too, and are usually already there — skia-bindings
@@ -138,6 +154,14 @@ probes for `python`/`python3` and syncs the Skia tree with git before it builds.
 `gn` comes with that sync; only `ninja` has to be on PATH yourself.
 `SKIA_NINJA_COMMAND` and `SKIA_GN_COMMAND` override both if they live somewhere
 unusual.
+
+**Changing `min_sdk_version` throws the Skia build away.** cargo-apk turns it into
+`RUSTFLAGS=-Clink-arg=--target=armv7a-linux-androideabi<n>`, and RUSTFLAGS is part
+of the fingerprint cargo hashes into the build directory name — so the whole
+`skia-bindings-<hash>/out/skia` tree is a different directory and all 1158 targets
+compile again. Environment variables that are not RUSTFLAGS (`LIBCLANG_PATH`,
+`ANDROID_NDK`) do not have this effect; ninja finds its output up to date and only
+the last steps re-run.
 
 Skia is resolved **per ABI**, so building both means two answers: armv7 has no
 prebuilt and compiles from source, and arm64 may or may not — the curl above,
