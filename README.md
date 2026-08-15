@@ -180,6 +180,16 @@ tree is compiled `-O0`. It installs and it draws, which makes it a fine smoke
 test, but **anything it suggests about frame rate is meaningless**. Judge
 performance on a release build or not at all.
 
+That said, the first on-device run was a `-O0` debug build and it performed well
+— no stutter on anything the face draws. Since that is the pessimistic case by a
+wide margin, CPU cost is not a live concern for this design on this hardware. It
+is worth re-checking once the overlays land, because they add scrolling lists and
+a 2x2 image grid, which is different work from a static face.
+
+Placement was within single-digit pixels of right at the real panel size, which
+is close enough to leave until the tuner is in. Nothing about the layout tracks
+or the scale factor needs revisiting.
+
 Release needs the keystore, and fails loudly without it rather than falling back
 to the debug key — `cargo-apk` returns `MissingReleaseKey` unless both
 `CARGO_APK_RELEASE_KEYSTORE` and `CARGO_APK_RELEASE_KEYSTORE_PASSWORD` are set
