@@ -56,6 +56,14 @@ package = "com.ninthfreak.carnyx"
 # skia-bindings has no prebuilt binary for armv7-linux-androideabi at 0.99 — the
 # download 404s and Skia is compiled from source. See the README.
 build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
+# cargo-apk's default is StripConfig::Default, which copies the .so into the APK
+# verbatim — debug symbols and all. Skia is compiled with `-g -gdwarf-2` and
+# statically linked into our single library, so "and all" means the DWARF for
+# 1158 Skia translation units. That is most of the 225 MB a debug APK weighs.
+#
+# `split` rather than `strip`: same APK, but objcopy also writes the symbols
+# beside it as a .dwarf, so a native crash can still be symbolicated later.
+strip = "split"
 
 [package.metadata.android.sdk]
 # 26 is NOT a preference, it is skia-bindings' floor. That crate hardcodes API
