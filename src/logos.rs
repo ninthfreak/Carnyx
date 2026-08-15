@@ -516,12 +516,14 @@ pub mod query {
         }
     }
 
-    fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-        if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
-            Some(&s[prefix.len()..])
-        } else {
-            None
-        }
+    /// `str::get` rather than `s[..n]`, and the difference is a crash. A length
+    /// check is NOT a char-boundary check: slicing a `&str` at a byte offset that
+    /// lands inside a multi-byte character panics. These strings come off the
+    /// network, so the input is not ours to trust, and a panic here is a panic on
+    /// a dashboard. `get` returns None on a bad boundary instead.
+    pub(super) fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+        let head = s.get(..prefix.len())?;
+        head.eq_ignore_ascii_case(prefix).then(|| &s[prefix.len()..])
     }
 
     /// The two URLs the DuckDuckGo flow needs, built once so the network edge
@@ -689,10 +691,12 @@ pub mod ddg {
             .collect()
     }
 
-    fn is_http(s: &str) -> bool {
-        let b = s.as_bytes();
-        (b.len() >= 7 && s[..7].eq_ignore_ascii_case("http://"))
-            || (b.len() >= 8 && s[..8].eq_ignore_ascii_case("https://"))
+    /// Same char-boundary hazard as `strip_prefix_ci`: the old form guarded the
+    /// LENGTH and then sliced, which panics when byte 7 or 8 falls inside a
+    /// multi-byte character.
+    pub(super) fn is_http(s: &str) -> bool {
+        s.get(..7).is_some_and(|h| h.eq_ignore_ascii_case("http://"))
+            || s.get(..8).is_some_and(|h| h.eq_ignore_ascii_case("https://"))
     }
 }
 
@@ -4466,6 +4470,30 @@ mod tests {
         assert_eq!(
             ddg::parse_vqd("vqd=&more &vqd=4-77").as_deref(),
             Some("4-77")
+        );
+    }
+
+    /// These two used to slice `&str` at a fixed byte offset behind a LENGTH
+    /// guard, which is not a char-boundary guard. Every string below puts a
+    /// multi-byte character across the offset that was being sliced, so each one
+    /// panicked before the fix. They are all reachable: the input is a URL out of
+    /// a search response, and nothing upstream promises it is ASCII.
+    #[test]
+    fn url_prefix_tests_survive_multibyte_input() {
+        // 'é' is two bytes, so byte 7 and byte 8 land mid-character.
+        assert!(!ddg::is_http("héllo://x"));
+        assert!(!ddg::is_http("httpé"));
+        assert!(!ddg::is_http("——————"));
+        assert!(!ddg::is_http(""));
+        // Still recognises the real thing.
+        assert!(ddg::is_http("http://a.example"));
+        assert!(ddg::is_http("HTTPS://a.example"));
+        // And the prefix stripper, whose offset is the caller's prefix length.
+        assert_eq!(query::strip_prefix_ci("wwé.example", "www."), None);
+        assert_eq!(query::strip_prefix_ci("é", "www."), None);
+        assert_eq!(
+            query::strip_prefix_ci("WWW.example", "www."),
+            Some("example")
         );
     }
 
