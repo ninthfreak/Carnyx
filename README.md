@@ -163,13 +163,34 @@ compile again. Environment variables that are not RUSTFLAGS (`LIBCLANG_PATH`,
 `ANDROID_NDK`) do not have this effect; ninja finds its output up to date and only
 the last steps re-run.
 
-Skia is resolved **per ABI**, so building both means two answers: armv7 has no
-prebuilt and compiles from source, and arm64 may or may not — the curl above,
-with the triple swapped, says which. Both are cached in `target/` afterwards.
+Skia is resolved **per ABI**, and neither of ours downloads: both the armv7 and
+the aarch64 prebuilt URLs 404 at 0.99.0 (checked). **A full both-ABI build is two
+Skia builds from source**, roughly an hour each, and both are cached in `target/`
+afterwards.
 
 `--target armv7-linux-androideabi` narrows a build to the one ABI the unit runs.
 That is for iterating when a full build is in the way, not for anything that
 leaves the machine: what goes on the flash drive should have both.
+
+### Debug APKs are not representative
+
+A debug APK is around **225 MB per ABI**, and the reason is not just symbols:
+cargo passes `OPT_LEVEL=0` through to Skia's `extra_cflags`, so the entire Skia
+tree is compiled `-O0`. It installs and it draws, which makes it a fine smoke
+test, but **anything it suggests about frame rate is meaningless**. Judge
+performance on a release build or not at all.
+
+Release needs the keystore, and fails loudly without it rather than falling back
+to the debug key — `cargo-apk` returns `MissingReleaseKey` unless both
+`CARGO_APK_RELEASE_KEYSTORE` and `CARGO_APK_RELEASE_KEYSTORE_PASSWORD` are set
+(`cargo-apk/src/apk.rs:272-300`). The debug-key fallback exists only for the
+`dev` profile.
+
+```sh
+export CARGO_APK_RELEASE_KEYSTORE=~/keys/carnyx-release.keystore
+export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=...
+cargo apk build --lib --release        # -> target/release/apk/carnyx.apk
+```
 
 **skia-bindings 0.99 does not build against a recent NDK.** Skia's own toolchain
 picks a VERSIONED compiler wrapper — `armv7a-linux-androideabi26-clang++`, which
