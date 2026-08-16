@@ -158,6 +158,32 @@ target_sdk_version = 34
 [[package.metadata.android.queries.package]]
 name = "com.nwd.radio.service"
 
+# LOCATION. The nearby-station picker sorts by distance and the face carries a
+# satellite glyph, and neither can be honest without a fix — today both run on
+# `fake::FakeLocation`, which is pinned to Madison.
+#
+# Both permissions, matching CarFM (android/app/src/main/AndroidManifest.xml:2-3).
+# COARSE alone would do for a picker sorted in kilometres, but FINE is what makes
+# the in-motion glyph meaningful, and a head unit that has a GPS antenna at all
+# will grant it.
+#
+# Checked the same way the `queries` stanza was, because the same silence
+# applies: `ndk_build::manifest::AndroidManifest` declares
+# `uses_permission: Vec<Permission>` with a `name` field renamed to
+# `android:name` on serialize, and the struct is `#[serde(flatten)]`-ed into
+# cargo-apk's metadata, so these reach the generated manifest.
+#
+# DECLARING IS NOT GRANTING. From API 23 these are runtime permissions, and a
+# request needs an Activity and someone to tap Allow — which on a dashboard, at
+# night, in a car, is nobody. The location code must therefore treat "denied"
+# and "never answered" as ordinary states that leave the fake in place, not as
+# errors.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_COARSE_LOCATION"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_FINE_LOCATION"
+
 [package.metadata.android.application]
 label = "Carnyx"
 # The face is the whole screen; the head unit has no use for a title bar.
