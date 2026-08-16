@@ -238,6 +238,14 @@ struct State {
     audio: bool,
     stereo: Option<bool>,
     location: fake::FakeLocation,
+    /// What a panel key asked for, applied after the drain.
+    ///
+    /// DEFERRED, because `apply_event` holds a mutable borrow of this struct and
+    /// every one of these actions retunes — which borrows it again and panics.
+    /// The queue is drained to nothing first, then the last request is honoured:
+    /// a driver leaning on the wheel button wants to end up one station along
+    /// from where they started, not to replay every intermediate step.
+    panel_action: Option<PanelAction>,
     /// Set by a Position event, cleared by the drain. The picker rebuild and the
     /// hero republish are done ONCE per drain rather than once per fix: a moving
     /// car produces a fix a second, and each one would otherwise re-run a
@@ -293,6 +301,22 @@ impl State {
     }
 }
 
+/// What a press on the head unit's own panel means to this app.
+///
+/// The vendor MCU broadcasts `com.nwd.action.ACTION_KEY_VALUE` and the press
+/// never enters Android's input pipeline, so nothing reaches the window: these
+/// arrive as tuner events and have to be turned into commands here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelAction {
+    /// Step OUR preset strip. CarFM runs the same animated step the on-screen
+    /// arrows do rather than a silent jump, so the wheel and the face behave
+    /// identically — and the hardware bank the service just stepped is not the
+    /// strip the driver can see.
+    Step(i32),
+    /// Hand the seek to the tuner and take whatever dial it settles on.
+    Seek(bool),
+}
+
 /// The whole application. One owner of one `AppWindow`, on one thread.
 pub struct App {
     ui: slint::Weak<AppWindow>,
@@ -302,6 +326,14 @@ pub struct App {
 /// The FM band, and the only band this app tunes.
 const FM_LO: f32 = 87.5;
 const FM_HI: f32 = 108.0;
+
+/// How often to re-read the signal level while connected.
+///
+/// The Java bridge floors this at 5s (`NwdBridge.LEVEL_MIN_INTERVAL_MS`) because
+/// every tick commands the tuner, and the vendor rate-limits its own comparable
+/// read to 900ms. Asking for less than the floor just gets clamped, so the floor
+/// is what is asked for.
+const LEVEL_WATCH_MS: i64 = 5_000;
 
 impl App {
     /// Build the application against a station database at `db_path`.
@@ -458,6 +490,7 @@ impl App {
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
+                panel_action: None,
                 callsigns,
                 store,
                 codec,
@@ -472,6 +505,11 @@ impl App {
 
         CURRENT.with(|c| *c.borrow_mut() = Some(Rc::downgrade(&app)));
         crate::android::set_event_sink(enqueue);
+        // DAY AND NIGHT BELONG TO THE VEHICLE, not to whichever tuner is
+        // selected, so this is started here and not inside `connect_tuner`.
+        // CarFM registered the receiver inside connect alone, and a session that
+        // never bound the built-in tuner stayed light all night.
+        app.state.borrow().tuner.start_illumination_watch();
         // The restored theme has to reach the palette; `Settings` alone only
         // records the choice.
         let theme = app.state.borrow().settings.theme;
@@ -533,7 +571,11 @@ impl App {
     /// Apply everything the tuner has said since the last drain.
     ///
     /// MUST RUN ON THE UI THREAD.
-    pub fn drain_events(&self) {
+    ///
+    /// Takes the `Rc` rather than a bare reference because a panel key applied
+    /// at the end of the batch retunes, and every command path needs the handle
+    /// its callbacks are registered against.
+    pub fn drain_events(self: &Rc<App>) {
         loop {
             let Some(event) = queue().pop_front() else { break };
             self.apply_event(event);
@@ -544,6 +586,13 @@ impl App {
         loop {
             let Some(event) = logo_queue().pop_front() else { break };
             self.apply_logo_event(event);
+        }
+        // The panel key, after the queue is empty and every borrow is gone. Both
+        // arms retune, and a retune drains again — which is why this is taken
+        // out of the state FIRST, so a re-entrant drain finds nothing to do and
+        // the recursion is one level deep rather than unbounded.
+        if let Some(action) = self.state.borrow_mut().panel_action.take() {
+            self.apply_panel_action(action);
         }
         // Once, after the whole batch: a position change re-runs the nearby
         // query and re-resolves the hero and the strip, and none of that is
@@ -654,6 +703,21 @@ impl App {
                 if s.audio {
                     s.tuner.set_audio_enabled(true);
                 }
+                // THE METER'S ONLY HEARTBEAT. Without this the level is read
+                // once here and once per retune, and the bars then sit frozen on
+                // a reading minutes old while the car drives out of range —
+                // which is worse than no meter, because it looks live.
+                //
+                // 5s is the Java side's own floor (`LEVEL_MIN_INTERVAL_MS`) and
+                // asking for less just gets clamped. Each tick COMMANDS the
+                // tuner, so the bridge also skips ticks where FM does not own
+                // the MCU source: it can never retune a front end that Bluetooth
+                // or Android Auto is using.
+                //
+                // Here rather than beside `connect`, for the same reason the
+                // audio claim is: `connect` returning Ok only means bindService
+                // was accepted, and this needs a live binder.
+                s.tuner.start_level_watch(LEVEL_WATCH_MS);
             }
             TunerEvent::Position { lat, lon, fix, in_motion } => {
                 let next = fake::FakeLocation { lat, lon, fix, in_motion };
@@ -685,6 +749,12 @@ impl App {
             }
             TunerEvent::Disconnected => {
                 s.settings.log.push(&stamp(), "disconnected");
+                // Nothing to command, and a watch left running against a dead
+                // binder is a thread waking every five seconds to fail.
+                s.tuner.stop_level_watch();
+                // The reading it last produced is not a reading of anything now.
+                s.level = None;
+                s.dotted = 0;
             }
             TunerEvent::Frequency(f) => {
                 if let Some(mhz) = f.mhz {
@@ -732,8 +802,14 @@ impl App {
                     s.level = Some(l.level);
                 }
             }
-            TunerEvent::PanelKey { code, .. } => {
-                s.settings.log.push(&stamp(), &format!("panel key {code}"));
+            TunerEvent::PanelKey { code, key, action } => {
+                let named = key.map_or("unknown", crate::android::PanelKey::label);
+                s.settings
+                    .log
+                    .push(&stamp(), &format!("panel key {code} ({named}) {action}"));
+                if let Some(next) = panel_action(key, &action) {
+                    s.panel_action = Some(next);
+                }
             }
             TunerEvent::Illumination { ui_mode, .. } => {
                 s.settings.log.push(&stamp(), &format!("illumination {ui_mode}"));
@@ -778,7 +854,7 @@ impl App {
     }
 
     /// One level reading, through the tuner's own path.
-    fn read_level(&self) {
+    fn read_level(self: &Rc<App>) {
         self.state.borrow().tuner.read_level_now();
         self.drain_events();
     }
@@ -1222,31 +1298,7 @@ impl App {
             }
         });
         on!(on_step_preset, |app, dir| {
-            let next = {
-                let s = app.state.borrow();
-                let n = s.presets.len() as i32;
-                if n == 0 {
-                    return;
-                }
-                let active = s.active();
-                if active < 0 {
-                    if dir > 0 { 0 } else { n - 1 }
-                } else {
-                    (active + dir).rem_euclid(n)
-                }
-            };
-            let mhz = app.state.borrow().presets[next as usize].mhz;
-            // ARM THE MORPH BEFORE THE TUNE, and the order is the whole trick.
-            // This is a FLIP: the hero is put back where the incoming station
-            // came from and then travels to where it now belongs, so the cards
-            // must already HOLD the new stations when the animation starts.
-            // `tune` republishes them synchronously, and `HeroRow` waits one
-            // frame past the nonce before releasing the morph — which is the
-            // slack CarFM buys with `requestAnimationFrame`, and which it names
-            // as the fix for "the card slides in and becomes a different
-            // station".
-            app.step_morph(dir);
-            app.tune(mhz);
+            app.step_preset(dir);
         });
         on!(on_toggle_save, |app| {
             app.toggle_save();
@@ -1553,6 +1605,57 @@ impl App {
         self.state.borrow_mut().location = location;
         self.refresh_nearby();
         self.push_hero();
+    }
+
+    /// Carry out what a panel key asked for.
+    ///
+    /// MUST NOT run inside `apply_event`: everything here retunes, and a retune
+    /// borrows the state `apply_event` is already holding.
+    fn apply_panel_action(self: &Rc<App>, action: PanelAction) {
+        match action {
+            PanelAction::Step(dir) => self.step_preset(dir),
+            PanelAction::Seek(up) => {
+                {
+                    let s = self.state.borrow();
+                    s.tuner.seek(up);
+                }
+                self.drain_events();
+                let mhz = self.state.borrow().dial;
+                self.tune(mhz);
+            }
+        }
+    }
+
+    /// One step through the preset strip, in DISPLAYED order, wrapping.
+    ///
+    /// Shared by the on-screen arrows, the peek cards and the wheel, so all
+    /// three animate identically — CarFM makes the same point about its
+    /// hardware step running "the SAME animated stepPreset ... not a silent
+    /// frequency jump".
+    fn step_preset(self: &Rc<App>, dir: i32) {
+        let next = {
+            let s = self.state.borrow();
+            let n = s.presets.len() as i32;
+            if n == 0 {
+                return;
+            }
+            let active = s.active();
+            if active < 0 {
+                if dir > 0 {
+                    0
+                } else {
+                    n - 1
+                }
+            } else {
+                (active + dir).rem_euclid(n)
+            }
+        };
+        let mhz = self.state.borrow().presets[next as usize].mhz;
+        // ARM THE MORPH BEFORE THE TUNE. This is a FLIP: the hero is put back
+        // where the incoming station came from and travels to where it belongs,
+        // so the cards must already hold the new stations when it starts.
+        self.step_morph(dir);
+        self.tune(mhz);
     }
 
     /// Re-resolve every preset's FCC row against the position as it now stands.
@@ -1918,6 +2021,35 @@ impl App {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/// What a panel press means, or `None` for a press this app does nothing with.
+///
+/// ONLY THE DOWN EDGE ACTS. The MCU sends the press and the release as separate
+/// broadcasts, and acting on both steps two stations for one push of the wheel.
+///
+/// A key this app has no answer for returns `None` rather than a no-op action,
+/// so a pending request from an earlier press is not silently cleared by a
+/// button that does nothing.
+fn panel_action(key: Option<crate::android::PanelKey>, action: &str) -> Option<PanelAction> {
+    use crate::android::PanelKey as K;
+    if action.eq_ignore_ascii_case("up") {
+        return None;
+    }
+    match key? {
+        // The service has ALREADY stepped its own hardware preset bank and a
+        // broadcast cannot be cancelled, so this reasserts the strip the driver
+        // can actually see.
+        K::PresetNext => Some(PanelAction::Step(1)),
+        K::PresetPrev => Some(PanelAction::Step(-1)),
+        K::SearchUp | K::SeekUp => Some(PanelAction::Seek(true)),
+        K::SearchDown | K::SeekDown => Some(PanelAction::Seek(false)),
+        // BAND, AMS and INTRO are not refused so much as absent: this app is
+        // FM-only and has no auto-store or scan-preview. The honest answer is
+        // the diagnostics line and nothing else — inventing a behaviour for a
+        // button whose meaning the driver already knows would be worse.
+        K::ChangeBand | K::ChangeFmBand | K::ChangeAmBand | K::Ams | K::Intro => None,
+    }
+}
+
 /// The FCC row on a dial: the NEAREST full-power station on that frequency, if
 /// one is close enough to be the station actually being received.
 ///
@@ -2149,6 +2281,34 @@ mod tests {
         assert_eq!(bare.name(), "87.9");
         assert_eq!(bare.call(), "87.9");
         assert_eq!(bare.base(), "");
+    }
+
+    /// The wheel and the panel buttons, which decoded to a log line and nothing
+    /// else until now: the head unit's own controls did not work.
+    #[test]
+    fn a_panel_press_becomes_an_action_and_a_release_does_not() {
+        use crate::android::PanelKey as K;
+
+        // The two that matter most on the wheel.
+        assert_eq!(panel_action(Some(K::PresetNext), "down"), Some(PanelAction::Step(1)));
+        assert_eq!(panel_action(Some(K::PresetPrev), "down"), Some(PanelAction::Step(-1)));
+        // Both search codes and both seek codes reach the same two answers.
+        assert_eq!(panel_action(Some(K::SearchUp), "down"), Some(PanelAction::Seek(true)));
+        assert_eq!(panel_action(Some(K::SeekUp), "down"), Some(PanelAction::Seek(true)));
+        assert_eq!(panel_action(Some(K::SearchDown), "down"), Some(PanelAction::Seek(false)));
+        assert_eq!(panel_action(Some(K::SeekDown), "down"), Some(PanelAction::Seek(false)));
+
+        // THE RELEASE DOES NOTHING. The MCU sends both edges, and acting on both
+        // steps two stations for one push.
+        assert_eq!(panel_action(Some(K::PresetNext), "up"), None);
+        assert_eq!(panel_action(Some(K::PresetNext), "UP"), None);
+
+        // Buttons this app has no answer for, and the unknown code 14 that
+        // arrived eight times in CarFM's drive log and is in no vendor table.
+        assert_eq!(panel_action(Some(K::Ams), "down"), None);
+        assert_eq!(panel_action(Some(K::ChangeBand), "down"), None);
+        assert_eq!(panel_action(None, "down"), None);
+        assert_eq!(K::from_code(14), None);
     }
 
     /// THE DRIVEWAY, end to end.
