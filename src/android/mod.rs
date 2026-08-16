@@ -630,6 +630,19 @@ pub trait Tuner: Send + Sync {
 /// stations to seek between.
 pub struct FakeTuner {
     inner: Mutex<FakeState>,
+    /// What `is_available` answers, and it is not decoration.
+    ///
+    /// The settings panel derives its whole status line from ONE predicate —
+    /// `Tuner::is_available` — so a fake that always says yes makes the panel
+    /// claim "Connected · Built-in hardware · NWD/NOWADA FM tuner" over a
+    /// simulation. That is a positive lie on a driver's dashboard, and it is
+    /// exactly what happened when `android::init` failed and the Android path
+    /// substituted a default `FakeTuner`.
+    ///
+    /// `new` stays available because the host and the screenshots are a
+    /// deliberate simulation of a WORKING unit; `unavailable` is for the
+    /// fallback, where the honest answer is no.
+    available: bool,
 }
 
 struct FakeState {
@@ -659,7 +672,17 @@ impl FakeTuner {
                 audio: false,
                 ill_watching: false,
             }),
+            available: true,
         }
+    }
+
+    /// The same simulation, reporting itself ABSENT.
+    ///
+    /// For the one caller that needs it: `android_main`, when `android::init`
+    /// could not give it a real tuner. The face still has something to draw
+    /// against, and the settings panel tells the truth about the radio.
+    pub fn unavailable() -> Self {
+        Self { available: false, ..Self::new() }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeState> {
@@ -712,7 +735,7 @@ impl Default for FakeTuner {
 
 impl Tuner for FakeTuner {
     fn is_available(&self) -> bool {
-        true
+        self.available
     }
 
     fn connect(&self) -> Result<(), TunerError> {
@@ -825,6 +848,27 @@ impl Tuner for FakeTuner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The settings panel derives its entire status line from this one
+    /// predicate, so a fake that always answered yes made the panel print
+    /// "Connected · Built-in hardware · NWD/NOWADA FM tuner" over a simulation
+    /// whenever `android::init` failed on a real head unit. The comment in
+    /// `android_main` asserted the opposite was happening, which is precisely
+    /// why a comment is not a test.
+    #[test]
+    fn the_fallback_fake_does_not_claim_a_tuner() {
+        assert!(
+            !FakeTuner::unavailable().is_available(),
+            "the fallback fake must report ABSENT — the status line believes it"
+        );
+        // The host and the 58 screenshots deliberately simulate a working unit.
+        assert!(FakeTuner::new().is_available());
+        // Everything else about the two is identical; only the answer changes.
+        assert_eq!(
+            FakeTuner::unavailable().snapshot(),
+            FakeTuner::new().snapshot()
+        );
+    }
 
     /// Collect events for the duration of a test.
     ///

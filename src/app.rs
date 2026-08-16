@@ -291,14 +291,32 @@ impl App {
                     .push(&at, "tuner: SIMULATED — no NWD service in this build");
             }
         }
-        let ok = self.state.borrow().tuner.connect().is_ok();
-        if ok {
-            self.drain_events();
-            // Settle the decoder against the replayed corpus so the face opens
-            // with a station rather than with eight seconds of blank hero.
-            self.pump_rds_until_settled();
-            self.read_level();
+        let outcome = self.state.borrow().tuner.connect();
+        match outcome {
+            Ok(()) => {
+                self.drain_events();
+                // Settle the decoder against the replayed corpus so the face
+                // opens with a station rather than with eight seconds of blank
+                // hero.
+                self.pump_rds_until_settled();
+                self.read_level();
+            }
+            // A SYNCHRONOUS refusal — bindService itself said no, rather than
+            // the bind being accepted and failing later, which arrives as a
+            // ConnectFailed event instead. This branch was previously an absent
+            // `else`, so a unit that refused the bind looked identical to one
+            // that was still connecting: nothing on screen, nothing in the log.
+            //
+            // Nothing swaps the tuner here. `is_available` is the one predicate
+            // the status line reads and it answers for itself, so recording the
+            // refusal is this function's whole job.
+            Err(e) => {
+                let at = stamp();
+                let mut s = self.state.borrow_mut();
+                s.settings.log.push(&at, &format!("tuner: connect refused — {e}"));
+            }
         }
+        self.push_settings();
     }
 
     /// Apply everything the tuner has said since the last drain.

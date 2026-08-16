@@ -70,12 +70,21 @@ fn android_main(android_app: slint::android::AndroidApp) {
 
     let ui = AppWindow::new().unwrap();
 
-    // The vendor radio, or an honest stand-in. A unit without the NWD service is
-    // a NORMAL state — the FYT/DuduOS units do not have it — so a failed bind
-    // must not take the process down on someone's dashboard. It falls back, and
-    // says so: `tuner_is_real` is what the settings panel's status line reads,
-    // so a failure is visible where the driver can actually see it rather than
-    // in a log this app has no way to show them.
+    // The vendor radio, or an honest stand-in.
+    //
+    // What can fail HERE is `init` — the dex load and the JNI wiring — not the
+    // bind. A unit that simply has no NWD service (the FYT/DuduOS ones) takes
+    // the Ok arm: `init` succeeds, and it is `connect` that fails later, which
+    // `NwdTuner::is_available` then reports honestly on its own.
+    //
+    // The fallback uses `unavailable()` rather than `new()` for one reason: the
+    // settings panel derives its status from `Tuner::is_available`, and the
+    // default fake answers yes. Handing it a yes-saying fake made the panel
+    // print "Connected · Built-in hardware · NWD/NOWADA FM tuner" over a
+    // simulation — a positive lie, and worse than saying nothing.
+    //
+    // Falling back at all rather than panicking is deliberate: a panic here is a
+    // dead screen on a dashboard.
     //
     // SAFETY: `vm` and `activity` came from `AndroidApp::vm_as_ptr` and
     // `activity_as_ptr` a few lines above, which is exactly what `init`
@@ -84,7 +93,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     let (tuner, tuner_is_real): (Box<dyn android::Tuner>, bool) =
         match unsafe { android::init(vm, activity) } {
             Ok(nwd) => (Box::new(nwd), true),
-            Err(_) => (Box::new(android::FakeTuner::new()), false),
+            Err(_) => (Box::new(android::FakeTuner::unavailable()), false),
         };
 
     let _driver = app::App::with_tuner(&ui, &db_path, tuner, tuner_is_real);
