@@ -154,21 +154,51 @@ struct Slot {
     mhz: f32,
     /// The FCC row this dial resolved to, if one did.
     row: Option<StationRow>,
+    /// The call sign this dial LAST resolved to, kept across launches.
+    ///
+    /// Resolution needs a position and a head unit does not always have one, so
+    /// without this a cold start with no fix showed six bare frequencies and the
+    /// logo window had no call sign to search on. See [`crate::prefs::Preset`].
+    saved_call: Option<String>,
 }
 
 impl Slot {
-    /// The label the tile's colour box prints, and the key its colour hashes
-    /// from. A resolved call sign wins; the dial stands in when nothing resolved.
-    fn call(&self) -> String {
+    /// The best call sign known for this dial: what it resolves to now, else
+    /// what it last resolved to, else nothing.
+    fn identity(&self) -> Option<&str> {
         match &self.row {
-            Some(r) => plate_label(Some(&r.callsign), &r.callsign),
+            Some(r) => Some(r.callsign.as_str()),
+            None => self.saved_call.as_deref(),
+        }
+    }
+
+    /// The base the logo search keys on. `callsign_base` is
+    /// `callsign.split('-')[0]` for every row in the table, so a stored call sign
+    /// is reduced the same way rather than guessed at.
+    fn base(&self) -> String {
+        match &self.row {
+            Some(r) => r.callsign_base.clone(),
+            None => self
+                .saved_call
+                .as_deref()
+                .and_then(|c| c.split('-').next())
+                .unwrap_or_default()
+                .to_string(),
+        }
+    }
+
+    /// The label the tile's colour box prints, and the key its colour hashes
+    /// from. A call sign wins; the dial stands in when there is none at all.
+    fn call(&self) -> String {
+        match self.identity() {
+            Some(c) => plate_label(Some(c), c),
             None => plate_label(None, &format_mhz(self.mhz)),
         }
     }
 
     fn name(&self) -> String {
-        match &self.row {
-            Some(r) => clean_call(&r.callsign),
+        match self.identity() {
+            Some(c) => clean_call(c),
             None => format_mhz(self.mhz),
         }
     }
@@ -340,17 +370,25 @@ impl App {
         // The seed list is a FIRST-RUN default, not a fallback: once the driver
         // has presets, an empty strip is a real state they chose and must not be
         // silently repopulated with six stations from Madison.
-        let dials: Vec<f32> = if crate::prefs::path(&prefs_dir).exists() {
+        let stored: Vec<crate::prefs::Preset> = if crate::prefs::path(&prefs_dir).exists() {
             saved.presets.clone()
         } else {
             fake::seed_presets()
+                .into_iter()
+                .map(|mhz| crate::prefs::Preset { mhz, call: None })
+                .collect()
         };
-        // Only the dial is stored, so the FCC row is resolved fresh here. A
-        // database update therefore improves old presets rather than leaving
-        // them pinned to whatever they resolved to when they were saved.
-        let presets: Vec<Slot> = dials
+        // The row is resolved fresh, so a database update improves old presets
+        // rather than leaving them pinned to whatever they resolved to when they
+        // were saved. It resolves to NOTHING without a position, which is why the
+        // stored call sign comes across as the fallback — see `Slot::saved_call`.
+        let presets: Vec<Slot> = stored
             .into_iter()
-            .map(|mhz| Slot { mhz, row: resolve(db.as_ref(), mhz, location.position()) })
+            .map(|e| Slot {
+                row: resolve(db.as_ref(), e.mhz, location.position()),
+                mhz: e.mhz,
+                saved_call: e.call,
+            })
             .collect();
 
         let picker = build_picker(db.as_ref(), location, snapshot.clone());
@@ -492,9 +530,10 @@ impl App {
             self.apply_logo_event(event);
         }
         // Once, after the whole batch: a position change re-runs the nearby
-        // query and re-resolves the hero, and neither is cheap enough to do per
-        // event.
+        // query and re-resolves the hero and the strip, and none of that is
+        // cheap enough to do per event.
         if std::mem::take(&mut self.state.borrow_mut().location_dirty) {
+            self.resolve_presets();
             self.refresh_nearby();
             self.push_hero();
             self.push_presets();
@@ -1402,7 +1441,8 @@ impl App {
                     if s.presets.len() >= fake::SEED_PRESET_MHZ.len() {
                         s.presets.remove(0);
                     }
-                    s.presets.push(Slot { mhz: dial, row });
+                    let saved_call = row.as_ref().map(|r| r.callsign.clone());
+                    s.presets.push(Slot { mhz: dial, row, saved_call });
                 }
             }
         }
@@ -1422,7 +1462,14 @@ impl App {
     fn save_prefs(&self) {
         let mut s = self.state.borrow_mut();
         let now = crate::prefs::Prefs {
-            presets: s.presets.iter().map(|p| p.mhz).collect(),
+            presets: s
+                .presets
+                .iter()
+                .map(|p| crate::prefs::Preset {
+                    mhz: p.mhz,
+                    call: p.identity().map(str::to_string),
+                })
+                .collect(),
             selected: s.settings.selected,
             theme: s.settings.theme,
             autostart: s.settings.autostart,
@@ -1473,6 +1520,46 @@ impl App {
         self.push_hero();
     }
 
+    /// Re-resolve every preset's FCC row against the position as it now stands.
+    ///
+    /// THIS WAS MISSING, and its absence is what turned a first fix into nothing
+    /// at all. The rows were resolved once, in the constructor, against whatever
+    /// position existed then — which on the device is no fix, because the GPS has
+    /// not answered yet when the window is built. When the fix finally arrived
+    /// the hero picked it up, because the hero re-resolves on every push, and the
+    /// strip did not, because it renders a row that was decided at start-up. Six
+    /// presets stayed bare frequencies for the whole session and the logo window
+    /// had no call sign to search on.
+    ///
+    /// The stored fallback is refreshed alongside, so a dial that has resolved
+    /// once keeps its identity through the next cold start with no fix.
+    fn resolve_presets(&self) {
+        let rows: Vec<Option<StationRow>> = {
+            let s = self.state.borrow();
+            let here = s.location.position();
+            s.presets.iter().map(|p| resolve(s.db.as_ref(), p.mhz, here)).collect()
+        };
+        let mut changed = false;
+        {
+            let mut s = self.state.borrow_mut();
+            for (slot, row) in s.presets.iter_mut().zip(rows) {
+                if slot.row == row {
+                    continue;
+                }
+                changed = true;
+                if let Some(r) = &row {
+                    slot.saved_call = Some(r.callsign.clone());
+                }
+                slot.row = row;
+            }
+        }
+        // Only when something actually moved: this runs on every fix, and a car
+        // parked with a lock produces one every two seconds.
+        if changed {
+            self.save_prefs();
+        }
+    }
+
     fn refresh_nearby(&self) {
         {
             let mut s = self.state.borrow_mut();
@@ -1500,7 +1587,8 @@ impl App {
                 if s.presets.len() >= fake::SEED_PRESET_MHZ.len() {
                     s.presets.remove(0);
                 }
-                s.presets.push(Slot { mhz, row: Some(row) });
+                let saved_call = Some(row.callsign.clone());
+                s.presets.push(Slot { mhz, row: Some(row), saved_call });
             }
         }
         self.push_presets();
@@ -1551,7 +1639,11 @@ impl App {
         let Some(slot) = self.state.borrow().presets.get(index as usize).cloned() else {
             return;
         };
-        let base = slot.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone());
+        // Through `Slot::base`, so a preset whose row has not resolved still
+        // searches on the call sign it was saved with. Reading `slot.row`
+        // directly is what left the logo window with an empty query on a unit
+        // with no fix.
+        let base = slot.base();
         let target = crate::logos::search::Target {
             base: base.clone(),
             callsign: base.clone(),
@@ -1925,7 +2017,7 @@ mod tests {
     /// without art is a blank plate over the wrong caption.
     #[test]
     fn a_tile_claims_a_logo_only_when_it_was_handed_one() {
-        let slot = Slot { mhz: 88.7, row: None };
+        let slot = Slot { mhz: 88.7, row: None, saved_call: None };
 
         let bare = to_preset(&slot, None);
         assert!(!bare.has_logo);
@@ -1972,14 +2064,50 @@ mod tests {
     fn a_slot_prints_a_resolved_call_sign_and_falls_back_to_the_dial() {
         let db = StationDb::open(&host_db_path()).unwrap();
         let here = fake::FakeLocation::default().position();
-        let resolved = Slot { mhz: 88.7, row: resolve(Some(&db), 88.7, here) };
+        let resolved =
+            Slot { mhz: 88.7, row: resolve(Some(&db), 88.7, here), saved_call: None };
         assert_eq!(resolved.call(), "WERN");
         assert_eq!(resolved.name(), "WERN");
         // Nothing on the dial: the frequency stands as the identity, never an
         // inaccurate "Tuning…".
-        let bare = Slot { mhz: 87.9, row: None };
+        let bare = Slot { mhz: 87.9, row: None, saved_call: None };
         assert_eq!(bare.name(), "87.9");
         assert_eq!(bare.call(), "87.9");
+        assert_eq!(bare.base(), "");
+    }
+
+    /// THE REGRESSION, pinned.
+    ///
+    /// A preset whose row has not resolved — which is every preset on a head
+    /// unit that has not got a GPS fix yet, because resolution needs a position
+    /// — must still carry the call sign it was saved with. It did not: the tiles
+    /// came back as bare frequencies and `open_logo_search` built its query from
+    /// an empty base, so the logo window had nothing to search for.
+    #[test]
+    fn a_preset_keeps_its_call_sign_with_no_fix_to_resolve_against() {
+        let remembered = Slot { mhz: 88.7, row: None, saved_call: Some("WERN-FM".into()) };
+
+        // What the tile prints, and what its colour hashes from.
+        assert_eq!(remembered.name(), "WERN");
+        assert_eq!(remembered.call(), "WERN");
+        // What the logo search keys on. `callsign_base` is
+        // `callsign.split('-')[0]` for every row in the table, and a stored call
+        // sign is reduced the same way.
+        assert_eq!(remembered.base(), "WERN");
+        // And it is what gets written back, so the next cold start has it too.
+        assert_eq!(remembered.identity(), Some("WERN-FM"));
+
+        // A LIVE ROW STILL WINS. The fallback is for when nothing resolves, not
+        // a cache that could outrank the station actually on this dial here.
+        let db = StationDb::open(&host_db_path()).unwrap();
+        let here = fake::FakeLocation::default().position();
+        let resolved = Slot {
+            mhz: 88.7,
+            row: resolve(Some(&db), 88.7, here),
+            saved_call: Some("KSTALE".into()),
+        };
+        assert_eq!(resolved.base(), "WERN");
+        assert_eq!(resolved.name(), "WERN");
     }
 
     #[test]
@@ -2022,7 +2150,7 @@ mod tests {
     fn the_active_slot_is_read_off_the_dial_not_remembered() {
         let slots: Vec<Slot> = fake::SEED_PRESET_MHZ
             .iter()
-            .map(|&mhz| Slot { mhz, row: None })
+            .map(|&mhz| Slot { mhz, row: None, saved_call: None })
             .collect();
         assert_eq!(active_index(102.1, &slots), 0);
         assert_eq!(active_index(94.1, &slots), 5);

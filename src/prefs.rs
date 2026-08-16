@@ -41,13 +41,33 @@ use crate::settings::{Settings, Source, Theme};
 /// The file, inside the app's own data directory.
 pub const FILE: &str = "prefs.json";
 
+/// One saved preset.
+///
+/// THE CALL SIGN IS STORED, and it did not used to be. Only the dial was, on the
+/// reasoning that the FCC row is re-resolved on load so a database update
+/// improves old presets rather than leaving them stale. That reasoning holds
+/// only while there is something to resolve AGAINST: resolution needs a
+/// position, because 88.7 has 178 full-power licensees across the country, and
+/// on a head unit that has not got a GPS fix yet there is none. The driver's
+/// six presets came back as bare frequencies with no call signs, and the logo
+/// window — which searches on the call sign — had nothing to search for.
+///
+/// So the dial is still authoritative and the row is still re-resolved, and this
+/// is the FALLBACK that keeps a preset's identity when nothing resolves. It
+/// tracks the most recent successful resolution for that dial, so it improves
+/// with the database exactly as the original design wanted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Preset {
+    pub mhz: f32,
+    /// The call sign this dial last resolved to, or `None` if it never has.
+    pub call: Option<String>,
+}
+
 /// Everything worth remembering between launches.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prefs {
-    /// The preset strip, in the driver's own order. Only the dial is stored —
-    /// the FCC row is re-resolved on load, so a database update improves old
-    /// presets instead of leaving them stale.
-    pub presets: Vec<f32>,
+    /// The preset strip, in the driver's own order.
+    pub presets: Vec<Preset>,
     pub selected: Source,
     pub theme: Theme,
     pub autostart: bool,
@@ -148,11 +168,27 @@ fn from_json(text: &str) -> Option<Prefs> {
     if let Some(Json::Arr(items)) = v.get("presets") {
         p.presets = items
             .iter()
-            .filter_map(|x| x.as_f64())
-            // A dial outside the FM band is not a preset, it is corruption, and
-            // tuning to it would send the front end somewhere it cannot go.
-            .filter(|m| (87.5..=108.0).contains(m))
-            .map(|m| m as f32)
+            .filter_map(|x| {
+                // TWO SHAPES, and the bare number is not legacy cruft to be
+                // tidied away later — it is what is on the driver's unit right
+                // now, and dropping it would wipe their strip on the update that
+                // introduced the object form.
+                let (mhz, call) = match x {
+                    Json::Obj(_) => (
+                        x.get("mhz")?.as_f64()?,
+                        x.get("call")
+                            .and_then(Json::as_str)
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_string),
+                    ),
+                    _ => (x.as_f64()?, None),
+                };
+                // A dial outside the FM band is not a preset, it is corruption,
+                // and tuning to it would send the front end somewhere it cannot
+                // go. Filtered HERE rather than after the fact, so the call sign
+                // cannot come adrift from the dial it belongs to.
+                (87.5..=108.0).contains(&mhz).then_some(Preset { mhz: mhz as f32, call })
+            })
             .collect();
     }
     if let Some(s) = v.get("selected").and_then(Json::as_str) {
@@ -182,7 +218,18 @@ fn from_json(text: &str) -> Option<Prefs> {
 
 /// Serialise. One decimal on the dial, which is the precision a dial has.
 pub fn to_json(p: &Prefs) -> String {
-    let presets: Vec<String> = p.presets.iter().map(|m| format!("{m:.1}")).collect();
+    // An OBJECT per preset, so the dial and its call sign cannot come apart. A
+    // preset that has never resolved writes no `call` at all rather than an
+    // empty string — absent and unknown are the same thing here, and one of them
+    // is shorter.
+    let presets: Vec<String> = p
+        .presets
+        .iter()
+        .map(|e| match &e.call {
+            Some(c) => format!("{{\"mhz\":{:.1},\"call\":{}}}", e.mhz, json::quote(c)),
+            None => format!("{{\"mhz\":{:.1}}}", e.mhz),
+        })
+        .collect();
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},\"autostart\":{},",
@@ -226,6 +273,51 @@ fn try_save(dir: &Path, p: &Prefs) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn at(mhz: f32, call: Option<&str>) -> Preset {
+        Preset { mhz, call: call.map(str::to_string) }
+    }
+
+    /// THE BARE-NUMBER FORM IS NOT LEGACY CRUFT. It is what is on the driver's
+    /// unit at the moment the object form ships, and a reader that rejected it
+    /// would wipe their strip on the update meant to fix it.
+    #[test]
+    fn a_file_written_before_call_signs_still_loads_its_presets() {
+        let d = tmpdir("bare-numbers");
+        fs::write(path(&d), r#"{"presets":[102.1,88.7],"theme":"dark"}"#).unwrap();
+        let p = load(&d);
+        assert_eq!(p.presets, vec![at(102.1, None), at(88.7, None)]);
+        assert_eq!(p.theme, Theme::Dark);
+    }
+
+    /// The two forms mix, because a strip can be half-resolved: some dials have
+    /// found their station and some never have.
+    #[test]
+    fn the_two_preset_shapes_read_side_by_side() {
+        let d = tmpdir("mixed-shapes");
+        fs::write(
+            path(&d),
+            r#"{"presets":[{"mhz":88.7,"call":"WERN"},105.5,{"mhz":98.1}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load(&d).presets,
+            vec![at(88.7, Some("WERN")), at(105.5, None), at(98.1, None)]
+        );
+    }
+
+    /// An out-of-band dial is dropped WITH its call sign. Filtering the dials
+    /// separately would slide every later call sign onto the wrong station.
+    #[test]
+    fn dropping_a_corrupt_dial_takes_its_call_sign_with_it() {
+        let d = tmpdir("drop-keeps-pairing");
+        fs::write(
+            path(&d),
+            r#"{"presets":[{"mhz":8.7,"call":"GHOST"},{"mhz":88.7,"call":"WERN"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(load(&d).presets, vec![at(88.7, Some("WERN"))]);
+    }
+
     fn tmpdir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("carnyx-prefs-{tag}"));
         let _ = fs::remove_dir_all(&d);
@@ -237,7 +329,7 @@ mod tests {
     fn round_trips_every_field() {
         let d = tmpdir("round");
         let p = Prefs {
-            presets: vec![88.7, 105.5, 98.1],
+            presets: vec![at(88.7, Some("WERN")), at(105.5, None), at(98.1, Some("WMGN-FM"))],
             selected: Source::Auto,
             theme: Theme::Dark,
             autostart: false,
@@ -276,7 +368,7 @@ mod tests {
         )
         .unwrap();
         let p = load(&d);
-        assert_eq!(p.presets, vec![88.7, 105.5], "presets survive");
+        assert_eq!(p.presets, vec![at(88.7, None), at(105.5, None)], "presets survive");
         assert_eq!(p.theme, Theme::System, "unknown theme falls back");
         assert_eq!(p.autostart, Prefs::default().autostart, "wrong type falls back");
         assert!(p.debug_on, "the readable field is still read");
@@ -287,7 +379,7 @@ mod tests {
     fn out_of_band_presets_are_dropped() {
         let d = tmpdir("band");
         fs::write(path(&d), r#"{"presets":[88.7,0,1e9,-5,107.9,108.1]}"#).unwrap();
-        assert_eq!(load(&d).presets, vec![88.7, 107.9]);
+        assert_eq!(load(&d).presets, vec![at(88.7, None), at(107.9, None)]);
     }
 
     /// Names, not ordinals — inserting an enum variant must not re-point saved
@@ -305,7 +397,7 @@ mod tests {
     #[test]
     fn a_save_leaves_no_temporary_behind() {
         let d = tmpdir("atomic");
-        save(&d, &Prefs { presets: vec![90.1], ..Prefs::default() });
+        save(&d, &Prefs { presets: vec![at(90.1, None)], ..Prefs::default() });
         let left: Vec<_> = fs::read_dir(&d)
             .unwrap()
             .filter_map(|e| e.ok())
