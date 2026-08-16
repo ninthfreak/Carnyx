@@ -434,15 +434,9 @@ export component HeroRow inherits Rectangle {
         // card out every frame while its type stays a fixed size, which reads as
         // reflow jitter rather than growth. So this is a travel-and-fade over
         // the same 520ms and the same easing, and the card does not change size.
-        x: root.card-x + (root.arming ? root.enter-dx : 0px);
-        opacity: root.arming ? 0 : 1;
-        // Zero going IN, so the jump to the source side is invisible; 520ms
-        // coming out, which is the travel. The duration is read when the
-        // animation starts, so the branch picks the right one each way.
-        animate x, opacity {
-            duration: root.arming ? 0ms : 520ms;
-            easing: cubic-bezier(0.25, 0.1, 0.25, 1);
-        }
+        //
+        // The RESTING geometry is here; the state below is what displaces it.
+        x: root.card-x;
         y: (root.height - root.resolved-card-h) / 2;
         width: root.card-w;
         height: root.resolved-card-h;
@@ -459,4 +453,38 @@ export component HeroRow inherits Rectangle {
         open-numpad => { root.open-numpad(); }
         toggle-audio => { root.toggle-audio(); }
     }
+
+    // ── The travel ──
+    //
+    // A STATE with an `out` transition, not an `animate` on the card's own
+    // bindings, and the difference is the whole bug. Written as
+    //
+    //     x: root.card-x + (root.arming ? root.enter-dx : 0px);
+    //     animate x { duration: root.arming ? 0ms : 520ms; }
+    //
+    // it worked in the screenshot harness and did nothing on the device: the
+    // card blinked out and came back at rest with no travel at all. Two things
+    // conspire. The duration is itself a binding on the state being left, so the
+    // out-transition can be set up reading the value it is leaving — 0ms — and
+    // snap. And Slint evaluates bindings lazily, at render, so if no frame is
+    // drawn between arming and the timer clearing it, `x` never holds the source
+    // value and there is nothing to animate FROM. A head unit mid-tune is
+    // exactly where that frame goes missing.
+    //
+    // A state has neither problem: the duration is a constant, and the state
+    // machine — not a rendered frame — is what decides the value being left.
+    states [
+        entering when root.arming: {
+            card.x: root.card-x + root.enter-dx;
+            card.opacity: 0;
+            // NO `in` BLOCK, deliberately. Going in must be instantaneous, or
+            // the card visibly slides AWAY to the peek slot before coming back.
+            out {
+                animate card.x, card.opacity {
+                    duration: 520ms;
+                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+                }
+            }
+        }
+    ]
 }

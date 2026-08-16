@@ -317,6 +317,13 @@ fn main() {
             // The REAL callback, so the tune, the republish and the arming all
             // run in the shipping order.
             ui.invoke_step_preset(1);
+            // NO RENDER HERE, deliberately, and it is the condition the device
+            // is in. Slint evaluates bindings lazily, at render, so a frame
+            // drawn while the morph is armed is what USED to make this work in
+            // the harness and never on a head unit busy tuning. Sleep past the
+            // 16ms arm timer without drawing anything, so the travel has to
+            // survive never having been rendered at its starting point.
+            std::thread::sleep(std::time::Duration::from_millis(40));
             // Stop at roughly a third of the 520ms travel. Pumping to the end
             // would photograph the resting face and prove nothing.
             for _ in 0..4 {
