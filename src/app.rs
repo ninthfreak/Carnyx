@@ -407,6 +407,16 @@ impl App {
     /// and every group goes to `push()` undeduplicated, because the consensus
     /// gates count the repeats.
     fn pump_rds_until_settled(&self) {
+        // NEVER against a real radio. The corpus below is SYNTHESISED — the
+        // block bit-layouts for WERN were computed, not captured — so replaying
+        // it into the live decoder would put an invented call sign, genre and
+        // song title on the face of a car that is tuned to a real transmitter.
+        // Wrong information stated confidently is worse than none, and the dial
+        // guard underneath is not enough: 88.7 is a real frequency and a real
+        // unit can be sitting on it.
+        if self.state.borrow().tuner_is_real {
+            return;
+        }
         // The recording belongs to one dial. Off it, there is nothing to feed
         // the decoder and the hero correctly shows a station with no RDS.
         if !fake::FakeRdsStream::carries(self.state.borrow().dial) {
