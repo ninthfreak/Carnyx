@@ -116,6 +116,10 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // A drag in flight: tile 0 held, the finger between slots 2 and 3, the gap
     // open behind it. Driven by real pointer events — see the DRAG block below.
     ("reorder-drag", 1024, 614, false, State::Dragging, 0.0),
+    // The §8 step morph, caught mid-travel: the hero has left the right-hand
+    // peek slot and is most of the way to the centre. Driven by the real
+    // `step-preset` callback — see the STEP block below.
+    ("hero-step-morph", 1024, 614, false, State::Stepping, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -154,6 +158,12 @@ enum State {
     /// reachable only through the gesture. A shot that set a flag would prove
     /// the tiles can be drawn displaced, not that a finger can displace them.
     Dragging,
+    /// A preset step caught PART WAY THROUGH its morph.
+    ///
+    /// Rendered by pumping the animation clock and stopping short, which is the
+    /// only way to photograph an animation: at rest it is indistinguishable from
+    /// a face that never moved.
+    Stepping,
     /// No position: the satellite icon's other state.
     NoGpsFix,
     /// A dial that is not one of the six saved slots.
@@ -303,6 +313,21 @@ fn main() {
             // order and quietly invalidate every comparison against it.
         }
 
+        if state == State::Stepping {
+            // The REAL callback, so the tune, the republish and the arming all
+            // run in the shipping order.
+            ui.invoke_step_preset(1);
+            // Stop at roughly a third of the 520ms travel. Pumping to the end
+            // would photograph the resting face and prove nothing.
+            for _ in 0..4 {
+                slint::platform::update_timers_and_animations();
+                render(&mut buffer);
+                std::thread::sleep(std::time::Duration::from_millis(45));
+            }
+            slint::platform::update_timers_and_animations();
+            render(&mut buffer);
+        }
+
         write_png(name, w, h, &buffer);
         ui.hide().expect("hide");
         println!("shots/{name}.png  {w}x{h}");
@@ -358,6 +383,9 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         // The press below arms the drag with no hold, which is the rule once the
         // mode is already open.
         State::Reordering | State::Dragging => ui.set_reordering(true),
+        // Nothing to set up: the step is invoked after the first render, so the
+        // morph has a resting frame to travel from.
+        State::Stepping => {}
         State::NoGpsFix => driver.set_position(FakeLocation::no_fix()),
         State::UnsavedDial => {
             // Through the numpad's own callbacks, so the band check, the buffer

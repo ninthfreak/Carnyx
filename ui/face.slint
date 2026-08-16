@@ -55,6 +55,9 @@ export component Face inherits Rectangle {
     in property <bool> audio-active: true;
     in property <bool> scanning: false;
     in property <bool> reordering: false;
+    /// The step morph (§8) — see `HeroRow`.
+    in property <int> step-nonce: 0;
+    in property <int> step-dir: 0;
 
     callback tune-here();
     callback toggle-save();
@@ -178,6 +181,8 @@ export component Face inherits Rectangle {
                 vertical-stretch: 1;
                 card-w: Metrics.hero-card-w;
                 card-fill: true;
+                step-nonce: root.step-nonce;
+                step-dir: root.step-dir;
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;
@@ -223,6 +228,8 @@ export component Face inherits Rectangle {
                 vertical-stretch: 0;
                 card-w: Metrics.tall-hero-w;
                 card-fill: false;
+                step-nonce: root.step-nonce;
+                step-dir: root.step-dir;
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;

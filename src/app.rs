@@ -1162,6 +1162,16 @@ impl App {
                 }
             };
             let mhz = app.state.borrow().presets[next as usize].mhz;
+            // ARM THE MORPH BEFORE THE TUNE, and the order is the whole trick.
+            // This is a FLIP: the hero is put back where the incoming station
+            // came from and then travels to where it now belongs, so the cards
+            // must already HOLD the new stations when the animation starts.
+            // `tune` republishes them synchronously, and `HeroRow` waits one
+            // frame past the nonce before releasing the morph — which is the
+            // slack CarFM buys with `requestAnimationFrame`, and which it names
+            // as the fix for "the card slides in and becomes a different
+            // station".
+            app.step_morph(dir);
             app.tune(mhz);
         });
         on!(on_toggle_save, |app| {
@@ -1676,6 +1686,17 @@ impl App {
         }
         drop(s);
         self.push_logo_search();
+    }
+
+    /// Tell the hero a step is coming, and which way.
+    ///
+    /// A COUNTER, not a flag. Two steps in the same direction must both animate,
+    /// and a flag that is already true changes nothing — so `HeroRow` watches the
+    /// nonce, and the direction is only meaningful when it moves.
+    fn step_morph(self: &Rc<App>, dir: i32) {
+        let ui = self.ui();
+        ui.set_step_dir(dir.signum());
+        ui.set_step_nonce(ui.get_step_nonce().wrapping_add(1));
     }
 
     /// Move one preset, after a drag in reorder mode has let go.

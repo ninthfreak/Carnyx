@@ -332,6 +332,58 @@ export component HeroRow inherits Rectangle {
     callback open-numpad();
     callback toggle-audio();
 
+    // ── The step morph (§8) ──
+    //
+    // Rust bumps `step-nonce` on every preset step and sets `step-dir` to the
+    // direction. A NONCE rather than a boolean because two steps in a row must
+    // both animate, and a boolean that is already true changes nothing.
+    in property <int> step-nonce: 0;
+    in property <int> step-dir: 0;
+
+    /// One frame at the PRE-swap geometry. This is a FLIP: by the time the
+    /// nonce arrives the cards already hold the new stations — Rust tunes
+    /// synchronously — so the morph is a matter of putting the hero back where
+    /// its station came from and letting it travel to where it now belongs.
+    property <bool> arming: false;
+
+    arm := Timer {
+        // One frame at 60Hz. CarFM arms with `requestAnimationFrame` for the
+        // same reason and spells out why: the morph is native-driven and starts
+        // before the new content has mounted, so without the frame of slack it
+        // plays out on the OLD cards — the video shows the wrong side growing
+        // and the content snapping partway through.
+        interval: 16ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.arming = false;
+        }
+    }
+
+    changed step-nonce => {
+        // §4.7/§8: instant swaps with audio released. A dead face does not
+        // animate, and CarFM skips the flip for exactly this case.
+        if (root.step-dir != 0 && !root.dead) {
+            root.arming = true;
+            arm.running = true;
+        }
+    }
+
+    /// How far the hero starts from its resting place: the peek slot on the side
+    /// the new station came from. Stepping to NEXT takes the right-hand peek, so
+    /// the card enters from the right.
+    ///
+    /// CENTRE TO CENTRE, which is what CarFM animates
+    /// (`translateX(cx(source) - cx(center))`). Edge to edge is a much longer
+    /// throw — the hero is far wider than a peek — and it hangs the card off the
+    /// side of the row at the start of the travel.
+    property <length> peek-mid: root.peek-w * 0.88 / 2;
+    property <length> enter-dx: root.step-dir > 0
+        ? (root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid)
+            - (root.card-x + root.card-w / 2)
+        : (root.start-x + root.peek-inset + root.peek-mid)
+            - (root.card-x + root.card-w / 2);
+
     property <length> peek-w: Metrics.peek-w;
     property <length> overlap: Metrics.peek-overlap;
     // CarFM lays this out as a centred flex row whose peek boxes carry a negative
@@ -374,7 +426,23 @@ export component HeroRow inherits Rectangle {
     }
     // Above the peeks, so they tuck behind it.
     card := HeroCard {
-        x: root.card-x;
+        // WHAT THIS IS NOT: CarFM's morph SCALES the card between the peek
+        // footprint and the hero footprint, on two sampled easings. Slint 1.17
+        // exposes no scale transform to user code — `Transform` is compiled but
+        // internal, "the type exists as an internal type, but cannot be accessed
+        // in this scope" — and animating `width`/`height` instead re-lays the
+        // card out every frame while its type stays a fixed size, which reads as
+        // reflow jitter rather than growth. So this is a travel-and-fade over
+        // the same 520ms and the same easing, and the card does not change size.
+        x: root.card-x + (root.arming ? root.enter-dx : 0px);
+        opacity: root.arming ? 0 : 1;
+        // Zero going IN, so the jump to the source side is invisible; 520ms
+        // coming out, which is the travel. The duration is read when the
+        // animation starts, so the branch picks the right one each way.
+        animate x, opacity {
+            duration: root.arming ? 0ms : 520ms;
+            easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
         y: (root.height - root.resolved-card-h) / 2;
         width: root.card-w;
         height: root.resolved-card-h;

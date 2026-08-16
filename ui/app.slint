@@ -56,6 +56,11 @@ export component AppWindow inherits Window {
     in property <bool> audio-active: true;
     in property <bool> scanning: false;
     in property <bool> reordering: false;
+    /// The preset-step morph (§8). Rust bumps the nonce on every step and sets
+    /// the direction; a nonce rather than a flag, so two steps in a row both
+    /// animate. See `HeroRow` for what it drives and what it does not.
+    in property <int> step-nonce: 0;
+    in property <int> step-dir: 0;
 
     callback toggle-save();
     callback open-settings();
@@ -242,6 +247,8 @@ export component AppWindow inherits Window {
         audio-active: root.audio-active;
         scanning: root.scanning;
         reordering: root.reordering;
+        step-nonce: root.step-nonce;
+        step-dir: root.step-dir;
         toggle-save => { root.toggle-save(); }
         open-settings => { root.overlay = Overlay.settings; root.open-settings(); }
         open-nearby => { root.overlay = Overlay.nearby; root.open-nearby(); }
