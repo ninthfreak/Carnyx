@@ -155,6 +155,11 @@ struct State {
     rds_state: RdsState,
     stream: fake::FakeRdsStream,
     presets: Vec<Slot>,
+    /// Where `prefs.json` lives — the app's data directory on the device.
+    prefs_dir: std::path::PathBuf,
+    /// The last thing written, so an unchanged state does not rewrite the file.
+    /// `push_settings` runs on far more than settings changes.
+    saved: crate::prefs::Prefs,
     dial: f32,
     /// The last trustworthy level reading, or `None` for no reading at all.
     level: Option<i32>,
@@ -206,7 +211,7 @@ impl App {
         // settings panel reads, so nothing on screen claims a tuner that is not
         // there. This is the host and screenshot path; `android_main` calls
         // `with_tuner` instead and hands over the vendor service.
-        App::with_tuner(ui, db_path, Box::new(FakeTuner::new()), false)
+        App::with_tuner(ui, db_path, &host_prefs_dir(), Box::new(FakeTuner::new()), false)
     }
 
     /// The same face, driven by whichever tuner the caller could actually get.
@@ -224,6 +229,7 @@ impl App {
     pub fn with_tuner(
         ui: &AppWindow,
         db_path: &Path,
+        prefs_dir: &Path,
         tuner: Box<dyn Tuner>,
         tuner_is_real: bool,
     ) -> Rc<App> {
@@ -232,7 +238,29 @@ impl App {
 
         let location = fake::FakeLocation::default();
 
-        let presets = fake::seed_presets()
+        // WHAT THE DRIVER CHOSE LAST TIME.
+        //
+        // Passed in rather than derived from `db_path`, and that is not
+        // fastidiousness: deriving it put `prefs.json` next to the shipped
+        // database in `assets/`, and `assets` is what cargo-apk packages, so a
+        // host run would have posted the developer's own preferences into the
+        // APK. On the device this is the app's private data directory; on the
+        // host it is under `target/`.
+        let prefs_dir = prefs_dir.to_path_buf();
+        let saved = crate::prefs::load(&prefs_dir);
+
+        // The seed list is a FIRST-RUN default, not a fallback: once the driver
+        // has presets, an empty strip is a real state they chose and must not be
+        // silently repopulated with six stations from Madison.
+        let dials: Vec<f32> = if crate::prefs::path(&prefs_dir).exists() {
+            saved.presets.clone()
+        } else {
+            fake::seed_presets()
+        };
+        // Only the dial is stored, so the FCC row is resolved fresh here. A
+        // database update therefore improves old presets rather than leaving
+        // them pinned to whatever they resolved to when they were saved.
+        let presets: Vec<Slot> = dials
             .into_iter()
             .map(|mhz| Slot { mhz, row: resolve(db.as_ref(), mhz, location.position()) })
             .collect();
@@ -257,14 +285,30 @@ impl App {
                 stereo: None,
                 location,
                 picker,
-                settings: settings::Settings::default(),
+                settings: settings::Settings {
+                    selected: saved.selected,
+                    theme: saved.theme,
+                    autostart: saved.autostart,
+                    logos_on: saved.logos_on,
+                    diag_on: saved.diag_on,
+                    diag_overlay_on: saved.diag_overlay_on,
+                    rds_capture_on: saved.rds_capture_on,
+                    debug_on: saved.debug_on,
+                    ..settings::Settings::default()
+                },
                 logo: crate::logos::search::Model::new(),
                 numpad: String::new(),
+                prefs_dir,
+                saved,
             }),
         });
 
         CURRENT.with(|c| *c.borrow_mut() = Some(Rc::downgrade(&app)));
         crate::android::set_event_sink(enqueue);
+        // The restored theme has to reach the palette; `Settings` alone only
+        // records the choice.
+        let theme = app.state.borrow().settings.theme;
+        app.apply_theme(theme);
         app.connect_tuner();
         app.install_callbacks(ui);
         app.push_all();
@@ -700,6 +744,9 @@ impl App {
         ui.set_settings_show_band_themes(cfg.egg_open());
         ui.set_settings_egg_labels(strings(&settings::egg_labels()));
         ui.set_settings_egg_index(cfg.egg_index);
+        // The borrow above must be released before `save_prefs` takes its own.
+        drop(s);
+        self.save_prefs();
     }
 
     fn push_numpad(&self) {
@@ -1018,6 +1065,36 @@ impl App {
             }
         }
         self.push_all();
+        // The strip is a preference too, and the one the driver would miss most.
+        self.save_prefs();
+    }
+
+    /// Write the driver's choices, if any of them have actually changed.
+    ///
+    /// Called from `push_settings` and after every preset edit, which between
+    /// them cover every mutation worth keeping. The change check is not an
+    /// optimisation for its own sake: `push_settings` also runs on connect, on
+    /// every tuner event that touches the panel, and on each diagnostics line,
+    /// and rewriting the file on all of those would put a flash write in the
+    /// path of ordinary radio traffic.
+    fn save_prefs(&self) {
+        let mut s = self.state.borrow_mut();
+        let now = crate::prefs::Prefs {
+            presets: s.presets.iter().map(|p| p.mhz).collect(),
+            selected: s.settings.selected,
+            theme: s.settings.theme,
+            autostart: s.settings.autostart,
+            logos_on: s.settings.logos_on,
+            diag_on: s.settings.diag_on,
+            diag_overlay_on: s.settings.diag_overlay_on,
+            rds_capture_on: s.settings.rds_capture_on,
+            debug_on: s.settings.debug_on,
+        };
+        if now == s.saved {
+            return;
+        }
+        crate::prefs::save(&s.prefs_dir, &now);
+        s.saved = now;
     }
 
     fn set_audio(self: &Rc<App>, on: bool) {
@@ -1086,6 +1163,7 @@ impl App {
         }
         self.push_presets();
         self.push_nearby();
+        self.save_prefs();
     }
 
     /// Every DIAGNOSTICS row but "Clear log" crosses the framework edge, and
@@ -1301,9 +1379,35 @@ pub fn host_db_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/db/stations.sqlite")
 }
 
+/// Where the HOST keeps preferences.
+///
+/// Under `target/`, deliberately: `assets/` is shipped verbatim into the APK by
+/// cargo-apk, so anything written beside the station database would be packaged
+/// and handed to every driver. `target/` is already ignored and already
+/// disposable.
+pub fn host_prefs_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("target/carnyx-host")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `assets/` is packaged into the APK verbatim by cargo-apk, so ANYTHING
+    /// written there by a host run ships to every driver. Deriving the prefs
+    /// directory from `db_path` did exactly that, putting `prefs.json` beside the
+    /// station database. This pins the separation rather than the current paths.
+    #[test]
+    fn host_prefs_never_live_in_the_shipped_assets_tree() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        assert!(
+            !host_prefs_dir().starts_with(&assets),
+            "host prefs at {:?} would be packaged into the APK",
+            host_prefs_dir()
+        );
+        // And the database really is in there, so the check above is meaningful.
+        assert!(host_db_path().starts_with(&assets));
+    }
 
     /// The resolution is by POSITION, and the assertion that matters is the
     /// negative one: 88.7 MHz has full-power licensees all over the country and

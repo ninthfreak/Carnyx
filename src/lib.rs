@@ -10,6 +10,7 @@ pub mod android;
 pub mod app;
 pub mod fake;
 pub mod logos;
+pub mod prefs;
 pub mod rds;
 pub mod settings;
 pub mod signal;
@@ -49,6 +50,12 @@ fn android_main(android_app: slint::android::AndroidApp) {
     let vm = android_app.vm_as_ptr();
     let activity = android_app.activity_as_ptr();
     slint::android::init(android_app).unwrap();
+
+    // The app's private data directory, and the prefs file's home. Captured
+    // before the map below consumes `files_dir`.
+    let files_dir_for_prefs = files_dir
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     let db_path = files_dir
         .map(|dir| {
@@ -96,7 +103,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
             Err(_) => (Box::new(android::FakeTuner::unavailable()), false),
         };
 
-    let _driver = app::App::with_tuner(&ui, &db_path, tuner, tuner_is_real);
+    let _driver = app::App::with_tuner(&ui, &db_path, &files_dir_for_prefs, tuner, tuner_is_real);
     // Tuner events arrive on binder and pump threads. The hop back to the UI
     // thread is `invoke_from_event_loop`; the drain itself reads the App out of
     // a thread-local, because `Rc<App>` cannot cross a `Send` boundary.
