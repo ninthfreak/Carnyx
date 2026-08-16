@@ -423,9 +423,13 @@ type Sink = Arc<dyn Fn(TunerEvent) + Send + Sync + 'static>;
 struct Shared {
     cal: Calibration,
     sink: Option<Sink>,
+    /// The motion verdict, kept because the thresholds have hysteresis and
+    /// hysteresis is a function of the answer you last gave.
+    moving: bool,
 }
 
-static SHARED: Mutex<Shared> = Mutex::new(Shared { cal: Calibration::NEW, sink: None });
+static SHARED: Mutex<Shared> =
+    Mutex::new(Shared { cal: Calibration::NEW, sink: None, moving: false });
 
 /// Lock without ever panicking on poison.
 ///
@@ -456,9 +460,17 @@ pub fn calibration() -> Calibration {
     shared().cal
 }
 
-/// Forget everything learned. Only for tests and for a deliberate re-bind.
+/// Forget everything learned about the device. Only for tests and for a
+/// deliberate re-bind.
+///
+/// The MOTION VERDICT goes too, and it must: it is hysteretic, so it is a
+/// function of the last answer, and a test that inherited `moving` from whatever
+/// ran before it would pass or fail on test ORDER. Nothing else behind this lock
+/// carries state across a re-bind.
 pub fn reset_calibration() {
-    shared().cal = Calibration::NEW;
+    let mut g = shared();
+    g.cal = Calibration::NEW;
+    g.moving = false;
 }
 
 /// Deliver an event.
@@ -495,12 +507,45 @@ pub fn ingest_connected(band: i32, raw: i32, ps: String, rt: String, pty: i32, r
 /// (0, 0) fix from a provider that has nothing, and Null Island is 700 km off
 /// the Gulf of Guinea, where the nearest FM station is nobody's. An impossible
 /// pair is reported as NO fix, which the picker already knows how to draw.
-pub fn ingest_position(lat: f64, lon: f64, fix: bool, in_motion: bool) {
+/// Above this the car is moving; below the other, it has stopped.
+///
+/// CarFM's own pair, converted from mph (`services/motion.ts`, MOVING_ON_MPH 5 /
+/// MOVING_OFF_MPH 3). TWO thresholds, not one: a single cut flaps every time GPS
+/// speed jitters across it while waiting at lights, and every flap is a driving
+/// glyph blinking and a reorder mode being refused and allowed by turns.
+pub const MOVING_ON_MPS: f32 = 2.235; // 5 mph
+pub const MOVING_OFF_MPS: f32 = 1.341; // 3 mph
+
+/// Whether the car is moving, given the last verdict.
+///
+/// `has_speed` false is STATIONARY, not unknown: only some providers report
+/// speed, and a fix that carries none is no evidence of movement. Guessing from
+/// successive positions would be the alternative, and it produces motion for a
+/// parked car whose fix wanders.
+pub fn settle_motion(was_moving: bool, speed_mps: f32, has_speed: bool) -> bool {
+    if !has_speed || !speed_mps.is_finite() || speed_mps < 0.0 {
+        return false;
+    }
+    if was_moving {
+        speed_mps >= MOVING_OFF_MPS
+    } else {
+        speed_mps >= MOVING_ON_MPS
+    }
+}
+
+pub fn ingest_position(lat: f64, lon: f64, fix: bool, speed_mps: f32, has_speed: bool) {
     let sane = lat.is_finite()
         && lon.is_finite()
         && (-90.0..=90.0).contains(&lat)
         && (-180.0..=180.0).contains(&lon)
         && !(lat == 0.0 && lon == 0.0);
+    let in_motion = {
+        let mut g = shared();
+        // A lost fix is not a moving car. Without this the verdict would latch
+        // on at the moment the antenna went dark and stay there.
+        g.moving = fix && sane && settle_motion(g.moving, speed_mps, has_speed);
+        g.moving
+    };
     emit(TunerEvent::Position { lat, lon, fix: fix && sane, in_motion });
 }
 
@@ -933,7 +978,7 @@ mod tests {
             (10.0, f64::INFINITY),
         ];
         for (lat, lon) in bad {
-            ingest_position(lat, lon, true, false);
+            ingest_position(lat, lon, true, 0.0, false);
             match h.drain().as_slice() {
                 [TunerEvent::Position { fix, .. }] => {
                     assert!(!fix, "({lat}, {lon}) must not be reported as a fix")
@@ -947,7 +992,7 @@ mod tests {
     fn a_real_position_survives_the_guard() {
         let h = Harness::new();
         // Madison, which is where the shipped fake sits.
-        ingest_position(43.07, -89.40, true, true);
+        ingest_position(43.07, -89.40, true, 20.0, true);
         match h.drain().as_slice() {
             [TunerEvent::Position { lat, lon, fix, in_motion }] => {
                 assert!(*fix);
@@ -958,11 +1003,75 @@ mod tests {
         }
     }
 
+    /// A PARKED CAR MUST STOP BEING A MOVING ONE, and getting there needs two
+    /// thresholds rather than one.
+    ///
+    /// The device fault this pins is upstream of the maths: the location
+    /// registration carried a 50-metre distance filter, so a car that stopped
+    /// earned no further callback at all and the last fix — taken while still
+    /// rolling — stood as the final word. The glyph stayed lit and reorder mode
+    /// stayed refused until the car moved another fifty metres. The filter is
+    /// zero now; this is the half that can be tested.
+    #[test]
+    fn the_motion_verdict_has_hysteresis_and_clears_when_the_car_stops() {
+        // Rising: 3 mph is not yet moving, 5 mph is.
+        assert!(!settle_motion(false, 1.5, true));
+        assert!(settle_motion(false, MOVING_ON_MPS, true));
+        // Falling: still moving at 3 mph, stopped below it. A single threshold
+        // would flap here, and every flap blinks the driving glyph.
+        assert!(settle_motion(true, 1.5, true));
+        assert!(!settle_motion(true, 1.0, true));
+        // No speed reported is STATIONARY, not "carry on as before" — otherwise
+        // a provider that never reports speed latches whatever it started with.
+        assert!(!settle_motion(true, 0.0, false));
+        assert!(!settle_motion(true, f32::NAN, true));
+        assert!(!settle_motion(true, -1.0, true));
+    }
+
+    /// The verdict is STATE, so a stop has to survive the round trip through
+    /// `ingest_position` and not just through the pure helper.
+    #[test]
+    fn a_stop_reaches_the_face_through_the_shipping_path() {
+        let h = Harness::new();
+        ingest_position(43.07, -89.40, true, 20.0, true);
+        match h.drain().as_slice() {
+            [TunerEvent::Position { in_motion, .. }] => assert!(*in_motion),
+            other => panic!("expected one Position, got {other:?}"),
+        }
+        // Parked, and the provider still reporting because the distance filter
+        // is gone.
+        ingest_position(43.07, -89.40, true, 0.0, true);
+        match h.drain().as_slice() {
+            [TunerEvent::Position { in_motion, fix, .. }] => {
+                assert!(!*in_motion, "a stopped car must stop reading as moving");
+                assert!(*fix);
+            }
+            other => panic!("expected one Position, got {other:?}"),
+        }
+    }
+
+    /// Losing the antenna is not a moving car. Without the `fix &&` guard the
+    /// verdict latches at whatever it was when the sky went dark.
+    #[test]
+    fn a_lost_fix_clears_the_motion_verdict() {
+        let h = Harness::new();
+        ingest_position(43.07, -89.40, true, 20.0, true);
+        let _ = h.drain();
+        ingest_position(0.0, 0.0, false, 20.0, true);
+        match h.drain().as_slice() {
+            [TunerEvent::Position { in_motion, fix, .. }] => {
+                assert!(!*in_motion);
+                assert!(!*fix);
+            }
+            other => panic!("expected one Position, got {other:?}"),
+        }
+    }
+
     /// A genuine loss of fix must stay a loss, not be rescued by sane numbers.
     #[test]
     fn losing_the_fix_is_reported_even_with_valid_coordinates() {
         let h = Harness::new();
-        ingest_position(43.07, -89.40, false, false);
+        ingest_position(43.07, -89.40, false, 0.0, false);
         match h.drain().as_slice() {
             [TunerEvent::Position { fix, .. }] => assert!(!fix),
             other => panic!("expected one Position, got {other:?}"),

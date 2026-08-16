@@ -382,12 +382,21 @@ export component PresetsBand inherits Rectangle {
             if (root.hold-index >= 0 && !root.reordering) {
                 root.hold-fired = true;
                 root.enter-reordering();
-                // THE FINGER IS STILL DOWN. CarFM's rule is that the long-press
-                // flows straight into a drag with the same finger — no lift and
-                // re-press — so the gesture is armed here rather than waiting for
-                // a second one the driver has no reason to make.
-                root.drag-index = root.hold-index;
-                root.drop-index = root.hold-index;
+                // ARMED ONLY IF THE MODE ACTUALLY OPENED. Rust refuses reorder
+                // mode while the car is moving, and it answers by simply not
+                // setting `reordering` — so arming unconditionally handed the
+                // driver a working drag in exactly the situation the refusal
+                // exists to prevent, tiles displacing and a reorder committing
+                // on a face that never entered the mode.
+                //
+                // THE FINGER IS STILL DOWN when this does arm. CarFM's rule is
+                // that the long-press flows straight into a drag with the same
+                // finger — no lift and re-press — so there is nothing else to
+                // wait for.
+                if (root.reordering) {
+                    root.drag-index = root.hold-index;
+                    root.drop-index = root.hold-index;
+                }
             }
         }
     }
@@ -426,19 +435,30 @@ export component PresetsBand inherits Rectangle {
     settle := Timer {
         interval: 200ms;
         running: false;
-        triggered => {
-            self.running = false;
-            // COMMITTED HERE, not at the release. The 200ms above is the held
-            // tile sliding into the gap the others already opened for it;
-            // committing on release instead would close that gap and swap every
-            // tile's contents on the same frame, which reads as a flicker rather
-            // than a move. CarFM gets the same effect from a FLIP snapshot.
-            if (root.drag-index >= 0 && root.drop-index >= 0
-                && root.drag-index != root.drop-index) {
-                root.reorder(root.drag-index, root.drop-index);
-            }
-            root.clear-drag();
+        triggered => { root.finish-drop(); }
+    }
+
+    /// Commit the move the finger decided on, and forget the gesture.
+    ///
+    /// COMMITTED HERE, not at the release. The 200ms is the held tile sliding
+    /// into the gap the others already opened for it; committing on release
+    /// instead closes that gap and swaps every tile's contents on the same
+    /// frame, which reads as a flicker rather than a move. CarFM gets the same
+    /// effect from a FLIP snapshot.
+    ///
+    /// A FUNCTION rather than the timer's body, because the timer is not the
+    /// only thing that can end a drop: a second press inside the 200ms window
+    /// used to overwrite `drag-index` and `drop-index` while this was still
+    /// pending, so the settle then either committed nothing at all or committed
+    /// a move the driver never made. Both callers below finish the old drop
+    /// first.
+    function finish-drop() {
+        settle.running = false;
+        if (root.drag-index >= 0 && root.drop-index >= 0
+            && root.drag-index != root.drop-index) {
+            root.reorder(root.drag-index, root.drop-index);
         }
+        root.clear-drag();
     }
 
     function clear-drag() {
@@ -450,7 +470,30 @@ export component PresetsBand inherits Rectangle {
         root.drag-dy = 0px;
     }
 
+    /// Reorder mode closed under the gesture — DONE was tapped, or the car
+    /// pulled away and Rust shut the mode down.
+    ///
+    /// A drop that has already been decided still commits: the driver let go
+    /// before this happened, and 200ms of settle animation is not a reason to
+    /// throw their move away. A drag with the finger still on the glass is
+    /// abandoned, because no decision was made. Without this the tiles stayed
+    /// displaced on a face that was no longer in reorder mode.
+    changed reordering => {
+        if (!root.reordering) {
+            if (root.dropping) {
+                root.finish-drop();
+            } else {
+                root.hold-cancel();
+            }
+        }
+    }
+
     function hold-begin(i: int, mx: length, my: length) {
+        // Finish any drop still settling. It owns `drag-index`/`drop-index`, and
+        // the writes below would otherwise erase the answer it is about to give.
+        if (root.dropping) {
+            root.finish-drop();
+        }
         root.hold-index = i;
         root.hold-fired = false;
         root.press-x = mx;

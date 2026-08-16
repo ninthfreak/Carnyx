@@ -29,7 +29,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use jni::objects::{JByteArray, JClass, JIntArray, JObject, JString};
+use jni::objects::{JByteArray, JClass, JObject, JString};
 use jni::refs::Global;
 use jni::{jni_sig, jni_str, Env, JavaVM};
 
@@ -231,33 +231,40 @@ impl LogoNet for AndroidNet {
 pub struct AndroidCodec;
 
 impl ImageCodec for AndroidCodec {
-    /// One JNI crossing, not three: Java returns `[w, h, r,g,b,a, …]` in a single
-    /// int array. A megapixel logo is four million ints, and crossing three times
-    /// to fetch dimensions separately would cost more than the decode.
+    /// One JNI crossing, not three: Java returns a big-endian `i32` width, a
+    /// big-endian `i32` height, then straight RGBA, in a single BYTE array.
+    ///
+    /// Bytes rather than ints, and it matters on this hardware. A 1024×1024 logo
+    /// as `int[]` components is 16 MB in Java and another 16 MB in the `Vec<i32>`
+    /// it lands in here; with the `Bitmap` and the intermediate ARGB array still
+    /// alive that is upwards of 40 MB in flight for one image, on a 32-bit head
+    /// unit. As bytes it is 4 MB a side, and the pixels move straight into the
+    /// `Raster` with no per-component conversion at all.
     fn decode(&self, bytes: &[u8]) -> Option<Raster> {
-        let flat: Vec<i32> = with_class(|env, class| {
+        /// Must match `CarnyxNet.HEADER`.
+        const HEADER: usize = 8;
+
+        let mut flat: Vec<u8> = with_class(|env, class| {
             let arr = env.byte_array_from_slice(bytes)?;
             let v = env.call_static_method(
                 class,
                 jni_str!("decode"),
-                jni_sig!("([BI)[I"),
+                jni_sig!("([BI)[B"),
                 &[(&arr).into(), (crate::logos::prep::DECODE_MAX_EDGE as i32).into()],
             )?;
             let obj = v.l()?;
             if obj.is_null() {
                 return Ok(Vec::new());
             }
-            let ints: JIntArray = JIntArray::cast_local(env, obj)?;
-            let len = ints.len(env)?;
-            let mut out = vec![0i32; len];
-            ints.get_region(env, 0, &mut out)?;
-            Ok(out)
+            let bytes: JByteArray = JByteArray::cast_local(env, obj)?;
+            env.convert_byte_array(&bytes)
         })?;
 
-        if flat.len() < 2 {
+        if flat.len() < HEADER {
             return None;
         }
-        let (w, h) = (flat[0], flat[1]);
+        let w = i32::from_be_bytes([flat[0], flat[1], flat[2], flat[3]]);
+        let h = i32::from_be_bytes([flat[4], flat[5], flat[6], flat[7]]);
         if w <= 0 || h <= 0 {
             return None;
         }
@@ -267,11 +274,14 @@ impl ImageCodec for AndroidCodec {
         let want = (w as usize)
             .checked_mul(h as usize)
             .and_then(|p| p.checked_mul(4))?;
-        if flat.len() != want + 2 {
+        if flat.len() != want + HEADER {
             return None;
         }
-        let rgba: Vec<u8> = flat[2..].iter().map(|&c| c.clamp(0, 255) as u8).collect();
-        let raster = Raster { w, h, rgba };
+        // `drain` rather than `flat[HEADER..].to_vec()`: the copy would hold both
+        // buffers at once, which is the allocation this whole change exists to
+        // avoid.
+        flat.drain(..HEADER);
+        let raster = Raster { w, h, rgba: flat };
         // The exact cap is applied here so the ladder maths lives in one place;
         // Java's inSampleSize only gets it into the right order of magnitude.
         Some(crate::logos::prep::resample_raster(

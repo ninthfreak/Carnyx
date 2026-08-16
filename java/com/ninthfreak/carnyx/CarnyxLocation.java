@@ -48,25 +48,31 @@ public final class CarnyxLocation {
     private static final String TAG = "CarnyxLocation";
 
     /**
-     * How often to accept a fix, and how far the car must move to earn one.
+     * How often to accept a fix.
      *
-     * A radio needs to know which town it is in, not which lane. Two seconds and
-     * fifty metres is far coarser than a navigation app would ask for and is
-     * still far finer than the nearest-transmitter question needs — the FCC
-     * table's rows are kilometres apart. The cost of asking for more is battery
-     * on a device that is often running off the ignition.
+     * A radio needs to know which town it is in, not which lane, and two seconds
+     * is far coarser than a navigation app would ask for while still far finer
+     * than the nearest-transmitter question needs — the FCC table's rows are
+     * kilometres apart. It is also the rate at which a STOP is noticed, which is
+     * why the distance filter below is zero.
      */
     private static final long MIN_INTERVAL_MS = 2000L;
-    private static final float MIN_DISTANCE_M = 50f;
 
     /**
-     * Above this, the car is moving, and the face shows the driving glyph.
+     * ZERO, and it has to be.
      *
-     * 2.2 m/s is about 8 km/h — above walking pace, below anything that could be
-     * a stationary unit's GPS noise. Speed is only reported by some providers,
-     * so a fix without it is treated as stationary rather than guessed at.
+     * This was 50 metres, on the reasoning that a radio needs to know which town
+     * it is in and not which lane. That is true of the POSITION and false of the
+     * motion state: a parked car moves no distance at all, so it earns no further
+     * callback, so the last fix — taken while still rolling — is the last word.
+     * The driving glyph stayed lit after parking and reorder mode stayed refused,
+     * both until the car moved another fifty metres.
+     *
+     * The cost of dropping the filter is a callback every {@link #MIN_INTERVAL_MS},
+     * which is 0.5 Hz. CarFM's own motion service takes GPS speed at ~1 Hz and
+     * calls it cheap "a car head unit's GPS is always powered".
      */
-    private static final float MOVING_MPS = 2.2f;
+    private static final float MIN_DISTANCE_M = 0f;
 
     private CarnyxLocation() {}
 
@@ -94,17 +100,27 @@ public final class CarnyxLocation {
     private static boolean listening;
     private static boolean asked;
 
-    /** Registered from Rust; see src/android/location.rs. */
-    private static native void nativePosition(double lat, double lon, boolean fix, boolean inMotion);
+    /**
+     * Registered from Rust; see src/android/location.rs.
+     *
+     * The RAW speed crosses, not a verdict about it. Deciding what counts as
+     * moving needs hysteresis, hysteresis needs state, and state that decides
+     * something belongs on the side of the wire that can be tested — which is
+     * the rule this file's header states and the old {@code MOVING_MPS} constant
+     * quietly broke.
+     */
+    private static native void nativePosition(
+        double lat, double lon, boolean fix, float speedMps, boolean hasSpeed);
 
     private static final LocationListener LISTENER = new LocationListener() {
         @Override public void onLocationChanged(Location loc) {
             if (loc == null) return;
-            boolean moving = loc.hasSpeed() && loc.getSpeed() >= MOVING_MPS;
-            // Every sanity check on the numbers themselves lives in Rust
-            // (`ingest_position`), including the (0, 0) that a provider with
-            // nothing hands back. Java's job is to pass on what it was told.
-            nativePosition(loc.getLatitude(), loc.getLongitude(), true, moving);
+            // Every judgement about these numbers lives in Rust
+            // (`ingest_position`) — the (0, 0) a provider with nothing hands
+            // back, and the speed hysteresis. Java's job is to pass on what it
+            // was told.
+            nativePosition(loc.getLatitude(), loc.getLongitude(), true,
+                loc.hasSpeed() ? loc.getSpeed() : 0f, loc.hasSpeed());
         }
 
         // The three-argument overload is abstract before API 29 and default
@@ -117,7 +133,7 @@ public final class CarnyxLocation {
             // Not necessarily a loss: the other provider may still be running.
             // Ask the manager rather than assuming.
             if (!anyProviderEnabled()) {
-                nativePosition(0, 0, false, false);
+                nativePosition(0, 0, false, 0f, false);
             }
         }
     };
@@ -236,7 +252,8 @@ public final class CarnyxLocation {
                         // take a minute, and the picker is unusable until then.
                         Location last = mgr.getLastKnownLocation(p);
                         if (last != null) {
-                            nativePosition(last.getLatitude(), last.getLongitude(), true, false);
+                            nativePosition(last.getLatitude(), last.getLongitude(), true,
+                                last.hasSpeed() ? last.getSpeed() : 0f, last.hasSpeed());
                         }
                     } catch (SecurityException e) {
                         // Permission revoked between the check and here.
@@ -246,7 +263,7 @@ public final class CarnyxLocation {
                     }
                 }
                 synchronized (LOCK) { listening = any; }
-                if (!any) nativePosition(0, 0, false, false);
+                if (!any) nativePosition(0, 0, false, 0f, false);
             }
         });
         return true;

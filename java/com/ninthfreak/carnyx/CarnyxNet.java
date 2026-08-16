@@ -159,10 +159,18 @@ public final class CarnyxNet {
      * allocation that fails. The exact cap is then applied by Rust's resampler,
      * so the ladder maths stays in one place.
      *
-     * Returns {@code [w, h, r,g,b,a, r,g,b,a, …]} flattened into one int array:
-     * one JNI crossing instead of three, and no shared-state handshake.
+     * Returns one byte array: a big-endian {@code int} width, a big-endian
+     * {@code int} height, then straight RGBA. One JNI crossing instead of three,
+     * and no shared-state handshake.
+     *
+     * BYTES, NOT INTS, and the difference is not cosmetic on this hardware. An
+     * {@code int[]} of RGBA components costs four bytes per component — 16 MB for
+     * a 1024×1024 logo here, and another 16 MB in the {@code Vec<i32>} Rust
+     * copies it into. With the {@link Bitmap} and the intermediate ARGB array
+     * still alive that is upwards of 40 MB in flight for one logo, on a 32-bit
+     * head unit. As bytes the same image is 4 MB a side.
      */
-    public static int[] decode(byte[] bytes, int maxEdge) {
+    public static byte[] decode(byte[] bytes, int maxEdge) {
         if (bytes == null || bytes.length == 0) return null;
         try {
             BitmapFactory.Options probe = new BitmapFactory.Options();
@@ -185,16 +193,16 @@ public final class CarnyxNet {
                 if (w <= 0 || h <= 0) return null;
                 int[] argb = new int[w * h];
                 bm.getPixels(argb, 0, w, 0, 0, w, h);
-                int[] out = new int[2 + w * h * 4];
-                out[0] = w;
-                out[1] = h;
+                byte[] out = new byte[HEADER + w * h * 4];
+                putInt(out, 0, w);
+                putInt(out, 4, h);
                 for (int i = 0; i < argb.length; i++) {
                     int p = argb[i];
-                    int o = 2 + i * 4;
-                    out[o]     = (p >> 16) & 0xFF;   // R
-                    out[o + 1] = (p >> 8) & 0xFF;    // G
-                    out[o + 2] = p & 0xFF;           // B
-                    out[o + 3] = (p >>> 24) & 0xFF;  // A
+                    int o = HEADER + i * 4;
+                    out[o]     = (byte) (p >> 16);   // R
+                    out[o + 1] = (byte) (p >> 8);    // G
+                    out[o + 2] = (byte) p;           // B
+                    out[o + 3] = (byte) (p >>> 24);  // A
                 }
                 return out;
             } finally {
@@ -203,6 +211,16 @@ public final class CarnyxNet {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** Two big-endian ints in front of the pixels: width, then height. */
+    static final int HEADER = 8;
+
+    private static void putInt(byte[] b, int at, int v) {
+        b[at]     = (byte) (v >>> 24);
+        b[at + 1] = (byte) (v >>> 16);
+        b[at + 2] = (byte) (v >>> 8);
+        b[at + 3] = (byte) v;
     }
 
     /** Encode straight-alpha RGBA8 as PNG. Null on failure. */

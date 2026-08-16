@@ -31,7 +31,7 @@ use std::sync::OnceLock;
 use jni::errors::Error;
 use jni::objects::{JClass, JObject};
 use jni::refs::Global;
-use jni::sys::{jboolean, jdouble};
+use jni::sys::{jboolean, jdouble, jfloat};
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM, NativeMethod};
 
 use super::TunerError;
@@ -50,13 +50,14 @@ extern "system" fn native_position<'a>(
     lat: jdouble,
     lon: jdouble,
     fix: jboolean,
-    in_motion: jboolean,
+    speed_mps: jfloat,
+    has_speed: jboolean,
 ) {
     // Through the same guard the tuner's natives use. A panic unwinding across
     // the JNI boundary is undefined behaviour, so it is turned into a Java
     // exception instead.
     guard(&mut env, |_env| {
-        super::ingest_position(lat, lon, fix, in_motion);
+        super::ingest_position(lat, lon, fix, speed_mps, has_speed);
         Ok(())
     });
 }
@@ -72,13 +73,13 @@ fn guard<'a>(unowned: &mut EnvUnowned<'a>, body: impl FnOnce(&mut Env) -> Result
 fn natives() -> Vec<NativeMethod<'static>> {
     // SAFETY: the signature matches both the Java declaration
     // (`private static native void nativePosition(double, double, boolean,
-    // boolean)`) and this function's parameter list. The two are written
-    // together and must be changed together — a mismatch is not a compile error
-    // on either side, it is a crash at the first fix.
+    // float, boolean)`) and this function's parameter list. The three are
+    // written together and must be changed together — a mismatch is not a
+    // compile error on either side, it is a crash at the first fix.
     unsafe {
         vec![NativeMethod::from_raw_parts(
             jni_str!("nativePosition"),
-            jni_str!("(DDZZ)V"),
+            jni_str!("(DDZFZ)V"),
             native_position as *mut c_void,
         )]
     }
