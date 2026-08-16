@@ -104,6 +104,17 @@ fn android_main(android_app: slint::android::AndroidApp) {
         };
 
     let _driver = app::App::with_tuner(&ui, &db_path, &files_dir_for_prefs, tuner, tuner_is_real);
+
+    // REAL POSITION, if this unit will give one. Failure here is silent and
+    // ordinary: no permission (nobody taps Allow on a dashboard), no provider,
+    // or no antenna. In every one of those cases the face keeps the position it
+    // already had and the picker keeps saying "Waiting for GPS…", which is the
+    // honest report.
+    //
+    // SAFETY: same pointers, same lifetime argument as the tuner above.
+    if unsafe { android::location::init(vm, activity) }.is_ok() {
+        android::location::start();
+    }
     // Tuner events arrive on binder and pump threads. The hop back to the UI
     // thread is `invoke_from_event_loop`; the drain itself reads the App out of
     // a thread-local, because `Rc<App>` cannot cross a `Send` boundary.

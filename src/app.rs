@@ -168,6 +168,11 @@ struct State {
     audio: bool,
     stereo: Option<bool>,
     location: fake::FakeLocation,
+    /// Set by a Position event, cleared by the drain. The picker rebuild and the
+    /// hero republish are done ONCE per drain rather than once per fix: a moving
+    /// car produces a fix a second, and each one would otherwise re-run a
+    /// 20,733-row query and repaint the hero.
+    location_dirty: bool,
     picker: NearbyPicker,
     settings: settings::Settings,
     logo: crate::logos::search::Model,
@@ -284,6 +289,7 @@ impl App {
                 audio: true,
                 stereo: None,
                 location,
+                location_dirty: false,
                 picker,
                 settings: settings::Settings {
                     selected: saved.selected,
@@ -371,6 +377,14 @@ impl App {
             let Some(event) = queue().pop_front() else { break };
             self.apply_event(event);
         }
+        // Once, after the whole batch: a position change re-runs the nearby
+        // query and re-resolves the hero, and neither is cheap enough to do per
+        // event.
+        if std::mem::take(&mut self.state.borrow_mut().location_dirty) {
+            self.refresh_nearby();
+            self.push_hero();
+            self.push_presets();
+        }
     }
 
     fn apply_event(&self, event: TunerEvent) {
@@ -394,6 +408,13 @@ impl App {
                 // this event is the first moment there is one.
                 if s.audio {
                     s.tuner.set_audio_enabled(true);
+                }
+            }
+            TunerEvent::Position { lat, lon, fix, in_motion } => {
+                let next = fake::FakeLocation { lat, lon, fix, in_motion };
+                if next != s.location {
+                    s.location = next;
+                    s.location_dirty = true;
                 }
             }
             TunerEvent::ConnectFailed(why) => {

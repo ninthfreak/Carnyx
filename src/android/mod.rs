@@ -38,6 +38,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "android")]
 mod dex;
 #[cfg(target_os = "android")]
+pub mod location;
+#[cfg(target_os = "android")]
 pub mod nwd;
 
 #[cfg(target_os = "android")]
@@ -365,6 +367,18 @@ pub struct LevelReading {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TunerEvent {
     Connected(Connected),
+    /// A location fix, or the loss of one.
+    ///
+    /// Not a tuner event, and it travels on the tuner's queue anyway: there is
+    /// one device, one drain and one hop back to the UI thread, and a second
+    /// queue would be a second thing to get the threading wrong in. `fix: false`
+    /// is the honest report of a unit that has an antenna and no sky.
+    Position {
+        lat: f64,
+        lon: f64,
+        fix: bool,
+        in_motion: bool,
+    },
     /// The bind was accepted but the service never connected, or it was refused.
     ConnectFailed(String),
     Disconnected,
@@ -463,6 +477,21 @@ pub fn ingest_connected(band: i32, raw: i32, ps: String, rt: String, pty: i32, r
         g.cal.mhz_for(raw)
     };
     emit(TunerEvent::Connected(Connected { band, raw, mhz, ps, rt, pty, registered }));
+}
+
+/// A fix from the platform's LocationManager.
+///
+/// Guards the coordinates rather than trusting them: Android will hand out a
+/// (0, 0) fix from a provider that has nothing, and Null Island is 700 km off
+/// the Gulf of Guinea, where the nearest FM station is nobody's. An impossible
+/// pair is reported as NO fix, which the picker already knows how to draw.
+pub fn ingest_position(lat: f64, lon: f64, fix: bool, in_motion: bool) {
+    let sane = lat.is_finite()
+        && lon.is_finite()
+        && (-90.0..=90.0).contains(&lat)
+        && (-180.0..=180.0).contains(&lon)
+        && !(lat == 0.0 && lon == 0.0);
+    emit(TunerEvent::Position { lat, lon, fix: fix && sane, in_motion });
 }
 
 pub fn ingest_connect_failed(reason: String) {
@@ -868,6 +897,60 @@ mod tests {
             FakeTuner::unavailable().snapshot(),
             FakeTuner::new().snapshot()
         );
+    }
+
+    /// Android hands out a (0, 0) fix from a provider that has nothing, and
+    /// Null Island is 700 km off the Gulf of Guinea. Trusting it would put the
+    /// picker's "best signal first" list in the Atlantic and re-resolve every
+    /// preset's call sign against stations that do not exist — silently, because
+    /// a fix is a fix as far as the face is concerned.
+    #[test]
+    fn an_impossible_position_is_reported_as_no_fix() {
+        let h = Harness::new();
+        let bad = [
+            (0.0, 0.0),
+            (91.0, 10.0),
+            (-91.0, 10.0),
+            (10.0, 181.0),
+            (10.0, -181.0),
+            (f64::NAN, 10.0),
+            (10.0, f64::INFINITY),
+        ];
+        for (lat, lon) in bad {
+            ingest_position(lat, lon, true, false);
+            match h.drain().as_slice() {
+                [TunerEvent::Position { fix, .. }] => {
+                    assert!(!fix, "({lat}, {lon}) must not be reported as a fix")
+                }
+                other => panic!("expected one Position, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_real_position_survives_the_guard() {
+        let h = Harness::new();
+        // Madison, which is where the shipped fake sits.
+        ingest_position(43.07, -89.40, true, true);
+        match h.drain().as_slice() {
+            [TunerEvent::Position { lat, lon, fix, in_motion }] => {
+                assert!(*fix);
+                assert!(*in_motion);
+                assert_eq!((*lat, *lon), (43.07, -89.40));
+            }
+            other => panic!("expected one Position, got {other:?}"),
+        }
+    }
+
+    /// A genuine loss of fix must stay a loss, not be rescued by sane numbers.
+    #[test]
+    fn losing_the_fix_is_reported_even_with_valid_coordinates() {
+        let h = Harness::new();
+        ingest_position(43.07, -89.40, false, false);
+        match h.drain().as_slice() {
+            [TunerEvent::Position { fix, .. }] => assert!(!fix),
+            other => panic!("expected one Position, got {other:?}"),
+        }
     }
 
     /// A connect must CLAIM the audio source, not assume it.

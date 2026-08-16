@@ -36,7 +36,7 @@ use crate::logos::{candidate, ddg::DdgImage, Raster};
 ///
 /// `fix` is settable because the satellite icon has two states and a fake that
 /// can only produce one of them tests half the icon.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FakeLocation {
     pub lat: f64,
     pub lon: f64,
