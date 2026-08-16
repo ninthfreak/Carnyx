@@ -238,6 +238,13 @@ struct State {
     audio: bool,
     stereo: Option<bool>,
     location: fake::FakeLocation,
+    /// When the last well-formed RDS group arrived, for the expiry below.
+    ///
+    /// `Instant`, not a wall clock: this measures a gap, and a wall clock can be
+    /// stepped by the head unit picking up time from GPS mid-drive.
+    last_rds_at: Option<std::time::Instant>,
+    /// The carrier has gone quiet. Set by the expiry, cleared by the next group.
+    rds_stale: bool,
     /// What a panel key asked for, applied after the drain.
     ///
     /// DEFERRED, because `apply_event` holds a mutable borrow of this struct and
@@ -334,6 +341,14 @@ const FM_HI: f32 = 108.0;
 /// read to 900ms. Asking for less than the floor just gets clamped, so the floor
 /// is what is asked for.
 const LEVEL_WATCH_MS: i64 = 5_000;
+
+/// How long a silence has to last before the RDS on screen is disowned.
+///
+/// CarFM's `RDS_STALE_MS` (RadioScreen.tsx:453). Long enough that a tunnel, an
+/// overpass or a burst of multipath does not blank a good station; short enough
+/// that a driver is not reading a song title from a transmitter they left behind
+/// twenty miles ago.
+const RDS_STALE: std::time::Duration = std::time::Duration::from_secs(25);
 
 impl App {
     /// Build the application against a station database at `db_path`.
@@ -490,6 +505,8 @@ impl App {
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
+                last_rds_at: None,
+                rds_stale: false,
                 panel_action: None,
                 callsigns,
                 store,
@@ -765,6 +782,12 @@ impl App {
                 // then needs twelve groups to displace instead of three.
                 s.rds.reset_for_retune();
                 s.rds_state = RdsState::default();
+                // The expiry clock restarts with the dial. Carrying the old
+                // station's last-heard stamp across a retune would expire the
+                // new one the moment it was tuned, if the old one had been quiet
+                // for twenty-four seconds already.
+                s.last_rds_at = None;
+                s.rds_stale = false;
                 // A new station has reported nothing yet, so the pill goes back
                 // to EMPTY rather than carrying the last station's pilot — and
                 // never to MONO, which would be an assertion nothing made.
@@ -773,6 +796,11 @@ impl App {
                 s.settings.log.push(&stamp(), &line);
             }
             TunerEvent::RdsGroup(g) => {
+                // The carrier is alive. Stamped for EVERY group that arrives,
+                // published or not — a group the consensus gates reject is still
+                // proof that there is a transmitter out there.
+                s.last_rds_at = Some(std::time::Instant::now());
+                s.rds_stale = false;
                 let hex = g
                     .0
                     .iter()
@@ -1004,7 +1032,16 @@ impl App {
         // A PROXY, and never "% intact": this tuner exposes no per-block
         // validity, so errors in C and D — where the text lives — are invisible
         // to it, and RadioText will arrive mangled while this reads healthy.
-        let loss = s.rds.quality().pi_match_pct.map(|pct| 100.0 - pct);
+        //
+        // GATED ON STALENESS, because the expiry deliberately does NOT reset the
+        // decoder — so its ring survives the carrier going quiet, and a figure
+        // held over from before that would be describing air this radio is no
+        // longer receiving.
+        let loss = if s.rds_stale {
+            None
+        } else {
+            s.rds.quality().pi_match_pct.map(|pct| 100.0 - pct)
+        };
         let face = signal::meter_face(s.level, loss, s.dotted, !s.audio);
         // Settled ONCE PER POLL and fed back. Settling at render time would run
         // the hysteresis against itself.
@@ -1312,6 +1349,9 @@ impl App {
         on!(on_done_reordering, |app| {
             app.ui().set_reordering(false);
         });
+        on!(on_tick, |app| {
+            app.tick();
+        });
         on!(on_enter_reordering, |app| {
             app.enter_reordering();
         });
@@ -1605,6 +1645,70 @@ impl App {
         self.state.borrow_mut().location = location;
         self.refresh_nearby();
         self.push_hero();
+    }
+
+    /// One second has passed.
+    ///
+    /// The only heartbeat in the process. Everything here has to be cheap enough
+    /// to run forever on a 32-bit head unit, and cheap here means "a comparison
+    /// unless something is actually wrong".
+    pub fn tick(self: &Rc<App>) {
+        if self.expire_rds() {
+            self.push_hero();
+            self.push_meter();
+            self.push_settings();
+        }
+    }
+
+    /// Disown the RDS on screen when the carrier has gone quiet.
+    ///
+    /// LOSING A STATION IS SILENCE, NOT AN EVENT. Drive out of range without
+    /// touching the dial and the groups simply stop; every merge in this file is
+    /// "keep what we had" and only a retune ever cleared anything. So the strip
+    /// went on scrolling the last song, the genre kept the old PTY, TP and TA
+    /// stayed latched and the RDS tell stayed lit — all of it over hiss, for as
+    /// long as the drive lasted. This is CarFM's expiry, and the two rules that
+    /// look wrong are the ones it paid for:
+    ///
+    /// THE DECODER IS NOT RESET. Expiry means "the carrier went quiet", not "we
+    /// are on a different station" — a retune is what means that, and the
+    /// frequency handler already resets there. Resetting here made the
+    /// corruption WORSE: it clears `rt_published`, which re-opens the
+    /// instant-publish path for the first complete assembly after the signal
+    /// returns, and that assembly is received in exactly the marginal conditions
+    /// that caused the gap. Eight of the eleven corrupt RadioText changes on
+    /// WERN on 2026-08-04 were first fills after an expiry. Keeping the decoder
+    /// means the confirmed text comes straight back instead of being re-acquired
+    /// from the worst air of the drive.
+    ///
+    /// TA IS DROPPED IN THE DECODER, not just on the face. TP and the text are
+    /// station identity worth restoring; TA means "an announcement is happening
+    /// RIGHT NOW", which is not safe to assume across a multi-second silence.
+    /// Clearing the tally with it forces a re-confirm — without that, a
+    /// still-running announcement could not re-publish, because the tally would
+    /// already be satisfied.
+    ///
+    /// The hero keeps its name through the station database and the learned
+    /// call-sign map, which is by design: the dial has not moved, so what is
+    /// licensed on it has not changed.
+    fn expire_rds(self: &Rc<App>) -> bool {
+        let mut s = self.state.borrow_mut();
+        let Some(at) = s.last_rds_at else { return false };
+        if at.elapsed() < RDS_STALE {
+            return false;
+        }
+        s.last_rds_at = None;
+        s.rds_stale = true;
+        s.rds.clear_ta();
+        s.rds_state = RdsState::default();
+        // The pilot came from the same carrier. EMPTY rather than MONO, which
+        // would be an assertion nothing made.
+        s.stereo = None;
+        let at = stamp();
+        s.settings
+            .log
+            .push(&at, &format!("RDS expired — no group for {}s", RDS_STALE.as_secs()));
+        true
     }
 
     /// Carry out what a panel key asked for.

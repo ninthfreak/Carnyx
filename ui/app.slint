@@ -81,6 +81,23 @@ export component AppWindow inherits Window {
     /// second. Rust owns the list; the band only reports where it landed.
     callback reorder-preset(int, int);
 
+    /// One second, forever, for anything that has to notice the passage of time
+    /// rather than an event.
+    ///
+    /// THE APP HAD NO CLOCK AT ALL, and losing a station is not an event: drive
+    /// out of range without touching the dial and the groups simply stop. Every
+    /// merge is "keep what we had", so the plate went on scrolling the last song
+    /// over hiss for the rest of the drive.
+    ///
+    /// One second is far finer than the 25s expiry it drives, and a tick that
+    /// finds nothing to do costs a comparison — which is the right trade for the
+    /// only heartbeat in the process.
+    callback tick();
+    Timer {
+        interval: 1s;
+        triggered => { root.tick(); }
+    }
+
     // ── Overlays (ANDROID §6) ───────────────────────────────────────────────
     //
     // ONE property, not four booleans — the four modals are mutually exclusive
