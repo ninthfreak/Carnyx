@@ -735,6 +735,22 @@ impl NearbyPicker {
         }
     }
 
+    /// The ranked rows behind the picker, nearest first.
+    ///
+    /// Exposed for `callsigns::Callsigns::relearn`, which learns what is on each
+    /// frequency from the query that has ALREADY run for the picker rather than
+    /// running a second one per fix.
+    pub fn rows(&self) -> &[Ranked] {
+        &self.all
+    }
+
+    /// Whether this picker has a position behind it. `false` means no fix, which
+    /// is not the same as nothing being in range — and only a located result is
+    /// worth learning from.
+    pub fn located(&self) -> bool {
+        self.located
+    }
+
     /// Run the picker's query at CarFM's shipping radius and cap.
     pub fn query(db: &StationDb, lat: f64, lon: f64) -> rusqlite::Result<Self> {
         let snapshot = db.snapshot_date()?;

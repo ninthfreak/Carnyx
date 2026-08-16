@@ -246,6 +246,11 @@ struct State {
     picker: NearbyPicker,
     settings: settings::Settings,
     logo: crate::logos::search::Model,
+    /// What was on each frequency the last time a fix let the database answer.
+    ///
+    /// The only thing that can name a station on a unit that cannot see the sky
+    /// — see [`crate::callsigns`].
+    callsigns: crate::callsigns::Callsigns,
     /// Where every station's art lives, under the app's own data directory.
     /// Always present — a store with nothing in it is the ordinary first-run
     /// state and answers every read with `None`.
@@ -370,6 +375,10 @@ impl App {
         // The seed list is a FIRST-RUN default, not a fallback: once the driver
         // has presets, an empty strip is a real state they chose and must not be
         // silently repopulated with six stations from Madison.
+        // Loaded before the strip is built, because it is what names a preset
+        // when there is no fix to resolve one.
+        let callsigns = crate::callsigns::load(&prefs_dir);
+
         let stored: Vec<crate::prefs::Preset> = if crate::prefs::path(&prefs_dir).exists() {
             saved.presets.clone()
         } else {
@@ -387,7 +396,13 @@ impl App {
             .map(|e| Slot {
                 row: resolve(db.as_ref(), e.mhz, location.position()),
                 mhz: e.mhz,
-                saved_call: e.call,
+                // The preset's own stored call sign first, then whatever the
+                // learned map knows about that dial. A preset saved before this
+                // file existed has no call sign of its own, and the map is what
+                // gives it one back.
+                saved_call: e
+                    .call
+                    .or_else(|| callsigns.get(e.mhz).map(str::to_string)),
             })
             .collect();
 
@@ -443,6 +458,7 @@ impl App {
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
+                callsigns,
                 store,
                 codec,
                 worker,
@@ -533,8 +549,10 @@ impl App {
         // query and re-resolves the hero and the strip, and none of that is
         // cheap enough to do per event.
         if std::mem::take(&mut self.state.borrow_mut().location_dirty) {
-            self.resolve_presets();
+            // NEARBY FIRST, because it is what LEARNS the band from this fix and
+            // the strip below reads what it learned.
             self.refresh_nearby();
+            self.resolve_presets();
             self.push_hero();
             self.push_presets();
         }
@@ -785,13 +803,23 @@ impl App {
         let st = &s.rds_state;
 
         // IDENTITY ORDER, and it matters: the station database is authoritative
-        // for what is on this dial, the decoded PS is a broadcaster-controlled
-        // string that many stations scroll song titles through, and the dial
-        // itself is the honest fallback. An empty ident makes the face print the
-        // frequency as the identity — never an inaccurate "Tuning…".
-        let ident = match (&row, st.ps_scrolling, st.ps.as_str()) {
-            (Some(r), _, _) => clean_call(&r.callsign),
-            (None, false, ps) if !ps.is_empty() => ps.to_string(),
+        // for what is on this dial, the LEARNED map is that same database's
+        // answer from the last time a fix let it speak, the decoded PS is a
+        // broadcaster-controlled string that many stations scroll song titles
+        // through, and the dial itself is the honest fallback. An empty ident
+        // makes the face print the frequency as the identity — never an
+        // inaccurate "Tuning…".
+        //
+        // THE LEARNED ANSWER OUTRANKS PS on purpose. It comes from the licence
+        // table; PS is whatever the broadcaster is putting out this second. The
+        // cost is that a car driven to another market before its next fix can
+        // show a stale call sign, which CarFM accepts for the same reason — a
+        // fresh lock overwrites, so it heals itself.
+        let learned = s.callsigns.get(s.dial).map(str::to_string);
+        let ident = match (&row, &learned, st.ps_scrolling, st.ps.as_str()) {
+            (Some(r), _, _, _) => clean_call(&r.callsign),
+            (None, Some(c), _, _) => clean_call(c),
+            (None, None, false, ps) if !ps.is_empty() => ps.to_string(),
             _ => String::new(),
         };
         ui.set_ident(ident.clone().into());
@@ -804,7 +832,10 @@ impl App {
         // The station's own name must not be stripped out of its own RadioText,
         // so the RESOLVED call sign goes in, never the PS: WIBA scrolls song
         // titles through PS, and a PS of "Walk" would strip "Walk This Way".
-        let call = row.as_ref().map(|r| r.callsign_base.clone());
+        let call = row
+            .as_ref()
+            .map(|r| r.callsign_base.clone())
+            .or_else(|| learned.clone());
         ui.set_radio_text(
             rds::strip_station_from_rt(&st.rt, Some(s.dial), call.as_deref()).into(),
         );
@@ -828,7 +859,11 @@ impl App {
         // The hero's own art. Dropped LAST and outside the borrow above, because
         // `art_for` writes the decode back into the cache and would otherwise be
         // a second mutable borrow of `state`.
-        let base = row.as_ref().map(|r| r.callsign_base.clone()).unwrap_or_default();
+        let base = row
+            .as_ref()
+            .map(|r| r.callsign_base.clone())
+            .or(learned)
+            .unwrap_or_default();
         drop(s);
         // No box: the hero takes the full-size rendition, as CarFM's does
         // (`LogoTile.tsx:60` — "`undefined` is the HERO's size").
@@ -1542,7 +1577,19 @@ impl App {
         let mut changed = false;
         {
             let mut s = self.state.borrow_mut();
+            // Cloned out first: the loop borrows `s.presets` mutably, and the map
+            // is read inside it.
+            let learned = s.callsigns.clone();
             for (slot, row) in s.presets.iter_mut().zip(rows) {
+                // A preset that has never resolved takes the learned answer, so
+                // a strip saved before this map existed gets its names back on
+                // the first launch after one.
+                if slot.saved_call.is_none() {
+                    if let Some(c) = learned.get(slot.mhz) {
+                        slot.saved_call = Some(c.to_string());
+                        changed = true;
+                    }
+                }
                 if slot.row == row {
                     continue;
                 }
@@ -1561,11 +1608,39 @@ impl App {
     }
 
     fn refresh_nearby(&self) {
-        {
+        let learned = {
             let mut s = self.state.borrow_mut();
             let (db, loc, snap) = (s.db.as_ref(), s.location, s.snapshot.clone());
             let picker = build_picker(db, loc, snap);
             s.picker = picker;
+
+            // LEARN WHAT THIS FIX REVEALED. One good lock fills the local band,
+            // and every no-fix start afterwards can name a station from it —
+            // which is the whole reason a car that cannot see the sky from its
+            // own driveway is not left with six bare frequencies.
+            //
+            // From the rows the picker just queried rather than a second query:
+            // this runs on every position change, and a parked car with a lock
+            // produces one every two seconds.
+            //
+            // FULL-POWER FM ONLY, matching CarFM's `s.service === 'FM'` filter.
+            // A translator can sit on a frequency it does not define.
+            if s.picker.located() {
+                let rows: Vec<(f32, String)> = s
+                    .picker
+                    .rows()
+                    .iter()
+                    .filter(|r| r.row.service == "FM")
+                    .map(|r| (r.row.frequency_mhz as f32, r.row.callsign_base.clone()))
+                    .collect();
+                s.callsigns.relearn(rows.iter().map(|(m, b)| (*m, b.as_str())))
+            } else {
+                false
+            }
+        };
+        if learned {
+            let s = self.state.borrow();
+            crate::callsigns::save(&s.prefs_dir, &s.callsigns);
         }
         self.push_nearby();
     }
@@ -2074,6 +2149,61 @@ mod tests {
         assert_eq!(bare.name(), "87.9");
         assert_eq!(bare.call(), "87.9");
         assert_eq!(bare.base(), "");
+    }
+
+    /// THE DRIVEWAY, end to end.
+    ///
+    /// The owner cannot get a fix from their own driveway. Everything that names
+    /// a station is position-gated, because 88.7 has 178 full-power licensees and
+    /// picking one without a position puts a stranger on the hero — so a cold
+    /// start there could name nothing at all.
+    ///
+    /// This is the way out, and it is CarFM's: one good lock while driving learns
+    /// what is on each frequency, and every no-fix start afterwards reads the
+    /// names straight out of it. Driven through the real query the picker runs,
+    /// against the real 20,733-row database, then reloaded from disk exactly as a
+    /// cold start would.
+    #[test]
+    fn one_lock_while_driving_names_the_band_from_the_driveway_forever_after() {
+        let db = StationDb::open(&host_db_path()).expect("the shipped database opens");
+        let dir = std::env::temp_dir().join("carnyx-driveway");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // ── The drive: a fix, so the picker's query answers. ──
+        let (lat, lon) = fake::FakeLocation::default().position().unwrap();
+        let picker = NearbyPicker::query(&db, lat, lon).expect("the nearby query runs");
+        assert!(picker.located());
+        let rows: Vec<(f32, String)> = picker
+            .rows()
+            .iter()
+            .filter(|r| r.row.service == "FM")
+            .map(|r| (r.row.frequency_mhz as f32, r.row.callsign_base.clone()))
+            .collect();
+        assert!(!rows.is_empty(), "the query has to return something to learn from");
+
+        let mut learned = crate::callsigns::Callsigns::default();
+        assert!(learned.relearn(rows.iter().map(|(m, b)| (*m, b.as_str()))));
+        crate::callsigns::save(&dir, &learned);
+
+        // The band it filled covers the dials the face opens on.
+        assert_eq!(learned.get(88.7), Some("WERN"));
+        assert!(learned.len() >= 6, "one lock should fill more than a preset or two");
+
+        // ── The driveway: a cold start, no fix, nothing but the file. ──
+        let cold = crate::callsigns::load(&dir);
+        assert_eq!(cold, learned, "the map survives the launch");
+
+        // Every seeded preset can be named, with no position at all.
+        for mhz in fake::SEED_PRESET_MHZ {
+            assert!(resolve(Some(&db), mhz, None).is_none(), "no fix resolves nothing");
+            let named = cold.get(mhz).expect("the learned map names it anyway");
+            let slot = Slot { mhz, row: None, saved_call: Some(named.to_string()) };
+            assert_ne!(slot.name(), format_mhz(mhz), "{mhz} must not read as a bare dial");
+            assert!(!slot.base().is_empty(), "{mhz} must give the logo search a key");
+        }
+        assert_eq!(cold.get(88.7), Some("WERN"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// THE REGRESSION, pinned.

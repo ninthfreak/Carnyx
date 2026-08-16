@@ -8,6 +8,7 @@ slint::include_modules!();
 
 pub mod android;
 pub mod app;
+pub mod callsigns;
 pub mod fake;
 pub mod logos;
 pub mod prefs;
