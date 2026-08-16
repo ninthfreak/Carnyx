@@ -870,6 +870,28 @@ mod tests {
         );
     }
 
+    /// A connect must CLAIM the audio source, not assume it.
+    ///
+    /// The face opens with the power button lit, so until the claim was sent the
+    /// UI and the MCU disagreed: the radio tuned and RDS arrived, and there was
+    /// silence until the driver toggled power off and on, because the ON half is
+    /// the only thing that had ever broadcast app-IN. This pins that a Connected
+    /// event reaches `set_audio_enabled`.
+    #[test]
+    fn connecting_emits_the_event_the_audio_claim_hangs_off() {
+        let h = Harness::new();
+        let t = FakeTuner::new();
+        assert!(!t.audio_enabled(), "audio starts unclaimed");
+        t.connect().unwrap();
+        assert!(
+            h.drain().iter().any(|e| matches!(e, TunerEvent::Connected(_))),
+            "connect must emit Connected — App::apply_event claims the audio \
+             source there, and without the event there is no claim and no sound"
+        );
+        t.set_audio_enabled(true);
+        assert!(t.audio_enabled(), "the claim must reach the tuner");
+    }
+
     /// Collect events for the duration of a test.
     ///
     /// The sink and the calibration are process-global — there is one tuner in

@@ -337,6 +337,20 @@ impl App {
                     s.dial = mhz;
                 }
                 s.settings.log.push(&stamp(), "connect ok");
+                // CLAIM THE AUDIO SOURCE. The face opens with the power button
+                // lit, and until this ran, that was a claim nobody had made: the
+                // tuner tuned, RDS and signal arrived, and the MCU was still
+                // routing some other source, so there was no SOUND. Toggling the
+                // power button off and on fixed it, because the ON half is the
+                // only thing that had ever sent the app-IN broadcast.
+                //
+                // Here rather than beside `connect()`, because `connect` returning
+                // Ok only means bindService was accepted. `setAudioEnabled`
+                // needs a live binder for its `setRadioBackServiceOn` half, and
+                // this event is the first moment there is one.
+                if s.audio {
+                    s.tuner.set_audio_enabled(true);
+                }
             }
             TunerEvent::ConnectFailed(why) => {
                 s.settings.log.push(&stamp(), &format!("connect failed: {why}"));
