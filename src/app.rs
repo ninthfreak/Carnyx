@@ -1179,6 +1179,9 @@ impl App {
         on!(on_enter_reordering, |app| {
             app.enter_reordering();
         });
+        on!(on_reorder_preset, |app, from, to| {
+            app.reorder_preset(from, to);
+        });
         on!(on_open_settings, |app| {
             app.push_settings();
         });
@@ -1673,6 +1676,36 @@ impl App {
         }
         drop(s);
         self.push_logo_search();
+    }
+
+    /// Move one preset, after a drag in reorder mode has let go.
+    ///
+    /// The band never touches the list — it only reports where the finger
+    /// landed, and every guard is here. An out-of-range index is DROPPED rather
+    /// than clamped: a clamp would silently move the wrong preset, and a gesture
+    /// that produced a nonsensical index is one that should do nothing.
+    ///
+    /// THE DIAL IS NOT TOUCHED. Reordering changes which tile a station sits on,
+    /// never what is playing, so `active()` re-derives from the same dial and
+    /// simply lands on a different index — which is why it was never stored.
+    fn reorder_preset(self: &Rc<App>, from: i32, to: i32) {
+        {
+            let mut s = self.state.borrow_mut();
+            let n = s.presets.len();
+            let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+                return;
+            };
+            if from >= n || to >= n || from == to {
+                return;
+            }
+            let slot = s.presets.remove(from);
+            s.presets.insert(to, slot);
+        }
+        self.push_presets();
+        self.push_hero();
+        // The ORDER is what changed, and the order is what `prefs.json` stores,
+        // so this has to reach disk or the drag is undone by the next launch.
+        self.save_prefs();
     }
 
     /// Long-press on a preset tile — the door to reorder mode.

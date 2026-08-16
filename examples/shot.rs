@@ -113,6 +113,9 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // exists only in reorder mode (§6.4 block 0).
     ("reorder-logo-badges", 1024, 614, false, State::Reordering, 0.0),
     ("reorder-logo-badges-portrait", 360, 800, false, State::Reordering, 0.0),
+    // A drag in flight: tile 0 held, the finger between slots 2 and 3, the gap
+    // open behind it. Driven by real pointer events — see the DRAG block below.
+    ("reorder-drag", 1024, 614, false, State::Dragging, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -144,6 +147,13 @@ enum State {
     LongGenre,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
+    /// Reorder mode with a DRAG IN FLIGHT.
+    ///
+    /// The only state produced by synthetic input rather than by setting a
+    /// property, and deliberately so: the drag lives inside `PresetsBand` and is
+    /// reachable only through the gesture. A shot that set a flag would prove
+    /// the tiles can be drawn displaced, not that a finger can displace them.
+    Dragging,
     /// No position: the satellite icon's other state.
     NoGpsFix,
     /// A dial that is not one of the six saved slots.
@@ -199,6 +209,16 @@ impl Platform for Headless {
     }
 }
 
+/// Where the synthetic drag starts and ends, on the 1024x614 wide track.
+///
+/// The end lands BETWEEN slot 2 and slot 3 on purpose. Ending on a slot centre
+/// parks the lifted tile exactly over the gap it opened, which looks identical
+/// to a strip that never moved — and that is precisely the reading that made a
+/// working drag look broken once already.
+const DRAG_Y: f32 = 505.0;
+const DRAG_FROM_X: f32 = 150.0;
+const DRAG_TO_X: f32 = 480.0;
+
 fn main() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
     slint::platform::set_platform(Box::new(Headless { window: window.clone() }))
@@ -246,6 +266,41 @@ fn main() {
             });
             slint::platform::update_timers_and_animations();
             render(&mut buffer);
+        }
+
+        if state == State::Dragging {
+            // A REAL GESTURE. Press on the first tile, then drag right across
+            // two slots. Everything downstream is the shipping path: the
+            // TouchArea's grab, the band's 4dp slop, `slot-at`, the inline slot
+            // arithmetic and the lifted tile.
+            let press = LogicalPosition::new(DRAG_FROM_X, DRAG_Y);
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position: press,
+                button: slint::platform::PointerEventButton::Left,
+            });
+            // TWO moves. The first crosses the slop and turns the press into a
+            // drag; a single jump would too, but two is what a finger does and
+            // it proves the drag survives more than one event.
+            ui.window().dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new((DRAG_FROM_X + DRAG_TO_X) / 2.0, DRAG_Y),
+            });
+            ui.window()
+                .dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(DRAG_TO_X, DRAG_Y) });
+            // Slint evaluates a dirty binding lazily, AT RENDER, so the 160ms
+            // gap animation does not start until something asks for pixels — one
+            // render after a sleep only ever catches its first frame. Pump the
+            // clock instead, which is what a running event loop would do.
+            for _ in 0..8 {
+                slint::platform::update_timers_and_animations();
+                render(&mut buffer);
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            slint::platform::update_timers_and_animations();
+            render(&mut buffer);
+            // NO RELEASE, deliberately. The shot is of a drag in flight, and a
+            // release would commit the reorder into `prefs.json` — which would
+            // make the next run of this harness start from a different preset
+            // order and quietly invalidate every comparison against it.
         }
 
         write_png(name, w, h, &buffer);
@@ -300,7 +355,9 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         State::NoCallsign => ui.set_ident("".into()),
         State::StereoUnknown => ui.set_stereo_known(false),
         State::LongGenre => ui.set_pty("Adult Album Alternative and Classic Rock".into()),
-        State::Reordering => ui.set_reordering(true),
+        // The press below arms the drag with no hold, which is the rule once the
+        // mode is already open.
+        State::Reordering | State::Dragging => ui.set_reordering(true),
         State::NoGpsFix => driver.set_position(FakeLocation::no_fix()),
         State::UnsavedDial => {
             // Through the numpad's own callbacks, so the band check, the buffer

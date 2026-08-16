@@ -72,6 +72,9 @@ export component AppWindow inherits Window {
     /// Long-press on a preset tile — the only door to reorder mode, and so the
     /// only door to the logo badge that opens §6.4.
     callback enter-reordering();
+    /// A drag in reorder mode let go: move the preset at the first index to the
+    /// second. Rust owns the list; the band only reports where it landed.
+    callback reorder-preset(int, int);
 
     // ── Overlays (ANDROID §6) ───────────────────────────────────────────────
     //
@@ -253,6 +256,7 @@ export component AppWindow inherits Window {
         // already is: the mode is refused outright while the car is moving, and
         // that judgement is not the view's to make.
         enter-reordering => { root.enter-reordering(); }
+        reorder-preset(from, to) => { root.reorder-preset(from, to); }
     }
 
     // ── The modal layer ─────────────────────────────────────────────────────

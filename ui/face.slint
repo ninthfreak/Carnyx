@@ -70,6 +70,8 @@ export component Face inherits Rectangle {
     callback done-reordering();
     /// Long-press on a preset tile. The only door to reorder mode.
     callback enter-reordering();
+    /// A drag let go: move the preset at the first index to the second.
+    callback reorder-preset(int, int);
 
     property <bool> dead: !root.audio-active;
 
@@ -151,6 +153,7 @@ export component Face inherits Rectangle {
             open-nearby => { root.open-nearby(); }
             done-reordering => { root.done-reordering(); }
             enter-reordering => { root.enter-reordering(); }
+            reorder(from, to) => { root.reorder-preset(from, to); }
             open-logo-search(i) => { root.open-logo-search(i); }
         }
     }
