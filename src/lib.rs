@@ -121,18 +121,43 @@ fn android_main(android_app: slint::android::AndroidApp) {
         Err(_) => None,
     };
 
-    let _driver =
-        app::App::with_tuner(&ui, &db_path, &files_dir_for_prefs, tuner, tuner_is_real, net);
+    let _driver = app::App::with_tuner(
+        &ui,
+        &db_path,
+        &files_dir_for_prefs,
+        tuner,
+        tuner_is_real,
+        net,
+        // NO FIX, until a real one arrives. The default is Madison with `fix`
+        // true — a host fake — and building it inside `with_tuner` put it on the
+        // device: the satellite glyph was lit from the first frame and the
+        // nearby list was for Wisconsin, wherever the car actually was.
+        fake::FakeLocation::no_fix(),
+    );
 
-    // REAL POSITION, if this unit will give one. Failure here is silent and
-    // ordinary: no permission (nobody taps Allow on a dashboard), no provider,
-    // or no antenna. In every one of those cases the face keeps the position it
-    // already had and the picker keeps saying "Waiting for GPS…", which is the
-    // honest report.
+    // REAL POSITION, if this unit will give one.
+    //
+    // `start` returning false is NOT the end of it, and treating it as such is
+    // why GPS never worked: on a first launch the grant does not exist yet, so
+    // `start` asks for it and answers false, and the grant lands seconds later
+    // when the driver taps Allow. `CarnyxLocation` watches for that itself and
+    // registers the providers when it appears — see `requestGrant`.
+    //
+    // Both outcomes reach the diagnostics log through the tuner's own event
+    // path, so a unit that never gets a fix says so somewhere a person can read
+    // rather than just showing an unlit satellite.
     //
     // SAFETY: same pointers, same lifetime argument as the tuner above.
-    if unsafe { android::location::init(vm, activity) }.is_ok() {
-        android::location::start();
+    match unsafe { android::location::init(vm, activity) } {
+        Ok(()) => {
+            let listening = android::location::start();
+            android::ingest_note(if listening {
+                "location: listening".into()
+            } else {
+                "location: waiting for the permission grant".into()
+            });
+        }
+        Err(e) => android::ingest_note(format!("location: unavailable — {e}")),
     }
     // Tuner events arrive on binder and pump threads. The hop back to the UI
     // thread is `invoke_from_event_loop`; the drain itself reads the App out of

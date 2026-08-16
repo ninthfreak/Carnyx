@@ -280,7 +280,19 @@ impl App {
         // settings panel reads, so nothing on screen claims a tuner that is not
         // there. This is the host and screenshot path; `android_main` calls
         // `with_tuner` instead and hands over the vendor service.
-        App::with_tuner(ui, db_path, &host_prefs_dir(), Box::new(FakeTuner::new()), false, None)
+        App::with_tuner(
+            ui,
+            db_path,
+            &host_prefs_dir(),
+            Box::new(FakeTuner::new()),
+            false,
+            None,
+            // MADISON, and only here. This is the position the station-database
+            // tests query from, so the picker's rows on a screenshot are the
+            // rows `the_madison_query_returns_what_carfm_returned` pins. On the
+            // device the seed is `no_fix` — see `android_main`.
+            fake::FakeLocation::default(),
+        )
     }
 
     /// The same face, driven by whichever tuner the caller could actually get.
@@ -295,6 +307,13 @@ impl App {
     /// panel states, on screen, whether the head unit's radio is present, and
     /// that claim should come from the caller that knows how the tuner was
     /// obtained rather than from a value the tuner reports about itself.
+    ///
+    /// `location` is the STARTING position, and it is a parameter for the same
+    /// reason. It used to be `FakeLocation::default()` — Madison, with `fix`
+    /// TRUE — built right here, which meant the device booted claiming a
+    /// satellite lock it did not have and a nearby list for a city 800 miles
+    /// away. The device passes `no_fix`; the host passes Madison, because that
+    /// is the position the screenshots and the database tests are pinned to.
     pub fn with_tuner(
         ui: &AppWindow,
         db_path: &Path,
@@ -302,11 +321,10 @@ impl App {
         tuner: Box<dyn Tuner>,
         tuner_is_real: bool,
         net: Option<Net>,
+        location: fake::FakeLocation,
     ) -> Rc<App> {
         let db = StationDb::open(db_path).ok();
         let snapshot = db.as_ref().and_then(|d| d.snapshot_date().ok()).flatten();
-
-        let location = fake::FakeLocation::default();
 
         // WHAT THE DRIVER CHOSE LAST TIME.
         //
@@ -601,6 +619,9 @@ impl App {
                     }
                     s.settings.log.push(&stamp(), "reorder: closed, the car is moving");
                 }
+            }
+            TunerEvent::Note(line) => {
+                s.settings.log.push(&stamp(), &line);
             }
             TunerEvent::ConnectFailed(why) => {
                 s.settings.log.push(&stamp(), &format!("connect failed: {why}"));
@@ -1044,8 +1065,17 @@ impl App {
     /// `box_dp` picks the ladder rung — 128 for a preset chip, `None` for the
     /// hero, which is CarFM's own split (`LogoTile.tsx:337`, `boxDp = fill ? 128
     /// : …`, and the hero calls `useStationLogo` with no box at all).
+    ///
+    /// `settings.logos_on` IS DELIBERATELY NOT CONSULTED, and gating on it was a
+    /// bug that shipped: a driver could search a logo, save it, and never see it
+    /// on the face. That switch is CarFM's `@carfm/logos_enabled_v1` and it
+    /// governs AUTO-DOWNLOAD, which is what its own subtitle says — "Auto-download
+    /// station artwork over Wi-Fi" against "Off — assign logos manually from a
+    /// station". CarFM's `useStationLogo` never reads it. A hand-assigned logo is
+    /// something the driver chose on purpose; a preference about background
+    /// fetching has no business hiding it.
     fn art_for(&self, base: &str, box_dp: Option<f32>) -> Option<slint::Image> {
-        if base.is_empty() || !self.state.borrow().settings.logos_on {
+        if base.is_empty() {
             return None;
         }
         let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32);
@@ -1271,13 +1301,11 @@ impl App {
             app.log_unavailable("battery exemption needs the Android settings activity");
         });
         on!(on_settings_set_logos, |app, v| {
+            // AUTO-DOWNLOAD, not "show logos" — see `art_for`. Nothing on the
+            // face changes when this moves, and nothing downloads either:
+            // `AUTO_LOGO_RESOLUTION` is false and has no caller.
             app.state.borrow_mut().settings.logos_on = v;
             app.push_settings();
-            // The toggle now REMOVES ART FROM THE FACE, so the tiles and the
-            // hero have to be republished — `art_for` reads the flag, but
-            // nothing would ask it again until the next tune.
-            app.push_hero();
-            app.push_presets();
         });
         on!(on_settings_clear_logos, |app| {
             // DESTRUCTIVE, AND THE CONFIRM DOES NOT EXIST. SettingsPanel.tsx

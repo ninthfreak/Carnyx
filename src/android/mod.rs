@@ -381,6 +381,14 @@ pub enum TunerEvent {
         fix: bool,
         in_motion: bool,
     },
+    /// One line for the diagnostics log, from a subsystem with no other way in.
+    ///
+    /// `android_main` is where the location binding either takes or does not,
+    /// and it holds no `App` — the queue is the only route from there to a panel
+    /// a person can read. Carries no state and changes nothing on the face: if a
+    /// Note is the ONLY evidence of something, that something is under-reported
+    /// and belongs in a property instead.
+    Note(String),
     /// The bind was accepted but the service never connected, or it was refused.
     ConnectFailed(String),
     Disconnected,
@@ -494,6 +502,12 @@ pub fn ingest_position(lat: f64, lon: f64, fix: bool, in_motion: bool) {
         && (-180.0..=180.0).contains(&lon)
         && !(lat == 0.0 && lon == 0.0);
     emit(TunerEvent::Position { lat, lon, fix: fix && sane, in_motion });
+}
+
+/// Put one line in the diagnostics log from outside the App. See
+/// [`TunerEvent::Note`].
+pub fn ingest_note(line: String) {
+    emit(TunerEvent::Note(line));
 }
 
 pub fn ingest_connect_failed(reason: String) {

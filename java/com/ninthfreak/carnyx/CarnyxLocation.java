@@ -19,15 +19,22 @@ import android.util.Log;
  * left on this side of the line. This file is dexed by build.rs and loaded at
  * run time through the same InMemoryDexClassLoader the tuner uses.
  *
- * <h2>Why this asks for permission and never demands it</h2>
+ * <h2>Asking for the grant, and surviving not getting it</h2>
  *
  * ACCESS_COARSE_LOCATION and ACCESS_FINE_LOCATION are declared in the manifest,
- * but from API 23 declaring is not granting — the grant needs a dialog, and a
- * dialog needs somebody to tap it. On a head unit, at night, on a motorway,
- * that somebody does not exist. So every entry point here treats "not granted"
- * as an ordinary answer: {@link #start} returns false, Rust keeps the fake it
- * already had, and the picker keeps sorting by frequency. Nothing throws and
- * nothing blocks.
+ * but from API 23 declaring is not granting. An earlier version of this file
+ * stopped there, reasoning that a dialog needs somebody to tap it and a head
+ * unit at night on a motorway has nobody — and the result was a radio whose GPS
+ * never worked at all, because the grant was never asked for even on the first
+ * launch, when the driver IS sitting there looking at the screen. CarFM asks
+ * (`services/gpsSession.ts`, `PermissionsAndroid.request`), and so does this.
+ *
+ * The ask is one-shot per launch and it never blocks. The grant arrives through
+ * {@code onRequestPermissionsResult} on the Activity, which a NativeActivity app
+ * does not own and cannot override, so {@link #start} polls instead: a bounded
+ * number of checks on the main looper, ending the moment the grant appears or
+ * the window closes. Denial is an ordinary answer — the polls stop, Rust keeps
+ * reporting no fix, and the picker sorts by frequency.
  *
  * <h2>Providers</h2>
  *
@@ -63,10 +70,29 @@ public final class CarnyxLocation {
 
     private CarnyxLocation() {}
 
+    /**
+     * How long to keep looking for the grant after asking, and how often.
+     *
+     * 40 × 500 ms is twenty seconds — long enough for a driver to read a dialog
+     * and tap Allow, short enough that a denial stops costing anything almost at
+     * once. The polls are three cheap `checkSelfPermission` calls; there is no
+     * timer left running afterwards either way.
+     */
+    private static final int GRANT_POLLS = 40;
+    private static final long GRANT_POLL_MS = 500L;
+
+    /** Arbitrary; nothing reads it back, because the result callback is the
+     *  Activity's and a NativeActivity app does not own that class. */
+    private static final int REQUEST_CODE = 0x10CA;
+
     private static final Object LOCK = new Object();
     private static Context ctx;
+    /** The Activity, kept SEPARATELY from {@link #ctx}: permissions are asked
+     *  for by an Activity, and `getApplicationContext()` is not one. */
+    private static android.app.Activity activity;
     private static LocationManager manager;
     private static boolean listening;
+    private static boolean asked;
 
     /** Registered from Rust; see src/android/location.rs. */
     private static native void nativePosition(double lat, double lon, boolean fix, boolean inMotion);
@@ -98,6 +124,9 @@ public final class CarnyxLocation {
 
     public static void attach(Context context) {
         synchronized (LOCK) {
+            if (context instanceof android.app.Activity) {
+                activity = (android.app.Activity) context;
+            }
             if (ctx == null && context != null) {
                 ctx = context.getApplicationContext();
                 manager = (LocationManager) ctx.getSystemService(Context.LOCATION_SERVICE);
@@ -127,9 +156,54 @@ public final class CarnyxLocation {
     }
 
     /**
+     * Ask for the grant, once per launch, and watch for it to land.
+     *
+     * Returns false when there is nothing to ask with (no Activity) or the ask
+     * has already been made. Never blocks: {@code requestPermissions} puts a
+     * dialog up and returns immediately, and the polling below is what notices
+     * the answer.
+     */
+    private static boolean requestGrant() {
+        final android.app.Activity act;
+        synchronized (LOCK) {
+            if (asked || activity == null) return false;
+            asked = true;
+            act = activity;
+        }
+        final Handler h = new Handler(Looper.getMainLooper());
+        h.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    act.requestPermissions(new String[] {
+                        "android.permission.ACCESS_FINE_LOCATION",
+                        "android.permission.ACCESS_COARSE_LOCATION",
+                    }, REQUEST_CODE);
+                } catch (Throwable t) {
+                    Log.w(TAG, "requestPermissions failed", t);
+                    return;
+                }
+                h.postDelayed(new Runnable() {
+                    int left = GRANT_POLLS;
+                    @Override public void run() {
+                        if (hasPermission()) {
+                            // The ask succeeded; registration is start()'s job
+                            // and it is now free to do it.
+                            start();
+                            return;
+                        }
+                        if (--left > 0) h.postDelayed(this, GRANT_POLL_MS);
+                        else Log.i(TAG, "location was not granted");
+                    }
+                }, GRANT_POLL_MS);
+            }
+        });
+        return true;
+    }
+
+    /**
      * Begin listening. Returns false when there is nothing to listen to, which
-     * is a normal state and not an error: no permission, no provider, or no
-     * LocationManager at all.
+     * is a normal state and not an error: no provider, no LocationManager, or a
+     * grant that has been asked for and not yet given.
      *
      * Idempotent. Registration must happen on a thread with a Looper, and the
      * caller is a JNI thread that has none, so it is posted to the main thread.
@@ -140,7 +214,12 @@ public final class CarnyxLocation {
             if (listening) return true;
             m = manager;
         }
-        if (m == null || !hasPermission()) return false;
+        if (m == null) return false;
+        if (!hasPermission()) {
+            // Not a failure yet — ask, and let the poll above call back in.
+            requestGrant();
+            return false;
+        }
 
         final LocationManager mgr = m;
         new Handler(Looper.getMainLooper()).post(new Runnable() {
