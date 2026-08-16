@@ -202,13 +202,34 @@ impl App {
     /// there is no database. Refusing to start because a reference table is
     /// missing would be the wrong trade in a car.
     pub fn new(ui: &AppWindow, db_path: &Path) -> Rc<App> {
+        // The fake, and it is announced as one: `tuner_is_real` is what the
+        // settings panel reads, so nothing on screen claims a tuner that is not
+        // there. This is the host and screenshot path; `android_main` calls
+        // `with_tuner` instead and hands over the vendor service.
+        App::with_tuner(ui, db_path, Box::new(FakeTuner::new()), false)
+    }
+
+    /// The same face, driven by whichever tuner the caller could actually get.
+    ///
+    /// Split out from [`App::new`] because the real one cannot be built here:
+    /// `android::init` needs a `JavaVM` and a live activity, so only
+    /// `android_main` can supply it. Everything downstream of this line is
+    /// identical either way, which is the point of the [`Tuner`] trait — the
+    /// face has no idea which one it has.
+    ///
+    /// `tuner_is_real` is not derived from the tuner, deliberately. The settings
+    /// panel states, on screen, whether the head unit's radio is present, and
+    /// that claim should come from the caller that knows how the tuner was
+    /// obtained rather than from a value the tuner reports about itself.
+    pub fn with_tuner(
+        ui: &AppWindow,
+        db_path: &Path,
+        tuner: Box<dyn Tuner>,
+        tuner_is_real: bool,
+    ) -> Rc<App> {
         let db = StationDb::open(db_path).ok();
         let snapshot = db.as_ref().and_then(|d| d.snapshot_date().ok()).flatten();
 
-        // The fake, and it is announced as one: `tuner_is_real` is what the
-        // settings panel reads, so nothing on screen claims a tuner that is not
-        // there.
-        let tuner: Box<dyn Tuner> = Box::new(FakeTuner::new());
         let location = fake::FakeLocation::default();
 
         let presets = fake::seed_presets()
@@ -224,7 +245,7 @@ impl App {
                 db,
                 snapshot,
                 tuner,
-                tuner_is_real: false,
+                tuner_is_real,
                 rds: RdsDecoder::new(),
                 rds_state: RdsState::default(),
                 stream: fake::FakeRdsStream::new(),

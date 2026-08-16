@@ -43,9 +43,11 @@ pub fn run() -> Result<(), slint::PlatformError> {
 fn android_main(android_app: slint::android::AndroidApp) {
     use std::io::Read;
 
-    // Both of these must be taken BEFORE `init`, which consumes the `AndroidApp`.
+    // All four must be taken BEFORE `init`, which consumes the `AndroidApp`.
     let files_dir = android_app.internal_data_path();
     let assets = android_app.asset_manager();
+    let vm = android_app.vm_as_ptr();
+    let activity = android_app.activity_as_ptr();
     slint::android::init(android_app).unwrap();
 
     let db_path = files_dir
@@ -67,7 +69,25 @@ fn android_main(android_app: slint::android::AndroidApp) {
         .unwrap_or_else(|| std::path::PathBuf::from(stations::DB_FILE));
 
     let ui = AppWindow::new().unwrap();
-    let _driver = app::App::new(&ui, &db_path);
+
+    // The vendor radio, or an honest stand-in. A unit without the NWD service is
+    // a NORMAL state — the FYT/DuduOS units do not have it — so a failed bind
+    // must not take the process down on someone's dashboard. It falls back, and
+    // says so: `tuner_is_real` is what the settings panel's status line reads,
+    // so a failure is visible where the driver can actually see it rather than
+    // in a log this app has no way to show them.
+    //
+    // SAFETY: `vm` and `activity` came from `AndroidApp::vm_as_ptr` and
+    // `activity_as_ptr` a few lines above, which is exactly what `init`
+    // documents. The activity outlives this call — `ui.run()` below is what
+    // ends the process.
+    let (tuner, tuner_is_real): (Box<dyn android::Tuner>, bool) =
+        match unsafe { android::init(vm, activity) } {
+            Ok(nwd) => (Box::new(nwd), true),
+            Err(_) => (Box::new(android::FakeTuner::new()), false),
+        };
+
+    let _driver = app::App::with_tuner(&ui, &db_path, tuner, tuner_is_real);
     // Tuner events arrive on binder and pump threads. The hop back to the UI
     // thread is `invoke_from_event_loop`; the drain itself reads the App out of
     // a thread-local, because `Rc<App>` cannot cross a `Send` boundary.
