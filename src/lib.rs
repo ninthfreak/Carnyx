@@ -103,7 +103,26 @@ fn android_main(android_app: slint::android::AndroidApp) {
             Err(_) => (Box::new(android::FakeTuner::unavailable()), false),
         };
 
-    let _driver = app::App::with_tuner(&ui, &db_path, &files_dir_for_prefs, tuner, tuner_is_real);
+    // HTTPS and image decoding, both the platform's. `init` loads the class out
+    // of the embedded dex; there are no natives to register, because every call
+    // is Rust asking Java a question and waiting for the answer.
+    //
+    // `None` on failure, and that is a real state rather than a stumble: the app
+    // then behaves exactly as the host does — the logo window opens, the search
+    // reports that nothing was found, and no station gets art. A logo is not
+    // worth a dead dashboard.
+    //
+    // SAFETY: same pointers, same lifetime argument as the tuner above.
+    let net = match unsafe { android::net::init(vm, activity) } {
+        Ok(()) => Some(app::Net {
+            http: std::sync::Arc::new(android::net::AndroidNet),
+            codec: std::sync::Arc::new(android::net::AndroidCodec),
+        }),
+        Err(_) => None,
+    };
+
+    let _driver =
+        app::App::with_tuner(&ui, &db_path, &files_dir_for_prefs, tuner, tuner_is_real, net);
 
     // REAL POSITION, if this unit will give one. Failure here is silent and
     // ordinary: no permission (nobody taps Allow on a dashboard), no provider,

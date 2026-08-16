@@ -16,16 +16,17 @@
 //! nearby picker's ranking and filters, the logo search's state machine, and the
 //! settings panel's derived layer.
 //!
-//! Faked, because the framework is absent from this container: the tuner
-//! (`crate::android::FakeTuner`, the tuner builder's own fake, which drives the
-//! same `ingest_*` path the device drives), the position, the RDS pump's source,
-//! and the logo search's network and image decoder. Every one of them lives in
-//! [`crate::fake`] and is named so.
+//! Faked ON THE HOST ONLY, because the framework is absent from this container:
+//! the tuner (`crate::android::FakeTuner`, the tuner builder's own fake, which
+//! drives the same `ingest_*` path the device drives), the position, the RDS
+//! pump's source, and the logo search's network and image decoder. Every one of
+//! them lives in [`crate::fake`] and is named so. On the device all four are
+//! real — [`App::with_tuner`] takes the tuner and the [`Net`] pair from the
+//! caller, and `android_main` is the only caller that can build them.
 //!
 //! Absent entirely, and reported as such rather than stubbed into looking
-//! present: preference persistence, the confirm dialog that must stand in front
-//! of "clear all logos", and every DIAGNOSTICS action that crosses the framework
-//! edge.
+//! present: the confirm dialog that must stand in front of "clear all logos",
+//! and every DIAGNOSTICS action that crosses the framework edge.
 //!
 //! ## Threading
 //!
@@ -36,16 +37,24 @@
 //! needs a wake, which is `slint::invoke_from_event_loop` — see
 //! [`set_event_wake`]. The queue exists precisely so that the UI thread is the
 //! only thread that ever touches an `AppWindow`.
+//!
+//! The logo worker is the SECOND producer on that path, and it gets its own
+//! queue for one reason: its events are not tuner events and must not be
+//! reachable from `apply_event`, where a stray match arm could route a
+//! thumbnail into the RDS decoder. Same wake, same drain, same UI thread.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::path::Path;
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::android::{FakeTuner, Tuner, TunerEvent};
+use crate::logos::prefs::HeroFlags;
+use crate::logos::store::LogoStore;
+use crate::logos::{service, ImageCodec, LogoNet, Raster};
 use crate::rds::{self, RdsDecoder, RdsState};
 use crate::signal;
 use crate::station::{brand_color, clean_call, format_mhz, plate_label};
@@ -59,6 +68,10 @@ use crate::{
 // ── The event queue ──────────────────────────────────────────────────────────
 
 static QUEUE: Mutex<VecDeque<TunerEvent>> = Mutex::new(VecDeque::new());
+/// The logo worker's own queue. Separate from the tuner's so a thumbnail can
+/// never reach `apply_event`, and so the two producers cannot deadlock behind
+/// one lock — the worker holds its sink across a decode.
+static LOGO_QUEUE: Mutex<VecDeque<service::Event>> = Mutex::new(VecDeque::new());
 type Wake = Box<dyn Fn() + Send + Sync>;
 static WAKE: OnceLock<Wake> = OnceLock::new();
 
@@ -74,6 +87,25 @@ pub fn set_event_wake(wake: impl Fn() + Send + Sync + 'static) {
 
 fn queue() -> std::sync::MutexGuard<'static, VecDeque<TunerEvent>> {
     QUEUE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn logo_queue() -> std::sync::MutexGuard<'static, VecDeque<service::Event>> {
+    LOGO_QUEUE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The logo worker's outside world, handed in rather than built here.
+///
+/// Both halves are `Arc<dyn …>` because the worker thread owns a clone of each
+/// while the UI thread keeps the codec for decoding STORED renditions — a
+/// station's art has to be turned into pixels on the thread that draws it, and
+/// that read never touches the network.
+///
+/// `None` is the host: there is no `HttpsURLConnection` and no `BitmapFactory`
+/// off the device, so the screenshot path keeps [`crate::fake::FakeLogoSearch`]
+/// and says so on the face rather than pretending a search ran.
+pub struct Net {
+    pub http: Arc<dyn LogoNet>,
+    pub codec: Arc<dyn ImageCodec>,
 }
 
 thread_local! {
@@ -101,6 +133,14 @@ pub fn drain_current() {
 /// amount of work on a binder thread: push, then signal.
 fn enqueue(event: TunerEvent) {
     queue().push_back(event);
+    if let Some(wake) = WAKE.get() {
+        wake();
+    }
+}
+
+/// The same, for the logo worker. Runs on `carnyx-logos`, never the UI thread.
+fn enqueue_logo(event: service::Event) {
+    logo_queue().push_back(event);
     if let Some(wake) = WAKE.get() {
         wake();
     }
@@ -176,6 +216,30 @@ struct State {
     picker: NearbyPicker,
     settings: settings::Settings,
     logo: crate::logos::search::Model,
+    /// Where every station's art lives, under the app's own data directory.
+    /// Always present — a store with nothing in it is the ordinary first-run
+    /// state and answers every read with `None`.
+    store: Arc<LogoStore>,
+    /// The decoder, for turning STORED renditions into pixels on the UI thread.
+    /// `None` on the host, where there is no `BitmapFactory`.
+    codec: Option<Arc<dyn ImageCodec>>,
+    /// The thread that owns every socket and every pixel pass. `None` on the
+    /// host, which is what makes `run_logo_search` fall back to the fake.
+    worker: Option<service::Worker>,
+    /// Decoded art, keyed by call-sign base and the ladder box it was read at.
+    ///
+    /// NOT an optimisation. `push_presets` runs on every tune, every fix and
+    /// every drain, and it renders up to eight tiles; without this, each of
+    /// those would be a file read and a PNG decode on the UI thread of a 32-bit
+    /// head unit. A `None` value is cached too — "this station has no art" is
+    /// the common answer and is worth not re-deriving.
+    art: HashMap<(String, u32), Option<slint::Image>>,
+    /// The open logo window's own art, at full size.
+    ///
+    /// A `Raster` rather than an `Image` because `logos::ui::apply` wants one,
+    /// and held rather than re-read because `push_logo_search` runs on every
+    /// keystroke of state the window has — one decode per window, not per push.
+    logo_art: Option<Raster>,
     numpad: String,
 }
 
@@ -216,7 +280,7 @@ impl App {
         // settings panel reads, so nothing on screen claims a tuner that is not
         // there. This is the host and screenshot path; `android_main` calls
         // `with_tuner` instead and hands over the vendor service.
-        App::with_tuner(ui, db_path, &host_prefs_dir(), Box::new(FakeTuner::new()), false)
+        App::with_tuner(ui, db_path, &host_prefs_dir(), Box::new(FakeTuner::new()), false, None)
     }
 
     /// The same face, driven by whichever tuner the caller could actually get.
@@ -237,6 +301,7 @@ impl App {
         prefs_dir: &Path,
         tuner: Box<dyn Tuner>,
         tuner_is_real: bool,
+        net: Option<Net>,
     ) -> Rc<App> {
         let db = StationDb::open(db_path).ok();
         let snapshot = db.as_ref().and_then(|d| d.snapshot_date().ok()).flatten();
@@ -272,6 +337,25 @@ impl App {
 
         let picker = build_picker(db.as_ref(), location, snapshot.clone());
 
+        // The store sits BESIDE `prefs.json`, under the same private directory,
+        // for the same reason it is passed in rather than derived: `assets/` is
+        // what cargo-apk packages, and a store rooted there would have shipped
+        // the developer's own logos inside the APK.
+        let store = Arc::new(LogoStore::new(logo_dir(&prefs_dir)));
+        let codec = net.as_ref().map(|n| n.codec.clone());
+        // `enqueue_logo` rather than anything Slint-shaped: the worker must not
+        // know a window exists, and the wake hop is already installed for the
+        // tuner. On the host WAKE is empty and the events sit in the queue until
+        // the caller drains — which is exactly what the screenshot path wants.
+        let worker = net.map(|n| {
+            service::Worker::spawn(
+                store.clone(),
+                n.http,
+                n.codec,
+                Box::new(enqueue_logo) as service::Sink,
+            )
+        });
+
         let app = Rc::new(App {
             ui: ui.as_weak(),
             state: RefCell::new(State {
@@ -303,6 +387,11 @@ impl App {
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
+                store,
+                codec,
+                worker,
+                art: HashMap::new(),
+                logo_art: None,
                 numpad: String::new(),
                 prefs_dir,
                 saved,
@@ -377,6 +466,13 @@ impl App {
             let Some(event) = queue().pop_front() else { break };
             self.apply_event(event);
         }
+        // The logo worker's queue, on the same hop. Drained AFTER the tuner's so
+        // a `Saved` event's invalidation lands on top of whatever a retune in
+        // the same batch already rebuilt.
+        loop {
+            let Some(event) = logo_queue().pop_front() else { break };
+            self.apply_logo_event(event);
+        }
         // Once, after the whole batch: a position change re-runs the nearby
         // query and re-resolves the hero, and neither is cheap enough to do per
         // event.
@@ -384,6 +480,80 @@ impl App {
             self.refresh_nearby();
             self.push_hero();
             self.push_presets();
+        }
+    }
+
+    /// Apply one thing the logo worker said.
+    ///
+    /// MUST RUN ON THE UI THREAD. Every variant is inert data; the decisions
+    /// were all made in `logos::search::Model`, which answers `false` for a
+    /// result whose generation the driver has already moved past.
+    fn apply_logo_event(&self, event: service::Event) {
+        match event {
+            service::Event::Results { generation, rows } => {
+                let changed = self.state.borrow_mut().logo.results_arrived(generation, rows);
+                if changed {
+                    self.push_logo_search();
+                }
+            }
+            service::Event::Thumb { generation, index, art } => {
+                let landed = self.state.borrow_mut().logo.thumb_arrived(generation, index, art);
+                if !landed {
+                    return;
+                }
+                // ONE ROW, not all seventeen properties. A thumbnail lands on
+                // the frame that can least afford a full republish — three more
+                // are still downloading behind it.
+                let cell = self.state.borrow().logo.cells().get(index).cloned();
+                let replaced = match &cell {
+                    Some(c) => crate::logos::ui::update_candidate(&self.ui(), index, c),
+                    None => false,
+                };
+                if !replaced {
+                    self.push_logo_search();
+                }
+            }
+            service::Event::SearchFailed { generation } => {
+                let changed = self.state.borrow_mut().logo.search_failed(generation);
+                if changed {
+                    self.push_logo_search();
+                }
+            }
+            service::Event::Saved { base } => {
+                {
+                    let mut s = self.state.borrow_mut();
+                    s.logo.saved();
+                    // UPPERCASED to match the key `art_for` writes. The store is
+                    // case-insensitive (`store::safe_base` uppercases) but this
+                    // cache is a plain `HashMap`, so a lower-case base here
+                    // would leave the OLD art on the face until the next launch.
+                    //
+                    // Every rung goes, not just one: the hero's entry and the
+                    // tile's are different keys holding the same stale station.
+                    let key = base.to_uppercase();
+                    s.art.retain(|(b, _), _| *b != key);
+                    s.settings.log.push(&stamp(), &format!("logo saved: {key}"));
+                }
+                // Dismiss and tear down, in that order — `close_logo_search`
+                // reads the target, which `close` then clears.
+                self.ui().set_overlay(Overlay::None);
+                self.close_logo_search();
+                self.push_hero();
+                self.push_presets();
+                self.push_settings();
+            }
+            service::Event::SaveFailed { reason } => {
+                {
+                    let mut s = self.state.borrow_mut();
+                    s.settings.log.push(&stamp(), &format!("logo save failed: {reason}"));
+                    // The BARE reason: `error_body` wraps it as "Couldn't save
+                    // this logo — {reason}. Try a different result.", so a
+                    // reason that repeats the prefix reads twice on the face.
+                    s.logo.save_failed(reason);
+                }
+                self.push_logo_search();
+                self.push_settings();
+            }
         }
     }
 
@@ -415,6 +585,21 @@ impl App {
                 if next != s.location {
                     s.location = next;
                     s.location_dirty = true;
+                }
+                // THE CAR PULLED AWAY. CarFM closes reorder mode on motion
+                // (`closeOnMotion`, CarFmFace.tsx:641) and so does this: a mode
+                // that is refused while moving must not survive because the
+                // driver happened to be stopped when they opened it.
+                //
+                // The overlay above it goes too. Leaving the logo window up over
+                // a face that has left reorder mode strands the driver in a
+                // window whose only door has closed behind them.
+                if in_motion && self.ui().get_reordering() {
+                    self.ui().set_reordering(false);
+                    if self.ui().get_overlay() == Overlay::LogoSearch {
+                        self.ui().set_overlay(Overlay::None);
+                    }
+                    s.settings.log.push(&stamp(), "reorder: closed, the car is moving");
                 }
             }
             TunerEvent::ConnectFailed(why) => {
@@ -579,12 +764,44 @@ impl App {
         ui.set_in_motion(s.location.in_motion);
         ui.set_tuner_error(!s.tuner.is_available());
         ui.set_audio_active(s.audio);
+
+        // The hero's own art. Dropped LAST and outside the borrow above, because
+        // `art_for` writes the decode back into the cache and would otherwise be
+        // a second mutable borrow of `state`.
+        let base = row.as_ref().map(|r| r.callsign_base.clone()).unwrap_or_default();
+        drop(s);
+        // No box: the hero takes the full-size rendition, as CarFM's does
+        // (`LogoTile.tsx:60` — "`undefined` is the HERO's size").
+        let art = self.art_for(&base, None);
+        let flags = self.hero_flags(&base, art.is_some());
+        ui.set_has_logo(art.is_some());
+        ui.set_logo(art.unwrap_or_default());
+        ui.set_show_call(flags.show_call);
+        ui.set_show_freq(flags.show_freq);
     }
 
     fn push_presets(&self) {
         let ui = self.ui();
+        // Art first, with NO borrow held: `art_for` decodes on a miss and writes
+        // the result back, so resolving it inside the map below would be a
+        // mutable borrow inside a shared one.
+        let bases: Vec<String> = self
+            .state
+            .borrow()
+            .presets
+            .iter()
+            .map(|p| p.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone()))
+            .collect();
+        let art: Vec<Option<slint::Image>> =
+            bases.iter().map(|b| self.art_for(b, Some(TILE_BOX_DP))).collect();
+
         let s = self.state.borrow();
-        let rows: Vec<Preset> = s.presets.iter().map(to_preset).collect();
+        let rows: Vec<Preset> = s
+            .presets
+            .iter()
+            .zip(art.iter())
+            .map(|(p, a)| to_preset(p, a.clone()))
+            .collect();
         ui.set_presets(ModelRc::from(Rc::new(VecModel::from(rows))));
 
         let n = s.presets.len() as i32;
@@ -601,8 +818,10 @@ impl App {
         } else {
             ((active - 1).rem_euclid(n), (active + 1).rem_euclid(n))
         };
-        ui.set_prev_preset(to_preset(&s.presets[prev as usize]));
-        ui.set_next_preset(to_preset(&s.presets[next as usize]));
+        // The peek cards reuse the tiles' art — same plate, same ladder rung, and
+        // it is already decoded.
+        ui.set_prev_preset(to_preset(&s.presets[prev as usize], art[prev as usize].clone()));
+        ui.set_next_preset(to_preset(&s.presets[next as usize], art[next as usize].clone()));
         ui.set_has_prev(true);
         ui.set_has_next(true);
     }
@@ -795,7 +1014,59 @@ impl App {
         let s = self.state.borrow();
         let view = s.logo.view();
         let brand = brand_color(&s.logo.target().map(|t| t.base.clone()).unwrap_or_default());
-        crate::logos::ui::apply(&ui, &view, s.logo.cells(), None, brand);
+        crate::logos::ui::apply(&ui, &view, s.logo.cells(), s.logo_art.as_ref(), brand);
+    }
+
+    // ── Stored art ───────────────────────────────────────────────────────────
+
+    /// Read one station's stored rendition off disk and decode it.
+    ///
+    /// `None` covers every ordinary state and they are NOT distinguished here,
+    /// because no surface can do anything different with them: no codec (the
+    /// host), no logo for this station, an unreadable file, a decode that
+    /// failed. Each one means the same thing to the face — draw the call-sign
+    /// box.
+    fn read_art(&self, base: &str, box_dp: Option<f32>) -> Option<Raster> {
+        // Both handles cloned out BEFORE the read: this decodes a PNG through
+        // JNI, and holding a `RefCell` borrow across that is a lock held across
+        // a call into another runtime.
+        let (store, codec) = {
+            let s = self.state.borrow();
+            (s.store.clone(), s.codec.clone()?)
+        };
+        let scale = self.ui().window().scale_factor();
+        crate::logos::assign::read_rendition(&store, &*codec, base, box_dp, scale)
+    }
+
+    /// The image a surface should draw for `base`, or `None` for the call-sign
+    /// box.
+    ///
+    /// `box_dp` picks the ladder rung — 128 for a preset chip, `None` for the
+    /// hero, which is CarFM's own split (`LogoTile.tsx:337`, `boxDp = fill ? 128
+    /// : …`, and the hero calls `useStationLogo` with no box at all).
+    fn art_for(&self, base: &str, box_dp: Option<f32>) -> Option<slint::Image> {
+        if base.is_empty() || !self.state.borrow().settings.logos_on {
+            return None;
+        }
+        let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32);
+        if let Some(hit) = self.state.borrow().art.get(&key) {
+            return hit.clone();
+        }
+        let image = self.read_art(&key.0, box_dp).as_ref().map(crate::logos::ui::to_image);
+        self.state.borrow_mut().art.insert(key, image.clone());
+        image
+    }
+
+    /// The hero flags a station actually gets, once it is known whether it has
+    /// art. `logos::prefs::effective` is the whole rule; this only supplies it
+    /// with the stored answer.
+    fn hero_flags(&self, base: &str, has_logo: bool) -> HeroFlags {
+        let stored = if base.is_empty() {
+            None
+        } else {
+            self.state.borrow().store.prefs(&base.to_uppercase())
+        };
+        crate::logos::prefs::effective(stored, has_logo)
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -875,6 +1146,9 @@ impl App {
         on!(on_done_reordering, |app| {
             app.ui().set_reordering(false);
         });
+        on!(on_enter_reordering, |app| {
+            app.enter_reordering();
+        });
         on!(on_open_settings, |app| {
             app.push_settings();
         });
@@ -888,6 +1162,7 @@ impl App {
         on!(on_close_overlay, |app| {
             app.state.borrow_mut().numpad.clear();
             app.push_numpad();
+            app.close_logo_search();
         });
 
         // ── §6.1 numpad ──
@@ -998,6 +1273,11 @@ impl App {
         on!(on_settings_set_logos, |app, v| {
             app.state.borrow_mut().settings.logos_on = v;
             app.push_settings();
+            // The toggle now REMOVES ART FROM THE FACE, so the tiles and the
+            // hero have to be republished — `art_for` reads the flag, but
+            // nothing would ask it again until the next tune.
+            app.push_hero();
+            app.push_presets();
         });
         on!(on_settings_clear_logos, |app| {
             // DESTRUCTIVE, AND THE CONFIRM DOES NOT EXIST. SettingsPanel.tsx
@@ -1227,36 +1507,62 @@ impl App {
     }
 
     fn open_logo_search(self: &Rc<App>, index: i32) {
+        let Some(slot) = self.state.borrow().presets.get(index as usize).cloned() else {
+            return;
+        };
+        let base = slot.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone());
+        let target = crate::logos::search::Target {
+            base: base.clone(),
+            callsign: base.clone(),
+            freq_mhz: slot.mhz,
+            name: slot.name(),
+        };
+
+        // What this station ALREADY has, read before the window opens. The three
+        // answers are genuinely different and the window renders each one
+        // differently: art plus explicit flags, art with the flags never chosen,
+        // and no art at all.
+        //
+        // Read OUTSIDE any borrow — `read_art` decodes through JNI.
+        let key = base.to_uppercase();
+        let existing = if key.is_empty() { None } else { self.read_art(&key, None) };
+        let stored = if key.is_empty() {
+            None
+        } else {
+            self.state.borrow().store.prefs(&key)
+        };
+
         {
             let mut s = self.state.borrow_mut();
-            let Some(slot) = s.presets.get(index as usize).cloned() else { return };
-            let target = crate::logos::search::Target {
-                base: slot.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone()),
-                callsign: slot.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone()),
-                freq_mhz: slot.mhz,
-                name: slot.name(),
-            };
-            // NO STORE IS CONSULTED. `logos::store::LogoStore` exists and is
-            // tested, but nothing has ever written a master to it — there is no
-            // decoder to produce one — so every station opens as a station with
-            // no logo.
-            s.logo.open(target, false, None);
+            s.logo.open(target, existing.is_some(), stored);
+            s.logo_art = existing;
         }
         self.push_logo_search();
     }
 
-    /// A search with no network behind it.
+    /// Queue the search on the worker, or run the fake when there is no worker.
     ///
-    /// `logos::LogoNet` and `logos::ImageCodec` have NO IMPLEMENTATIONS in this
-    /// crate, so this runs the real state machine against
-    /// [`crate::fake::FakeLogoSearch`] instead: the generation counter, the
-    /// arrival order, the per-cell thumbnail landing and the selection are all
-    /// the shipping code's, and only the bytes are invented.
+    /// The split is the whole difference between the device and the host, and it
+    /// is ONE branch on purpose: the generation counter, the arrival order, the
+    /// per-cell thumbnail landing and the selection are `search::Model`'s either
+    /// way. Only where the bytes come from changes.
     fn run_logo_search(self: &Rc<App>) {
         let job = self.state.borrow_mut().logo.search();
         let Some(job) = job else { return };
         self.push_logo_search();
 
+        // The real path returns immediately; the results arrive as events on the
+        // logo queue and land through `apply_logo_event`.
+        {
+            let s = self.state.borrow();
+            if let Some(w) = s.worker.as_ref() {
+                w.search(&job);
+                return;
+            }
+        }
+
+        // No worker — the host. `crate::fake::FakeLogoSearch` stands in for the
+        // network, synchronously, and the face says so.
         let mut s = self.state.borrow_mut();
         if s.logo.results_arrived(job.generation, fake::FakeLogoSearch::results()) {
             for (i, cell) in fake::logo_cells().into_iter().enumerate() {
@@ -1271,12 +1577,29 @@ impl App {
 
     fn confirm_logo(self: &Rc<App>) {
         let outcome = self.state.borrow_mut().logo.begin_confirm();
+        if matches!(outcome, crate::logos::search::Confirm::Ignore) {
+            return;
+        }
+
+        // The worker owns the download, the decode, the trim, the ladder and the
+        // dark pass — seconds of work on a 32-bit head unit, and the face is the
+        // thing the driver is looking at. The window stays up in its `saving`
+        // state until a `Saved` or `SaveFailed` event comes back.
+        {
+            let s = self.state.borrow();
+            if let Some(w) = s.worker.as_ref() {
+                w.submit(outcome);
+                drop(s);
+                self.push_logo_search();
+                return;
+            }
+        }
+
         match outcome {
-            crate::logos::search::Confirm::Ignore => return,
-            // THE SAVE CANNOT HAPPEN. Writing a master needs a decoded image and
-            // there is no decoder, so the window reports the failure with the
-            // wording it would use for a real one rather than pretending the art
-            // landed.
+            crate::logos::search::Confirm::Ignore => {}
+            // NO WORKER, so no decoder: writing a master needs decoded pixels.
+            // The window reports the failure with the wording it would use for a
+            // real one rather than pretending the art landed.
             crate::logos::search::Confirm::AssignLogo { .. } => {
                 // The BARE reason. `error_body` wraps it as "Couldn\u{2019}t save this
                 // logo \u{2014} {reason}. Try a different result.", so a reason that
@@ -1295,6 +1618,52 @@ impl App {
             }
         }
         self.push_logo_search();
+    }
+
+    /// Tear the logo window down: forget the target, drop the art, and tell the
+    /// worker to stop paying for an answer nobody is waiting for.
+    ///
+    /// The cancel is the point. A search is two round trips plus four thumbnail
+    /// downloads, and `run_search` checks the shared generation between each
+    /// one — so a window closed after the grid appears abandons the remaining
+    /// thumbnails instead of finishing them. Without this call the worker would
+    /// run every job to completion on a head unit's radio link.
+    ///
+    /// Called on EVERY overlay close, so it starts by checking there was a logo
+    /// window at all: bumping the generation for a numpad dismissal would be
+    /// harmless but untrue.
+    fn close_logo_search(&self) {
+        if self.state.borrow().logo.target().is_none() {
+            return;
+        }
+        let mut s = self.state.borrow_mut();
+        s.logo.close();
+        s.logo_art = None;
+        let generation = s.logo.generation();
+        if let Some(w) = s.worker.as_ref() {
+            w.cancel(generation);
+        }
+        drop(s);
+        self.push_logo_search();
+    }
+
+    /// Long-press on a preset tile — the door to reorder mode.
+    ///
+    /// REFUSED WHILE THE CAR IS MOVING, which is CarFM's rule
+    /// (`CarFmFace.tsx:1654`, `if (blockedWhileDriving()) return;`): reordering
+    /// is a two-handed, look-at-it task and the logo window behind it is worse.
+    ///
+    /// WHAT IS NOT PORTED, and it is visible: CarFM answers a refusal by
+    /// swelling the §4.6 motion-car glyph, so the driver sees WHY nothing
+    /// happened. That is `services/driveLock.ts`'s event bus plus an animation
+    /// on one leaf, and neither exists here yet — so this refusal is silent on
+    /// the face and only shows up in the diagnostics log.
+    fn enter_reordering(self: &Rc<App>) {
+        if self.state.borrow().location.in_motion {
+            self.log_unavailable("reorder: refused, the car is moving");
+            return;
+        }
+        self.ui().set_reordering(true);
     }
 }
 
@@ -1357,7 +1726,15 @@ fn active_index(dial: f32, presets: &[Slot]) -> i32 {
         .map_or(-1, |i| i as i32)
 }
 
-fn to_preset(slot: &Slot) -> Preset {
+/// The preset chip's ladder box, in dp.
+///
+/// CarFM's own number for a fill-mode plate (`LogoTile.tsx:337`, `boxDp = fill ?
+/// 128 : …`), and Carnyx's tiles are all fill-mode — `PresetPlate` is given
+/// `fill: true` on every track. 128 is also the bottom rung of `SIZE_LADDER`, so
+/// a chip decodes a 128 px PNG rather than a 512 px one.
+const TILE_BOX_DP: f32 = 128.0;
+
+fn to_preset(slot: &Slot, logo: Option<slint::Image>) -> Preset {
     let call = slot.call();
     Preset {
         name: slot.name().into(),
@@ -1367,8 +1744,8 @@ fn to_preset(slot: &Slot) -> Preset {
         brand: brand_color(&call),
         freq_mhz: slot.mhz,
         freq_label: format_mhz(slot.mhz).into(),
-        logo: Default::default(),
-        has_logo: false,
+        has_logo: logo.is_some(),
+        logo: logo.unwrap_or_default(),
     }
 }
 
@@ -1410,6 +1787,18 @@ pub fn host_prefs_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("target/carnyx-host")
 }
 
+/// Where a station's art lives: one directory per call-sign base, under the same
+/// private directory as `prefs.json`.
+///
+/// A SUBDIRECTORY, and it is not tidiness. `LogoStore` keeps its own hero flags
+/// in a file called `prefs.json` at its root (`store::prefs_path`) — the same
+/// name [`crate::prefs::FILE`] uses. Rooted at the same directory the two would
+/// be ONE FILE, and whichever wrote last would silently destroy the other's
+/// contents.
+pub fn logo_dir(prefs_dir: &Path) -> PathBuf {
+    prefs_dir.join("logos")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1428,6 +1817,43 @@ mod tests {
         );
         // And the database really is in there, so the check above is meaningful.
         assert!(host_db_path().starts_with(&assets));
+    }
+
+    /// `LogoStore` writes its own hero flags to a file called `prefs.json` at
+    /// its root — the SAME NAME `crate::prefs` uses. Rooted at the prefs
+    /// directory the two would be one file and each would destroy the other, so
+    /// the separation is pinned here rather than left to the comment.
+    #[test]
+    fn the_logo_store_cannot_collide_with_the_preference_file() {
+        let dir = Path::new("/tmp/carnyx-test");
+        let logos = logo_dir(dir);
+        assert_ne!(logos, dir, "the store must not be rooted at the prefs directory");
+        assert!(logos.starts_with(dir), "the store belongs under the prefs directory");
+        // The name that would collide, spelt out so a rename of either side
+        // fails here rather than on a driver's unit.
+        assert_ne!(logos.join("prefs.json"), crate::prefs::path(dir));
+        // And the store is not packaged into the APK either.
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        assert!(!logo_dir(&host_prefs_dir()).starts_with(&assets));
+    }
+
+    /// `has_logo` is not a decoration flag — a tile with it set draws a
+    /// borderless transparent plate and prints the CALL SIGN beneath, and a tile
+    /// without it draws the coloured box and prints the FREQUENCY. Setting it
+    /// without art is a blank plate over the wrong caption.
+    #[test]
+    fn a_tile_claims_a_logo_only_when_it_was_handed_one() {
+        let slot = Slot { mhz: 88.7, row: None };
+
+        let bare = to_preset(&slot, None);
+        assert!(!bare.has_logo);
+        assert_eq!(bare.freq_label, "88.7");
+
+        // A 1×1 image is enough: what is under test is that the flag follows the
+        // Option, not what the pixels are.
+        let px = crate::logos::ui::to_image(&Raster { w: 1, h: 1, rgba: vec![0, 0, 0, 255] });
+        let dressed = to_preset(&slot, Some(px));
+        assert!(dressed.has_logo);
     }
 
     /// The resolution is by POSITION, and the assertion that matters is the

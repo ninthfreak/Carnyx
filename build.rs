@@ -43,6 +43,7 @@ use android_build::{Dexer, JavaBuild};
 const JAVA_SOURCES: &[&str] = &[
     "com/ninthfreak/carnyx/NwdBridge.java",
     "com/ninthfreak/carnyx/CarnyxLocation.java",
+    "com/ninthfreak/carnyx/CarnyxNet.java",
     "com/nwd/radio/service/data/Frequency.java",
     "com/nwd/radio/service/data/RadioPoint.java",
 ];

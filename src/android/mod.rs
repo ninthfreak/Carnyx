@@ -40,6 +40,8 @@ mod dex;
 #[cfg(target_os = "android")]
 pub mod location;
 #[cfg(target_os = "android")]
+pub mod net;
+#[cfg(target_os = "android")]
 pub mod nwd;
 
 #[cfg(target_os = "android")]

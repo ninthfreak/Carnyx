@@ -62,6 +62,46 @@ That drives Slint's software renderer headlessly — no window system, no GPU �
 at each of the five surfaces the design has to support, plus the states worth a
 second look (audio released, tuner error, driving, lossy reception, no presets).
 
+## What the platform does, and why it is Java
+
+Three things the app needs are the platform's, and each is reached the same way:
+a small class in `java/com/ninthfreak/carnyx/`, compiled and dexed by `build.rs`,
+loaded at run time out of the embedded dex, bound over JNI in `src/android/`.
+
+| class | Rust side | what it is |
+|---|---|---|
+| `NwdBridge` | `android::nwd` | the vendor FM tuner, `com.nwd.radio.service` |
+| `CarnyxLocation` | `android::location` | `LocationManager`, GPS + network |
+| `CarnyxNet` | `android::net` | `HttpsURLConnection` and `BitmapFactory` |
+
+The third is a decision worth stating, because `src/logos.rs` used to recommend
+the opposite. The logo search needs HTTPS, and HTTPS in Rust means a TLS stack —
+on a 32-bit ARM head unit that is a C dependency to cross-compile and verify,
+plus a bundled root store that starts going stale the day it ships. Against
+that, the app already dexes Java and binds it twice, so one more class costs
+almost nothing and gets the **system** trust store, which is what the rest of the
+device trusts and which tracks OS updates. `BitmapFactory` follows the same
+logic: it reads PNG, JPEG, WebP and GIF and has been hardened against malformed
+input for a decade — which matters, because every byte it sees came off an image
+search.
+
+Java moves bytes and pixels. Nothing else. Which URL to fetch, how to read
+DuckDuckGo's two-step response, which candidate to keep and what to do with the
+pixels are all Rust's, in `src/logos.rs`, where they are tested.
+
+Every download and every pixel pass runs on one worker thread
+(`logos::service::Worker`), never on the event loop: a search is two round trips
+plus four thumbnail downloads, and a confirm is a download, a decode, a trim,
+three ladder resamples and a full dark-adaptation pass. On this hardware that is
+seconds, and the face is the thing the driver is looking at.
+
+**There is no automatic logo fetching, and there must not be.**
+`AUTO_LOGO_RESOLUTION` is `false` and stays false: CarFM's 2026-07-17 device test
+had auto-resolved logos come back completely wrong, because every text-matching
+source will happily return an unrelated image rather than nothing. A logo is
+written only when the driver taps a candidate — long-press a preset tile for
+reorder mode, then the badge on the tile.
+
 ## Building
 
 Everything below runs on your development machine. Nothing is ever compiled on

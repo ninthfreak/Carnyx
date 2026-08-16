@@ -128,6 +128,15 @@ export component PresetTile inherits Rectangle {
     /// The reorder-mode badge — §6.4's entry point. A callback of its own, not
     /// `selected()`, because it opens the logo window instead of tuning.
     callback logo-badge();
+    /// Press began and ended, so the STRIP's single hold timer can run.
+    ///
+    /// The tile deliberately does not own that timer: a `Timer` inside a
+    /// repeated element is a shape nothing in this tree has compiled, and
+    /// `nearby.slint` already keeps one at its list root for the same reason. A
+    /// hold belongs to the gesture, not to the tile it landed on, and there is
+    /// only ever one finger.
+    callback press-began();
+    callback press-ended();
 
     border-radius: 16px;
     background: Pal.panel;
@@ -135,7 +144,21 @@ export component PresetTile inherits Rectangle {
     border-color: root.active ? Pal.blue : Pal.border;
     opacity: touch.pressed && !root.reordering ? 0.6 : 1.0;
 
-    touch := TouchArea { clicked => { root.selected(); } }
+    touch := TouchArea {
+        // `clicked`, not a pointer-up: once pressed, a TouchArea grabs the
+        // pointer and still gets the up event after the finger has slid off the
+        // tile. `clicked` fires only when the release lands inside — and it
+        // fires BEFORE pointer-event(up), which is why the strip resets its
+        // hold flag on DOWN rather than on the way out.
+        clicked => { root.selected(); }
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                root.press-began();
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                root.press-ended();
+            }
+        }
+    }
 
     VerticalLayout {
         padding-top: root.pad-top;
@@ -301,8 +324,64 @@ export component PresetsBand inherits Rectangle {
     callback done-reordering();
     /// The reorder-mode logo badge on tile `i` (§6.4).
     callback open-logo-search(int);
+    /// Long-press on any tile. THE ONLY DOOR to reorder mode, and through it the
+    /// only door to the logo window — the badge that opens §6.4 is drawn by
+    /// `PresetTile` under `if root.reordering`, so without this the whole logo
+    /// pipeline is unreachable on the device no matter how much of it works.
+    callback enter-reordering();
 
     height: root.band-height;
+
+    // ── Long press ──
+    //
+    // 550ms, matching `nearby.slint`'s hold and CarFM's own HOLD_MS
+    // (PresetsBand.tsx:43). ONE timer for the whole band, at the root, for the
+    // reason spelt out on `PresetTile::press-began`.
+    //
+    // The felt hold is longer than 550ms here: a press inside a Flickable is
+    // withheld from the inner TouchArea for FORWARD_DELAY (100ms) before it is
+    // forwarded, so the tiles answer at ~650ms. That is Slint's scroll
+    // disambiguation, not a mistake, and shortening the interval to compensate
+    // would break the moment that constant changes.
+    property <int> hold-index: -1;
+    property <bool> hold-fired: false;
+
+    hold := Timer {
+        interval: 550ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            // Already reordering: a second hold has nothing to open, and firing
+            // again would re-enter a mode the driver is already in.
+            if (root.hold-index >= 0 && !root.reordering) {
+                root.hold-fired = true;
+                root.enter-reordering();
+            }
+        }
+    }
+
+    function hold-begin(i: int) {
+        root.hold-index = i;
+        root.hold-fired = false;
+        hold.running = true;
+    }
+    function hold-stop() {
+        hold.running = false;
+    }
+    /// A tap that has to decide whether it was really a hold.
+    ///
+    /// A hold that already fired CONSUMES the release, the way RN's Pressable
+    /// swallows `onPress` after `onLongPress` — otherwise entering reorder mode
+    /// would also retune the radio to whichever tile the driver happened to
+    /// hold.
+    function tile-tapped(i: int) {
+        hold.running = false;
+        if (root.hold-fired) {
+            root.hold-fired = false;
+            return;
+        }
+        root.select(i);
+    }
 
     // Per-track tile geometry (CarFM's `tileSizeFor`). The active tile grows only
     // in the strip tracks; grid and two-row tiles are uniform. The plate itself
@@ -388,7 +467,9 @@ export component PresetsBand inherits Rectangle {
                             ? (Metrics.landscape ? 16 : 18)
                             : (Metrics.landscape ? 13 : 15)));
                         reordering: root.reordering;
-                        selected => { root.select(i); }
+                        selected => { root.tile-tapped(i); }
+                        press-began => { root.hold-begin(i); }
+                        press-ended => { root.hold-stop(); }
                         logo-badge => { root.open-logo-search(i); }
                     }
                 }
@@ -408,7 +489,9 @@ export component PresetsBand inherits Rectangle {
                         logo-radius: i == root.active-index ? 15px : 12px;
                         name-font: Math.max(12px, Metrics.s(15));
                         reordering: root.reordering;
-                        selected => { root.select(i); }
+                        selected => { root.tile-tapped(i); }
+                        press-began => { root.hold-begin(i); }
+                        press-ended => { root.hold-stop(); }
                         logo-badge => { root.open-logo-search(i); }
                     }
                 }
@@ -429,7 +512,9 @@ export component PresetsBand inherits Rectangle {
                         logo-radius: i == root.active-index ? 15px : 12px;
                         name-font: Math.max(12px, Metrics.s(15));
                         reordering: root.reordering;
-                        selected => { root.select(i); }
+                        selected => { root.tile-tapped(i); }
+                        press-began => { root.hold-begin(i); }
+                        press-ended => { root.hold-stop(); }
                         logo-badge => { root.open-logo-search(i); }
                     }
                 }

@@ -17,6 +17,18 @@ export { LogoSearchState, LogoCandidate }
 export component AppWindow inherits Window {
     in property <string> ident;
     in property <string> freq-label: "—";
+    /// The tuned station's stored logo, and whether there is one.
+    ///
+    /// A logo REPLACES the big call sign on the hero, so `has-logo` is not a
+    /// decoration flag — it changes what the card is. It is false whenever the
+    /// station has no master, whenever the driver has logos switched off, and
+    /// whenever that station's own hero flags say to show the call sign anyway.
+    in property <image> logo;
+    in property <bool> has-logo: false;
+    /// The station's hero flags (`logos::prefs::HeroFlags`). Meaningful only
+    /// with a logo up: a no-logo hero always shows both rows.
+    in property <bool> show-call: true;
+    in property <bool> show-freq: true;
     in property <bool> saved: false;
     in property <bool> in-band: true;
     in property <string> radio-text;
@@ -57,6 +69,9 @@ export component AppWindow inherits Window {
     callback select-preset(int);
     callback step-preset(int);
     callback done-reordering();
+    /// Long-press on a preset tile — the only door to reorder mode, and so the
+    /// only door to the logo badge that opens §6.4.
+    callback enter-reordering();
 
     // ── Overlays (ANDROID §6) ───────────────────────────────────────────────
     //
@@ -193,6 +208,10 @@ export component AppWindow inherits Window {
         height: root.height;
         ident: root.ident;
         freq-label: root.freq-label;
+        logo: root.logo;
+        has-logo: root.has-logo;
+        show-call: root.show-call;
+        show-freq: root.show-freq;
         saved: root.saved;
         in-band: root.in-band;
         radio-text: root.radio-text;
@@ -230,6 +249,10 @@ export component AppWindow inherits Window {
         select-preset(i) => { root.select-preset(i); }
         step-preset(d) => { root.step-preset(d); }
         done-reordering => { root.done-reordering(); }
+        // `reordering` is set by RUST, not here, exactly as `done-reordering`
+        // already is: the mode is refused outright while the car is moving, and
+        // that judgement is not the view's to make.
+        enter-reordering => { root.enter-reordering(); }
     }
 
     // ── The modal layer ─────────────────────────────────────────────────────

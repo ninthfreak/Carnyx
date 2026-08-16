@@ -178,6 +178,12 @@ name = "com.nwd.radio.service"
 # night, in a car, is nobody. The location code must therefore treat "denied"
 # and "never answered" as ordinary states that leave the fake in place, not as
 # errors.
+# INTERNET, for the logo search. Every request fails without it, and the failure
+# is a SecurityException rather than a timeout, so it would look like a bug in
+# the transport rather than a missing line here.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_COARSE_LOCATION"
 

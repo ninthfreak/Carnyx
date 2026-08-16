@@ -11,10 +11,10 @@
 //!
 //! | fake | the real thing | why it is absent |
 //! |---|---|---|
-//! | [`FakeLocation`] | Android `LocationManager` | no GPS, no framework |
+//! | [`FakeLocation`] | `android::location`, over `LocationManager` | no GPS, no framework |
 //! | [`FakeRdsStream`] | the vendor RDS pump at 90 ms | no tuner |
-//! | [`FakeLogoSearch`] | `logos::LogoNet` + `logos::ImageCodec` | no network, no decoder |
-//! | [`seed_presets`] | a preference store of user-saved presets | not written yet |
+//! | [`FakeLogoSearch`] | `android::net`, over `HttpsURLConnection` + `BitmapFactory` | no network, no decoder |
+//! | [`seed_presets`] | the driver's own presets, from `crate::prefs` | first run only |
 //!
 //! The tuner itself is NOT faked here: `crate::android::FakeTuner` is the
 //! builder's own fake and drives the same `ingest_*` path the device drives, so
@@ -177,12 +177,18 @@ impl FakeRdsStream {
 
 /// A logo search that never touches a socket.
 ///
-/// `logos::LogoNet` and `logos::ImageCodec` are TRAITS WITH NO IMPLEMENTATIONS
-/// in this crate — there is no HTTP client and no PNG/JPEG decoder in
-/// `Cargo.toml` — so the search window would otherwise have nothing but its
-/// error body to draw. This produces four results synchronously, with flat
-/// generated art in place of decoded downloads, so the grid, the selection
-/// badge, the captions and Confirm can all be exercised.
+/// `logos::LogoNet` and `logos::ImageCodec` are implemented ONLY for Android
+/// (`crate::android::net`), because both are the platform's — there is no HTTP
+/// client and no PNG/JPEG decoder in `Cargo.toml`. On the host the search window
+/// would otherwise have nothing but its error body to draw. This produces four
+/// results synchronously, with flat generated art in place of decoded downloads,
+/// so the grid, the selection badge, the captions and Confirm can all be
+/// exercised.
+///
+/// `App` picks between the two by whether it was handed an `app::Net`, and there
+/// is exactly one branch: everything downstream — the generation counter, the
+/// arrival order, the per-cell landing, the selection — is `search::Model`'s
+/// either way.
 ///
 /// NOTHING HERE IS A LOGO. The domains are the ones the design reference
 /// captions show, so the shot matches the reference; the art is four coloured

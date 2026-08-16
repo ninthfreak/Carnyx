@@ -68,6 +68,8 @@ export component Face inherits Rectangle {
     callback select-preset(int);
     callback step-preset(int);
     callback done-reordering();
+    /// Long-press on a preset tile. The only door to reorder mode.
+    callback enter-reordering();
 
     property <bool> dead: !root.audio-active;
 
@@ -148,6 +150,7 @@ export component Face inherits Rectangle {
             select(i) => { root.select-preset(i); }
             open-nearby => { root.open-nearby(); }
             done-reordering => { root.done-reordering(); }
+            enter-reordering => { root.enter-reordering(); }
             open-logo-search(i) => { root.open-logo-search(i); }
         }
     }

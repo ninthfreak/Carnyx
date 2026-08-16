@@ -23,12 +23,16 @@
 //! ── WHAT IS PURE AND WHAT IS NOT ─────────────────────────────────────────────
 //! Everything in this file is pure and unit-tested except three named seams:
 //! `LogoNet` (six HTTP calls), `ImageCodec` (decode/encode) and `LogoStore`'s
-//! filesystem calls. None of the three can be exercised in this container — there
-//! is no network, no Android SDK and no head unit — so they are traits with fakes
-//! behind them, and every decision they would otherwise make has been pulled out
-//! into a function that a test can call. The traits are implemented nowhere in
-//! this file on purpose: the real HTTP client and the real image decoder need
-//! crates that `Cargo.toml` does not yet carry.
+//! filesystem calls. The first two are implemented nowhere in THIS file on
+//! purpose — they are traits, so every decision they would otherwise make has
+//! been pulled out into a function a test can call, and the host exercises them
+//! through `crate::fake::FakeLogoSearch`.
+//!
+//! The real ones live in `crate::android::net`: `AndroidNet` over
+//! `HttpsURLConnection` and `AndroidCodec` over `BitmapFactory`, both compiled
+//! only for Android. NEITHER HAS EVER RUN in this container — it has no network,
+//! no Android SDK and no head unit — so what is claimed for them is that they
+//! compile for `armv7-linux-androideabi`, and nothing more.
 //!
 //! ── SLINT DECIDES NOTHING ────────────────────────────────────────────────────
 //! `ui/logo-search.slint` exposes 21 in-properties and 7 callbacks and computes
@@ -2964,15 +2968,22 @@ pub struct FetchedImage {
 
 /// Every socket the logo feature touches.
 ///
-/// A SEAM, NOT AN IMPLEMENTATION. Six to eight HTTPS requests per search, and not
-/// one of them can be made from this container. `ureq` + `rustls` +
-/// `webpki-roots` is the recommendation (bundled Mozilla roots, so no Android
-/// trust-store JNI and no OpenSSL); `INTERNET` is not in the manifest today and
-/// without it every one of these fails.
+/// A SEAM, NOT AN IMPLEMENTATION. Six to eight HTTPS requests per search, and
+/// none of them can be made from the host — everything in this file is pure
+/// logic, tested against captured bodies.
+///
+/// THE IMPLEMENTATION IS [`crate::android::net::AndroidNet`], over
+/// `HttpsURLConnection`. This doc previously recommended `ureq` + `rustls` +
+/// `webpki-roots`, and that recommendation was deliberately NOT taken: the head
+/// unit is 32-bit ARM, a TLS stack there is a C dependency to cross-compile and
+/// verify, and bundled Mozilla roots go stale on a machine that may never be
+/// updated again. The app already dexes Java and binds it over JNI twice, so one
+/// more class costs almost nothing and gets the SYSTEM trust store — the one the
+/// rest of the device trusts. That module's header carries the full argument.
 ///
 /// GIVE EVERY REQUEST A TIMEOUT. CarFM sets none: its `fetch` can hang until the
 /// platform gives up, and on a head unit with a dead SIM that is a spinner the
-/// driver cannot cancel. 8 s connect / 15 s total is a sane pair.
+/// driver cannot cancel. 8 s connect / 15 s total is the pair `CarnyxNet` uses.
 pub trait LogoNet: Send + Sync {
     /// Page → `vqd` token → `i.js` JSON → parsed rows. One method because the two
     /// round trips are one operation as far as every caller is concerned, and
