@@ -321,6 +321,16 @@ pub fn level_text(level: Option<i32>, audio_off: bool) -> String {
     }
 }
 
+/// The pool of arcs a reading draws — what the dotting spreads through.
+///
+/// Split out because the pool and the band are settled at DIFFERENT MOMENTS: the
+/// pool follows the level, which arrives whenever the tuner answers, while the
+/// band is settled once per poll. `settle_dotted_pairs` needs the pool as of the
+/// settle, so the caller reads it here rather than inside the face.
+pub fn dottable(level: Option<i32>) -> i32 {
+    drawn_arcs(level_to_lit(level.map(f64::from)).as_ref())
+}
+
 /// Everything the signal cluster needs, finished. Slint decides none of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeterFace {
@@ -331,22 +341,26 @@ pub struct MeterFace {
     pub level_text: String,
 }
 
-/// The poll-time join: a reading and a loss figure in, the five face properties
-/// out.
+/// A reading and an ALREADY-SETTLED band in, the five face properties out.
 ///
-/// `prev_dotted` is the count currently on screen and `dotted_arcs` is what must
-/// be fed back as the next call's `prev_dotted` — the hysteresis is the one piece
-/// of state here, and it belongs to the caller so that a redraw cannot advance it.
+/// THIS FUNCTION DOES NOT ADVANCE THE HYSTERESIS, and it used to. `dotted` comes
+/// in settled and goes out unchanged (bar the released-audio case), because the
+/// two are on different clocks and folding them together silently tied the
+/// hysteresis to the redraw rate.
 ///
-/// `loss` is `100 - quality().pi_match_pct`, or `None` while the RDS carrier is
-/// stale. It is a PROXY: block A is the only block this tuner lets anyone judge,
-/// so errors in C and D — where the text lives — are invisible to it.
-pub fn meter_face(
-    level: Option<i32>,
-    loss: Option<f64>,
-    prev_dotted: i32,
-    audio_off: bool,
-) -> MeterFace {
+/// That was a real defect, not a tidiness point. `settle_dotted_pairs` is a
+/// per-sample state machine: `prev` in, `next` out, fed back. CarFM settles it in
+/// exactly one place, its 1.5s poll (RadioScreen.tsx:3060-3069), and its render
+/// passes the answer through untouched (`dottedArcs={off ? 0 : signalDottedPairs}`).
+/// Carnyx settled it inside this function instead — which `push_meter` calls, which
+/// `push_all` calls, which runs on every wake from the tuner queue. The raw RDS
+/// pump is 90ms, so on a station with RDS the band advanced about eleven times a
+/// second against CarFM's two thirds of one, and `LOSS_BAND_MARGIN` — the whole
+/// anti-flap mechanism — did about a sixteenth of the work it was written to do.
+///
+/// So the settle lives at the poll now and this only publishes. See
+/// `App::settle_dotted`.
+pub fn meter_face(level: Option<i32>, dotted: i32, audio_off: bool) -> MeterFace {
     // Audio released: the empty glyph and no dots at all, matching CarFM's
     // `off ? discreteLit(0)` and `dottedArcs={off ? 0 : …}`.
     if audio_off {
@@ -359,12 +373,15 @@ pub fn meter_face(
         };
     }
     let lit = level_to_lit(level.map(f64::from)).unwrap_or_else(|| discrete_lit(0.0));
-    let dottable = drawn_arcs(Some(&lit));
     MeterFace {
         full_pairs: lit.full_pairs,
         half: lit.half,
         dot_opacity: lit.dot_opacity,
-        dotted_arcs: settle_dotted_pairs(prev_dotted, loss, dottable),
+        // Passed through UNCLAMPED, as CarFM's render does. The band was clamped
+        // to the pool at the settle; between settles the level can move it, and
+        // the glyph clamps for itself (`icons.slint`, `dotted:
+        // Math.min(root.drawn, root.dotted-arcs)`).
+        dotted_arcs: dotted,
         level_text: level_text(level, audio_off),
     }
 }
@@ -431,6 +448,18 @@ mod tests {
 
     fn lit(n: f64) -> SignalLit {
         level_to_lit(Some(n)).expect("a finite level always lights something")
+    }
+
+    /// The two calls a poll makes, composed: settle the band against the pool
+    /// this reading draws, then finish the face from the settled count.
+    ///
+    /// A helper rather than a call to a single function, because the shipping
+    /// code deliberately does these AT DIFFERENT CADENCES — the pool and the
+    /// level move whenever the tuner answers, the band moves once per poll — and
+    /// tying them back together is the defect `meter_face` documents. What these
+    /// tests are about is the join, so the join is spelled out here.
+    fn meter(level: Option<i32>, loss: Option<f64>, prev: i32, off: bool) -> MeterFace {
+        meter_face(level, settle_dotted_pairs(prev, loss, dottable(level)), off)
     }
 
     /// "0" or "1+half" — the shape the JavaScript table is written in.
@@ -710,7 +739,7 @@ mod tests {
     /// half-step, exactly one of them dotted.
     #[test]
     fn the_reference_frame_lands_on_the_bundles_numbers() {
-        let f = meter_face(Some(79), Some(45.0), 0, false);
+        let f = meter(Some(79), Some(45.0), 0, false);
         assert_eq!(f.full_pairs, 3);
         assert!(f.half);
         assert_eq!(f.dot_opacity, 1.0);
@@ -720,7 +749,7 @@ mod tests {
 
     #[test]
     fn the_meter_goes_dead_when_audio_is_released() {
-        let f = meter_face(Some(79), Some(45.0), 3, true);
+        let f = meter(Some(79), Some(45.0), 3, true);
         assert_eq!(f.full_pairs, 0);
         assert!(!f.half);
         assert_eq!(f.dot_opacity, 0.0);
@@ -730,7 +759,7 @@ mod tests {
 
     #[test]
     fn no_reading_draws_the_empty_glyph_and_an_em_dash() {
-        let f = meter_face(None, None, 2, false);
+        let f = meter(None, None, 2, false);
         assert_eq!(f.full_pairs, 0);
         assert_eq!(f.dot_opacity, 0.0);
         assert_eq!(f.dotted_arcs, 0);
@@ -742,8 +771,8 @@ mod tests {
     /// difference between a clean weak signal and a strong shredded one.
     #[test]
     fn a_strong_carrier_arriving_in_pieces_is_still_dotted() {
-        let clean = meter_face(Some(54), Some(16.0), 0, false);
-        let shredded = meter_face(Some(54), Some(44.5), 0, false);
+        let clean = meter(Some(54), Some(16.0), 0, false);
+        let shredded = meter(Some(54), Some(44.5), 0, false);
         assert_eq!(clean.full_pairs, shredded.full_pairs);
         assert_eq!(clean.half, shredded.half);
         assert_eq!(clean.dotted_arcs, 0, "audio rated clean ran ~16% loss");
@@ -755,14 +784,14 @@ mod tests {
     #[test]
     fn the_settled_count_is_carried_between_polls() {
         // Up to three dots at 80% loss…
-        let a = meter_face(Some(79), Some(80.0), 0, false);
+        let a = meter(Some(79), Some(80.0), 0, false);
         assert_eq!(a.dotted_arcs, 3);
         // …and a figure that has fallen just under the 3-arc boundary holds there
         // rather than flickering, because the margin has not been cleared yet.
-        let b = meter_face(Some(79), Some(72.0), a.dotted_arcs, false);
+        let b = meter(Some(79), Some(72.0), a.dotted_arcs, false);
         assert_eq!(b.dotted_arcs, 3);
         // A real fall does move it.
-        let c = meter_face(Some(79), Some(40.0), b.dotted_arcs, false);
+        let c = meter(Some(79), Some(40.0), b.dotted_arcs, false);
         assert_eq!(c.dotted_arcs, 1);
     }
 }

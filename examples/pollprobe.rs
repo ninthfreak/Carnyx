@@ -258,8 +258,70 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── The reception-loss band advances once per poll, not once per event ──
+    //
+    // `settle_dotted_pairs` is a per-sample state machine and `LOSS_BAND_MARGIN`
+    // is calibrated against the rate it is stepped at. It used to be stepped
+    // inside `push_meter`, which `push_all` calls, which runs on every wake from
+    // the tuner queue — and the raw RDS pump is 90ms, so on a station with RDS
+    // the band advanced about eleven times a second against CarFM's two thirds
+    // of one.
+    //
+    // 88.7 so the replayed WERN corpus seeds the decoder with a confirmed PI and
+    // a quality ring full of good samples: the band starts clean and there is
+    // something for the bad groups below to spoil.
+    {
+        let dir = dir_for("dotted-cadence");
+        let tuner = std::sync::Arc::new(ScriptedTuner::at(88.7));
+        let (ui, app) = launch_with(&dir, Box::new(TunerHandle(tuner.clone())));
+        pump(&window, PAST_POLL);
+        assert_eq!(ui.get_dotted_arcs(), 0, "a clean carrier dots nothing");
+        assert_eq!(ui.get_full_pairs(), 2, "level 62 draws two pairs, which is the pool");
+
+        // A ruined channel: eighty groups whose block A carries the wrong PI,
+        // enough to fill the 64-slot quality ring. The PI VARIES so the decoder
+        // cannot reach consensus on a new one and adopt it — that would make the
+        // groups match again, which is the opposite of the point.
+        //
+        // Each one is drained and republished exactly as the wake hop does it on
+        // the device, and NOT ONE `update_timers_and_animations` runs in between,
+        // so the poll cannot have fired. Anything that moves the band here moved
+        // it off an event.
+        for i in 0..80u16 {
+            carnyx::android::ingest_rds_group(&format!("{:04x}000000000000", 0xF001 + i));
+            app.drain_events();
+            app.push_all();
+        }
+        assert_eq!(
+            ui.get_dotted_arcs(),
+            0,
+            "eighty events must not advance the band by themselves"
+        );
+
+        // And one poll turn does the whole move at once — the rising side is
+        // adopted immediately, so the leading arc dots at the floor rather than
+        // at the floor plus the margin.
+        pump(&window, PAST_POLL);
+        assert_eq!(ui.get_dotted_arcs(), 2, "one poll turn dots the whole pool at total loss");
+
+        // Back the other way: the recorded corpus again, and the same rule holds.
+        let corpus = carnyx::fake::FakeRdsStream::new();
+        let groups = corpus.all();
+        for hex in groups.iter().cycle().take(80) {
+            carnyx::android::ingest_rds_group(hex);
+            app.drain_events();
+            app.push_all();
+        }
+        assert_eq!(ui.get_dotted_arcs(), 2, "recovery does not advance on events either");
+        pump(&window, PAST_POLL);
+        assert_eq!(ui.get_dotted_arcs(), 0, "and the poll clears it");
+        ui.hide().expect("hide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     println!("level schedule: no immediate read, 1s read, 4s correction, 2 retries");
     println!("getter poll: dial backstopped, audio healed, power-off respected");
+    println!("loss band: eighty events move nothing, one poll turn moves it all");
 }
 
 /// `Tuner` is implemented for the struct; the App wants a `Box<dyn Tuner>` while

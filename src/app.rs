@@ -221,6 +221,38 @@ pub fn persist_session_current(parting: crate::session::Parting) {
 /// reading after a tune is inflated by +17.7 on average, with cases of +45, +48
 /// and +57, and the excess is almost entirely inside the first second. So the
 /// meter shows something fast and then tells the truth, which beats a long dash.
+/// Advance the reception-loss band by one step. THE ONLY CALLER IS THE POLL.
+///
+/// `settle_dotted_pairs` is a per-sample state machine — previous count in, next
+/// count out, fed back — and `LOSS_BAND_MARGIN` is calibrated against the rate it
+/// is stepped at. CarFM steps it in exactly one place, inside its 1.5s poll
+/// (RadioScreen.tsx:3060-3069), and says why in a comment worth keeping: "the
+/// ring's percentage drifts by fractions of a point every poll, and both the
+/// rounding and the hysteresis have to happen once, against the band actually on
+/// screen."
+///
+/// Returns whether the band moved, so the caller can skip a republish.
+///
+/// THE LOSS FIGURE is the complement of the decoder's block-A match rate. A
+/// PROXY, and never "% intact": this tuner exposes no per-block validity, so
+/// errors in C and D — where the text lives — are invisible to it, and RadioText
+/// will arrive mangled while this reads healthy.
+///
+/// GATED ON STALENESS, because the expiry deliberately does NOT reset the decoder
+/// — so its ring survives the carrier going quiet, and a figure held over from
+/// before that would be describing air this radio is no longer receiving.
+fn settle_dotted(s: &mut State) -> bool {
+    let loss = if s.rds_stale {
+        None
+    } else {
+        s.rds.quality().pi_match_pct.map(|pct| 100.0 - pct)
+    };
+    let next = signal::settle_dotted_pairs(s.dotted, loss, signal::dottable(s.level));
+    let moved = next != s.dotted;
+    s.dotted = next;
+    moved
+}
+
 fn arm_level_schedule(s: &mut State) {
     s.level_first.stop();
     s.level_correction.stop();
@@ -1069,6 +1101,10 @@ impl App {
                     );
                 }
             }
+
+            // THE RECEPTION-LOSS BAND, once per turn. This is the whole reason
+            // the hysteresis has a cadence at all — see `settle_dotted`.
+            changed |= settle_dotted(&mut s);
         }
         if changed {
             self.push_all();
@@ -1530,27 +1566,17 @@ impl App {
         ui.set_has_next(true);
     }
 
+    /// PUBLISHES the meter. It does not advance anything.
+    ///
+    /// The reception-loss band is settled by `settle_dotted`, once per poll turn,
+    /// and this only reads what that left. It used to settle here — and this
+    /// function is reached from `push_all`, which runs on every wake from the
+    /// tuner queue, so a per-sample hysteresis was being stepped at whatever rate
+    /// the radio happened to be talking. See `signal::meter_face`.
     fn push_meter(&self) {
         let ui = self.ui();
-        let mut s = self.state.borrow_mut();
-        // The loss figure is the complement of the decoder's block-A match rate.
-        // A PROXY, and never "% intact": this tuner exposes no per-block
-        // validity, so errors in C and D — where the text lives — are invisible
-        // to it, and RadioText will arrive mangled while this reads healthy.
-        //
-        // GATED ON STALENESS, because the expiry deliberately does NOT reset the
-        // decoder — so its ring survives the carrier going quiet, and a figure
-        // held over from before that would be describing air this radio is no
-        // longer receiving.
-        let loss = if s.rds_stale {
-            None
-        } else {
-            s.rds.quality().pi_match_pct.map(|pct| 100.0 - pct)
-        };
-        let face = signal::meter_face(s.level, loss, s.dotted, !s.audio);
-        // Settled ONCE PER POLL and fed back. Settling at render time would run
-        // the hysteresis against itself.
-        s.dotted = face.dotted_arcs;
+        let s = self.state.borrow();
+        let face = signal::meter_face(s.level, s.dotted, !s.audio);
 
         ui.set_full_pairs(face.full_pairs);
         ui.set_half(face.half);
@@ -2086,22 +2112,29 @@ impl App {
         self.toggle_save();
     }
 
-    /// Take the post-retune schedule's readings NOW, for the screenshot harness
-    /// only.
+    /// Take the meter to where a settled poll would leave it, for the screenshot
+    /// harness only.
     ///
-    /// The schedule reads at 1s and corrects at 4s off real `slint::Timer`s, and
-    /// the harness renders the frame it builds — so without this every shot that
-    /// tunes would show an empty meter over a station, which is a picture of a
-    /// transient rather than of the face. Four seconds of real waiting per shot,
-    /// across fifty-nine of them, is not a workflow.
+    /// The level schedule reads at 1s and corrects at 4s, and the loss band is
+    /// settled by a 1.5s poll — all real `slint::Timer`s, against a harness that
+    /// renders the frame it builds. Without this, every shot that tunes would
+    /// show an empty meter over a station: a picture of a transient rather than
+    /// of the face. Waiting four seconds sixty-two times is not a workflow.
     ///
-    /// It is the schedule's OUTCOME, not a bypass of it: the same
-    /// `tuner.read_level_now()` the 1s timer calls, taken early.
-    pub fn settle_level_for_test(self: &Rc<App>) {
+    /// It is those timers' OUTCOME, not a bypass of them — the same
+    /// `tuner.read_level_now()` and the same `settle_dotted`, taken early.
+    ///
+    /// PUSHES ONLY THE METER. It used to end in `push_all`, and that was wrong in
+    /// a way that cost a reference image: `apply` in the harness has arms that
+    /// set face properties DIRECTLY, because no fake can produce a lossy carrier
+    /// or a traffic announcement, and a full republish overwrote every one of
+    /// them. `weak-and-lossy.png` came back as an ordinary strong-signal shot.
+    pub fn settle_meter_for_test(self: &Rc<App>) {
         self.state.borrow().level_first.stop();
         self.state.borrow().level_correction.stop();
         self.read_level();
-        self.push_all();
+        settle_dotted(&mut self.state.borrow_mut());
+        self.push_meter();
     }
 
     /// Save the current dial, or drop it if it is already saved.

@@ -399,8 +399,12 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
                 let mhz = 88.1 + (step as f32) * 1.1;
                 driver.save_dial_for_test(mhz);
             }
+            driver.settle_meter_for_test();
         }
-        State::Tuned => ui.invoke_select_preset(2),
+        State::Tuned => {
+            ui.invoke_select_preset(2);
+            driver.settle_meter_for_test();
+        }
         State::OutOfBand => {
             ui.set_in_band(false);
             ui.set_freq_label("76.5".into());
@@ -425,6 +429,7 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
                 ui.invoke_numpad_enter(c.into());
             }
             ui.invoke_numpad_tune();
+            driver.settle_meter_for_test();
         }
 
         // ── §6 overlays ────────────────────────────────────────────────────
@@ -502,6 +507,7 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             // Two real tunes, so the log has more in it than the connect line.
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
+            driver.settle_meter_for_test();
             ui.set_overlay(Overlay::Settings);
         }
         State::SettingsEgg => {
@@ -559,13 +565,6 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_overlay(Overlay::LogoSearch);
         }
     }
-    // THE METER, SETTLED. Any arm above that tunes drops the previous station's
-    // level and leaves the post-retune schedule to refill it at 1s and correct it
-    // at 4s — real `slint::Timer`s, against a harness that renders the frame it
-    // builds. Waiting four seconds fifty-nine times is not a workflow, so the
-    // schedule's readings are taken here instead. Unconditional: an arm that
-    // never tuned already has its connect-time reading and this only repeats it.
-    driver.settle_level_for_test();
 }
 
 /// One column of the pushed genre grid. See the `NearbyGenre` arm for why this
