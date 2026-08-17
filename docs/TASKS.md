@@ -83,11 +83,21 @@ round-trip, the post-tune read schedule and two bug passes. **This is the
 highest-value open item** — it either confirms a large body of work or produces a
 short bug list.
 
-**Carnyx:** the equivalent is wide open and is the highest-value item here too.
-No APK has ever been built — this repository has been developed in a container
-with no SDK and no NDK. Everything from this session is unverified on the unit:
-the seek fix, the post-retune level schedule, the getter poll, the STEREO settle
-window, the between-launch session restore and the push-rate work.
+**Carnyx:** running on the unit already, and it is the OWNER who builds and
+installs it — `cargo apk build --lib` on their own machine, per the README's
+Building section. Their field reports are what drive the work: the STEREO pill
+"almost never lit up", the app not staying alive in the background, the overlays
+opening slowly. Each of those was reproduced, diagnosed and fixed from the
+report.
+
+**No session may write that Carnyx has not run on hardware.** This container has
+no SDK and no NDK and cannot produce an APK; that is a fact about the container
+and says nothing about the app. Confusing the two once already produced a false
+claim that contradicted what the owner had said in the same conversation.
+
+What is genuinely unknown is which build carries which fix — that depends on when
+the owner last built, and only they know. Ask; do not assume in either
+direction.
 
 ### 28. Settle four separation decisions
 **[STRIP §B, partial]** — The four undecided rebrand/separation questions carried
@@ -413,8 +423,10 @@ then `src/session.rs` survives the restart instead of preventing it, and the
 
 ### 68. Build a stripped release APK for both ABIs
 **PENDING.** armv7-linux-androideabi and aarch64-linux-android. The unit is
-32-bit ARM and an arm64-only APK will not install. Blocked on an SDK and NDK,
-which this container has never had; see the README's three cargo-apk traps.
+32-bit ARM and an arm64-only APK will not install. This is about the RELEASE
+artefact — stripped, both ABIs, signed with a keystore held outside the
+repository. Debug builds already happen on the owner's machine; see the README's
+three cargo-apk traps.
 
 ### 69. Add the confirm dialog "clear all logos" needs
 **PENDING.** `logos::clear_all` and `clear_all_prefs` exist and have no caller —
@@ -449,8 +461,10 @@ without the head unit"*. That reason is false: they were never ported, so they
 will say the same thing on the unit. Either strip them or make each say its real
 reason. "Clear log" works; the tuner log itself is Carnyx's own and stays.
 
-### 73. Verify this session's fixes on the unit
-**PENDING, blocked on #26/#68.** Nothing below has run on hardware: the hardware
+### 73. Confirm this session's fixes on the unit
+**PENDING — needs a build from the owner, not a blocker in the tree.** Each of
+these was written against a defect the owner reported from the unit, and each
+needs the same route back: build, drive, report. The hardware
 seek no longer cancelling itself, the refused tune no longer spinning the dial,
 the vendor-driven retune dropping the old level, the 1s/4s post-retune read
 schedule with two retries, the 1.5s getter poll on its own thread with the dial
