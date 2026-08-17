@@ -372,6 +372,34 @@ mod tests {
         assert!(p.debug_on, "the readable field is still read");
     }
 
+    /// A FILE FROM THE BUILD BEFORE `autostart` WAS DROPPED still reads.
+    ///
+    /// This is the one way removing a persisted field can hurt a driver, and it
+    /// is worth a test rather than an assurance: `from_json` reads named fields
+    /// and ignores everything else, so a key nobody asks for any more costs
+    /// nothing. A serde struct with `deny_unknown_fields` would have failed the
+    /// whole file here and reset every preset on the unit.
+    #[test]
+    fn a_file_written_before_autostart_was_dropped_still_loads() {
+        let d = tmpdir("stale-key");
+        fs::write(
+            path(&d),
+            concat!(
+                r#"{"presets":[{"mhz":102.1,"call":"WQLF"},88.7],"selected":"nwd","#,
+                r#""theme":"dark","autostart":true,"logosOn":true,"diagOn":true,"#,
+                r#""diagOverlayOn":false,"rdsCaptureOn":true,"debugOn":false}"#
+            ),
+        )
+        .unwrap();
+        let p = load(&d);
+        assert_eq!(p.presets, vec![at(102.1, Some("WQLF")), at(88.7, None)]);
+        assert_eq!(p.selected, Source::Nwd);
+        assert_eq!(p.theme, Theme::Dark);
+        assert!(p.logos_on && p.diag_on && p.rds_capture_on);
+        assert!(!p.diag_overlay_on && !p.debug_on);
+        let _ = fs::remove_dir_all(&d);
+    }
+
     /// A dial the front end cannot reach is corruption, not a preset.
     #[test]
     fn out_of_band_presets_are_dropped() {
