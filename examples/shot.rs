@@ -38,6 +38,10 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("driving", 1024, 614, false, State::Driving),
     ("weak-and-lossy", 1024, 614, false, State::WeakAndLossy),
     ("no-presets", 1024, 614, false, State::NoPresets),
+    // A LONG STRIP. Both save paths used to cap the list at six and delete the
+    // oldest preset to make room, so nothing had ever rendered more than six.
+    ("many-presets", 1024, 614, false, State::ManyPresets),
+    ("many-presets-portrait", 360, 800, false, State::ManyPresets),
     ("tuned", 1024, 614, false, State::Tuned),
     ("tuned-portrait", 360, 800, false, State::Tuned),
     ("out-of-band", 1024, 614, false, State::OutOfBand),
@@ -151,6 +155,10 @@ enum State {
     LongGenre,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
+    /// EIGHTEEN PRESETS. The strip is not limited, and this is the shot that
+    /// says so: the band has to scroll rather than overflow, and the tall
+    /// track's three-column grid has to wrap and stay inside its own height cap.
+    ManyPresets,
     /// Reorder mode with a DRAG IN FLIGHT.
     ///
     /// The only state produced by synthetic input rather than by setting a
@@ -244,7 +252,14 @@ fn main() {
         //
         // `driver` must outlive the render — it owns every callback, and a face
         // whose callbacks have been dropped still draws but answers nothing.
-        let (ui, driver) = carnyx::build().expect("build window");
+        // A PREFERENCE DIRECTORY PER SHOT. An App reads and writes `prefs.json`,
+        // so one shared directory let a shot that saves a preset change what
+        // every later shot started from — see `carnyx::build_with_prefs`.
+        let prefs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/carnyx-shots")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&prefs_dir);
+        let (ui, driver) = carnyx::build_with_prefs(&prefs_dir).expect("build window");
         ui.global::<carnyx::Pal>().set_dark(dark);
         apply(&ui, &driver, state);
         window.set_size(PhysicalSize::new(w, h));
@@ -375,6 +390,15 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_presets(slint::ModelRc::default());
             ui.set_has_prev(false);
             ui.set_has_next(false);
+        }
+        State::ManyPresets => {
+            // Through the REAL save path, one dial at a time, so the cap would
+            // still be enforced if it were there — setting the model directly
+            // would prove only that Slint can draw a long list.
+            for step in 0..18 {
+                let mhz = 88.1 + (step as f32) * 1.1;
+                driver.save_dial_for_test(mhz);
+            }
         }
         State::Tuned => ui.invoke_select_preset(2),
         State::OutOfBand => {

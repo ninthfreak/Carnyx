@@ -24,8 +24,34 @@ pub mod stations;
 /// callback: drop it and the face goes inert while still drawing. The caller
 /// keeps both alive for as long as the window is up.
 pub fn build() -> Result<(AppWindow, std::rc::Rc<app::App>), slint::PlatformError> {
+    build_with_prefs(&app::host_prefs_dir())
+}
+
+/// The same, against a preference directory of the caller's choosing.
+///
+/// THE SCREENSHOT HARNESS NEEDS THIS. Every shot builds a whole App, and an App
+/// both READS and WRITES `prefs.json` — so with one shared directory a shot that
+/// saves a preset changes what every later shot starts from. That is not a
+/// theory: `many-presets` saved eighteen dials, and the portrait render of the
+/// same state then loaded all eighteen and TOGGLED THEM BACK OFF, because
+/// `toggle_save` is a toggle. The second shot rendered six presets and an unsaved
+/// hero while claiming to show a long strip.
+///
+/// A per-shot directory makes each render independent of the ones before it,
+/// which is what a screenshot is supposed to be.
+pub fn build_with_prefs(
+    prefs_dir: &std::path::Path,
+) -> Result<(AppWindow, std::rc::Rc<app::App>), slint::PlatformError> {
     let ui = AppWindow::new()?;
-    let driver = app::App::new(&ui, &app::host_db_path());
+    let driver = app::App::with_tuner(
+        &ui,
+        &app::host_db_path(),
+        prefs_dir,
+        Box::new(android::FakeTuner::new()),
+        false,
+        None,
+        fake::FakeLocation::default(),
+    );
     Ok((ui, driver))
 }
 

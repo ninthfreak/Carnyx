@@ -1574,6 +1574,31 @@ impl App {
 
     // ── The command bodies ───────────────────────────────────────────────────
 
+    /// Tune to `mhz` and save it, for the screenshot harness only.
+    ///
+    /// Goes through `tune` and `toggle_save`, so a shot built with it exercises
+    /// the shipping save path rather than writing the model directly — which is
+    /// the difference between proving the strip has no limit and proving Slint
+    /// can draw a long list.
+    pub fn save_dial_for_test(self: &Rc<App>, mhz: f32) {
+        self.tune(mhz);
+        self.toggle_save();
+    }
+
+    /// Save the current dial, or drop it if it is already saved.
+    ///
+    /// THE STRIP HAS NO LIMIT, and the one that used to be here was never a
+    /// decision. Both save paths capped the list at `fake::SEED_PRESET_MHZ.len()`
+    /// — the length of the six-element demo array that seeds the SCREENSHOT
+    /// HARNESS — and then silently deleted the driver's oldest preset to make
+    /// room. A constant from `crate::fake` was acting as shipping policy, and the
+    /// comment justifying it as "what a six-slot strip with no slot picker can
+    /// do" was written to explain the accident rather than from any intent.
+    ///
+    /// Nothing needed the cap. The band is a `Flickable` whose content width and
+    /// grid height are computed from the list length, so it already scrolls; the
+    /// tall track already wraps to three columns and caps its own height at 42%
+    /// of the screen. Removing it changes no geometry.
     fn toggle_save(self: &Rc<App>) {
         {
             let mut s = self.state.borrow_mut();
@@ -1583,8 +1608,8 @@ impl App {
                 i if i >= 0 => {
                     s.presets.remove(i as usize);
                 }
-                // Unsaved: take the oldest slot, which is what a six-slot strip
-                // with no slot picker can do.
+                // Unsaved: append it. THE STRIP HAS NO LIMIT — see `toggle_save`'s
+                // own note below.
                 _ => {
                     let at = s.location.position();
                     let row = resolve(s.db.as_ref(), dial, at);
@@ -1596,9 +1621,6 @@ impl App {
                         .as_ref()
                         .map(|r| r.callsign.clone())
                         .or_else(|| s.callsigns.get(dial).map(str::to_string));
-                    if s.presets.len() >= fake::SEED_PRESET_MHZ.len() {
-                        s.presets.remove(0);
-                    }
                     s.presets.push(Slot { mhz: dial, row, saved_call });
                 }
             }
@@ -1896,9 +1918,6 @@ impl App {
             {
                 s.presets.remove(at);
             } else {
-                if s.presets.len() >= fake::SEED_PRESET_MHZ.len() {
-                    s.presets.remove(0);
-                }
                 let saved_call = Some(row.callsign.clone());
                 s.presets.push(Slot { mhz, row: Some(row), saved_call });
             }
