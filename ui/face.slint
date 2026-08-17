@@ -77,6 +77,8 @@ export component Face inherits Rectangle {
     callback reorder-preset(int, int);
     /// One diagnostics line about the reorder gesture. See `PresetsBand`.
     callback drag-note(string);
+    /// The same, for the hero's step morph. See `HeroRow`.
+    callback morph-note(string);
 
     property <bool> dead: !root.audio-active;
 
@@ -186,6 +188,7 @@ export component Face inherits Rectangle {
                 card-fill: true;
                 step-nonce: root.step-nonce;
                 step-dir: root.step-dir;
+                morph-note(m) => { root.morph-note(m); }
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;
@@ -233,6 +236,7 @@ export component Face inherits Rectangle {
                 card-fill: false;
                 step-nonce: root.step-nonce;
                 step-dir: root.step-dir;
+                morph-note(m) => { root.morph-note(m); }
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;

@@ -360,6 +360,9 @@ export component HeroRow inherits Rectangle {
         }
     }
 
+    /// One line into the diagnostics log, for a morph that cannot be watched.
+    callback morph-note(string);
+
     changed step-nonce => {
         // §4.7/§8: instant swaps with audio released. A dead face does not
         // animate, and CarFM skips the flip for exactly this case.
@@ -367,6 +370,11 @@ export component HeroRow inherits Rectangle {
             root.arming = true;
             arm.running = true;
         }
+        root.morph-note("dir=" + root.step-dir
+            + " dead=" + (root.dead ? "yes" : "no")
+            + " travel=" + Math.round(root.enter-dx / 1px) + "px"
+            + " cardw=" + Math.round(root.card-w / 1px)
+            + " peekw=" + Math.round(root.peek-w / 1px));
     }
 
     /// How far the hero starts from its resting place: the peek slot on the side
@@ -476,11 +484,20 @@ export component HeroRow inherits Rectangle {
     states [
         entering when root.arming: {
             card.x: root.card-x + root.enter-dx;
-            card.opacity: 0;
-            // NO `in` BLOCK, deliberately. Going in must be instantaneous, or
-            // the card visibly slides AWAY to the peek slot before coming back.
+            // NO OPACITY. The card travels at full strength, because that is
+            // what CarFM's does: its `centerTransform` is translate and scale
+            // only, and the two opacity animations in that morph belong to the
+            // clone leaving and the far peek arriving, neither of which exists
+            // here. Fading the hero to nothing was my own addition, and it is
+            // exactly the "hero card disappears for a moment" reported from the
+            // car — because the arming window is one frame in the harness and
+            // however long a synchronous retune takes on a head unit, and the
+            // card is a HOLE for all of it.
+            //
+            // NO `in` BLOCK either. Going in must be instantaneous, or the card
+            // visibly slides AWAY to the peek slot before coming back.
             out {
-                animate card.x, card.opacity {
+                animate card.x {
                     duration: 520ms;
                     easing: cubic-bezier(0.25, 0.1, 0.25, 1);
                 }

@@ -83,6 +83,8 @@ export component AppWindow inherits Window {
     /// One diagnostics line about the reorder gesture, which cannot be watched
     /// any other way on a head unit. See `PresetsBand::drag-note`.
     callback drag-note(string);
+    /// One diagnostics line about the hero's step morph. See `HeroRow`.
+    callback morph-note(string);
 
     /// One second, forever, for anything that has to notice the passage of time
     /// rather than an event.
@@ -285,6 +287,7 @@ export component AppWindow inherits Window {
         enter-reordering => { root.enter-reordering(); }
         reorder-preset(from, to) => { root.reorder-preset(from, to); }
         drag-note(m) => { root.drag-note(m); }
+        morph-note(m) => { root.morph-note(m); }
     }
 
     // ── The modal layer ─────────────────────────────────────────────────────

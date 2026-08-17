@@ -1388,6 +1388,9 @@ impl App {
         on!(on_reorder_preset, |app, from, to| {
             app.reorder_preset(from, to);
         });
+        on!(on_morph_note, |app, m| {
+            app.log_unavailable(&format!("step morph: {m}"));
+        });
         on!(on_drag_note, |app, m| {
             // Straight to the log the driver can read, because this gesture
             // cannot be observed any other way on the unit.
