@@ -186,6 +186,42 @@ stick. (`cargo apk run` and `adb install` exist, but this unit is not on adb.)
 ./tools/check-apk.sh
 ```
 
+### The same APK, built by Gradle — a spike
+
+```sh
+cargo install cargo-ndk
+./tools/build-apk-gradle.sh
+```
+
+Lands at **`android/app/build/outputs/apk/debug/app-debug.apk`** and runs the
+same pre-flight check. Same environment variables as above; the Gradle wrapper is
+checked in, so nothing but a JDK 17+ is needed on top of the SDK.
+
+**Why a second packager at all.** cargo-apk cannot declare a `<service>` or a
+`<receiver>`: `ndk_build::manifest::Application` has one activity and no field
+for anything else, and the manifest is generated from `[package.metadata.android]`
+with no escape hatch. That single absence is why the app does not survive being
+switched away from — CarFM stays alive because a foreground service pins its
+process — and why it does not come back when the unit wakes on ACC. Gradle writes
+its own manifest, so both become possible. That is task **#67**.
+
+**What the spike is asking, and what it is not.** It packages *exactly* what
+cargo-apk packages today — same package id, permissions, `queries`, theme,
+`configChanges`, `launchMode`, assets — and adds nothing. The one question is
+whether a Gradle-built APK boots `android_main` on the unit the way the cargo-apk
+one does. The service and the receiver go in **after** that answer, because a
+spike that changes two things cannot tell you which one failed.
+
+Until it is confirmed on the unit, **cargo-apk remains the default build** and
+the two manifests are kept in parity by hand.
+
+**The one thing Gradle stopped generating for us** is `android.app.lib_name`.
+NativeActivity loads `lib<value>.so`, cargo-apk derived that name from the crate,
+and `android/app/src/main/AndroidManifest.xml` now states it by hand. Get it wrong
+and the activity starts, finds no library, and the screen stays black — with no
+adb to ask why. `tools/check-apk.sh` cross-checks the value against the libraries
+actually in the APK for exactly that reason.
+
 Without adb there is no install error to read — the unit says "App not
 installed" and stops. That script checks, on the machine that built it, the
 things which produce exactly that message: the `armeabi-v7a` library is present,

@@ -421,6 +421,25 @@ by something that can write its own manifest: Gradle, or a forked cargo-apk. Unt
 then `src/session.rs` survives the restart instead of preventing it, and the
 `session:` line at the top of the log says which of the two restarts happened.
 
+**Gradle spike written, NOT yet confirmed on the unit.** `android/` holds a
+complete Gradle build of the same APK — wrapper checked in, `tools/build-apk-gradle.sh`
+runs `cargo ndk` then `gradlew assembleDebug`. It packages exactly what cargo-apk
+packages and adds nothing; the service and receiver are marked in the manifest as
+comments and go in only once the spike boots. The risk that mattered was checked
+and is absent: Slint resolves to plain `NativeActivity`, not GameActivity
+(`slint-1.17.1/Cargo.toml:64-68` → `i-slint-backend-android-activity/native-activity`),
+and `android.app.NativeActivity` is a framework class with no dependency to add.
+
+**Nothing in `android/` has been built or run.** The container has no SDK and no
+NDK, and `dl.google.com` is refused by the proxy so the Android Gradle Plugin
+cannot even be resolved here. What WAS verified: both scripts parse (`bash -n`),
+the manifest is well-formed XML, its `configChanges` string is byte-identical to
+`Cargo.toml`'s, and the new `lib_name` check in `tools/check-apk.sh` extracts the
+right value from a realistic `aapt dump xmltree`. Nothing beyond that.
+
+Next step is the owner's: run `./tools/build-apk-gradle.sh`, carry the APK out,
+and report whether the face comes up.
+
 ### 68. Build a stripped release APK for both ABIs
 **PENDING.** armv7-linux-androideabi and aarch64-linux-android. The unit is
 32-bit ARM and an arm64-only APK will not install. This is about the RELEASE

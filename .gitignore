@@ -4,3 +4,13 @@
 # Signing keys never go in the repository.
 *.keystore
 *.jks
+
+# The Gradle build. `jniLibs` holds the .so files cargo-ndk cross-compiles —
+# build output that happens to live inside a source set, so it is ignored like
+# any other build output. `local.properties` records an SDK path specific to one
+# machine.
+/android/.gradle
+/android/build
+/android/app/build
+/android/app/src/main/jniLibs
+/android/local.properties

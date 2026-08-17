@@ -6,11 +6,21 @@
 # installed" and nothing else. This checks, on the machine that built it, the
 # things that cause exactly that message.
 #
-#   ./tools/check-apk.sh                              # target/debug/apk/carnyx.apk
+#   ./tools/check-apk.sh                  # whichever of the two builds is there
 #   ./tools/check-apk.sh path/to/some.apk
 set -uo pipefail
 
-APK="${1:-target/debug/apk/carnyx.apk}"
+# Two packagers produce an APK now. With no argument, take whichever exists —
+# cargo-apk's first, since it is still the default build.
+CARGO_APK="target/debug/apk/carnyx.apk"
+GRADLE_APK="android/app/build/outputs/apk/debug/app-debug.apk"
+if [[ $# -ge 1 ]]; then
+  APK="$1"
+elif [[ -f "$CARGO_APK" ]]; then
+  APK="$CARGO_APK"
+else
+  APK="$GRADLE_APK"
+fi
 # Both, always. The unit is 32-bit ARM, so armeabi-v7a is what actually installs
 # today — but the project ships both, and an APK quietly missing one is the kind
 # of thing that is only noticed on different hardware, months later.
@@ -18,7 +28,8 @@ NEED_ABIS=(armeabi-v7a arm64-v8a)
 
 if [[ ! -f "$APK" ]]; then
   echo "No APK at $APK — build one first:" >&2
-  echo "  cargo apk build --lib" >&2
+  echo "  cargo apk build --lib          # the cargo-apk build" >&2
+  echo "  ./tools/build-apk-gradle.sh    # the Gradle build" >&2
   exit 1
 fi
 
@@ -78,6 +89,41 @@ else
   else
     note "FAIL" "android:exported MISSING — Android 12+ refuses to install"
     fail=1
+  fi
+
+  # ── android.app.lib_name ─────────────────────────────────────────────────
+  # NativeActivity loads `lib<value>.so` and nothing tells you when the name is
+  # wrong: the activity starts, finds no library, and the screen stays black.
+  # There is no logcat here to ask why, so the name is cross-checked against the
+  # libraries actually in the APK.
+  #
+  # cargo-apk derived this value from the crate; a Gradle manifest states it by
+  # hand, which is the one thing the move to Gradle stopped generating for us.
+  libname=$(awk '
+    /"android\.app\.lib_name"/ { seen = 1; next }
+    seen && /android:value/ {
+      if (match($0, /="[^"]*"/)) {
+        print substr($0, RSTART + 2, RLENGTH - 3)
+      }
+      exit
+    }
+  ' <<< "$tree")
+  if [[ -z "$libname" ]]; then
+    note "FAIL" "no android.app.lib_name meta-data — NativeActivity has no library to load"
+    fail=1
+  else
+    note "" "android.app.lib_name = $libname"
+    missing=""
+    while read -r abi; do
+      [[ -z "$abi" ]] && continue
+      unzip -l "$APK" "lib/$abi/lib$libname.so" >/dev/null 2>&1 || missing="$missing $abi"
+    done <<< "$abis"
+    if [[ -z "$missing" ]]; then
+      note "OK" "lib$libname.so present for every packaged ABI"
+    else
+      note "FAIL" "lib$libname.so MISSING for:$missing — black screen, no error on the unit"
+      fail=1
+    fi
   fi
 fi
 echo

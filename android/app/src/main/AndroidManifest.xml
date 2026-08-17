@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Parity with what cargo-apk generates, and nothing more.
+
+  This is a SPIKE. Its only question is whether a Gradle-packaged APK boots
+  Slint's `android_main` on the head unit exactly as the cargo-apk one does, so
+  every element below is a faithful copy of what `[package.metadata.android]`
+  produces today. The foreground service and the wake receiver — the reason for
+  moving packagers at all — go in AFTER that question is answered, not alongside
+  it, because a spike that changes two things cannot tell you which one failed.
+
+  Where the service and receiver will go is marked at the bottom.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      INTERNET is for the logo search; without it every request fails with a
+      SecurityException rather than a timeout, which reads as a transport bug.
+
+      Both location permissions match CarFM. COARSE would do for a picker sorted
+      in kilometres; FINE is what makes the in-motion glyph meaningful.
+
+      DECLARING IS NOT GRANTING. From API 23 these are runtime permissions and a
+      request needs someone to tap Allow, which on a dashboard at night is
+      nobody — so the location code treats "denied" and "never answered" as
+      ordinary states.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
+      PACKAGE VISIBILITY, load-bearing rather than defensive. From targetSdk 30
+      a package cannot see another it has not declared, and the filtering is
+      SILENT: `resolveService` returns null and `bindService` returns false on a
+      unit that plainly has the vendor radio installed, so the tuner would report
+      itself absent on the one device this app is for.
+    -->
+    <queries>
+        <package android:name="com.nwd.radio.service" />
+    </queries>
+
+    <application
+        android:label="Carnyx"
+        android:hasCode="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+
+        <!--
+          `android.app.NativeActivity` is a FRAMEWORK class, present on every
+          device — there is no dependency to add for it. Slint resolves to plain
+          NativeActivity, not GameActivity: slint's `backend-android-activity-06`
+          feature expands to `i-slint-backend-android-activity/native-activity`
+          (slint-1.17.1/Cargo.toml:64-68). cargo-apk hardcodes the same class
+          (cargo-apk-0.10.0/src/apk.rs:340).
+
+          android:exported is REQUIRED. Android 12 refuses to install a package
+          whose targetSdk is 31+ if a component with an intent-filter omits it,
+          and the on-device installer reports that only as "App not installed".
+        -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection">
+
+            <!--
+              THE ONE VALUE THAT SILENTLY BREAKS EVERYTHING. NativeActivity loads
+              `lib<value>.so`, so this must be the crate's lib name — `carnyx`,
+              from [lib] in ../../Cargo.toml, giving `libcarnyx.so`.
+
+              Get it wrong and the activity starts, finds no library, and you get
+              a black screen. There is no adb on this unit to ask why, which is
+              why tools/check-apk.sh now cross-checks this value against the .so
+              files actually packaged.
+
+              cargo-apk emits this same meta-data automatically
+              (cargo-apk-0.10.0/src/apk.rs:178); under Gradle it is written by
+              hand, and that is the one thing this file does that a generator did
+              for us before.
+            -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="carnyx" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          ── WHAT COMES NEXT, ONCE THIS BOOTS (#67) ────────────────────────────
+
+          A foreground service, so the process is not a candidate for the
+          launcher's cleaner or the low-memory killer and the face is still in RAM
+          when the driver comes back:
+
+              <service android:name=".CarnyxService"
+                       android:foregroundServiceType="mediaPlayback"
+                       android:exported="false" />
+
+          It needs FOREGROUND_SERVICE and FOREGROUND_SERVICE_MEDIA_PLAYBACK
+          above, a notification channel (API 26+), POST_NOTIFICATIONS on API 33+,
+          and an explicit-type `ServiceCompat.startForeground` call — CarFM does
+          not let the 2-arg form infer the type (VibeStreamService.kt:394-400).
+
+          And a receiver, so the app comes back when the unit wakes:
+
+              <receiver android:name=".WakeReceiver"
+                        android:exported="true" android:enabled="true">
+                  <intent-filter>
+                      <action android:name="com.nwd.ACTION_OS_WAKE_UP" />
+                      <action android:name="android.intent.action.BOOT_COMPLETED" />
+                  </intent-filter>
+              </receiver>
+
+          `com.nwd.ACTION_OS_WAKE_UP` is the one that matters and BOOT_COMPLETED
+          is the fallback, not the other way round: CarFM's manifest records that
+          THIS UNIT SLEEPS on ACC-off rather than shutting down, so BOOT_COMPLETED
+          never fires on an ignition cycle
+          (CarFM android/app/src/main/AndroidManifest.xml:91-94). It has to be a
+          manifest receiver, because the process is killed while the unit sleeps
+          and only a manifest-declared receiver gets restarted.
+
+          Neither is declared yet. A permission or a component with nothing behind
+          it is a prompt the driver answers for no reason.
+        -->
+    </application>
+</manifest>

@@ -100,8 +100,11 @@ png = "0.18"
 # `deny_unknown_fields`, so a misspelled key is silently dropped rather than
 # reported, and a build that "succeeds" can quietly ship the defaults.
 #
-# The APK itself has still never been built — this container has no SDK and no
-# NDK, so the toolchain path beyond manifest parsing is untested.
+# This table is still the DEFAULT build and is not going anywhere yet. `android/`
+# holds a Gradle build of the same APK, which exists because cargo-apk cannot
+# declare the foreground service (see the long note further down); until that
+# spike is confirmed on the unit, these two are kept in parity by hand and
+# `android/app/src/main/AndroidManifest.xml` cites this file where they overlap.
 [package.metadata.android]
 package = "com.ninthfreak.carnyx"
 # THE HEAD UNIT IS 32-BIT ARM. armeabi-v7a is not optional and not a nice-to-have
