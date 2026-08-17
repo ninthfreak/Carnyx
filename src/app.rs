@@ -118,6 +118,20 @@ thread_local! {
     static CURRENT: RefCell<Option<std::rc::Weak<App>>> = const { RefCell::new(None) };
 }
 
+/// How many Apps this PROCESS has built.
+///
+/// The whole diagnostic for "why did the radio start fresh", and it works
+/// because a static is per-process and `android_main` runs per-ACTIVITY. Come
+/// back from another app and read the log:
+///
+/// * `app #2 in this process` — the Activity was destroyed and re-created while
+///   the process lived. That is a configuration change the manifest did not
+///   claim, and `config_changes` in `Cargo.toml` is where it is fixed.
+/// * `app #1 in this process`, every time — the process itself was killed. No
+///   manifest flag prevents that; only a foreground service does, and cargo-apk
+///   cannot declare one.
+static APPS_BUILT_HERE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Drain and republish on the current thread's App. This is what the wake hop
 /// runs; it does nothing if there is no App here, which is the correct answer
 /// for a late event after the window has gone.
@@ -126,6 +140,19 @@ pub fn drain_current() {
     if let Some(app) = app {
         app.drain_events();
         app.push_all();
+    }
+}
+
+/// Write the parting snapshot for the current thread's App.
+///
+/// Called from the Android lifecycle listener in `lib.rs`, which runs on this
+/// same thread inside `poll_events` — so the borrow below is safe in exactly the
+/// way a borrow from a callback is. Does nothing when there is no App, which is
+/// what a lifecycle event before construction or after teardown deserves.
+pub fn persist_session_current(parting: crate::session::Parting) {
+    let app = CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade));
+    if let Some(app) = app {
+        app.persist_session(parting);
     }
 }
 
@@ -245,6 +272,19 @@ struct State {
     last_rds_at: Option<std::time::Instant>,
     /// The carrier has gone quiet. Set by the expiry, cleared by the next group.
     rds_stale: bool,
+    /// The dial the RDS on screen was RESTORED from, when it came off disk
+    /// rather than off the air. See [`crate::session`].
+    ///
+    /// It exists because the restore is optimistic: it is applied before the
+    /// tuner has said a word, so the face is warm on the first frame. This is
+    /// what lets the first `Connected`/`Frequency` event confirm it — or throw
+    /// it away, if the radio turns out to be somewhere else. Cleared for good by
+    /// the first real group, and by the expiry.
+    warm_dial: Option<f32>,
+    /// How many times this app has started since it was installed, counting the
+    /// run that is happening now. Read from the last run's snapshot; written
+    /// back into the next one.
+    launches: u32,
     /// What a panel key asked for, applied after the drain.
     ///
     /// DEFERRED, because `apply_event` holds a mutable borrow of this struct and
@@ -348,7 +388,11 @@ const LEVEL_WATCH_MS: i64 = 5_000;
 /// overpass or a burst of multipath does not blank a good station; short enough
 /// that a driver is not reading a song title from a transmitter they left behind
 /// twenty miles ago.
-const RDS_STALE: std::time::Duration = std::time::Duration::from_secs(25);
+///
+/// Public because `session::WARM` IS this number: a snapshot older than the
+/// window the running app would have disowned must not come back from disk, and
+/// the way to guarantee that is one constant rather than two that agree today.
+pub const RDS_STALE: std::time::Duration = std::time::Duration::from_secs(25);
 
 impl App {
     /// Build the application against a station database at `db_path`.
@@ -455,6 +499,21 @@ impl App {
 
         let picker = build_picker(db.as_ref(), location, snapshot.clone());
 
+        // WHAT THE LAST RUN LEFT ON THE DIAL.
+        //
+        // Read here and applied below rather than after the tuner answers,
+        // because the whole point is the FIRST frame: the driver's complaint is
+        // that coming back from another app looks like a cold start, and a hero
+        // that fills in a second later is still a cold start with a delay on it.
+        // `session::warm_rds` refuses anything the live expiry would already
+        // have wiped, so an optimistic restore can be wrong about which station
+        // is tuned but can never be wrong about how old the text is.
+        let previous = crate::session::load(&prefs_dir);
+        let launches = previous.as_ref().map(|p| p.launches).unwrap_or(0).saturating_add(1);
+        let warm = previous
+            .as_ref()
+            .and_then(|p| p.warm_rds(crate::session::now_unix()).map(|(rds, age)| (p.dial, rds, age)));
+
         // The store sits BESIDE `prefs.json`, under the same private directory,
         // for the same reason it is passed in rather than derived: `assets/` is
         // what cargo-apk packages, and a store rooted there would have shipped
@@ -482,10 +541,18 @@ impl App {
                 tuner,
                 tuner_is_real,
                 rds: RdsDecoder::new(),
-                rds_state: RdsState::default(),
+                // The DECODER is not seeded, only the published state. A decoder
+                // restored from disk would have consensus tallies it never
+                // earned, and the first corrupt group off the air would then
+                // publish against them. What comes back is a picture of a
+                // station, not a claim to have received it.
+                rds_state: warm.as_ref().map(|(_, rds, _)| rds.clone()).unwrap_or_default(),
                 stream: fake::FakeRdsStream::new(),
                 presets,
-                dial: fake::SEED_DIAL_MHZ,
+                // The last dial beats the seed, which is a Madison frequency
+                // from the host fake. The tuner overwrites it the moment it
+                // connects; until then this is the better guess by far.
+                dial: warm.as_ref().map(|&(dial, _, _)| dial).unwrap_or(fake::SEED_DIAL_MHZ),
                 level: None,
                 dotted: 0,
                 audio: true,
@@ -505,8 +572,21 @@ impl App {
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
-                last_rds_at: None,
+                // THE RESTORED TEXT KEEPS THE OLD STATION'S CLOCK. Stamping it
+                // `now` would hand a snapshot taken twenty-four seconds ago a
+                // fresh twenty-five second lease, so a station that had already
+                // gone quiet would sit on the face for another half minute. The
+                // fallback is only reached when the device has been up for less
+                // time than the snapshot's age, which means a reboot happened in
+                // between and the lease is the least of it.
+                last_rds_at: warm.as_ref().and_then(|&(_, _, age)| {
+                    std::time::Instant::now()
+                        .checked_sub(age)
+                        .or_else(|| Some(std::time::Instant::now()))
+                }),
                 rds_stale: false,
+                warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
+                launches,
                 panel_action: None,
                 callsigns,
                 store,
@@ -521,6 +601,38 @@ impl App {
         });
 
         CURRENT.with(|c| *c.borrow_mut() = Some(Rc::downgrade(&app)));
+        // THE LAUNCH RECORD, first line of every run's log.
+        //
+        // This is the answer to "why did it start fresh", written where the
+        // driver can read it without a cable. It says how the last run ended,
+        // how long ago, and — the part that matters — whether this process has
+        // built an App before. See `APPS_BUILT_HERE`.
+        {
+            let here = APPS_BUILT_HERE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let mut s = app.state.borrow_mut();
+            let last = match &previous {
+                None => "no previous run on record".to_string(),
+                Some(p) => {
+                    let ago = match p.age(crate::session::now_unix()) {
+                        Some(d) => format!("{}s ago", d.as_secs()),
+                        None => "at an unusable time".to_string(),
+                    };
+                    format!("last run ended in {} {}", p.parting.name(), ago)
+                }
+            };
+            let restored = match &warm {
+                Some((dial, rds, _)) if !rds.ps.is_empty() => {
+                    format!("RDS restored on {dial:.1} ({})", rds.ps)
+                }
+                Some((dial, _, _)) => format!("RDS restored on {dial:.1}"),
+                None => "cold RDS".to_string(),
+            };
+            let at = stamp();
+            s.settings.log.push(
+                &at,
+                &format!("session: launch #{launches}, app #{here} in this process, {last}, {restored}"),
+            );
+        }
         crate::android::set_event_sink(enqueue);
         // DAY AND NIGHT BELONG TO THE VEHICLE, not to whichever tuner is
         // selected, so this is started here and not inside `connect_tuner`.
@@ -705,12 +817,39 @@ impl App {
         }
     }
 
+    /// Write the parting snapshot: the dial, the RDS on it, and how this run
+    /// ended.
+    ///
+    /// Cheap enough to run from a lifecycle callback that Android is waiting on
+    /// — one small file, written temporary-then-renamed — and rare enough that
+    /// the flash does not care: pause, stop, destroy and the low-memory warning,
+    /// which together happen a handful of times a drive.
+    ///
+    /// STALE RDS IS NOT WRITTEN. If the carrier has already gone quiet the face
+    /// is showing nothing, and preserving nothing is the honest snapshot; the
+    /// dial and the launch counter still go down, because those are facts.
+    pub fn persist_session(&self, parting: crate::session::Parting) {
+        let s = self.state.borrow();
+        let snapshot = crate::session::Session {
+            dial: s.dial,
+            saved_at: crate::session::now_unix(),
+            launches: s.launches,
+            parting,
+            rds: if s.rds_stale { RdsState::default() } else { s.rds_state.clone() },
+        };
+        crate::session::save(&s.prefs_dir, &snapshot);
+    }
+
     fn apply_event(&self, event: TunerEvent) {
         let mut s = self.state.borrow_mut();
         match event {
             TunerEvent::Connected(c) => {
                 if let Some(mhz) = c.mhz {
                     s.dial = mhz;
+                    // The first word from the radio about where it actually is.
+                    // A warm restore that guessed wrong is thrown away here,
+                    // before anybody reads it off the hero.
+                    settle_warm(&mut s, mhz);
                 }
                 s.settings.log.push(&stamp(), "connect ok");
                 // CLAIM THE AUDIO SOURCE. The face opens with the power button
@@ -784,25 +923,49 @@ impl App {
                 if let Some(mhz) = f.mhz {
                     s.dial = mhz;
                 }
-                // EVERY frequency event, and `reset_for_retune` rather than
-                // `reset`: a full reset leaves the old PI as an incumbent that
-                // then needs twelve groups to displace instead of three.
-                s.rds.reset_for_retune();
-                s.rds_state = RdsState::default();
-                // The expiry clock restarts with the dial. Carrying the old
-                // station's last-heard stamp across a retune would expire the
-                // new one the moment it was tuned, if the old one had been quiet
-                // for twenty-four seconds already.
-                s.last_rds_at = None;
-                s.rds_stale = false;
-                // A new station has reported nothing yet, so the pill goes back
-                // to EMPTY rather than carrying the last station's pilot — and
-                // never to MONO, which would be an assertion nothing made.
-                s.stereo = None;
+                // A WARM RESTORE THIS EVENT CONFIRMS IS NOT A RETUNE. On the
+                // first frequency report of a run the radio is telling us where
+                // it already was, not moving — and if that is the dial the
+                // snapshot came from, wiping it here would undo the restore one
+                // frame after it was drawn, which is the blank hero all of this
+                // exists to prevent.
+                //
+                // EXACTLY ONE EVENT'S WORTH OF PROTECTION, retired on the way
+                // through rather than left to the first group. This is the arm
+                // that clears the face, and an uncalibrated tuner can report a
+                // frequency it cannot convert — `f.mhz` is None, the dial does
+                // not move, and the check would go on answering yes for as long
+                // as that lasted. From the second event on, a retune resets as
+                // it always did.
+                let dial = s.dial;
+                let confirmed = settle_warm(&mut s, dial);
+                s.warm_dial = None;
+                if !confirmed {
+                    // EVERY frequency event, and `reset_for_retune` rather than
+                    // `reset`: a full reset leaves the old PI as an incumbent
+                    // that then needs twelve groups to displace instead of three.
+                    s.rds.reset_for_retune();
+                    s.rds_state = RdsState::default();
+                    // The expiry clock restarts with the dial. Carrying the old
+                    // station's last-heard stamp across a retune would expire the
+                    // new one the moment it was tuned, if the old one had been
+                    // quiet for twenty-four seconds already.
+                    s.last_rds_at = None;
+                    s.rds_stale = false;
+                    // A new station has reported nothing yet, so the pill goes
+                    // back to EMPTY rather than carrying the last station's pilot
+                    // — and never to MONO, which would be an assertion nothing
+                    // made.
+                    s.stereo = None;
+                }
                 let line = format!("tuned {:.1}", s.dial);
                 s.settings.log.push(&stamp(), &line);
             }
             TunerEvent::RdsGroup(g) => {
+                // A LIVE GROUP RETIRES THE RESTORE. From here on the decoder is
+                // the authority on this dial and the snapshot has done its job,
+                // so a later retune must clear the face in the ordinary way.
+                s.warm_dial = None;
                 // The carrier is alive. Stamped for EVERY group that arrives,
                 // published or not — a group the consensus gates reject is still
                 // proof that there is a transmitter out there.
@@ -1766,6 +1929,9 @@ impl App {
         }
         s.last_rds_at = None;
         s.rds_stale = true;
+        // Whatever came off disk has now outlived its own window, so the next
+        // retune must clear the face rather than protect a restore.
+        s.warm_dial = None;
         s.rds.clear_ta();
         s.rds_state = RdsState::default();
         // The pilot came from the same carrier. EMPTY rather than MONO, which
@@ -2266,6 +2432,30 @@ fn build_picker(
         }
         _ => NearbyPicker::no_fix(snapshot),
     }
+}
+
+/// Reconcile a restored RDS snapshot against the dial the radio actually
+/// reports, and say whether the snapshot belongs here.
+///
+/// The restore in `with_tuner` is optimistic — it is applied before the tuner
+/// has said a word, so the face is warm on the first frame rather than a second
+/// later. This is the other half of that bargain: the FIRST thing the radio says
+/// about its own dial either confirms the snapshot or destroys it. A snapshot is
+/// a picture of one station, and the one way it can lie is by being shown over a
+/// different one.
+///
+/// Through `preset_key` for the same reason `active_index` uses it: 105.5 does
+/// not round-trip through an f32.
+fn settle_warm(s: &mut State, mhz: f32) -> bool {
+    let Some(warm) = s.warm_dial else { return false };
+    if crate::stations::preset_key(f64::from(warm)) == crate::stations::preset_key(f64::from(mhz)) {
+        return true;
+    }
+    s.warm_dial = None;
+    s.rds_state = RdsState::default();
+    s.last_rds_at = None;
+    s.rds_stale = false;
+    false
 }
 
 /// Which slot a dial sits on, or -1.

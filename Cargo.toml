@@ -71,6 +71,17 @@ slint = { version = "1.17", features = ["backend-android-activity-06"] }
 # depends on it, so any other major would put a SECOND jni crate in the tree and
 # its `Env` would not be the same type as the one Slint hands out.
 jni = "0.22"
+# The Activity lifecycle, for `MainEvent::{Pause, Stop, Destroy, LowMemory}`.
+#
+# Same rule as `jni` above and for the same reason: Slint's Android backend
+# depends on android-activity 0.6 and hands us a `&PollEvent` through
+# `init_with_event_listener`, so 0.6 HERE is what makes that reference a type
+# this crate can match on. A different major would compile and then match
+# nothing, because the two `PollEvent`s would not be the same type.
+#
+# It has to be a dependency at all because `slint::android` re-exports
+# `AndroidApp` and nothing else — there is no path to `MainEvent` through slint.
+android-activity = "0.6"
 
 # Screenshots. There is no desktop app, but the face still has to be LOOKED at
 # without a car: `cargo run --example shot` renders every layout track headless
@@ -190,6 +201,40 @@ name = "android.permission.ACCESS_COARSE_LOCATION"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_FINE_LOCATION"
 
+# WHAT CANNOT BE DECLARED HERE, AND WHAT IT COSTS.
+#
+# CarFM survives being switched away from. Carnyx does not — come back and the
+# face is redrawing and the RadioText is being decoded again — and the difference
+# is one component: CarFM runs `VibeStreamService` in the FOREGROUND even when
+# the built-in NWD tuner is the source and the service carries no audio at all
+# (`startNwdControlSession` → `startForegroundMedia` → `startForeground`,
+# VibeStreamService.kt:726-739). A process with a foreground service is not a
+# candidate for the launcher's cleaner or the low-memory killer, so its state is
+# still in RAM when the driver comes back.
+#
+# CARGO-APK CANNOT DECLARE A SERVICE. This was checked rather than assumed, in
+# the source: `ndk_build::manifest::Application` (ndk-build-0.10.0
+# src/manifest.rs) has exactly `debuggable, theme, has_code, icon, label,
+# extract_native_libs, uses_cleartext_traffic, meta_data, activity` — ONE
+# activity, and no `service`, `receiver` or `provider` field to put anything
+# else in. There is no custom-manifest escape hatch either: cargo-apk builds the
+# manifest from this table alone (cargo-apk-0.10.0 src/apk.rs:33, 161-213) and
+# quick-xml escapes every string it serialises, so it cannot be smuggled through
+# an attribute. The same absence rules out CarFM's `BootReceiver`, which is what
+# brings the app back after the unit wakes on ACC.
+#
+# So the foreground service is not a to-do that fits in this file. It needs the
+# APK to be built by something that can write its own manifest — Gradle, or a
+# forked cargo-apk — and until that happens the restart is a fact to survive
+# rather than a bug to fix. `src/session.rs` is what survives it, and the
+# `session:` line at the top of the diagnostics log is what says which of the two
+# restarts actually happened on this unit.
+#
+# The permissions that go with a foreground service — FOREGROUND_SERVICE,
+# FOREGROUND_SERVICE_MEDIA_PLAYBACK, POST_NOTIFICATIONS, WAKE_LOCK — are
+# deliberately NOT declared below. A permission with nothing to use it is a
+# prompt the driver answers for no reason and a line in the store listing that
+# describes an app this is not.
 [package.metadata.android.application]
 label = "Carnyx"
 # The face is the whole screen; the head unit has no use for a title bar.
@@ -203,7 +248,29 @@ theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 # filter — so the pair is a guaranteed INSTALL_PARSE_FAILED_MANIFEST_MALFORMED,
 # which the on-device installer reports only as "App not installed".
 exported = true
-# DUDU OS resizes the app into vertical thirds, and the face reflows per surface
-# rather than restarting — so it handles these itself.
-config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density"
+# EVERY CONFIGURATION CHANGE THIS APP CAN OUTLIVE, CLAIMED.
+#
+# A change not named here destroys the Activity and creates a new one, and on
+# android-activity that means `android_main` RETURNS and is called again
+# (android-activity-0.6.1 src/lib.rs:68-76) — a whole new App, a blank decoder,
+# an empty log. Nothing on the face survives it. The list used to be six flags
+# and was written for DUDU OS resizing the app into vertical thirds; it left out
+# `uiMode`, which is the one a car actually produces, because a head unit flips
+# day/night with the headlights and the OS shell changes it coming forward.
+# CarFM claims `uiMode`; Carnyx did not, and was restarted by it.
+#
+# Claiming a change means handling it, and every one of these IS handled — by
+# doing nothing, correctly:
+#
+#   * `density`, `screenSize`, `smallestScreenSize`, `screenLayout`,
+#     `orientation` — Slint re-reads the window and the scale factor and the face
+#     reflows from `Metrics` (i-slint-backend-android-activity, ConfigChanged).
+#   * `uiMode` — day and night come from the VEHICLE, over the vendor's
+#     illumination broadcast, not from Android's night mode. There is genuinely
+#     nothing to do, which is exactly why being restarted for it was pure loss.
+#   * `locale`, `layoutDirection`, `fontScale` — the face has one language and
+#     its own type ramp, so none of the three changes a pixel.
+#   * `keyboard`, `keyboardHidden`, `navigation`, `touchscreen`, `mcc`, `mnc` —
+#     a dashboard has none of these and never will.
+config_changes = "mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection"
 launch_mode = "singleTask"

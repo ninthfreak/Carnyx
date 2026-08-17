@@ -522,9 +522,9 @@ keep both the path and the password out of the repository entirely.
 
 `*.keystore` and `*.jks` are gitignored as a backstop, not as the plan.
 
-### Two cargo-apk traps
+### Three cargo-apk traps
 
-Both read out of its source rather than guessed:
+All read out of its source rather than guessed:
 
 - **It shells out to `aapt`, not `aapt2`** (`ndk-build::apk`). Recent build-tools
   packages ship only `aapt2`. Check with `ls $ANDROID_HOME/build-tools/*/aapt`;
@@ -532,6 +532,63 @@ Both read out of its source rather than guessed:
 - **It picks the HIGHEST build-tools version it finds**, by `max()` over the
   directory names (`ndk-build::ndk::Ndk::from_env`) — so installing an older one
   alongside is not enough on its own if the newest lacks `aapt`.
+- **It cannot declare a service, a receiver or a provider.** That one costs a
+  feature rather than an afternoon; see below.
+
+### The APK cannot hold a foreground service, and that is why the app restarts
+
+CarFM survives being switched away from. Carnyx does not: switch to another app,
+come back, and the face is redrawing and the RadioText is being decoded again.
+The difference is one component. CarFM runs `VibeStreamService` in the
+**foreground** even when the built-in NWD tuner is the source and the service is
+carrying no audio at all — `startNwdControlSession` → `startForegroundMedia` →
+`startForeground` (`VibeStreamService.kt:726-739`). A process with a foreground
+service is not a candidate for the launcher's cleaner or the low-memory killer,
+so CarFM's state is still in RAM when the driver comes back.
+
+`ndk_build::manifest::Application` (ndk-build-0.10.0 `src/manifest.rs`) has
+exactly these fields:
+
+```
+debuggable, theme, has_code, icon, label, extract_native_libs,
+uses_cleartext_traffic, meta_data, activity
+```
+
+One activity, and nowhere to put anything else. There is no custom-manifest
+escape hatch either: cargo-apk builds the manifest from
+`[package.metadata.android]` alone (cargo-apk-0.10.0 `src/apk.rs:33`, `161-213`)
+and quick-xml escapes every string it serialises, so nothing can be smuggled
+through an attribute value. The same absence rules out CarFM's `BootReceiver`,
+which is what brings the app back after the unit wakes on ACC.
+
+**Two restarts look identical to a driver and need opposite fixes**, so the app
+now says which one happened. The first line of every run's diagnostics log reads:
+
+```
+session: launch #12, app #1 in this process, last run ended in pause 6s ago, RDS restored on 96.3 (WQLF)
+```
+
+- `app #2 in this process`, or higher — the **Activity** was destroyed and
+  re-created while the process lived. That is a configuration change the manifest
+  did not claim, and `config_changes` in `Cargo.toml` is the lever. The list
+  there is now every flag this app can outlive; it used to omit `uiMode`, which
+  is the one a car actually produces, because a head unit flips day/night with
+  the headlights.
+- `app #1 in this process` every single time — the **process** was killed. No
+  manifest flag prevents that. Only a foreground service does, and that needs the
+  APK to be built by something that can write its own manifest: Gradle, or a
+  forked cargo-apk.
+
+Until one of those happens the restart is survived rather than prevented.
+`src/session.rs` writes the dial and the decoded RDS on the way out — on pause,
+stop, destroy and the low-memory warning, through the lifecycle listener in
+`android_main` — and puts them back on the first frame of the next run, so a
+quick switch away and back comes up warm instead of blank. It refuses anything
+older than `app::RDS_STALE`, the same twenty-five seconds the running app uses to
+disown a quiet carrier: text the live face would have wiped must not come back
+from disk. `cargo run --example warmprobe` drives that whole path through a real
+`App` — restore kept on the same dial, discarded on a different one, refused when
+stale.
 
 `xbuild` (`cargo install xbuild`) is the alternative that uses `aapt2`. It has
 not been tried here.

@@ -13,6 +13,7 @@ pub mod fake;
 pub mod logos;
 pub mod prefs;
 pub mod rds;
+pub mod session;
 pub mod settings;
 pub mod signal;
 pub mod station;
@@ -76,7 +77,42 @@ fn android_main(android_app: slint::android::AndroidApp) {
     let assets = android_app.asset_manager();
     let vm = android_app.vm_as_ptr();
     let activity = android_app.activity_as_ptr();
-    slint::android::init(android_app).unwrap();
+    // THE LIFECYCLE, WATCHED. `init` alone would run the same event loop with
+    // nobody looking at it, and there are two things only this listener can do.
+    //
+    // It WRITES THE PARTING SNAPSHOT. `session` restores the dial and the RDS on
+    // the next launch, and the only honest moment to take that picture is the
+    // moment the app is being put down. Android blocks in `onPause` until the
+    // native thread has taken the command, so this runs before the app is
+    // actually backgrounded rather than hopefully afterwards.
+    //
+    // And it RECORDS WHICH WAY THE RUN ENDED, which is the difference between a
+    // fault this repository can fix and one it cannot: a `Destroy` means the
+    // Activity was re-created and `config_changes` is the lever, while a `Pause`
+    // or `Stop` followed by a cold process means the app was killed outright,
+    // and nothing short of a foreground service prevents that.
+    //
+    // Nothing here can fail loudly: before the App exists, `persist_session_current`
+    // finds nothing and `ingest_note` has no sink, and both are no-ops.
+    slint::android::init_with_event_listener(android_app, |event| {
+        use android_activity::{MainEvent, PollEvent};
+        let PollEvent::Main(main) = event else { return };
+        let parting = match main {
+            MainEvent::Pause => session::Parting::Pause,
+            MainEvent::Stop => session::Parting::Stop,
+            MainEvent::Destroy => session::Parting::Destroy,
+            MainEvent::LowMemory => session::Parting::LowMemory,
+            // `SaveState` is the Android-blessed moment for this, but
+            // `NativeActivity` only raises it when the system intends to restore
+            // the instance later — it is not raised on the ordinary path out.
+            // Treated as a pause, since that is what it means for our purposes.
+            MainEvent::SaveState { .. } => session::Parting::Pause,
+            _ => return,
+        };
+        app::persist_session_current(parting);
+        android::ingest_note(format!("lifecycle: {}", parting.name()));
+    })
+    .unwrap();
 
     // The app's private data directory, and the prefs file's home. Captured
     // before the map below consumes `files_dir`.

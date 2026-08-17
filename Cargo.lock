@@ -756,6 +756,7 @@ dependencies = [
 name = "carnyx"
 version = "0.1.0"
 dependencies = [
+ "android-activity 0.6.1",
  "android-build",
  "jni 0.22.4",
  "png",
