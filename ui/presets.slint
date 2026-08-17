@@ -744,7 +744,23 @@ export component PresetsBand inherits Rectangle {
                         // why a function here silently half-works.
                         property <int> slot:
                             (root.drag-index < 0 || root.drop-index < 0) ? i
-                            : (i == root.drag-index) ? root.drop-index
+                            // THE HELD TILE DOES NOT MOVE, and that is the fix
+                            // for a drag that started and then froze. It is
+                            // hidden, so its position is invisible — but its
+                            // TouchArea is the one holding the gesture, and
+                            // `mouse-x` is measured RELATIVE TO THAT TOUCHAREA.
+                            // Sending it to `drop-index` moved the coordinate
+                            // origin by a whole tile the instant the drop index
+                            // changed, so the very next move reported a finger
+                            // that had apparently jumped 128px backwards, which
+                            // put the drop index back, which moved the origin
+                            // back. A drag that fights itself to a standstill
+                            // within a few pixels.
+                            //
+                            // Leaving it at `i` costs nothing: the gap is opened
+                            // by the OTHER tiles stepping aside, and the lifted
+                            // copy is what the driver actually sees move.
+                            : (i == root.drag-index) ? i
                             : (root.drag-index < root.drop-index)
                                 ? ((i > root.drag-index && i <= root.drop-index) ? i - 1 : i)
                                 : ((i >= root.drop-index && i < root.drag-index) ? i + 1 : i);
@@ -792,7 +808,23 @@ export component PresetsBand inherits Rectangle {
                         // why a function here silently half-works.
                         property <int> slot:
                             (root.drag-index < 0 || root.drop-index < 0) ? i
-                            : (i == root.drag-index) ? root.drop-index
+                            // THE HELD TILE DOES NOT MOVE, and that is the fix
+                            // for a drag that started and then froze. It is
+                            // hidden, so its position is invisible — but its
+                            // TouchArea is the one holding the gesture, and
+                            // `mouse-x` is measured RELATIVE TO THAT TOUCHAREA.
+                            // Sending it to `drop-index` moved the coordinate
+                            // origin by a whole tile the instant the drop index
+                            // changed, so the very next move reported a finger
+                            // that had apparently jumped 128px backwards, which
+                            // put the drop index back, which moved the origin
+                            // back. A drag that fights itself to a standstill
+                            // within a few pixels.
+                            //
+                            // Leaving it at `i` costs nothing: the gap is opened
+                            // by the OTHER tiles stepping aside, and the lifted
+                            // copy is what the driver actually sees move.
+                            : (i == root.drag-index) ? i
                             : (root.drag-index < root.drop-index)
                                 ? ((i > root.drag-index && i <= root.drop-index) ? i - 1 : i)
                                 : ((i >= root.drop-index && i < root.drag-index) ? i + 1 : i);
@@ -836,7 +868,23 @@ export component PresetsBand inherits Rectangle {
                         // why a function here silently half-works.
                         property <int> slot:
                             (root.drag-index < 0 || root.drop-index < 0) ? i
-                            : (i == root.drag-index) ? root.drop-index
+                            // THE HELD TILE DOES NOT MOVE, and that is the fix
+                            // for a drag that started and then froze. It is
+                            // hidden, so its position is invisible — but its
+                            // TouchArea is the one holding the gesture, and
+                            // `mouse-x` is measured RELATIVE TO THAT TOUCHAREA.
+                            // Sending it to `drop-index` moved the coordinate
+                            // origin by a whole tile the instant the drop index
+                            // changed, so the very next move reported a finger
+                            // that had apparently jumped 128px backwards, which
+                            // put the drop index back, which moved the origin
+                            // back. A drag that fights itself to a standstill
+                            // within a few pixels.
+                            //
+                            // Leaving it at `i` costs nothing: the gap is opened
+                            // by the OTHER tiles stepping aside, and the lifted
+                            // copy is what the driver actually sees move.
+                            : (i == root.drag-index) ? i
                             : (root.drag-index < root.drop-index)
                                 ? ((i > root.drag-index && i <= root.drop-index) ? i - 1 : i)
                                 : ((i >= root.drop-index && i < root.drag-index) ? i + 1 : i);
