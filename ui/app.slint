@@ -80,6 +80,9 @@ export component AppWindow inherits Window {
     /// A drag in reorder mode let go: move the preset at the first index to the
     /// second. Rust owns the list; the band only reports where it landed.
     callback reorder-preset(int, int);
+    /// One diagnostics line about the reorder gesture, which cannot be watched
+    /// any other way on a head unit. See `PresetsBand::drag-note`.
+    callback drag-note(string);
 
     /// One second, forever, for anything that has to notice the passage of time
     /// rather than an event.
@@ -281,6 +284,7 @@ export component AppWindow inherits Window {
         // that judgement is not the view's to make.
         enter-reordering => { root.enter-reordering(); }
         reorder-preset(from, to) => { root.reorder-preset(from, to); }
+        drag-note(m) => { root.drag-note(m); }
     }
 
     // ── The modal layer ─────────────────────────────────────────────────────

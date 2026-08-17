@@ -1358,6 +1358,11 @@ impl App {
         on!(on_reorder_preset, |app, from, to| {
             app.reorder_preset(from, to);
         });
+        on!(on_drag_note, |app, m| {
+            // Straight to the log the driver can read, because this gesture
+            // cannot be observed any other way on the unit.
+            app.log_unavailable(&format!("reorder: {m}"));
+        });
         on!(on_open_settings, |app| {
             app.push_settings();
         });

@@ -355,6 +355,20 @@ export component PresetsBand inherits Rectangle {
     /// A drag let go: move the preset at the first index to the second. Rust owns
     /// the list; this only ever reports where the finger landed.
     callback reorder(int, int);
+    /// One line into the diagnostics log, for a gesture that cannot be watched.
+    ///
+    /// THE DRAG WORKS HEADLESSLY AND NOT IN THE CAR, and the difference is not
+    /// visible from here. The screenshot harness dispatches MOUSE events; the
+    /// head unit delivers touch, and a `Flickable` treats the two differently —
+    /// it withholds a press from its children for 100ms and CAPTURES the gesture
+    /// outright once the pointer has moved 8 logical px in an axis it can
+    /// scroll. This strip scrolls horizontally with six presets, so a finger
+    /// that drifts sideways during the 550ms hold is exactly the case the
+    /// harness cannot produce.
+    ///
+    /// So the gesture reports itself. Settings → DIAGNOSTICS shows where it
+    /// stops, which beats another round of guessing at it from here.
+    callback drag-note(string);
 
     height: root.band-height;
 
@@ -382,6 +396,9 @@ export component PresetsBand inherits Rectangle {
             if (root.hold-index >= 0 && !root.reordering) {
                 root.hold-fired = true;
                 root.enter-reordering();
+                root.drag-note(root.reordering
+                    ? "hold fired, mode opened"
+                    : "hold fired, mode REFUSED");
                 // ARMED ONLY IF THE MODE ACTUALLY OPENED. Rust refuses reorder
                 // mode while the car is moving, and it answers by simply not
                 // setting `reordering` — so arming unconditionally handed the
@@ -505,8 +522,10 @@ export component PresetsBand inherits Rectangle {
             // is a potential drag from the first pixel.
             root.drag-index = i;
             root.drop-index = i;
+            root.drag-note("press on " + i + ", armed (mode already open)");
         } else {
             hold.running = true;
+            root.drag-note("press on " + i + ", holding");
         }
     }
 
@@ -521,6 +540,9 @@ export component PresetsBand inherits Rectangle {
             && Math.abs(root.drag-dy / 1px) <= root.drag-slop / 1px) {
             return;
         }
+        if (!root.dragging) {
+            root.drag-note("slop crossed on " + i + ", dragging");
+        }
         root.dragging = true;
         // Viewport coordinates: the tile reports where the finger is inside
         // ITSELF, and only the band knows where that tile rests.
@@ -528,6 +550,8 @@ export component PresetsBand inherits Rectangle {
     }
 
     function hold-stop() {
+        root.drag-note("released: dragging=" + (root.dragging ? "yes" : "no")
+            + " from=" + root.drag-index + " to=" + root.drop-index);
         hold.running = false;
         if (root.dragging && !root.dropping) {
             // Let the held tile settle before the model changes under it.
@@ -541,6 +565,11 @@ export component PresetsBand inherits Rectangle {
     /// The system took the gesture away. Everything goes back, and NOTHING is
     /// committed — a cancel is not a decision the driver made.
     function hold-cancel() {
+        // THE MOST INTERESTING LINE IN THE LOG. A cancel here means something
+        // above took the gesture away, and the Flickable claiming it as a scroll
+        // is the prime suspect.
+        root.drag-note("CANCELLED: dragging=" + (root.dragging ? "yes" : "no")
+            + " index=" + root.drag-index);
         hold.running = false;
         settle.running = false;
         root.clear-drag();

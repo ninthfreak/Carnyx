@@ -75,6 +75,8 @@ export component Face inherits Rectangle {
     callback enter-reordering();
     /// A drag let go: move the preset at the first index to the second.
     callback reorder-preset(int, int);
+    /// One diagnostics line about the reorder gesture. See `PresetsBand`.
+    callback drag-note(string);
 
     property <bool> dead: !root.audio-active;
 
@@ -157,6 +159,7 @@ export component Face inherits Rectangle {
             done-reordering => { root.done-reordering(); }
             enter-reordering => { root.enter-reordering(); }
             reorder(from, to) => { root.reorder-preset(from, to); }
+            drag-note(m) => { root.drag-note(m); }
             open-logo-search(i) => { root.open-logo-search(i); }
         }
     }
