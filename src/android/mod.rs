@@ -689,10 +689,13 @@ pub fn ingest_radio_state(state: i32) {
 }
 
 pub fn ingest_level(level: i32, asked: i32, landed: i32, ok: bool, error: Option<String>) {
-    // `ok` only says the call itself returned an integer. Whether the READING
-    // can be believed is the equality check, and it is made here so there is one
-    // definition of a trustworthy level.
-    let trustworthy = ok && error.is_none() && asked > 0 && asked == landed;
+    // `ok` only says the call itself returned an integer. Whether the READING can
+    // be believed is the equality check, and there IS one definition of that —
+    // `signal::level_is_trustworthy`, which is the one with the tests. This
+    // comment used to claim the definition was here, while an identical copy sat
+    // in `signal.rs` being tested and never called: two spellings of one rule,
+    // and only the untested one shipping.
+    let trustworthy = ok && error.is_none() && crate::signal::level_is_trustworthy(asked, landed);
     emit(TunerEvent::Level(LevelReading { level, asked, landed, trustworthy, error }));
 }
 

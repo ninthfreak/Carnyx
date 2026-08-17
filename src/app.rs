@@ -1274,6 +1274,14 @@ impl App {
                 // restore above, where the RDS is kept but the level still has to
                 // be re-measured, because a level is a reading of the air right
                 // now and nothing on disk can stand in for it.
+                // THE LEVEL BELONGS TO THE STATION WE JUST LEFT. `tune` drops it
+                // on the way out, but a retune the VENDOR drove — a landed seek,
+                // the hardware buttons, the service's own preset walk — never
+                // passes through `tune`, so the meter sat on the old station's
+                // reading until the 1s read replaced it. CarFM clears it right
+                // here, in the same handler (`setFmLevel(null)`,
+                // RadioScreen.tsx:2829).
+                s.level = None;
                 arm_level_schedule(&mut s);
                 let line = format!("tuned {:.1}", s.dial);
                 s.settings.log.push(&stamp(), &line);
@@ -1878,6 +1886,13 @@ impl App {
                 drop(s);
                 let mut s = self.state.borrow_mut();
                 s.settings.log.push(&stamp(), &format!("tune refused: {e}"));
+                // AND NOTHING ELSE MOVES. The lines below set the dial, drop the
+                // level and republish, and they used to run whether or not the
+                // command was accepted — so an uncalibrated unit put a frequency
+                // on the hero that the front end was not on. That is exactly the
+                // failure the comment above names: the dial spins and the radio
+                // does not move.
+                return;
             }
         }
         self.drain_events();
@@ -2016,10 +2031,12 @@ impl App {
                 s.numpad.clear();
                 s.numpad_error = false;
             }
+            // Handed over and let go — see `PanelAction::Seek`. Re-tuning after
+            // a hardware seek cancels it.
             app.state.borrow().tuner.seek(dir > 0);
             app.drain_events();
-            let mhz = app.state.borrow().dial;
-            app.tune(mhz);
+            app.pump_rds_until_settled();
+            app.push_all();
         });
 
         // ── §6.2 nearby ──
@@ -2406,9 +2423,23 @@ impl App {
                     let s = self.state.borrow();
                     s.tuner.seek(up);
                 }
+                // NO RE-TUNE AFTER, and there used to be one.
+                //
+                // `NwdBridge.seek` calls `RadioFeature.search` and returns at
+                // once (NwdBridge.java:337-342); the frequency it lands on
+                // arrives later as `notifyCurrentFrequency`. So the drain below
+                // finds nothing, `s.dial` is still where the seek STARTED, and
+                // tuning to it commanded the front end straight back — cancelling
+                // the seek on the one device this app is for.
+                //
+                // CarFM hands a hardware seek over and stops: "the landed
+                // frequency arrives via the tuner callback, so there's no
+                // client-side sweep to animate here" (CarFmFace.tsx:918-921).
+                // Everything that hangs off the new dial is already the
+                // `Frequency` arm's work.
                 self.drain_events();
-                let mhz = self.state.borrow().dial;
-                self.tune(mhz);
+                self.pump_rds_until_settled();
+                self.push_all();
             }
         }
     }

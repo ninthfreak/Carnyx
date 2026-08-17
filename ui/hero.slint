@@ -165,6 +165,14 @@ export component HeroCard inherits Rectangle {
     in property <bool> dead: false;
     /// The client-side FCC sweep is running: the identity reads "Scanning…" and
     /// the digits slide as the dial steps.
+    ///
+    /// NOTHING SETS THIS TODAY, and that is correct rather than unfinished. On the
+    /// built-in tuner CarFM hands the seek to the hardware and animates nothing —
+    /// "the landed frequency arrives via the tuner callback, so there's no
+    /// client-side sweep to animate here" (CarFmFace.tsx:918-921) — and the
+    /// built-in tuner is the only one this app has. The branches below are that
+    /// client-side sweep, which belongs to the SDR path Carnyx has not built. Said
+    /// out loud so the next reader does not take an unreachable branch for a bug.
     in property <bool> scanning: false;
     in property <int> scan-dir: 0;
 

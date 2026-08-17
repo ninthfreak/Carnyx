@@ -53,6 +53,16 @@ pub struct ScriptedTuner {
     watch_ms: AtomicI32,
     /// What the next commanded read answers with: (level, landed-raw).
     answer: Mutex<Option<(i32, i32)>>,
+    /// How many tune COMMANDS the App has sent.
+    tunes: AtomicI32,
+    /// How many seek commands.
+    seeks: AtomicI32,
+    /// Seek the way the vendor seeks: `RadioFeature.search` returns at once and
+    /// the frequency it lands on arrives later as a callback. With this set the
+    /// scripted seek reports nothing at all, which is the device's timing.
+    seek_async: std::sync::atomic::AtomicBool,
+    /// Refuse every tune, the way an uncalibrated unit does.
+    refuse_tune: std::sync::atomic::AtomicBool,
 }
 
 impl ScriptedTuner {
@@ -67,6 +77,10 @@ impl ScriptedTuner {
             silent: std::sync::atomic::AtomicBool::new(false),
             watch_ms: AtomicI32::new(-1),
             answer: Mutex::new(Some((62, raw))),
+            tunes: AtomicI32::new(0),
+            seeks: AtomicI32::new(0),
+            seek_async: std::sync::atomic::AtomicBool::new(false),
+            refuse_tune: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -88,6 +102,10 @@ impl Tuner for ScriptedTuner {
     }
     fn disconnect(&self) {}
     fn tune(&self, mhz: f32) -> Result<(), TunerError> {
+        self.tunes.fetch_add(1, Ordering::Relaxed);
+        if self.refuse_tune.load(Ordering::Relaxed) {
+            return Err(TunerError::NotCalibrated);
+        }
         let raw = (mhz * 100.0).round() as i32;
         *self.raw.lock().unwrap() = raw;
         self.seen_raw.store(raw, Ordering::Relaxed);
@@ -95,7 +113,18 @@ impl Tuner for ScriptedTuner {
         carnyx::android::ingest_frequency(0, raw, String::new(), -1);
         Ok(())
     }
-    fn seek(&self, _up: bool) {}
+    fn seek(&self, up: bool) {
+        self.seeks.fetch_add(1, Ordering::Relaxed);
+        if self.seek_async.load(Ordering::Relaxed) {
+            // The vendor's own timing: the command is accepted and nothing is
+            // reported until the front end has landed.
+            return;
+        }
+        let raw = *self.raw.lock().unwrap() + if up { 20 } else { -20 };
+        *self.raw.lock().unwrap() = raw;
+        self.seen_raw.store(raw, Ordering::Relaxed);
+        carnyx::android::ingest_frequency(0, raw, String::new(), -1);
+    }
     fn snapshot(&self) -> Option<TunerSnapshot> {
         self.polls.fetch_add(1, Ordering::Relaxed);
         if self.silent.load(Ordering::Relaxed) {
@@ -361,10 +390,105 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── A hardware seek is handed over and let go ──
+    //
+    // `NwdBridge.seek` calls `RadioFeature.search` and returns at once; the
+    // landing arrives later as a callback. The App used to drain, read `s.dial`
+    // — still where the seek STARTED, because nothing had landed yet — and tune
+    // to it, commanding the front end straight back and cancelling the seek.
+    {
+        let dir = dir_for("seek-async");
+        let tuner = std::sync::Arc::new(ScriptedTuner::at(96.3));
+        let (ui, _app) = launch_with(&dir, Box::new(TunerHandle(tuner.clone())));
+        tuner.seek_async.store(true, Ordering::Relaxed);
+        let tunes_before = tuner.tunes.load(Ordering::Relaxed);
+
+        ui.invoke_numpad_seek(1);
+        assert_eq!(tuner.seeks.load(Ordering::Relaxed), 1, "the seek was commanded");
+        assert_eq!(
+            tuner.tunes.load(Ordering::Relaxed),
+            tunes_before,
+            "and NOTHING was tuned after it — that would cancel the sweep"
+        );
+
+        // The landing arrives on its own, as a callback, and moves the face.
+        carnyx::android::ingest_frequency(0, 9810, String::new(), -1);
+        carnyx::app::drain_current();
+        assert_eq!(ui.get_freq_label().as_str(), "98.1", "the landing is what moves the dial");
+
+        // THE STEERING WHEEL TAKES THE SAME ROAD, and it is a SECOND call site —
+        // `apply_panel_action`, not the numpad callback. Both had the re-tune and
+        // fixing one would have left the wheel cancelling every sweep.
+        let tunes_before = tuner.tunes.load(Ordering::Relaxed);
+        let seeks_before = tuner.seeks.load(Ordering::Relaxed);
+        carnyx::android::ingest_panel_key(16, "down".into());
+        carnyx::app::drain_current();
+        assert_eq!(
+            tuner.seeks.load(Ordering::Relaxed),
+            seeks_before + 1,
+            "the wheel's seek key reaches the tuner"
+        );
+        assert_eq!(
+            tuner.tunes.load(Ordering::Relaxed),
+            tunes_before,
+            "and the wheel must not tune after it either"
+        );
+        ui.hide().expect("hide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── A refused tune moves nothing ──
+    //
+    // An uncalibrated unit cannot convert MHz to its own raw scale and says so.
+    // The face used to set the dial anyway, which is the exact failure the code
+    // there names: the dial spins and the radio does not move.
+    {
+        let dir = dir_for("tune-refused");
+        let tuner = std::sync::Arc::new(ScriptedTuner::at(96.3));
+        let (ui, app) = launch_with(&dir, Box::new(TunerHandle(tuner.clone())));
+        app.settle_meter_for_test();
+        assert_eq!(ui.get_freq_label().as_str(), "96.3");
+        assert_eq!(ui.get_level_text().as_str(), "62");
+
+        tuner.refuse_tune.store(true, Ordering::Relaxed);
+        ui.invoke_select_preset(1);
+        assert_eq!(ui.get_freq_label().as_str(), "96.3", "a refused tune leaves the dial alone");
+        assert_eq!(ui.get_level_text().as_str(), "62", "and the reading it did not invalidate");
+        ui.hide().expect("hide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── A retune the VENDOR drove drops the old station's level ──
+    //
+    // A landed seek, the hardware buttons and the service's own preset walk all
+    // arrive as `notifyCurrentFrequency` without passing through `tune`, so
+    // `tune`'s own clearing never ran and the meter sat on the station the driver
+    // had just left. CarFM clears it in the same handler.
+    {
+        let dir = dir_for("vendor-retune");
+        let tuner = std::sync::Arc::new(ScriptedTuner::at(96.3));
+        let (ui, app) = launch_with(&dir, Box::new(TunerHandle(tuner.clone())));
+        app.settle_meter_for_test();
+        assert_eq!(ui.get_level_text().as_str(), "62");
+
+        carnyx::android::ingest_frequency(0, 10210, String::new(), -1);
+        app.drain_events();
+        app.push_all();
+        assert_eq!(ui.get_freq_label().as_str(), "102.1");
+        assert_eq!(
+            ui.get_level_text().as_str(),
+            "—",
+            "the old station's level must not survive the vendor's own retune"
+        );
+        ui.hide().expect("hide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     println!("level schedule: no immediate read, 1s read, 4s correction, 2 retries");
     println!("getter poll: dial backstopped, audio healed, power-off respected");
     println!("loss band: eighty events move nothing, one poll turn moves it all");
     println!("poll thread: off the UI thread, and it dies with the App");
+    println!("commands: seek handed over, refused tune moves nothing, vendor retune drops the level");
 }
 
 /// `Tuner` is implemented for the struct; the App wants a `Box<dyn Tuner>` while

@@ -53,6 +53,11 @@ pub const LEVEL_LOC_FLOOR: i32 = 31;
 /// 105 comes from that distribution: min 30, p50 63, p75 79, p90 92, p99 101, max
 /// 103. Still empirical rather than specified — no chip datasheet is reachable —
 /// but it rests on a commute rather than on two car parks.
+///
+/// NOTHING READS IT, here or in CarFM, and that is worth saying beside it the way
+/// `LEVEL_DX_FLOOR` says it: `level_to_lit` works from `BANDS` and the local
+/// floor, and the top band is open-ended. It is kept because it is the measured
+/// ceiling the band table was chosen against.
 pub const LEVEL_TOP: i32 = 105;
 
 /// The bands, from SIGNAL-METER.md v1.14. Deliberately NOT evenly spread: two of
