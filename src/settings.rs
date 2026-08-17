@@ -352,10 +352,19 @@ pub fn clear_logos_label(clearing: bool) -> &'static str {
 
 // ── The whole panel's mutable state ──────────────────────────────────────────
 
-/// Everything the panel remembers. No persistence: CarFM stores these in
-/// AsyncStorage and Carnyx has no preference store yet, so every one of them is
-/// back at its default on the next launch. That is a missing subsystem, not a
-/// design choice, and it is stated here so nobody reads the defaults as settled.
+/// Everything the panel remembers.
+///
+/// EIGHT OF THESE SURVIVE A LAUNCH and the rest do not, which is deliberate
+/// rather than unfinished. [`crate::prefs`] stores the preset strip, the
+/// selected source, the theme, autostart, the logo switch and the four
+/// diagnostics switches — the same set CarFM keeps in AsyncStorage, key for key,
+/// less `battery_prompted`.
+///
+/// The rest are SESSION state and belong nowhere else: `battery` is read from
+/// the OS every launch, `clearing_logos` is a spinner, `details_open` is whether
+/// a disclosure is open right now, `log` is a ring buffer of this session, and
+/// `about_taps` / `egg_index` are the hidden BAND THEMES counter, which CarFM
+/// does not persist either.
 #[derive(Debug)]
 pub struct Settings {
     pub selected: Source,
