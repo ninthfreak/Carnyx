@@ -477,6 +477,13 @@ struct State {
     /// keystroke of state the window has — one decode per window, not per push.
     logo_art: Option<Raster>,
     numpad: String,
+    /// The numpad refused the last TUNE.
+    ///
+    /// STATE, not a predicate over the buffer, because that is what CarFM does:
+    /// `press` clears the flag and `commit` sets it (`Numpad.tsx:44,58`). Deriving
+    /// it from the buffer instead lit the error while a driver was still typing —
+    /// "1" is out of band on the way to "105.1".
+    numpad_error: bool,
 }
 
 impl State {
@@ -772,7 +779,6 @@ impl App {
                 settings: settings::Settings {
                     selected: saved.selected,
                     theme: saved.theme,
-                    autostart: saved.autostart,
                     logos_on: saved.logos_on,
                     diag_on: saved.diag_on,
                     diag_overlay_on: saved.diag_overlay_on,
@@ -804,6 +810,7 @@ impl App {
                 art: HashMap::new(),
                 logo_art: None,
                 numpad: String::new(),
+                numpad_error: false,
                 prefs_dir,
                 saved,
             }),
@@ -1286,6 +1293,7 @@ impl App {
                     .map(|b| format!("{b:04x}"))
                     .collect::<String>();
                 let published = s.rds.push(&hex);
+                let mut changed = false;
                 if std::mem::take(&mut s.rds_stale) {
                     // THE CARRIER IS BACK. The expiry cleared the face but
                     // deliberately did NOT reset the decoder, so the decoder
@@ -1296,8 +1304,28 @@ impl App {
                     // has no reason to come. CarFM restores `decoder.state()`
                     // wholesale here for exactly this reason.
                     s.rds_state = s.rds.state();
+                    changed = true;
                 } else if let Some(published) = published {
                     s.rds_state = published;
+                    changed = true;
+                }
+                // ON THE RECORD, when something actually changed.
+                //
+                // CarFM logs a line here on every published change
+                // (RadioScreen.tsx:2955) and Carnyx logged nothing at all, so the
+                // one subsystem whose behaviour is hardest to reason about on a
+                // dashboard left no trace. `format_state` is the format CarFM's
+                // own differential harness prints, which is what makes a Carnyx
+                // line and a CarFM line from the same drive diffable — it was
+                // written for exactly this and had no caller.
+                //
+                // Change-gated, and quiet in debug mode, both as CarFM has it:
+                // the unchanged case is the common one, since the same group
+                // repeats many times a second.
+                if changed && !s.settings.debug_on {
+                    let line = rds::format_state(&s.rds_state, &s.rds.stats(), &s.rds.quality());
+                    let at = stamp();
+                    s.settings.log.push(&at, &format!("RDS {line}"));
                 }
             }
             TunerEvent::RadioText(rt) => {
@@ -1734,9 +1762,6 @@ impl App {
             )
             .into(),
         );
-        ui.set_settings_show_band_themes(cfg.egg_open());
-        ui.set_settings_egg_labels(strings(&settings::egg_labels()));
-        ui.set_settings_egg_index(cfg.egg_index);
         // The borrow above must be released before `save_prefs` takes its own.
         drop(s);
         self.save_prefs();
@@ -1754,11 +1779,15 @@ impl App {
         } else {
             SharedString::from(format_mhz(s.dial))
         });
-        ui.set_numpad_display_dim(!typed);
+        // DIM ONLY WHEN THERE IS NOTHING TO SAY. A sweep runs behind this card
+        // and the display follows it, so a scan is as much a reason to be legible
+        // as a typed dial: CarFM's `opacity: buf || scanning ? 1 : 0.45`.
+        ui.set_numpad_display_dim(!typed && !ui.get_scanning());
         ui.set_numpad_can_tune(typed);
-        let value = s.numpad.parse::<f32>().ok();
-        let bad = typed && value.is_some_and(|v| !(FM_LO..=FM_HI).contains(&v));
-        ui.set_numpad_error(bad);
+        // THE REFUSAL IS STATE. Derived from the buffer, it lit while a driver
+        // was still typing — "1" is out of band on the way to "105.1" — where
+        // CarFM shows nothing until TUNE is actually pressed.
+        ui.set_numpad_error(s.numpad_error);
         ui.set_numpad_error_text(format!("Outside {FM_LO}\u{2013}{FM_HI} band").into());
     }
 
@@ -1942,33 +1971,51 @@ impl App {
         on!(on_numpad_enter, |app, c| {
             {
                 let mut s = app.state.borrow_mut();
-                // Six characters is "108.0" plus a typed decimal point; past
-                // that the buffer can only be junk.
-                if s.numpad.len() < 6 {
-                    let c: SharedString = c;
-                    s.numpad.push_str(c.as_str());
-                }
+                let c: SharedString = c;
+                s.numpad = numpad_press(&s.numpad, c.as_str());
+                // Any key clears the refusal, exactly as CarFM's `press` does.
+                s.numpad_error = false;
             }
             app.push_numpad();
         });
         on!(on_numpad_backspace, |app| {
-            app.state.borrow_mut().numpad.pop();
+            let mut s = app.state.borrow_mut();
+            s.numpad.pop();
+            s.numpad_error = false;
+            drop(s);
             app.push_numpad();
         });
         on!(on_numpad_tune, |app| {
-            let value = app.state.borrow().numpad.parse::<f32>().ok();
-            match value {
+            let dial = numpad_commit(&app.state.borrow().numpad);
+            match dial {
                 // A rejected value KEEPS THE CARD UP with the buffer intact —
                 // the error line is the answer, not a dismissal.
-                Some(v) if (FM_LO..=FM_HI).contains(&v) => {
-                    app.state.borrow_mut().numpad.clear();
+                Some(v) => {
+                    {
+                        let mut s = app.state.borrow_mut();
+                        s.numpad.clear();
+                        s.numpad_error = false;
+                    }
                     app.ui().set_overlay(Overlay::None);
                     app.tune(v);
                 }
-                _ => app.push_numpad(),
+                None => {
+                    app.state.borrow_mut().numpad_error = true;
+                    app.push_numpad();
+                }
             }
         });
         on!(on_numpad_seek, |app, dir| {
+            // THE BUFFER GOES FIRST. CarFM's `seek` calls `reset()` before it
+            // hands the sweep on (`Numpad.tsx:43`), and it has to: the display
+            // shows the buffer whenever there is one, so a half-typed dial left
+            // standing would sit there through the whole sweep instead of the
+            // face following it to the station it finds.
+            {
+                let mut s = app.state.borrow_mut();
+                s.numpad.clear();
+                s.numpad_error = false;
+            }
             app.state.borrow().tuner.seek(dir > 0);
             app.drain_events();
             let mhz = app.state.borrow().dial;
@@ -2025,8 +2072,22 @@ impl App {
             app.push_settings();
         });
         on!(on_settings_set_autostart, |app, v| {
-            app.state.borrow_mut().settings.autostart = v;
-            app.push_settings();
+            let _ = v;
+            // THE FRAMEWORK EDGE, like the battery row above it. "Start radio on
+            // boot" needs something to run at boot, and Carnyx has no boot
+            // receiver: cargo-apk's manifest struct has one activity and no
+            // `receiver` field at all, so `BOOT_COMPLETED` and the NWD unit's
+            // own `com.nwd.ACTION_OS_WAKE_UP` cannot be declared. See the
+            // Cargo.toml comment beside `config_changes`.
+            //
+            // CarFM's toggle is not the same control either. Its key is
+            // `@vibesdr/car_autostart` (services/carMode.ts:13), it is VibeSDR
+            // lineage, and what it starts is a plugged-in RTL-SDR — hardware this
+            // app does not have and, by the provenance rule, will not inherit.
+            //
+            // So the row says so in the log rather than flipping a flag nothing
+            // can honour. It was flipping one, and persisting it.
+            app.log_unavailable("autostart needs a boot receiver, which cargo-apk cannot declare");
         });
         on!(on_settings_set_theme, |app, t| {
             let t: SharedString = t;
@@ -2077,16 +2138,6 @@ impl App {
         on!(on_settings_pick_diag_action, |app, i| {
             app.run_diag_action(i);
         });
-        on!(on_settings_tap_about, |app| {
-            app.state.borrow_mut().settings.tap_about();
-            app.push_settings();
-        });
-        on!(on_settings_pick_egg, |app, i| {
-            app.state.borrow_mut().settings.egg_index = i;
-            app.push_settings();
-        });
-
-        // ── §6.4 logo search ──
         on!(on_open_logo_search, |app, i| {
             app.open_logo_search(i);
         });
@@ -2217,7 +2268,6 @@ impl App {
                 .collect(),
             selected: s.settings.selected,
             theme: s.settings.theme,
-            autostart: s.settings.autostart,
             logos_on: s.settings.logos_on,
             diag_on: s.settings.diag_on,
             diag_overlay_on: s.settings.diag_overlay_on,
@@ -2769,6 +2819,53 @@ impl App {
 /// A key this app has no answer for returns `None` rather than a no-op action,
 /// so a pending request from an earlier press is not silently cleared by a
 /// button that does nothing.
+/// One key into the numpad's buffer, and the rules are CarFM's
+/// (`Numpad.tsx:45-53`) rather than a size limit standing in for them.
+///
+/// AT MOST FOUR DIGITS, at most one decimal point, and never a LEADING one. The
+/// buffer here used to be capped at six characters and nothing else, which let
+/// `..`, `1.2.3`, `.1055` and `100000` be typed — none of which parses, so the
+/// TUNE button stayed lit over a value that could not be tuned and pressing it
+/// did nothing at all.
+///
+/// The key is checked rather than trusted. `ui/numpad.slint` only ever sends the
+/// twelve keys, so this cannot change what a driver sees; it stops the buffer
+/// from being a place where anything at all can be appended.
+fn numpad_press(buf: &str, key: &str) -> String {
+    if key == "." {
+        // A leading decimal is refused outright — CarFM's `b.length === 0` arm.
+        // "0.5" is not an FM dial, so there is nothing to lose.
+        if buf.contains('.') || buf.is_empty() {
+            return buf.to_string();
+        }
+        return format!("{buf}.");
+    }
+    if key.len() != 1 || !key.as_bytes()[0].is_ascii_digit() {
+        return buf.to_string();
+    }
+    // DIGITS, not characters: "105." is four characters and three digits, and it
+    // must still accept its fourth.
+    if buf.chars().filter(|c| *c != '.').count() >= 4 {
+        return buf.to_string();
+    }
+    format!("{buf}{key}")
+}
+
+/// What the buffer tunes to, or `None` if it tunes to nothing.
+///
+/// CarFM's `commit` (`Numpad.tsx:56-60`): parse, ROUND TO A TENTH, then check the
+/// band. The rounding is the part that was missing — "105.55" tuned 105.55 here
+/// and 105.6 in CarFM, and a dial is a tenth or it is not a dial.
+///
+/// `Math.round` breaks ties toward +∞ and Rust's `round` away from zero; every
+/// value that reaches this is positive, so the two agree. It is written down
+/// because that is only true while the band floor stays above zero.
+fn numpad_commit(buf: &str) -> Option<f32> {
+    let parsed = buf.parse::<f32>().ok().filter(|v| v.is_finite())?;
+    let dial = (parsed * 10.0).round() / 10.0;
+    (FM_LO..=FM_HI).contains(&dial).then_some(dial)
+}
+
 fn panel_action(key: Option<crate::android::PanelKey>, action: &str) -> Option<PanelAction> {
     use crate::android::PanelKey as K;
     if action.eq_ignore_ascii_case("up") {
@@ -3045,6 +3142,62 @@ mod tests {
         assert_eq!(bare.name(), "87.9");
         assert_eq!(bare.call(), "87.9");
         assert_eq!(bare.base(), "");
+    }
+
+    /// THE NUMPAD'S ENTRY RULES, which used to be a six-character cap.
+    ///
+    /// CarFM's `press` (Numpad.tsx:45-53). The cap let `..`, `1.2.3`, `.1055` and
+    /// `100000` be typed, and none of them parses — so TUNE stayed lit over a
+    /// value that could not be tuned and pressing it did nothing at all.
+    #[test]
+    fn the_numpad_takes_four_digits_and_one_decimal() {
+        // The ordinary dial, one key at a time.
+        let typed = ["1", "0", "5", ".", "1"]
+            .iter()
+            .fold(String::new(), |b, k| numpad_press(&b, k));
+        assert_eq!(typed, "105.1");
+
+        // FOUR DIGITS, and the decimal point is not one of them: "105." is four
+        // characters and three digits, so its fourth digit is still welcome.
+        assert_eq!(numpad_press("105.1", "9"), "105.1", "a fifth digit is refused");
+        assert_eq!(numpad_press("1055", "9"), "1055");
+        assert_eq!(numpad_press("105.", "1"), "105.1");
+
+        // ONE decimal point, and never a leading one.
+        assert_eq!(numpad_press("105.1", "."), "105.1", "a second point is refused");
+        assert_eq!(numpad_press("", "."), "", "a leading point is refused");
+        assert_eq!(numpad_press("1", "."), "1.");
+
+        // The keypad only ever sends the twelve keys; anything else is not a key.
+        assert_eq!(numpad_press("10", "x"), "10");
+        assert_eq!(numpad_press("10", "12"), "10");
+        assert_eq!(numpad_press("10", ""), "10");
+    }
+
+    /// THE COMMIT, and the rounding that was missing.
+    ///
+    /// CarFM's `commit` (Numpad.tsx:56-60) rounds to a tenth before it checks the
+    /// band. Carnyx tuned the raw parse, so "105.55" tuned 105.55 where CarFM
+    /// tunes 105.6 — and a dial is a tenth or it is not a dial.
+    #[test]
+    fn the_numpad_rounds_to_a_tenth_and_then_checks_the_band() {
+        assert_eq!(numpad_commit("105.1"), Some(105.1));
+        // A trailing point is a legitimate mid-entry string and parses.
+        assert_eq!(numpad_commit("105."), Some(105.0));
+        assert_eq!(numpad_commit("88"), Some(88.0));
+
+        // ROUNDED, not truncated, and rounded BEFORE the band check — 108.04 is
+        // out of band as typed and in band once it is a dial.
+        assert_eq!(numpad_commit("105.55"), Some(105.6));
+        assert_eq!(numpad_commit("108.04"), Some(108.0));
+
+        // Outside the band, and unparseable, are both "nothing to tune".
+        assert_eq!(numpad_commit("87.4"), None);
+        assert_eq!(numpad_commit("108.1"), None);
+        assert_eq!(numpad_commit("1"), None);
+        assert_eq!(numpad_commit(""), None);
+        assert_eq!(numpad_commit("."), None);
+        assert_eq!(numpad_commit("1.2.3"), None);
     }
 
     /// The wheel and the panel buttons, which decoded to a log line and nothing

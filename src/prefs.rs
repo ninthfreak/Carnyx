@@ -22,11 +22,14 @@
 //!
 //! ## What is NOT here
 //!
-//! `battery`, `details_open`, `clearing_logos`, `about_taps` and the diagnostics
-//! log are all transient or derived, and persisting them would either restore a
-//! stale fact about the device or reopen a panel nobody left open. `egg_index` is
-//! deliberately excluded too: the band-theme egg is not persisted in CarFM
-//! either, and it is revealed by six taps rather than remembered.
+//! `battery`, `details_open`, `clearing_logos` and the diagnostics log are all
+//! transient or derived, and persisting them would either restore a stale fact
+//! about the device or reopen a panel nobody left open.
+//!
+//! `autostart` USED TO BE HERE and is not any more. Its row cannot work — a boot
+//! receiver is undeclarable under cargo-apk — and CarFM's toggle is a different
+//! control anyway, keyed `@vibesdr/car_autostart` and starting a plugged-in
+//! RTL-SDR. There is nothing left to remember; see `settings::Settings`.
 //!
 //! Per-station hero flags (Display Call Sign / Display Frequency) already persist
 //! separately, in `logos::store`, because they belong to a station rather than to
@@ -70,7 +73,6 @@ pub struct Prefs {
     pub presets: Vec<Preset>,
     pub selected: Source,
     pub theme: Theme,
-    pub autostart: bool,
     pub logos_on: bool,
     pub diag_on: bool,
     pub diag_overlay_on: bool,
@@ -88,7 +90,6 @@ impl Default for Prefs {
             presets: Vec::new(),
             selected: s.selected,
             theme: s.theme,
-            autostart: s.autostart,
             logos_on: s.logos_on,
             diag_on: s.diag_on,
             diag_overlay_on: s.diag_overlay_on,
@@ -207,7 +208,6 @@ fn from_json(text: &str) -> Option<Prefs> {
             _ => cur,
         }
     };
-    p.autostart = flag("autostart", p.autostart);
     p.logos_on = flag("logosOn", p.logos_on);
     p.diag_on = flag("diagOn", p.diag_on);
     p.diag_overlay_on = flag("diagOverlayOn", p.diag_overlay_on);
@@ -232,14 +232,13 @@ pub fn to_json(p: &Prefs) -> String {
         .collect();
     format!(
         concat!(
-            "{{\"presets\":[{}],\"selected\":{},\"theme\":{},\"autostart\":{},",
+            "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
             "\"logosOn\":{},\"diagOn\":{},\"diagOverlayOn\":{},",
             "\"rdsCaptureOn\":{},\"debugOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
         json::quote(theme_name(p.theme)),
-        p.autostart,
         p.logos_on,
         p.diag_on,
         p.diag_overlay_on,
@@ -332,7 +331,6 @@ mod tests {
             presets: vec![at(88.7, Some("WERN")), at(105.5, None), at(98.1, Some("WMGN-FM"))],
             selected: Source::Auto,
             theme: Theme::Dark,
-            autostart: false,
             logos_on: true,
             diag_on: true,
             diag_overlay_on: true,
@@ -364,13 +362,13 @@ mod tests {
         let d = tmpdir("partial");
         fs::write(
             path(&d),
-            r#"{"presets":[88.7,105.5],"theme":"chartreuse","autostart":"yes","debugOn":true}"#,
+            r#"{"presets":[88.7,105.5],"theme":"chartreuse","logosOn":"yes","debugOn":true}"#,
         )
         .unwrap();
         let p = load(&d);
         assert_eq!(p.presets, vec![at(88.7, None), at(105.5, None)], "presets survive");
         assert_eq!(p.theme, Theme::System, "unknown theme falls back");
-        assert_eq!(p.autostart, Prefs::default().autostart, "wrong type falls back");
+        assert_eq!(p.logos_on, Prefs::default().logos_on, "wrong type falls back");
         assert!(p.debug_on, "the readable field is still read");
     }
 
@@ -412,7 +410,6 @@ mod tests {
         let p = Prefs::default();
         assert_eq!(p.selected, s.selected);
         assert_eq!(p.theme, s.theme);
-        assert_eq!(p.autostart, s.autostart);
         assert_eq!(p.logos_on, s.logos_on);
     }
 }

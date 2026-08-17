@@ -1,8 +1,8 @@
 //! The settings panel's derived layer.
 //!
 //! `ui/settings.slint` decides nothing: it is handed finished titles, finished
-//! sub-lines, a finished list of action rows with their rules already applied,
-//! and an index saying which egg is ticked. Everything that decides any of that
+//! sub-lines, and a finished list of action rows with their rules already
+//! applied. Everything that decides any of that
 //! is here, and it is all pure — no Slint types, no framework calls — so it can
 //! be tested on a machine with no head unit.
 //!
@@ -227,45 +227,6 @@ impl DiagLog {
     }
 }
 
-// ── The BAND THEMES egg ──────────────────────────────────────────────────────
-
-/// Six taps on the about line opens it. The counter never resets and is never
-/// persisted, so the section stays for the life of the process and is gone on the
-/// next launch — `SettingsPanel.tsx:88-89`.
-pub const EGG_TAPS: u32 = 6;
-
-/// The puns, in registry order, with the "off" head in front.
-///
-/// Transcribed from `bandThemes.ts:215-221`, including U+2019 in "Now I’m
-/// Nothing". The ids they map to (`AC/DC`, `The Beatles`, …) never reach Slint:
-/// an index is what crosses, because the labels are puns and two could one day
-/// rhyme.
-pub fn egg_labels() -> Vec<String> {
-    [
-        "Off (auto-detect)",
-        "Powerage",
-        "The Walrus was Paul",
-        "Hammer of the Gods",
-        "Smells Like Gen X",
-        "Now I\u{2019}m Nothing",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
-}
-
-/// The theme id an egg index forces, or `None` for "off (auto-detect)".
-pub fn egg_id(index: i32) -> Option<&'static str> {
-    match index {
-        1 => Some("AC/DC"),
-        2 => Some("The Beatles"),
-        3 => Some("Led Zeppelin"),
-        4 => Some("Nirvana"),
-        5 => Some("Nine Inch Nails"),
-        _ => None,
-    }
-}
-
 // ── The about line ───────────────────────────────────────────────────────────
 
 /// `Carnyx  ·  v0.1.0  ·  FCC station data as of 2026-07-16`.
@@ -354,21 +315,36 @@ pub fn clear_logos_label(clearing: bool) -> &'static str {
 
 /// Everything the panel remembers.
 ///
-/// EIGHT OF THESE SURVIVE A LAUNCH and the rest do not, which is deliberate
-/// rather than unfinished. [`crate::prefs`] stores the preset strip, the
-/// selected source, the theme, autostart, the logo switch and the four
-/// diagnostics switches — the same set CarFM keeps in AsyncStorage, key for key,
-/// less `battery_prompted`.
+/// SEVEN OF THESE SURVIVE A LAUNCH and the rest do not, which is deliberate
+/// rather than unfinished. [`crate::prefs`] stores the preset strip, the selected
+/// source, the theme, the logo switch and the four diagnostics switches.
+///
+/// THAT IS NOT CARFM'S SET "KEY FOR KEY", and this doc used to claim it was.
+/// CarFM keeps `@carfm/{preset_order_v1, tuner_backend_v1, theme_v1,
+/// logos_enabled_v1, diag_enabled, diag_overlay, rds_capture, debug_mode_v1,
+/// battery_prompted_v1, freq_callsign_v1}`. The learned call-sign map is here
+/// too, in its own file; `battery_prompted` is the one genuinely absent.
+///
+/// `autostart` was in this list and is NOT persisted any more. It has no key
+/// under `@carfm/` at all — CarFM's is `@vibesdr/car_autostart`
+/// (services/carMode.ts:13), it is VibeSDR lineage, and what it starts is a
+/// plugged-in RTL-SDR. Carnyx has no SDR and can declare no boot receiver, so
+/// the row reports itself unavailable and there is nothing left to remember.
 ///
 /// The rest are SESSION state and belong nowhere else: `battery` is read from
 /// the OS every launch, `clearing_logos` is a spinner, `details_open` is whether
-/// a disclosure is open right now, `log` is a ring buffer of this session, and
-/// `about_taps` / `egg_index` are the hidden BAND THEMES counter, which CarFM
-/// does not persist either.
+/// a disclosure is open right now, and `log` is a ring buffer of this session.
 #[derive(Debug)]
 pub struct Settings {
     pub selected: Source,
     pub theme: Theme,
+    /// "Start radio on boot", which this app cannot do.
+    ///
+    /// FALSE AND STAYS FALSE. The row is drawn because CarFM draws it, and it
+    /// reports itself unavailable when tapped — there is no boot receiver to
+    /// declare under cargo-apk, and CarFM's toggle starts a plugged-in RTL-SDR
+    /// this app does not have. Showing it ON would be the face asserting
+    /// something untrue about the next ignition cycle.
     pub autostart: bool,
     pub battery: Battery,
     pub logos_on: bool,
@@ -378,8 +354,6 @@ pub struct Settings {
     pub diag_overlay_on: bool,
     pub rds_capture_on: bool,
     pub debug_on: bool,
-    pub egg_index: i32,
-    pub about_taps: u32,
     pub log: DiagLog,
 }
 
@@ -388,7 +362,7 @@ impl Default for Settings {
         Settings {
             selected: Source::Nwd,
             theme: Theme::System,
-            autostart: true,
+            autostart: false,
             battery: Battery::NotExempt,
             logos_on: false,
             clearing_logos: false,
@@ -397,24 +371,12 @@ impl Default for Settings {
             diag_overlay_on: false,
             rds_capture_on: false,
             debug_on: false,
-            egg_index: 0,
-            about_taps: 0,
             log: DiagLog::new(),
         }
     }
 }
 
 impl Settings {
-    /// One tap on the about line. Returns whether the egg is now open.
-    pub fn tap_about(&mut self) -> bool {
-        self.about_taps = self.about_taps.saturating_add(1);
-        self.egg_open()
-    }
-
-    pub fn egg_open(&self) -> bool {
-        self.about_taps >= EGG_TAPS
-    }
-
     /// Reception testing implies capture (`SettingsPanel.tsx:107-114`): the
     /// sampler's whole output is the captured stream, so a debug session with
     /// capture off records nothing.
@@ -510,35 +472,6 @@ mod tests {
         // The label is drawn, the action is dispatched, and they are separate —
         // so re-wording a row cannot change what it does.
         assert_eq!(full[5].action, Action::ProbeFmManager);
-    }
-
-    #[test]
-    fn the_egg_menu_is_the_five_puns_behind_an_off_head() {
-        let labels = egg_labels();
-        assert_eq!(labels.len(), 6);
-        assert_eq!(labels[0], "Off (auto-detect)");
-        // U+2019 RIGHT SINGLE QUOTATION MARK, not an ASCII apostrophe — the
-        // difference is invisible in a diff and visible on the face.
-        assert_eq!(labels[5], "Now I\u{2019}m Nothing");
-        assert!(labels[5].contains('\u{2019}'));
-        assert_eq!(egg_id(0), None);
-        assert_eq!(egg_id(1), Some("AC/DC"));
-        assert_eq!(egg_id(5), Some("Nine Inch Nails"));
-        // Out of range is "off", never a panic and never a neighbour.
-        assert_eq!(egg_id(6), None);
-        assert_eq!(egg_id(-1), None);
-    }
-
-    #[test]
-    fn six_taps_open_the_egg_and_it_never_closes() {
-        let mut s = Settings::default();
-        for _ in 0..5 {
-            assert!(!s.tap_about());
-        }
-        assert!(s.tap_about());
-        // It never resets: a seventh tap is not a toggle.
-        assert!(s.tap_about());
-        assert!(s.egg_open());
     }
 
     /// The shape, byte for byte. Two spaces either side of each U+00B7 is what

@@ -99,7 +99,6 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-scrolled-end", 1024, 614, false, State::Settings, -8.0),
     ("settings-diagnostics-open", 1024, 614, false, State::SettingsDiag, -7.0),
     ("settings-diagnostics-full", 1024, 614, false, State::SettingsDiagFull, -9.0),
-    ("settings-band-themes", 1024, 614, false, State::SettingsEgg, -8.0),
     ("settings-diagnostics-portrait", 360, 800, false, State::SettingsDiag, -11.0),
     ("settings-phone-portrait", 360, 800, false, State::Settings, 0.0),
     ("settings-phone-portrait-scrolled", 360, 800, false, State::Settings, -8.0),
@@ -202,9 +201,6 @@ enum State {
     /// The same with raw capture on too, which is what adds the export row and
     /// is the only way to see a second action row at all without a head unit.
     SettingsDiagFull,
-    /// The hidden BAND THEMES group, opened the way the driver opens it: six
-    /// taps on the about line, through the real counter.
-    SettingsEgg,
     /// §6.4 landing on a station with no logo.
     LogoLanding,
     /// §6.4 landing on a station that already has one.
@@ -447,10 +443,16 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_overlay(Overlay::Numpad);
         }
         State::NumpadError => {
-            ui.set_numpad_display("76.5".into());
-            ui.set_numpad_display_dim(false);
-            ui.set_numpad_can_tune(true);
-            ui.set_numpad_error(true);
+            // THROUGH THE REAL KEYS AND THE REAL REFUSAL. This arm used to push
+            // the four properties by hand, because the error was derived from the
+            // buffer and there was no refusal to reach. It is state now — set by
+            // a commit CarFM would also reject — so the shot can be what a driver
+            // produces: type a dial below the band, press TUNE, read the line.
+            ui.invoke_open_numpad();
+            for c in ["7", "6", ".", "5"] {
+                ui.invoke_numpad_enter(c.into());
+            }
+            ui.invoke_numpad_tune();
             ui.set_overlay(Overlay::Numpad);
         }
         State::Nearby => ui.set_overlay(Overlay::Nearby),
@@ -508,14 +510,6 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
             driver.settle_meter_for_test();
-            ui.set_overlay(Overlay::Settings);
-        }
-        State::SettingsEgg => {
-            // Six taps, counted in Rust exactly as a driver's six taps are.
-            for _ in 0..6 {
-                ui.invoke_settings_tap_about();
-            }
-            ui.invoke_settings_pick_egg(2);
             ui.set_overlay(Overlay::Settings);
         }
         State::LogoLanding => ui.set_overlay(Overlay::LogoSearch),

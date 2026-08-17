@@ -174,10 +174,6 @@ export component AppWindow inherits Window {
     in property <[string]> settings-diag-lines;
     in property <[DiagAction]> settings-diag-actions;
     in property <string> settings-about;
-    // The BAND THEMES egg: six taps on the about line. The counter is Rust's.
-    in property <bool> settings-show-band-themes: false;
-    in property <[string]> settings-egg-labels;
-    in property <int> settings-egg-index: 0;
     callback settings-retry-tuner();
     callback settings-toggle-details();
     callback settings-pick-source(int);
@@ -191,8 +187,6 @@ export component AppWindow inherits Window {
     callback settings-set-rds-capture(bool);
     callback settings-set-debug(bool);
     callback settings-pick-diag-action(int);
-    callback settings-tap-about();
-    callback settings-pick-egg(int);
 
     // §6.4 logo search.
     in property <string> logo-search-name;
@@ -362,9 +356,6 @@ export component AppWindow inherits Window {
         diag-lines: root.settings-diag-lines;
         diag-actions: root.settings-diag-actions;
         about: root.settings-about;
-        show-band-themes: root.settings-show-band-themes;
-        egg-labels: root.settings-egg-labels;
-        egg-index: root.settings-egg-index;
         retry-tuner => { root.settings-retry-tuner(); }
         toggle-details => { root.settings-toggle-details(); }
         pick-source(i) => { root.settings-pick-source(i); }
@@ -378,8 +369,6 @@ export component AppWindow inherits Window {
         set-rds-capture(v) => { root.settings-set-rds-capture(v); }
         set-debug(v) => { root.settings-set-debug(v); }
         pick-diag-action(i) => { root.settings-pick-diag-action(i); }
-        tap-about => { root.settings-tap-about(); }
-        pick-egg(i) => { root.settings-pick-egg(i); }
         close => { root.dismiss(); }
     }
 

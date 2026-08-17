@@ -15,7 +15,7 @@
 // SDR interface. CarFM DELETED that row on 2026-07-21 — docs/CARFM-STRIP-PLAN.md
 // item 19 removes the `advancedOpen` state, the `onOpenAdvanced` prop, the
 // SettingsPanel row and the "◂ FM" return button together — and the bundle
-// predates DIAGNOSTICS and the band-theme egg entirely. So
+// predates DIAGNOSTICS entirely. So
 // `src/components/carfm/SettingsPanel.tsx` is the truth for WHAT IS HERE and WHAT
 // IT SAYS, top to bottom. The dc.html is kept only for the visual language of the
 // pieces both still share, and is cited by style name where it still wins.
@@ -23,9 +23,9 @@
 // THE TWO-TONE STRUCTURE IS THE WHOLE PANEL. The card is Pal.bg and every group
 // inside it is Pal.panel over a 1dp Pal.border — that relationship is what makes
 // the sections read as sections, and it is the one thing here that must not
-// collapse. The BAND THEMES group is the single deliberate exception (Pal.raised,
-// a tighter corner, no inner padding); it is an egg, and it is meant to look like
-// one. Nothing else in this file is load-bearing in the same way.
+// collapse. CarFM's one deliberate exception was the BAND THEMES group, which is
+// not here: its picker was ported and the themes behind it were not, so it is
+// gone rather than half-built. Nothing else in this file departs from the rule.
 //
 // WHERE THE NUMBERS COME FROM. `SettingsPanel.dc.html` wins on appearance for
 // anything it still describes; `SettingsPanel.tsx` wins on behaviour, on copy,
@@ -217,39 +217,9 @@ component BatteryBolt {
     }
 }
 
-/// The tick beside the chosen band theme.
-///
-/// SettingsPanel.tsx:638 TYPES it — `<Text>✓</Text>` at bold 16 — and that does not
-/// survive the port: U+2713 is in NEITHER bundled Atkinson cut. I read the cmaps of
-/// ui/fonts/AtkinsonHyperlegible-{Regular,Bold}.ttf myself rather than trusting the
-/// note in logo-search.slint: · — … ' › are all there, ✓ ✕ → are not, and the
-/// software renderer that makes every screenshot has no fallback stack to reach
-/// past them. So it is drawn.
-///
-/// Same path and same stroke as logo-search.slint's private `CheckMark`
-/// (:198-212), copied for the reason `VPath` and `BatteryBolt` above are copied:
-/// ui/icons.slint is another agent's file this pass. Whoever consolidates should
-/// export ONE CheckMark from icons.slint and delete both copies.
-component CheckMark {
-    in property <length> size: 17px;
-    in property <color> color;
-
-    width: root.size;
-    height: root.size;
-
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 3;
-        commands: "M5 12.5 L10 17.5 L19 6.5";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
-}
-
 // ── The pieces every section is built from ───────────────────────────────────
 
-/// The all-caps label above a group — TUNER, APPEARANCE, SYSTEM, DIAGNOSTICS and
-/// the egg's BAND THEMES.
+/// The all-caps label above a group — TUNER, APPEARANCE, SYSTEM and DIAGNOSTICS.
 ///
 /// dc.html `sectionLabelStyle`:256 `{fontSize:12, fontWeight:700, letterSpacing:2,
 /// color:t.dim, margin:'14px 4px 8px'}`. A VerticalLayout rather than a bare Text
@@ -303,11 +273,11 @@ component SubLabel inherits VerticalLayout {
 /// borderRadius:18, padding:10}` with NO row gap — rows abut and the dividers do
 /// all the separating. The border is a hairline, so it stays at a raw 1px.
 ///
-/// The plate and the corner are properties for ONE caller: the BAND THEMES group
-/// is deliberately built the other way round — Pal.raised, an 14dp corner and no
-/// inner padding at all, so its rows run edge to edge behind a clip
-/// (SettingsPanel.tsx:627). Every other group takes the defaults, which are the
-/// dc.html's.
+/// The plate and the corner are properties because CarFM's BAND THEMES group
+/// built itself the other way round — Pal.raised, a 14dp corner and no inner
+/// padding, so its rows ran edge to edge behind a clip (SettingsPanel.tsx:627).
+/// That group is not ported, so every caller here takes the defaults, which are
+/// the dc.html's; the properties stay because the next exception will want them.
 component GroupCard inherits Rectangle {
     /// s(10) wide, s(8) narrow. The reduction is an ADDITION — neither reference
     /// is responsive — and it buys back ~4dp of row width per side on the phone
@@ -1170,68 +1140,6 @@ component DiagLog inherits VerticalLayout {
     }
 }
 
-/// BAND THEMES: one row of the egg's picker.
-///
-/// SettingsPanel.tsx:628-641. Nothing else in the panel is shaped like this — no
-/// sub-line, no divider element, no radio ring; the rows are separated by their
-/// own 1dp top edge and the choice is carried by a trailing tick and a blue label.
-///
-/// Height is content-driven in the TSX (13dp of padding either side of a 16dp
-/// label, so ~46dp) and floored at 48dp here for the same §10 reason as everything
-/// else that is tapped.
-component EggRow inherits Rectangle {
-    /// The pun, not the id — "Hammer of the Gods", not "Led Zeppelin". Matching
-    /// always uses the id, which never leaves Rust (bandThemes.ts:215-221).
-    in property <string> label;
-    in property <bool> on: false;
-    /// The first row has no top edge; every row after it does.
-    in property <bool> first: false;
-
-    callback clicked();
-
-    min-height: Math.max(48px, Metrics.s(46));
-    opacity: touch.pressed ? 0.7 : 1.0;
-
-    touch := TouchArea { clicked => { root.clicked(); } }
-
-    // `borderTopWidth: 1` on `i > 0`. A hairline, so raw 1px, and placed the way
-    // OverlayHeader places its own rule rather than being a border on the row (a
-    // real border would inset the row's content by a pixel on one side only).
-    if !root.first: Rectangle {
-        y: 0;
-        height: 1px;
-        background: Pal.border;
-    }
-
-    HorizontalLayout {
-        padding-left: Metrics.s(16);
-        padding-right: Metrics.s(16);
-        padding-top: Metrics.s(13);
-        padding-bottom: Metrics.s(13);
-        spacing: Metrics.s(12);
-
-        Text {
-            text: root.label;
-            horizontal-stretch: 1;
-            font-size: Math.max(12px, Metrics.s(16));
-            font-weight: 700;
-            color: root.on ? Pal.blue : Pal.text;
-            vertical-alignment: center;
-            wrap: word-wrap;
-        }
-
-        if root.on: VerticalLayout {
-            horizontal-stretch: 0;
-            alignment: center;
-
-            CheckMark {
-                size: Math.max(12px, Metrics.s(16));
-                color: Pal.blue;
-            }
-        }
-    }
-}
-
 // ── The panel ────────────────────────────────────────────────────────────────
 
 export component SettingsOverlay inherits Rectangle {
@@ -1323,21 +1231,6 @@ export component SettingsOverlay inherits Rectangle {
     /// of each U+00B7 — and that belongs in a byte-exact Rust test, not here.
     in property <string> about;
 
-    // ── BAND THEMES (the egg) ──
-    /// Six taps on the about line. The COUNTER lives in Rust; this file only
-    /// reports taps and draws what it is told. It never resets and it is not
-    /// persisted, so the section stays for the life of the process and is gone on
-    /// the next launch — the shipping behaviour (SettingsPanel.tsx:88-89).
-    in property <bool> show-band-themes: false;
-    /// ["Off (auto-detect)", "Powerage", "The Walrus was Paul", "Hammer of the
-    /// Gods", "Smells Like Gen X", "Now I’m Nothing"] — the puns, in registry
-    /// order, with the "off" head in front (bandThemes.ts:215-221 via
-    /// SettingsPanel.tsx:628). The ids they map to never reach this file.
-    in property <[string]> egg-labels;
-    /// Index of the ticked row, 0 being "Off (auto-detect)". An index rather than a
-    /// label because the labels are puns and two could one day rhyme.
-    in property <int> egg-index: 0;
-
     // ── What the user can do ──
     callback retry-tuner();
     callback toggle-details();
@@ -1372,12 +1265,6 @@ export component SettingsOverlay inherits Rectangle {
     /// edge — a native file write, a vendor-service probe, a read-only root
     /// recon — and none of it is decided or described here.
     callback pick-diag-action(int);
-    /// One tap on the about line. Rust counts them and flips `show-band-themes` at
-    /// six.
-    callback tap-about();
-    /// The index into `egg-labels`; 0 is "off (auto-detect)". Picking FORCES that
-    /// theme regardless of what is playing (bandThemes.ts:196-197).
-    callback pick-egg(int);
     /// The ✕ and the Android back button. NOT the scrim — see below.
     callback close();
 
@@ -1665,17 +1552,16 @@ export component SettingsOverlay inherits Rectangle {
             // inside the ScrollView, which is why this overlay has no OverlayFooter.
             // dc.html `aboutStyle`:294 `padding:'20px 0 4px'`.
             //
-            // AND IT IS A TAP TARGET. SettingsPanel.tsx:617 wraps it in a Pressable
-            // that counts taps; at six the BAND THEMES group below appears. No
-            // pressed state, no ripple, no hint — the TSX gives it none, and an egg
-            // that advertises itself is not one. The Rectangle is what carries the
-            // TouchArea; declared before the column so the text draws over it, which
-            // is OverlayCard's own idiom.
+            // NOT A TAP TARGET ANY MORE. SettingsPanel.tsx:617 wraps this in a
+            // Pressable that counts to six and reveals a BAND THEMES picker. That
+            // picker was ported and the themes behind it were not — `egg_id`
+            // named five bands and nothing ever read it — so six taps revealed a
+            // control that moved a radio button and changed nothing on the face.
+            // The picker is gone rather than half-built; CarFM's `resolveEgg` and
+            // `eggTokens` recolour the whole face, swap the stereo fan art, the
+            // card frame and the band fonts, and that is a feature port rather
+            // than a fix.
             Rectangle {
-                TouchArea {
-                    clicked => { root.tap-about(); }
-                }
-
                 VerticalLayout {
                     padding-top: Metrics.s(20);
                     padding-bottom: Metrics.s(4);
@@ -1697,42 +1583,6 @@ export component SettingsOverlay inherits Rectangle {
                 }
             }
 
-            // ── BAND THEMES (the egg) ──
-            //
-            // Wrapped so the label and the group come and go together as ONE
-            // conditional child of the body's column — the shape the ADVANCED block
-            // used, reused for the thing that replaced it.
-            //
-            // The 14dp here is ON TOP OF the SectionLabel's own 14 (the TSX's
-            // `marginTop: 14` at :625 wrapping a SectionLabel that already carries
-            // one), which is what sets this section further off the about line than
-            // any two groups are from each other.
-            if root.show-band-themes: VerticalLayout {
-                padding-top: Metrics.s(14);
-
-                SectionLabel { label: "BAND THEMES"; }
-
-                // NOT the standard plate: Pal.raised, a 14dp corner and no inner
-                // padding, so the rows run edge to edge and their own top edges do
-                // the dividing (SettingsPanel.tsx:627).
-                GroupCard {
-                    plate: Pal.raised;
-                    corner: Metrics.s(14);
-                    pad: 0px;
-                    clip: true;
-
-                    // `m`, not `label` — an unqualified name on the right of a
-                    // binding resolves against the element's OWN properties first,
-                    // so `label: label` on a component that has a `label` would be
-                    // a self-reference, not a read of the loop variable.
-                    for m[i] in root.egg-labels: EggRow {
-                        label: m;
-                        on: i == root.egg-index;
-                        first: i == 0;
-                        clicked => { root.pick-egg(i); }
-                    }
-                }
-            }
         }
     }
 }
