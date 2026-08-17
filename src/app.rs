@@ -608,7 +608,14 @@ impl App {
         // arms retune, and a retune drains again — which is why this is taken
         // out of the state FIRST, so a re-entrant drain finds nothing to do and
         // the recursion is one level deep rather than unbounded.
-        if let Some(action) = self.state.borrow_mut().panel_action.take() {
+        // TAKEN IN ITS OWN STATEMENT, and that is not style. On edition 2021 the
+        // temporary in an `if let` scrutinee lives to the END OF THE IF-LET, so
+        // writing this as `if let Some(a) = self.state.borrow_mut()...take()`
+        // kept the `RefMut` alive across the body — and the body retunes, which
+        // borrows the same cell. That is a `BorrowMutError` panic on the first
+        // press of a steering-wheel button, which is exactly what it did.
+        let pending = self.state.borrow_mut().panel_action.take();
+        if let Some(action) = pending {
             self.apply_panel_action(action);
         }
         // Once, after the whole batch: a position change re-runs the nearby
@@ -1284,8 +1291,13 @@ impl App {
             return None;
         }
         let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32);
-        if let Some(hit) = self.state.borrow().art.get(&key) {
-            return hit.clone();
+        // Cloned out in its own statement for the reason spelt out in
+        // `drain_events`: an `if let` scrutinee holds its borrow across the body
+        // on edition 2021. This one is only a shared borrow and the read below
+        // is too, so it never paniced — but it is one edit away from doing so.
+        let hit = self.state.borrow().art.get(&key).cloned();
+        if let Some(hit) = hit {
+            return hit;
         }
         let image = self.read_art(&key.0, box_dp).as_ref().map(crate::logos::ui::to_image);
         self.state.borrow_mut().art.insert(key, image.clone());
