@@ -11,75 +11,12 @@
 //! So this builds whole `App`s against a tuner that reports a dial and then goes
 //! quiet, and reads the answers off the face's own properties.
 
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::sync::Mutex;
+mod common;
 
-use carnyx::android::{BandPoint, Tuner, TunerError, TunerSnapshot};
+use common::{dir_for, install_platform, launch};
 use carnyx::rds::RdsState;
 use carnyx::session::{self, Parting, Session};
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, PhysicalSize, PlatformError};
-
-struct Headless {
-    window: Rc<MinimalSoftwareWindow>,
-}
-
-impl Platform for Headless {
-    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        Ok(self.window.clone())
-    }
-}
-
-/// A tuner that reports one dial and then says nothing.
-///
-/// `FakeTuner` cannot be used here: it always comes up on 88.7, which is the one
-/// dial its synthesised RDS corpus covers, so `pump_rds_until_settled` fills the
-/// decoder from the recording the instant it connects and there is no way to
-/// tell a restore from a replay. This reports whatever dial the case needs and
-/// never emits a group, which is what a real head unit looks like in the second
-/// after it binds.
-struct SilentTuner {
-    raw: Mutex<i32>,
-}
-
-impl SilentTuner {
-    fn at(mhz: f32) -> SilentTuner {
-        SilentTuner { raw: Mutex::new((mhz * 100.0).round() as i32) }
-    }
-}
-
-impl Tuner for SilentTuner {
-    fn is_available(&self) -> bool {
-        true
-    }
-    fn connect(&self) -> Result<(), TunerError> {
-        carnyx::android::ingest_connected(0, *self.raw.lock().unwrap(), String::new(), String::new(), -1, true);
-        Ok(())
-    }
-    fn disconnect(&self) {}
-    fn tune(&self, mhz: f32) -> Result<(), TunerError> {
-        let raw = (mhz * 100.0).round() as i32;
-        *self.raw.lock().unwrap() = raw;
-        carnyx::android::ingest_frequency(0, raw, String::new(), -1);
-        Ok(())
-    }
-    fn seek(&self, _up: bool) {}
-    fn snapshot(&self) -> Option<TunerSnapshot> {
-        None
-    }
-    fn set_audio_enabled(&self, _on: bool) {}
-    fn set_rds_enabled(&self, _on: bool) {}
-    fn send_panel_key(&self, _code: i32) {}
-    fn start_level_watch(&self, _interval_ms: i64) {}
-    fn stop_level_watch(&self) {}
-    fn read_level_now(&self) {}
-    fn band_plan(&self) -> Vec<BandPoint> {
-        Vec::new()
-    }
-    fn start_illumination_watch(&self) {}
-}
+use slint::ComponentHandle;
 
 /// The RadioText a case writes and then looks for. Deliberately carries NO call
 /// sign: `strip_station_from_rt` removes one from the head of the string, which
@@ -107,37 +44,8 @@ fn snapshot(dial: f32, age_secs: u64) -> Session {
     }
 }
 
-fn dir_for(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("carnyx-warmprobe-{tag}"));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
-
-/// Build a whole App in `dir` against a tuner sitting on `tuner_dial`, and give
-/// back the face plus the driver.
-fn launch(dir: &Path, tuner_dial: f32) -> (carnyx::AppWindow, Rc<carnyx::app::App>) {
-    // The calibration is process-global and is seeded by whichever tuner
-    // connected last. Cleared between cases so a dial from an earlier one cannot
-    // decide what a raw reading means in this one.
-    carnyx::android::reset_calibration();
-    let ui = carnyx::AppWindow::new().expect("window");
-    let driver = carnyx::app::App::with_tuner(
-        &ui,
-        &carnyx::app::host_db_path(),
-        dir,
-        Box::new(SilentTuner::at(tuner_dial)),
-        false,
-        None,
-        carnyx::fake::FakeLocation::no_fix(),
-    );
-    (ui, driver)
-}
-
 fn main() {
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless { window: window.clone() })).expect("platform");
-    window.set_size(PhysicalSize::new(1024, 614));
+    let _window = install_platform();
 
     // ── The case the driver reported: away and back within seconds. ──
     //

@@ -143,6 +143,30 @@ pub fn drain_current() {
     }
 }
 
+/// Put the settled pilot on the pill. What [`STEREO_SETTLE`] waits for.
+///
+/// A free function rather than a method because the timer's callback must not
+/// hold the App alive: `CURRENT` is a `Weak`, so a window that has gone finds
+/// nothing here and the late tick does nothing, which is the right answer.
+fn settle_stereo_current() {
+    let app = CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade));
+    let Some(app) = app else { return };
+    let changed = {
+        let mut s = app.state.borrow_mut();
+        let pending = s.stereo_pending.take();
+        match pending {
+            Some(on) if s.stereo != Some(on) => {
+                s.stereo = Some(on);
+                true
+            }
+            _ => false,
+        }
+    };
+    if changed {
+        app.push_hero();
+    }
+}
+
 /// Write the parting snapshot for the current thread's App.
 ///
 /// Called from the Android lifecycle listener in `lib.rs`, which runs on this
@@ -263,7 +287,23 @@ struct State {
     /// The hysteresis' one piece of state, settled once per poll and fed back.
     dotted: i32,
     audio: bool,
+    /// The pilot on the pill: `Some(true)` STEREO, `Some(false)` MONO, `None` a
+    /// blank pill because nothing trustworthy has reported yet.
+    ///
+    /// ONLY EVER WRITTEN AFTER THE SETTLE WINDOW — see [`STEREO_SETTLE`]. Two
+    /// other places used to clear it, a retune and the RDS expiry, and both were
+    /// this app's own invention rather than CarFM's: CarFM writes its `fmStereo`
+    /// from the vendor callback and from nowhere else, so a reported pilot holds
+    /// until the tuner reports a different one. Clearing it here meant the pill
+    /// was blanked by every frequency notification the vendor sent, and the
+    /// driver saw it "almost never lit up".
     stereo: Option<bool>,
+    /// The last pilot the tuner reported, still holding still. Applied to
+    /// `stereo` by `stereo_settle` and dropped if a newer one arrives first.
+    stereo_pending: Option<bool>,
+    /// The settle window's timer, restarted by every report. See
+    /// [`STEREO_SETTLE`].
+    stereo_settle: slint::Timer,
     location: fake::FakeLocation,
     /// When the last well-formed RDS group arrived, for the expiry below.
     ///
@@ -393,6 +433,24 @@ const LEVEL_WATCH_MS: i64 = 5_000;
 /// window the running app would have disowned must not come back from disk, and
 /// the way to guarantee that is one constant rather than two that agree today.
 pub const RDS_STALE: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// How long a reported pilot has to hold still before it reaches the STEREO pill.
+///
+/// CarFM's `setStereoDebounced` (RadioScreen.tsx:2700-2703), the same 2000ms, and
+/// it is a TRAILING window: every report restarts it, so a callback that keeps
+/// flapping never lands at all and the pill holds whatever it last settled on.
+///
+/// The flapping is measured, not feared. CarFM counts `stereoFlips` on the raw
+/// event precisely because multipath collapses the pilot without touching the
+/// signal level — "a station can read 55 and still flap. WERN did exactly that
+/// all through one commute" (RadioScreen.tsx:494-497). Applied straight through,
+/// that is a pill strobing between STEREO and MONO for a whole drive.
+///
+/// The two getters that would answer instantly are both useless here and were
+/// checked on the device: `isStreroOn()` and `getStationStereoState()` each read
+/// true on dead air (NwdRadioModule.kt:706-710). The push callback is the only
+/// honest source, which is why this waits for it rather than polling.
+const STEREO_SETTLE: std::time::Duration = std::time::Duration::from_millis(2000);
 
 impl App {
     /// Build the application against a station database at `db_path`.
@@ -557,6 +615,8 @@ impl App {
                 dotted: 0,
                 audio: true,
                 stereo: None,
+                stereo_pending: None,
+                stereo_settle: slint::Timer::default(),
                 location,
                 location_dirty: false,
                 picker,
@@ -952,11 +1012,20 @@ impl App {
                     // quiet for twenty-four seconds already.
                     s.last_rds_at = None;
                     s.rds_stale = false;
-                    // A new station has reported nothing yet, so the pill goes
-                    // back to EMPTY rather than carrying the last station's pilot
-                    // — and never to MONO, which would be an assertion nothing
-                    // made.
-                    s.stereo = None;
+                    // THE PILOT IS NOT CLEARED HERE, and it used to be. The
+                    // argument for clearing it was that a new station has
+                    // reported nothing yet, so the pill should go blank rather
+                    // than carry the last station's lock — which sounds right and
+                    // was never checked against CarFM, where this same handler
+                    // clears `name`, `text`, `pty`, `tp`, `ta` and `pi` and
+                    // deliberately not stereo (RadioScreen.tsx:2794-2802).
+                    //
+                    // The cost on the device is the whole defect: the vendor
+                    // sends `notifyCurrentFrequency` for its own reasons — its
+                    // preset walk transits several stations on one wheel press —
+                    // while `notifyStereo` arrives only when the pilot actually
+                    // changes. So the blanking ran far more often than the
+                    // refilling, and the pill was almost never lit.
                 }
                 let line = format!("tuned {:.1}", s.dial);
                 s.settings.log.push(&stamp(), &line);
@@ -1005,7 +1074,20 @@ impl App {
                     s.rds_state.rt = rt;
                 }
             }
-            TunerEvent::Stereo(on) => s.stereo = Some(on),
+            TunerEvent::Stereo(on) => {
+                // LOGGED RAW, before the settle window, because the flapping the
+                // window hides is the measurement worth having — it is what
+                // CarFM's `stereoFlips` counter exists to record, and it is the
+                // only way to tell "the pilot is genuinely marginal" from "this
+                // callback never arrives on this unit" without a cable.
+                s.settings.log.push(&stamp(), &format!("stereo {on}"));
+                s.stereo_pending = Some(on);
+                s.stereo_settle.start(
+                    slint::TimerMode::SingleShot,
+                    STEREO_SETTLE,
+                    settle_stereo_current,
+                );
+            }
             TunerEvent::Pty(pty) => {
                 // Same cache, same rule as the vendor RadioText above.
                 if s.rds_state.pty.is_none() && !s.rds_stale && (0..=31).contains(&pty) {
@@ -1064,9 +1146,16 @@ impl App {
                 self.state.borrow_mut().rds_state = st;
             }
         }
-        // The pilot the vendor reported alongside the recording, through the
-        // same ingest function the device's callback calls.
-        crate::android::ingest_stereo(fake::WERN_STEREO);
+        // The pilot the vendor reported alongside the recording, assigned
+        // DIRECTLY rather than through `ingest_stereo`.
+        //
+        // Not an inconsistency — the loop above assigns `rds_state` directly too,
+        // for the same reason. This function's whole job is to leave the face
+        // SETTLED against a replay, and `STEREO_SETTLE` is a two-second window
+        // that exists to absorb a live callback flapping on real multipath. There
+        // is no multipath in a recording, and a settled face that has to wait two
+        // seconds for its pill is not settled.
+        self.state.borrow_mut().stereo = Some(fake::WERN_STEREO);
     }
 
     /// One level reading, through the tuner's own path.
@@ -1934,9 +2023,13 @@ impl App {
         s.warm_dial = None;
         s.rds.clear_ta();
         s.rds_state = RdsState::default();
-        // The pilot came from the same carrier. EMPTY rather than MONO, which
-        // would be an assertion nothing made.
-        s.stereo = None;
+        // THE PILOT IS NOT CLEARED HERE EITHER. The argument was that it came
+        // from the same carrier that has gone quiet — but RDS and the stereo
+        // pilot are different subcarriers and they fail independently: 57 kHz
+        // can be lost to multipath while 19 kHz still locks, which is why
+        // CarFM's expiry clears `name`, `text`, `pty`, `tp`, `ta` and `pi` and
+        // leaves stereo alone (RadioScreen.tsx:3046-3049). A station whose RDS
+        // is marginal is exactly the one a driver is watching this pill on.
         let at = stamp();
         s.settings
             .log

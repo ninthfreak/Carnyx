@@ -62,6 +62,20 @@ That drives Slint's software renderer headlessly — no window system, no GPU �
 at each of the five surfaces the design has to support, plus the states worth a
 second look (audio released, tuner error, driving, lossy reception, no presets).
 
+Beside it are the behaviour probes. They exist because the same fault kept
+recurring in this tree: a check written one layer away from the code that
+actually runs — a pure function standing in for the path around it, a harness
+drawing a frame the device never draws — passes while the driver watches the
+thing fail. Each probe builds a whole `App` and reads the answers off the face's
+own properties.
+
+```sh
+cargo run --example dragprobe    # long-press into reorder, then drag
+cargo run --example panelprobe   # every steering-wheel code, both edges
+cargo run --example warmprobe    # the between-launch restore
+cargo run --example stereoprobe  # the STEREO pill's settle window
+```
+
 ## What the platform does, and why it is Java
 
 Three things the app needs are the platform's, and each is reached the same way:
