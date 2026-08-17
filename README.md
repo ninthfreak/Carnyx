@@ -10,6 +10,18 @@ not a port of that codebase — it is a rebuild that salvages the parts worth
 keeping: the RDS decoder, the RBDS station identity and geo maths, and the
 signal-meter model, all of which already exist as pure Rust.
 
+## The task list
+
+`docs/TASKS.md` is the list, and it is a FILE on purpose. It was previously held
+in a task store and in conversation, both of which were lost — the whole record
+had to be reconstructed once already. Every session that opens or closes an item
+edits that file in the same commit as the work.
+
+Numbers are permanent. Thirty-four of the entries cross-reference each other by
+number, and CarFM's tree cites three of them from code: `#55` in
+`src/services/tunerCapabilities.ts:134`, `#58` in `NwdRadioModule.kt:753` and
+`:977`, `#60` in `src/screens/RadioScreen.tsx:458`.
+
 ## Order of work
 
 1. **The interface.** Slint, on the head unit, with placeholder data.
