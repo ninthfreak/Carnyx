@@ -77,6 +77,16 @@ cargo run --example stereoprobe  # the STEREO pill's settle window
 cargo run --example pollprobe    # the level schedule and the getter poll
 ```
 
+`pollprobe` also pins where the poll RUNS. The vendor getters are binder calls
+into the head unit's radio service; CarFM makes them from React Native's
+native-modules thread and never from the UI thread, so Carnyx's poll is a thread
+of its own (`android::start_state_poll`) that emits a `TunerEvent::Snapshot` and
+lets the ordinary wake hop carry it to the face. The first version used a
+`slint::Timer`, which is the UI thread, and a vendor service that blocked would
+have hitched the face every 1.5 seconds. The probe checks the thread dies with
+the App, because it holds an `Arc` to the tuner and emits into a process-global
+queue, so nothing else would stop it.
+
 `pollprobe` exists because of a failure mode worth naming: both things it covers
 had been ported in PARTS and never joined up. `src/signal.rs` carried the whole
 post-retune read schedule — five constants, the drive-log measurements behind

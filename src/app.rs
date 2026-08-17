@@ -176,12 +176,6 @@ fn correct_level_current() {
     app.push_meter();
 }
 
-/// One turn of the vendor-getter poll. See [`POLL_MS`].
-fn poll_current() {
-    let Some(app) = current() else { return };
-    app.poll_tuner();
-}
-
 /// Put the settled pilot on the pill. What [`STEREO_SETTLE`] waits for.
 fn settle_stereo_current() {
     let Some(app) = current() else { return };
@@ -351,7 +345,12 @@ struct State {
     /// hero falls back to the dial.
     db: Option<StationDb>,
     snapshot: Option<String>,
-    tuner: Box<dyn Tuner>,
+    /// The head unit, or the fake standing in for it.
+    ///
+    /// `Arc` rather than `Box` because the vendor-getter poll runs on its OWN
+    /// THREAD and needs a handle of its own. `Tuner` is already `Send + Sync`;
+    /// this is what lets a second owner exist.
+    tuner: Arc<dyn Tuner>,
     /// Whether the tuner behind the trait is the real vendor service.
     ///
     /// False in this container. It is NOT a second availability predicate — the
@@ -394,8 +393,6 @@ struct State {
     /// Rejected reads left before the schedule gives up and waits for the
     /// periodic watch. Re-armed by any good read.
     level_retries: u32,
-    /// The vendor-getter poll. See [`POLL_MS`].
-    poll: slint::Timer,
     /// The pilot on the pill: `Some(true)` STEREO, `Some(false)` MONO, `None` a
     /// blank pill because nothing trustworthy has reported yet.
     ///
@@ -519,6 +516,20 @@ pub struct App {
     state: RefCell<State>,
 }
 
+/// Retire the poll thread with the App that started it.
+///
+/// The thread holds an `Arc` to the tuner, so nothing stops it on its own, and it
+/// emits into a queue that is global to the process. On the head unit a leftover
+/// poll would outlive a destroyed Activity; off it, the probes build one App
+/// after another in one process and a leftover poll would deliver a phantom
+/// reading into the next one. `Disconnected` stops it too — this is the case
+/// where nothing said goodbye.
+impl Drop for App {
+    fn drop(&mut self) {
+        crate::android::stop_state_poll();
+    }
+}
+
 /// The FM band, and the only band this app tunes.
 const FM_LO: f32 = 87.5;
 const FM_HI: f32 = 108.0;
@@ -546,13 +557,12 @@ const LEVEL_WATCH_MS: i64 = signal::LEVEL_POLL_MS as i64;
 /// on `pollNumbers` says so: "the push notify* callbacks do not always reach a
 /// passive client, but these synchronous getters do return live values".
 ///
-/// A FLAGGED DIVERGENCE, so that it is not mistaken for parity later: CarFM's
-/// poll runs on React Native's native-modules thread, off the UI thread. This one
-/// runs a `slint::Timer` on the UI thread, which is where every other tuner
-/// command in this file already runs (`tune`, `seek`, `set_audio_enabled`,
-/// `read_level_now`). The three getters are cheap and return null unbound, but if
-/// the vendor service ever blocks, this is where the face would hitch — and then
-/// the fix is a Java-side poll thread beside the RDS pump and the level watch.
+/// OFF THE UI THREAD, on a thread of its own — see
+/// [`crate::android::start_state_poll`]. The three getters are binder calls into
+/// the vendor service, and CarFM makes them from React Native's native-modules
+/// thread, never from the UI thread. The first version of this in Carnyx used a
+/// `slint::Timer`, which IS the UI thread, and a vendor service that blocked
+/// would have hitched the face every 1.5 seconds.
 const POLL_MS: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// How long a silence has to last before the RDS on screen is disowned.
@@ -729,7 +739,8 @@ impl App {
             state: RefCell::new(State {
                 db,
                 snapshot,
-                tuner,
+                // The poll thread gets a clone of this on connect.
+                tuner: Arc::from(tuner),
                 tuner_is_real,
                 rds: RdsDecoder::new(),
                 // The DECODER is not seeded, only the published state. A decoder
@@ -752,7 +763,6 @@ impl App {
                 level_correction: slint::Timer::default(),
                 level_retry: slint::Timer::default(),
                 level_retries: signal::LEVEL_RETRY_MAX,
-                poll: slint::Timer::default(),
                 stereo: None,
                 stereo_pending: None,
                 stereo_settle: slint::Timer::default(),
@@ -1039,78 +1049,6 @@ impl App {
         crate::session::save(&s.prefs_dir, &snapshot);
     }
 
-    /// One turn of the vendor-getter poll — the dial backstop and the audio
-    /// self-heal.
-    ///
-    /// WHAT THIS DELIBERATELY DOES NOT TOUCH: PS, RadioText and PTY. CarFM's poll
-    /// does not drive them either, and spells out why — "on this unit those
-    /// getters are worthless: getRtMessage() is a hardcoded \"\" on one manager
-    /// and region-gated on the other, psName stays empty for a passive bound
-    /// client, and getPTYType() returns 0". Nor the stereo pilot, whose getter is
-    /// stuck true (see [`STEREO_SETTLE`]). The snapshot carries all four so a
-    /// diagnostic can show them; none of them reaches the face.
-    ///
-    /// The RDS expiry lives on the 1s heartbeat here rather than in this poll,
-    /// which is where CarFM keeps it. Same rule, a slightly faster clock.
-    fn poll_tuner(self: &Rc<App>) {
-        let snap = self.state.borrow().tuner.snapshot();
-        let Some(snap) = snap else { return };
-        let mut changed = false;
-        {
-            let mut s = self.state.borrow_mut();
-
-            // THE DIAL BACKSTOP. A `notifyCurrentFrequency` that never arrived
-            // leaves the face on a station the radio has left; this is what
-            // notices. Deliberately NOT a retune: the RDS reset belongs to the
-            // callback, and CarFM's poll does not reset it either — it sets the
-            // frequency and nothing else.
-            if let Some(mhz) = snap.mhz {
-                let moved = crate::stations::preset_key(f64::from(mhz))
-                    != crate::stations::preset_key(f64::from(s.dial));
-                if (FM_LO..=FM_HI).contains(&mhz) && moved {
-                    s.dial = mhz;
-                    changed = true;
-                    let at = stamp();
-                    s.settings.log.push(&at, &format!("poll: dial is {mhz:.1}"));
-                }
-            }
-
-            // THE AUDIO SELF-HEAL, and it is the reason this poll exists at all.
-            //
-            // On a head unit the audio is analog and MCU-routed, so Android's
-            // audio focus cannot answer "is FM actually playing" — and after a
-            // permanent AUDIOFOCUS_LOSS the OS never sends a GAIN, so a
-            // focus-driven state goes dark when Android Auto takes over and never
-            // comes back when the MCU hands FM back. The MCU's own source
-            // register is the truth and it heals itself. CarFM:
-            // `if (typeof p.source === 'number' && p.source >= 0 &&
-            //     !userPoweredOffRef.current) setFmAudioActive(p.source === 4);`
-            //
-            // An explicit power-off still wins, which is what `user_powered_off`
-            // is for: without it the poll would switch the radio back on 1.5s
-            // after the driver switched it off.
-            if snap.mcu_source.is_some() && !s.user_powered_off {
-                let playing = snap.fm_is_playing();
-                if s.audio != playing {
-                    s.audio = playing;
-                    changed = true;
-                    let at = stamp();
-                    s.settings.log.push(
-                        &at,
-                        if playing { "poll: the MCU handed FM back" } else { "poll: the MCU took FM away" },
-                    );
-                }
-            }
-
-            // THE RECEPTION-LOSS BAND, once per turn. This is the whole reason
-            // the hysteresis has a cadence at all — see `settle_dotted`.
-            changed |= settle_dotted(&mut s);
-        }
-        if changed {
-            self.push_all();
-        }
-    }
-
     fn apply_event(&self, event: TunerEvent) {
         let mut s = self.state.borrow_mut();
         match event {
@@ -1150,10 +1088,10 @@ impl App {
                 // audio claim is: `connect` returning Ok only means bindService
                 // was accepted, and this needs a live binder.
                 s.tuner.start_level_watch(LEVEL_WATCH_MS);
-                // THE GETTER POLL. Started here for the same reason, and stopped
-                // on `Disconnected`: a poll against a dead binder is a timer
-                // waking every 1.5s to be told nothing.
-                s.poll.start(slint::TimerMode::Repeated, POLL_MS, poll_current);
+                // THE GETTER POLL, on its own thread. Started here for the same
+                // reason, and stopped on `Disconnected`: a poll against a dead
+                // binder is a thread waking every 1.5s to be told nothing.
+                crate::android::start_state_poll(s.tuner.clone(), POLL_MS);
             }
             TunerEvent::Position { lat, lon, fix, in_motion } => {
                 let next = fake::FakeLocation { lat, lon, fix, in_motion };
@@ -1188,7 +1126,7 @@ impl App {
                 // Nothing to command, and a watch left running against a dead
                 // binder is a thread waking every five seconds to fail.
                 s.tuner.stop_level_watch();
-                s.poll.stop();
+                crate::android::stop_state_poll();
                 // Nor is a post-retune schedule worth finishing against a binder
                 // that has gone: both timers would fire into a tuner that cannot
                 // answer, and the retry budget belongs to the next connection.
@@ -1199,6 +1137,82 @@ impl App {
                 // The reading it last produced is not a reading of anything now.
                 s.level = None;
                 s.dotted = 0;
+            }
+            TunerEvent::Snapshot(snap) => {
+                // ONE TURN OF THE VENDOR-GETTER POLL — the dial backstop, the
+                // audio self-heal and the reception-loss band.
+                //
+                // It arrives as an EVENT because the poll runs on its own thread
+                // (`android::start_state_poll`): the three getters are binder
+                // calls, CarFM makes them off the UI thread, and the first
+                // version of this used a `slint::Timer`, which is the UI thread.
+                // So it takes the same road every binder callback takes — push,
+                // wake, drain here — and the work below happens where all the
+                // other state changes happen.
+                //
+                // WHAT THIS DELIBERATELY DOES NOT TOUCH: PS, RadioText and PTY.
+                // CarFM's poll does not drive them either, and spells out why —
+                // "on this unit those getters are worthless: getRtMessage() is a
+                // hardcoded \"\" on one manager and region-gated on the other,
+                // psName stays empty for a passive bound client, and getPTYType()
+                // returns 0". Nor the stereo pilot, whose getter is stuck true
+                // (see `STEREO_SETTLE`). The snapshot carries all four so a
+                // diagnostic can show them; none of them reaches the face.
+                //
+                // The RDS expiry lives on the 1s heartbeat rather than here,
+                // which is where CarFM keeps it. Same rule, a slightly faster
+                // clock.
+
+                // THE DIAL BACKSTOP. A `notifyCurrentFrequency` that never
+                // arrived leaves the face on a station the radio has left; this
+                // is what notices. Deliberately NOT a retune: the RDS reset
+                // belongs to the callback, and CarFM's poll does not reset it
+                // either — it sets the frequency and nothing else.
+                if let Some(mhz) = snap.mhz {
+                    let moved = crate::stations::preset_key(f64::from(mhz))
+                        != crate::stations::preset_key(f64::from(s.dial));
+                    if (FM_LO..=FM_HI).contains(&mhz) && moved {
+                        s.dial = mhz;
+                        let at = stamp();
+                        s.settings.log.push(&at, &format!("poll: dial is {mhz:.1}"));
+                    }
+                }
+
+                // THE AUDIO SELF-HEAL, and it is the reason this poll exists at
+                // all.
+                //
+                // On a head unit the audio is analog and MCU-routed, so Android's
+                // audio focus cannot answer "is FM actually playing" — and after
+                // a permanent AUDIOFOCUS_LOSS the OS never sends a GAIN, so a
+                // focus-driven state goes dark when Android Auto takes over and
+                // never comes back when the MCU hands FM back. The MCU's own
+                // source register is the truth and it heals itself. CarFM:
+                // `if (typeof p.source === 'number' && p.source >= 0 &&
+                //     !userPoweredOffRef.current) setFmAudioActive(p.source === 4);`
+                //
+                // An explicit power-off still wins, which is what
+                // `user_powered_off` is for: without it the poll would switch the
+                // radio back on 1.5s after the driver switched it off.
+                if snap.mcu_source.is_some() && !s.user_powered_off {
+                    let playing = snap.fm_is_playing();
+                    if s.audio != playing {
+                        s.audio = playing;
+                        let at = stamp();
+                        s.settings.log.push(
+                            &at,
+                            if playing {
+                                "poll: the MCU handed FM back"
+                            } else {
+                                "poll: the MCU took FM away"
+                            },
+                        );
+                    }
+                }
+
+                // THE RECEPTION-LOSS BAND, once per turn. This is the whole
+                // reason the hysteresis has a cadence at all — see
+                // `settle_dotted`.
+                settle_dotted(&mut s);
             }
             TunerEvent::Frequency(f) => {
                 if let Some(mhz) = f.mhz {

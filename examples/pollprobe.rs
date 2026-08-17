@@ -43,6 +43,12 @@ pub struct ScriptedTuner {
     source: AtomicI32,
     /// How many times the App has commanded a reading.
     reads: AtomicI32,
+    /// How many times the poll thread has asked for a snapshot.
+    polls: AtomicI32,
+    /// While set, `snapshot()` answers nothing — an unbound binder, as far as the
+    /// poll can tell. It is how a case pins a burst of events against a poll that
+    /// is definitely NOT delivering, rather than against one that probably is not.
+    silent: std::sync::atomic::AtomicBool,
     /// The interval of the last `start_level_watch`, or -1.
     watch_ms: AtomicI32,
     /// What the next commanded read answers with: (level, landed-raw).
@@ -57,6 +63,8 @@ impl ScriptedTuner {
             seen_raw: AtomicI32::new(raw),
             source: AtomicI32::new(4),
             reads: AtomicI32::new(0),
+            polls: AtomicI32::new(0),
+            silent: std::sync::atomic::AtomicBool::new(false),
             watch_ms: AtomicI32::new(-1),
             answer: Mutex::new(Some((62, raw))),
         }
@@ -89,6 +97,10 @@ impl Tuner for ScriptedTuner {
     }
     fn seek(&self, _up: bool) {}
     fn snapshot(&self) -> Option<TunerSnapshot> {
+        self.polls.fetch_add(1, Ordering::Relaxed);
+        if self.silent.load(Ordering::Relaxed) {
+            return None;
+        }
         let raw = self.seen_raw.load(Ordering::Relaxed);
         let source = self.source.load(Ordering::Relaxed);
         Some(TunerSnapshot {
@@ -287,11 +299,13 @@ fn main() {
         // the device, and NOT ONE `update_timers_and_animations` runs in between,
         // so the poll cannot have fired. Anything that moves the band here moved
         // it off an event.
+        tuner.silent.store(true, Ordering::Relaxed);
         for i in 0..80u16 {
             carnyx::android::ingest_rds_group(&format!("{:04x}000000000000", 0xF001 + i));
             app.drain_events();
             app.push_all();
         }
+        tuner.silent.store(false, Ordering::Relaxed);
         assert_eq!(
             ui.get_dotted_arcs(),
             0,
@@ -307,11 +321,13 @@ fn main() {
         // Back the other way: the recorded corpus again, and the same rule holds.
         let corpus = carnyx::fake::FakeRdsStream::new();
         let groups = corpus.all();
+        tuner.silent.store(true, Ordering::Relaxed);
         for hex in groups.iter().cycle().take(80) {
             carnyx::android::ingest_rds_group(hex);
             app.drain_events();
             app.push_all();
         }
+        tuner.silent.store(false, Ordering::Relaxed);
         assert_eq!(ui.get_dotted_arcs(), 2, "recovery does not advance on events either");
         pump(&window, PAST_POLL);
         assert_eq!(ui.get_dotted_arcs(), 0, "and the poll clears it");
@@ -319,9 +335,36 @@ fn main() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ── The poll thread dies with the App that started it ──
+    //
+    // It holds an Arc to the tuner and emits into a process-global queue, so
+    // nothing stops it on its own. On the head unit a leftover poll would outlive
+    // a destroyed Activity; here it would deliver a phantom reading into the next
+    // case — which is exactly the kind of cross-contamination that makes a probe
+    // suite lie.
+    {
+        let dir = dir_for("poll-teardown");
+        let tuner = std::sync::Arc::new(ScriptedTuner::at(96.3));
+        {
+            let (ui, _app) = launch_with(&dir, Box::new(TunerHandle(tuner.clone())));
+            pump(&window, PAST_POLL);
+            assert!(tuner.polls.load(Ordering::Relaxed) > 0, "the poll ran while the App lived");
+            ui.hide().expect("hide");
+        }
+        let after_drop = tuner.polls.load(Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(2200));
+        assert_eq!(
+            tuner.polls.load(Ordering::Relaxed),
+            after_drop,
+            "the poll thread must not outlive the App"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     println!("level schedule: no immediate read, 1s read, 4s correction, 2 retries");
     println!("getter poll: dial backstopped, audio healed, power-off respected");
     println!("loss band: eighty events move nothing, one poll turn moves it all");
+    println!("poll thread: off the UI thread, and it dies with the App");
 }
 
 /// `Tuner` is implemented for the struct; the App wants a `Box<dyn Tuner>` while

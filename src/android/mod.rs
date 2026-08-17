@@ -393,6 +393,14 @@ pub enum TunerEvent {
     ConnectFailed(String),
     Disconnected,
     Frequency(FrequencyChange),
+    /// One turn of the vendor-getter poll. See [`start_state_poll`].
+    ///
+    /// Carries the whole snapshot rather than the two facts the face acts on,
+    /// because the other four — PS, RadioText, PTY and the stuck stereo getter —
+    /// are what a diagnostic prints, and splitting them out here would put the
+    /// decision about which of them is trustworthy in the wrong file. This is the
+    /// ingest edge; it reports, and the app decides.
+    Snapshot(TunerSnapshot),
     RadioText(String),
     Stereo(bool),
     Pty(i32),
@@ -553,6 +561,81 @@ pub fn ingest_position(lat: f64, lon: f64, fix: bool, speed_mps: f32, has_speed:
 /// [`TunerEvent::Note`].
 pub fn ingest_note(line: String) {
     emit(TunerEvent::Note(line));
+}
+
+// ── The vendor-getter poll ───────────────────────────────────────────────────
+
+/// Which poll is the live one. Bumped by every start and every stop, so a thread
+/// whose number no longer matches knows it has been superseded and exits.
+///
+/// The same generation trick `NwdBridge.startRdsPump` and `startLevelWatch` use
+/// on the Java side, and for the same reason: there is no way to interrupt a
+/// sleeping thread from here, so the thread has to ask.
+static POLL_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How finely the poll's sleep is sliced.
+///
+/// Not a cadence — the cadence is the caller's `interval`. This is how long a
+/// stopped poll can still be asleep for, and it matters most off the head unit:
+/// the probes build one App after another in one process, and a poll thread from
+/// the previous case that woke up and emitted would be a phantom event in the
+/// next one.
+const POLL_SLICE: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Read the vendor's own getters, on a thread of their own, for as long as
+/// nobody supersedes it.
+///
+/// OFF THE UI THREAD, and that is the whole point of this function. The three
+/// getters are binder calls into the vendor service; CarFM makes them from React
+/// Native's native-modules thread and never from the UI thread, and the first
+/// version of this in Carnyx used a `slint::Timer`, which is the UI thread. A
+/// vendor service that blocks would have hitched the face every 1.5 seconds.
+///
+/// It sleeps BEFORE its first read, matching `setInterval` rather than
+/// `startLevelWatch`: connect has already taken a snapshot of everything this
+/// would report.
+///
+/// The generation is re-checked AFTER the snapshot and before the emit, not just
+/// before the read. A thread that was already inside `snapshot()` when it was
+/// superseded would otherwise deliver one stale reading into whatever came next.
+pub fn start_state_poll(tuner: Arc<dyn Tuner>, interval: std::time::Duration) {
+    use std::sync::atomic::Ordering;
+    let mine = POLL_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let spawned = std::thread::Builder::new()
+        .name("carnyx-state-poll".into())
+        .spawn(move || {
+            let mut waited = std::time::Duration::ZERO;
+            loop {
+                if POLL_GEN.load(Ordering::SeqCst) != mine {
+                    return;
+                }
+                if waited < interval {
+                    let slice = POLL_SLICE.min(interval - waited);
+                    std::thread::sleep(slice);
+                    waited += slice;
+                    continue;
+                }
+                waited = std::time::Duration::ZERO;
+                let snap = tuner.snapshot();
+                if POLL_GEN.load(Ordering::SeqCst) != mine {
+                    return;
+                }
+                if let Some(snap) = snap {
+                    emit(TunerEvent::Snapshot(snap));
+                }
+            }
+        });
+    if spawned.is_err() {
+        // A process that cannot spawn a thread has worse problems, but the face
+        // must still come up — and silently having no poll is exactly the class
+        // of gap this poll was written to close.
+        ingest_note("poll: could not start the state thread".into());
+    }
+}
+
+/// Retire the current poll. Idempotent; safe to call when none is running.
+pub fn stop_state_poll() {
+    POLL_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 pub fn ingest_connect_failed(reason: String) {

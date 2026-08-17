@@ -128,13 +128,21 @@ pub fn launch_with(dir: &Path, tuner: Box<dyn Tuner>) -> (carnyx::AppWindow, Rc<
     (ui, driver)
 }
 
-/// Let real time pass while Slint's timers run, because the settle window is a
-/// real `slint::Timer` and only a real clock moves it.
+/// Let real time pass while Slint's timers run and the tuner queue drains.
+///
+/// Two things need it. The settle windows are real `slint::Timer`s and only a
+/// real clock moves them. And the vendor-getter poll runs on its OWN THREAD,
+/// pushing events into the process-global queue — on the head unit
+/// `slint::invoke_from_event_loop` hops those to the UI thread and drains them,
+/// and there is no running event loop here, so this stands in for that hop. It
+/// calls the very function the device installs as its wake, which is the point:
+/// a probe that drained some other way would be testing some other path.
 pub fn pump(window: &MinimalSoftwareWindow, total: std::time::Duration) {
     let step = std::time::Duration::from_millis(50);
     let mut left = total;
     loop {
         slint::platform::update_timers_and_animations();
+        carnyx::app::drain_current();
         window.request_redraw();
         window.draw_if_needed(|_| {});
         if left.is_zero() {
