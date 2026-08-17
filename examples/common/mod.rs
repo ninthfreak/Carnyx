@@ -106,6 +106,11 @@ pub fn dir_for(tag: &str) -> PathBuf {
 /// Build a whole `App` in `dir` against a tuner sitting on `tuner_dial`, and
 /// give back the face plus the driver that owns its callbacks.
 pub fn launch(dir: &Path, tuner_dial: f32) -> (carnyx::AppWindow, Rc<carnyx::app::App>) {
+    launch_with(dir, Box::new(SilentTuner::at(tuner_dial)))
+}
+
+/// The same, against a tuner the caller scripts.
+pub fn launch_with(dir: &Path, tuner: Box<dyn Tuner>) -> (carnyx::AppWindow, Rc<carnyx::app::App>) {
     // The calibration is process-global and is seeded by whichever tuner
     // connected last. Cleared between cases so a dial from an earlier one cannot
     // decide what a raw reading means in this one.
@@ -115,7 +120,7 @@ pub fn launch(dir: &Path, tuner_dial: f32) -> (carnyx::AppWindow, Rc<carnyx::app
         &ui,
         &carnyx::app::host_db_path(),
         dir,
-        Box::new(SilentTuner::at(tuner_dial)),
+        tuner,
         false,
         None,
         carnyx::fake::FakeLocation::no_fix(),

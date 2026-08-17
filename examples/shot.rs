@@ -559,6 +559,13 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_overlay(Overlay::LogoSearch);
         }
     }
+    // THE METER, SETTLED. Any arm above that tunes drops the previous station's
+    // level and leaves the post-retune schedule to refill it at 1s and correct it
+    // at 4s — real `slint::Timer`s, against a harness that renders the frame it
+    // builds. Waiting four seconds fifty-nine times is not a workflow, so the
+    // schedule's readings are taken here instead. Unconditional: an arm that
+    // never tuned already has its connect-time reading and this only repeats it.
+    driver.settle_level_for_test();
 }
 
 /// One column of the pushed genre grid. See the `NearbyGenre` arm for why this

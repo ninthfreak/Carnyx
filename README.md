@@ -74,7 +74,18 @@ cargo run --example dragprobe    # long-press into reorder, then drag
 cargo run --example panelprobe   # every steering-wheel code, both edges
 cargo run --example warmprobe    # the between-launch restore
 cargo run --example stereoprobe  # the STEREO pill's settle window
+cargo run --example pollprobe    # the level schedule and the getter poll
 ```
+
+`pollprobe` exists because of a failure mode worth naming: both things it covers
+had been ported in PARTS and never joined up. `src/signal.rs` carried the whole
+post-retune read schedule — five constants, the drive-log measurements behind
+them, and a test pinning their order — and nothing called any of it. The vendor
+getter poll was built end to end, `pollNumbers` in Java through
+`NwdTuner::snapshot()` in Rust, and `snapshot()` was reachable only from tests.
+Neither gap showed up in a reading of the code, because every part was present.
+So the probe watches the TUNER rather than the functions: a scripted tuner counts
+every command the App sends it.
 
 ## What the platform does, and why it is Java
 

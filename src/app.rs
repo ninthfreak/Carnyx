@@ -143,14 +143,48 @@ pub fn drain_current() {
     }
 }
 
-/// Put the settled pilot on the pill. What [`STEREO_SETTLE`] waits for.
+/// The App on this thread, if there still is one.
 ///
-/// A free function rather than a method because the timer's callback must not
-/// hold the App alive: `CURRENT` is a `Weak`, so a window that has gone finds
-/// nothing here and the late tick does nothing, which is the right answer.
+/// Every timer callback below goes through this rather than capturing a handle:
+/// `CURRENT` is a `Weak`, so a window that has gone finds nothing and the late
+/// tick does nothing, which is the right answer for all of them.
+fn current() -> Option<Rc<App>> {
+    CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade))
+}
+
+/// One level reading now. The 1s post-retune read and the retry both land here.
+fn read_level_current() {
+    let Some(app) = current() else { return };
+    app.read_level();
+    app.push_meter();
+}
+
+/// The 4s correction — and the re-phasing of the periodic watch, which is the
+/// same call.
+///
+/// CarFM restarts the watch here rather than taking a second one-off reading, and
+/// says why: "startLevelWatch reads once immediately and then sleeps the cadence,
+/// so restarting it here is both the 4s correction and a clean '…and every 20s
+/// from now' — without it the watch is a free-running native thread a retune
+/// never touches, and the next update after this could land anywhere in its
+/// cycle" (RadioScreen.tsx:2839-2846). `NwdBridge.startLevelWatch` reads before
+/// its first sleep too, so the assumption holds on this side.
+fn correct_level_current() {
+    let Some(app) = current() else { return };
+    app.state.borrow().tuner.start_level_watch(LEVEL_WATCH_MS);
+    app.drain_events();
+    app.push_meter();
+}
+
+/// One turn of the vendor-getter poll. See [`POLL_MS`].
+fn poll_current() {
+    let Some(app) = current() else { return };
+    app.poll_tuner();
+}
+
+/// Put the settled pilot on the pill. What [`STEREO_SETTLE`] waits for.
 fn settle_stereo_current() {
-    let app = CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade));
-    let Some(app) = app else { return };
+    let Some(app) = current() else { return };
     let changed = {
         let mut s = app.state.borrow_mut();
         let pending = s.stereo_pending.take();
@@ -174,10 +208,34 @@ fn settle_stereo_current() {
 /// way a borrow from a callback is. Does nothing when there is no App, which is
 /// what a lifecycle event before construction or after teardown deserves.
 pub fn persist_session_current(parting: crate::session::Parting) {
-    let app = CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade));
-    if let Some(app) = app {
+    if let Some(app) = current() {
         app.persist_session(parting);
     }
+}
+
+/// Start the post-retune read schedule over.
+///
+/// CarFM's `NwdRadioFrequency` handler, verbatim in shape (RadioScreen.tsx:2836-2846):
+/// clear whatever is pending, re-arm the retry budget, read at 1s and correct at
+/// 4s. The evidence for those two numbers is in [`crate::signal`] — the first
+/// reading after a tune is inflated by +17.7 on average, with cases of +45, +48
+/// and +57, and the excess is almost entirely inside the first second. So the
+/// meter shows something fast and then tells the truth, which beats a long dash.
+fn arm_level_schedule(s: &mut State) {
+    s.level_first.stop();
+    s.level_correction.stop();
+    s.level_retry.stop();
+    s.level_retries = signal::LEVEL_RETRY_MAX;
+    s.level_first.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(signal::LEVEL_FIRST_READ_MS),
+        read_level_current,
+    );
+    s.level_correction.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(signal::LEVEL_CORRECTION_MS),
+        correct_level_current,
+    );
 }
 
 /// The sink every tuner event lands in. Deliberately the smallest possible
@@ -287,6 +345,25 @@ struct State {
     /// The hysteresis' one piece of state, settled once per poll and fed back.
     dotted: i32,
     audio: bool,
+    /// The driver pressed the power button OFF, as opposed to the MCU having
+    /// taken the source away.
+    ///
+    /// Two different facts that `audio` alone cannot tell apart, and the getter
+    /// poll needs them apart: it heals `audio` from the MCU's own source
+    /// register, and an explicit power-off must survive that. CarFM's
+    /// `userPoweredOffRef` (RadioScreen.tsx:3010).
+    user_powered_off: bool,
+    /// The post-retune level schedule: read at 1s, correct at 4s, retry a
+    /// rejection twice. See [`crate::signal`] for the measurements and
+    /// `arm_level_schedule` for the wiring.
+    level_first: slint::Timer,
+    level_correction: slint::Timer,
+    level_retry: slint::Timer,
+    /// Rejected reads left before the schedule gives up and waits for the
+    /// periodic watch. Re-armed by any good read.
+    level_retries: u32,
+    /// The vendor-getter poll. See [`POLL_MS`].
+    poll: slint::Timer,
     /// The pilot on the pill: `Some(true)` STEREO, `Some(false)` MONO, `None` a
     /// blank pill because nothing trustworthy has reported yet.
     ///
@@ -420,7 +497,31 @@ const FM_HI: f32 = 108.0;
 /// every tick commands the tuner, and the vendor rate-limits its own comparable
 /// read to 900ms. Asking for less than the floor just gets clamped, so the floor
 /// is what is asked for.
-const LEVEL_WATCH_MS: i64 = 5_000;
+/// How often to re-read the signal level while parked on a station.
+///
+/// CarFM's `LEVEL_POLL_MS`, referenced rather than restated. This used to be
+/// 5_000, justified by the Java side's own floor (`NwdBridge.LEVEL_MIN_INTERVAL_MS`)
+/// — but that floor is a MINIMUM the bridge clamps to, not a cadence anyone
+/// chose, and reading four times as often as CarFM commands the tuner four times
+/// as often for no gain. The floor still applies underneath; it simply is not
+/// reached.
+const LEVEL_WATCH_MS: i64 = signal::LEVEL_POLL_MS as i64;
+
+/// How often to read the vendor's own getters.
+///
+/// CarFM's poll interval (`RadioScreen.tsx:3100`, `}, 1500)`). It exists because
+/// the push callbacks are not reliable on this unit — `NwdBridge`'s own comment
+/// on `pollNumbers` says so: "the push notify* callbacks do not always reach a
+/// passive client, but these synchronous getters do return live values".
+///
+/// A FLAGGED DIVERGENCE, so that it is not mistaken for parity later: CarFM's
+/// poll runs on React Native's native-modules thread, off the UI thread. This one
+/// runs a `slint::Timer` on the UI thread, which is where every other tuner
+/// command in this file already runs (`tune`, `seek`, `set_audio_enabled`,
+/// `read_level_now`). The three getters are cheap and return null unbound, but if
+/// the vendor service ever blocks, this is where the face would hitch — and then
+/// the fix is a Java-side poll thread beside the RDS pump and the level watch.
+const POLL_MS: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// How long a silence has to last before the RDS on screen is disowned.
 ///
@@ -614,6 +715,12 @@ impl App {
                 level: None,
                 dotted: 0,
                 audio: true,
+                user_powered_off: false,
+                level_first: slint::Timer::default(),
+                level_correction: slint::Timer::default(),
+                level_retry: slint::Timer::default(),
+                level_retries: signal::LEVEL_RETRY_MAX,
+                poll: slint::Timer::default(),
                 stereo: None,
                 stereo_pending: None,
                 stereo_settle: slint::Timer::default(),
@@ -900,6 +1007,74 @@ impl App {
         crate::session::save(&s.prefs_dir, &snapshot);
     }
 
+    /// One turn of the vendor-getter poll — the dial backstop and the audio
+    /// self-heal.
+    ///
+    /// WHAT THIS DELIBERATELY DOES NOT TOUCH: PS, RadioText and PTY. CarFM's poll
+    /// does not drive them either, and spells out why — "on this unit those
+    /// getters are worthless: getRtMessage() is a hardcoded \"\" on one manager
+    /// and region-gated on the other, psName stays empty for a passive bound
+    /// client, and getPTYType() returns 0". Nor the stereo pilot, whose getter is
+    /// stuck true (see [`STEREO_SETTLE`]). The snapshot carries all four so a
+    /// diagnostic can show them; none of them reaches the face.
+    ///
+    /// The RDS expiry lives on the 1s heartbeat here rather than in this poll,
+    /// which is where CarFM keeps it. Same rule, a slightly faster clock.
+    fn poll_tuner(self: &Rc<App>) {
+        let snap = self.state.borrow().tuner.snapshot();
+        let Some(snap) = snap else { return };
+        let mut changed = false;
+        {
+            let mut s = self.state.borrow_mut();
+
+            // THE DIAL BACKSTOP. A `notifyCurrentFrequency` that never arrived
+            // leaves the face on a station the radio has left; this is what
+            // notices. Deliberately NOT a retune: the RDS reset belongs to the
+            // callback, and CarFM's poll does not reset it either — it sets the
+            // frequency and nothing else.
+            if let Some(mhz) = snap.mhz {
+                let moved = crate::stations::preset_key(f64::from(mhz))
+                    != crate::stations::preset_key(f64::from(s.dial));
+                if (FM_LO..=FM_HI).contains(&mhz) && moved {
+                    s.dial = mhz;
+                    changed = true;
+                    let at = stamp();
+                    s.settings.log.push(&at, &format!("poll: dial is {mhz:.1}"));
+                }
+            }
+
+            // THE AUDIO SELF-HEAL, and it is the reason this poll exists at all.
+            //
+            // On a head unit the audio is analog and MCU-routed, so Android's
+            // audio focus cannot answer "is FM actually playing" — and after a
+            // permanent AUDIOFOCUS_LOSS the OS never sends a GAIN, so a
+            // focus-driven state goes dark when Android Auto takes over and never
+            // comes back when the MCU hands FM back. The MCU's own source
+            // register is the truth and it heals itself. CarFM:
+            // `if (typeof p.source === 'number' && p.source >= 0 &&
+            //     !userPoweredOffRef.current) setFmAudioActive(p.source === 4);`
+            //
+            // An explicit power-off still wins, which is what `user_powered_off`
+            // is for: without it the poll would switch the radio back on 1.5s
+            // after the driver switched it off.
+            if snap.mcu_source.is_some() && !s.user_powered_off {
+                let playing = snap.fm_is_playing();
+                if s.audio != playing {
+                    s.audio = playing;
+                    changed = true;
+                    let at = stamp();
+                    s.settings.log.push(
+                        &at,
+                        if playing { "poll: the MCU handed FM back" } else { "poll: the MCU took FM away" },
+                    );
+                }
+            }
+        }
+        if changed {
+            self.push_all();
+        }
+    }
+
     fn apply_event(&self, event: TunerEvent) {
         let mut s = self.state.borrow_mut();
         match event {
@@ -931,16 +1106,18 @@ impl App {
                 // a reading minutes old while the car drives out of range —
                 // which is worse than no meter, because it looks live.
                 //
-                // 5s is the Java side's own floor (`LEVEL_MIN_INTERVAL_MS`) and
-                // asking for less just gets clamped. Each tick COMMANDS the
-                // tuner, so the bridge also skips ticks where FM does not own
-                // the MCU source: it can never retune a front end that Bluetooth
-                // or Android Auto is using.
+                // Each tick COMMANDS the tuner, so the bridge skips ticks where
+                // FM does not own the MCU source: it can never retune a front end
+                // that Bluetooth or Android Auto is using.
                 //
                 // Here rather than beside `connect`, for the same reason the
                 // audio claim is: `connect` returning Ok only means bindService
                 // was accepted, and this needs a live binder.
                 s.tuner.start_level_watch(LEVEL_WATCH_MS);
+                // THE GETTER POLL. Started here for the same reason, and stopped
+                // on `Disconnected`: a poll against a dead binder is a timer
+                // waking every 1.5s to be told nothing.
+                s.poll.start(slint::TimerMode::Repeated, POLL_MS, poll_current);
             }
             TunerEvent::Position { lat, lon, fix, in_motion } => {
                 let next = fake::FakeLocation { lat, lon, fix, in_motion };
@@ -975,6 +1152,14 @@ impl App {
                 // Nothing to command, and a watch left running against a dead
                 // binder is a thread waking every five seconds to fail.
                 s.tuner.stop_level_watch();
+                s.poll.stop();
+                // Nor is a post-retune schedule worth finishing against a binder
+                // that has gone: both timers would fire into a tuner that cannot
+                // answer, and the retry budget belongs to the next connection.
+                s.level_first.stop();
+                s.level_correction.stop();
+                s.level_retry.stop();
+                s.level_retries = signal::LEVEL_RETRY_MAX;
                 // The reading it last produced is not a reading of anything now.
                 s.level = None;
                 s.dotted = 0;
@@ -1027,6 +1212,12 @@ impl App {
                     // changes. So the blanking ran far more often than the
                     // refilling, and the pill was almost never lit.
                 }
+                // THE POST-RETUNE READ SCHEDULE, on every frequency report, which
+                // is where CarFM arms it. Unconditional — including on the warm
+                // restore above, where the RDS is kept but the level still has to
+                // be re-measured, because a level is a reading of the air right
+                // now and nothing on disk can stand in for it.
+                arm_level_schedule(&mut s);
                 let line = format!("tuned {:.1}", s.dial);
                 s.settings.log.push(&stamp(), &line);
             }
@@ -1097,7 +1288,44 @@ impl App {
             TunerEvent::Level(l) => {
                 // A reading taken while the tuner was moving is not a reading.
                 if l.trustworthy {
+                    // A good read RE-ARMS the budget, so a rejection later in the
+                    // drive gets its own two attempts rather than inheriting a
+                    // budget some earlier retune spent.
+                    s.level_retries = signal::LEVEL_RETRY_MAX;
                     s.level = Some(l.level);
+                    // CarFM logs every accepted reading with what it becomes on
+                    // the glyph, and suppresses it in debug mode where the
+                    // structured sample carries the same figures. Carnyx has no
+                    // structured sample, so debug mode simply goes quiet here.
+                    if !s.settings.debug_on {
+                        let lit = signal::level_to_lit(Some(f64::from(l.level)));
+                        let shown = signal::describe(lit.as_ref());
+                        let at = stamp();
+                        s.settings.log.push(&at, &format!("level {} @ {} → {shown}", l.level, l.asked));
+                    }
+                } else {
+                    // A REJECTION IS RETRIED, not left to the periodic watch.
+                    //
+                    // On CarFM's drive logs a rejection was almost always
+                    // `landed=0` — the chip saying it was not ready — which the
+                    // next attempt a second later usually clears. Without this, a
+                    // rejected read right after a retune leaves the meter blank
+                    // until the next tick, because the retune already dropped the
+                    // previous reading and there is nothing to fall back on.
+                    let at = stamp();
+                    let why = l.error.as_deref().unwrap_or("");
+                    s.settings.log.push(
+                        &at,
+                        &format!("level: REJECTED asked={} landed={} {why}", l.asked, l.landed),
+                    );
+                    if s.level_retries > 0 {
+                        s.level_retries -= 1;
+                        s.level_retry.start(
+                            slint::TimerMode::SingleShot,
+                            std::time::Duration::from_millis(signal::LEVEL_RETRY_MS),
+                            read_level_current,
+                        );
+                    }
                 }
             }
             TunerEvent::PanelKey { code, key, action } => {
@@ -1593,7 +1821,13 @@ impl App {
             s.dotted = 0;
         }
         self.pump_rds_until_settled();
-        self.read_level();
+        // NO IMMEDIATE READ HERE, and there used to be one.
+        //
+        // It is the reading `signal`'s own measurements say to throw away: +17.7
+        // on average against the same station twenty seconds later, with cases of
+        // +45, +48 and +57. The schedule armed by the frequency report that
+        // follows this tune reads at 1s and corrects at 4s instead, which is
+        // CarFM's answer and the reason those constants were ported.
         self.push_all();
     }
 
@@ -1852,6 +2086,24 @@ impl App {
         self.toggle_save();
     }
 
+    /// Take the post-retune schedule's readings NOW, for the screenshot harness
+    /// only.
+    ///
+    /// The schedule reads at 1s and corrects at 4s off real `slint::Timer`s, and
+    /// the harness renders the frame it builds — so without this every shot that
+    /// tunes would show an empty meter over a station, which is a picture of a
+    /// transient rather than of the face. Four seconds of real waiting per shot,
+    /// across fifty-nine of them, is not a workflow.
+    ///
+    /// It is the schedule's OUTCOME, not a bypass of it: the same
+    /// `tuner.read_level_now()` the 1s timer calls, taken early.
+    pub fn settle_level_for_test(self: &Rc<App>) {
+        self.state.borrow().level_first.stop();
+        self.state.borrow().level_correction.stop();
+        self.read_level();
+        self.push_all();
+    }
+
     /// Save the current dial, or drop it if it is already saved.
     ///
     /// THE STRIP HAS NO LIMIT, and the one that used to be here was never a
@@ -1932,11 +2184,19 @@ impl App {
         s.saved = now;
     }
 
+    /// The power button, and only the power button.
+    ///
+    /// `user_powered_off` is latched here rather than derived from `audio`,
+    /// because the getter poll writes `audio` from the MCU's own source register
+    /// and the two facts have to stay apart: "the driver switched the radio off"
+    /// must outlive "the MCU says FM is not the current source", or the poll
+    /// would switch the radio back on 1.5s after every press.
     fn set_audio(self: &Rc<App>, on: bool) {
         {
             let s = self.state.borrow();
             s.tuner.set_audio_enabled(on);
         }
+        self.state.borrow_mut().user_powered_off = !on;
         self.state.borrow_mut().audio = on;
         self.drain_events();
         self.push_all();

@@ -369,6 +369,22 @@ pub fn meter_face(
     }
 }
 
+/// What a reading became on the glyph, for the diagnostics log.
+///
+/// CarFM's own line, character for character where it can be
+/// (RadioScreen.tsx:2884-2889): `2+half`, `1 dot@45%`, or `?` when the level was
+/// not readable at all. It is written here rather than at the call site because
+/// the same shape appears in this file's spec table, and two spellings of one
+/// format is how a log line and its test stop agreeing.
+pub fn describe(lit: Option<&SignalLit>) -> String {
+    let Some(l) = lit else { return "?".to_string() };
+    let mut out = format!("{}{}", l.full_pairs, if l.half { "+half" } else { "" });
+    if l.dot_opacity < 1.0 {
+        out.push_str(&format!(" dot@{}%", (l.dot_opacity * 100.0).round() as i32));
+    }
+    out
+}
+
 // ── The post-retune read schedule ───────────────────────────────────────────
 //
 // Timings only: the thread that obeys them lives at the framework edge and cannot
