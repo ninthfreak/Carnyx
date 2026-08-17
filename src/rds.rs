@@ -1081,6 +1081,39 @@ mod tests {
         assert_eq!(pty_label(d.state().pty), "Public");
     }
 
+    /// THE PREMISE THE RDS EXPIRY RESTS ON, and getting it wrong left the plate
+    /// blank on a station that was playing perfectly well.
+    ///
+    /// `push` answers `Some` only when something CHANGED. After an expiry the
+    /// face has been cleared but the decoder deliberately has not, so the first
+    /// group back changes nothing in the decoder and `push` says `None` — which
+    /// means a caller that only ever assigns what `push` returns would wait for
+    /// a change that has no reason to come. The way out is `state()`, and this
+    /// pins both halves: the None, and the fact that `state()` still holds the
+    /// station that produced it.
+    #[test]
+    fn a_settled_station_stops_publishing_but_never_stops_knowing() {
+        let mut d = prime(PS_WERN[0]);
+        feed(&mut d, &PS_WERN, 1);
+        feed(&mut d, &PS_WERN, 1);
+        assert_eq!(d.state().ps, "WERN");
+
+        // Another identical cycle. Nothing has changed, so nothing publishes.
+        let mut published = None;
+        for g in PS_WERN {
+            if let Some(p) = d.push(g) {
+                published = Some(p);
+            }
+        }
+        assert!(published.is_none(), "an unchanged station publishes nothing");
+
+        // And yet the decoder still knows exactly who it is listening to. This
+        // is what the expiry's restore reads back.
+        assert_eq!(d.state().ps, "WERN");
+        assert_eq!(d.state().pi, Some(0xa6ff));
+        assert_eq!(d.state().pty, Some(22));
+    }
+
     #[test]
     fn an_incomplete_assembly_never_publishes() {
         let mut d = prime(PS_WERN[0]);

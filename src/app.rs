@@ -800,13 +800,23 @@ impl App {
                 // published or not — a group the consensus gates reject is still
                 // proof that there is a transmitter out there.
                 s.last_rds_at = Some(std::time::Instant::now());
-                s.rds_stale = false;
                 let hex = g
                     .0
                     .iter()
                     .map(|b| format!("{b:04x}"))
                     .collect::<String>();
-                if let Some(published) = s.rds.push(&hex) {
+                let published = s.rds.push(&hex);
+                if std::mem::take(&mut s.rds_stale) {
+                    // THE CARRIER IS BACK. The expiry cleared the face but
+                    // deliberately did NOT reset the decoder, so the decoder
+                    // still holds this station — and `push` returns None when
+                    // nothing CHANGED, which after an expiry is the normal case.
+                    // Without this the plate would stay blank indefinitely while
+                    // a perfectly good station played, waiting for a change that
+                    // has no reason to come. CarFM restores `decoder.state()`
+                    // wholesale here for exactly this reason.
+                    s.rds_state = s.rds.state();
+                } else if let Some(published) = published {
                     s.rds_state = published;
                 }
             }
@@ -814,13 +824,21 @@ impl App {
                 // The vendor's own getter, which is a different path from the
                 // decoded 2A groups and is NOT consensus-gated. It is taken only
                 // when the decoder has published nothing.
-                if s.rds_state.rt.is_empty() {
+                //
+                // AND NOT WHILE STALE. This getter answers from the vendor's own
+                // cache, so after an expiry it hands back the very string the
+                // expiry just removed — the carrier is gone and the text would
+                // come straight back on the next poll. Only a decoded group is
+                // evidence that there is a transmitter out there, and only a
+                // group clears the flag.
+                if s.rds_state.rt.is_empty() && !s.rds_stale {
                     s.rds_state.rt = rt;
                 }
             }
             TunerEvent::Stereo(on) => s.stereo = Some(on),
             TunerEvent::Pty(pty) => {
-                if s.rds_state.pty.is_none() && (0..=31).contains(&pty) {
+                // Same cache, same rule as the vendor RadioText above.
+                if s.rds_state.pty.is_none() && !s.rds_stale && (0..=31).contains(&pty) {
                     s.rds_state.pty = Some(pty as u8);
                 }
             }
@@ -1570,10 +1588,17 @@ impl App {
                 _ => {
                     let at = s.location.position();
                     let row = resolve(s.db.as_ref(), dial, at);
+                    // THE LEARNED MAP IS THE FALLBACK HERE TOO. Saving a preset
+                    // in a driveway with no fix resolves no row, and taking only
+                    // the row left the new tile showing a bare frequency while
+                    // the map on disk knew perfectly well what was on that dial.
+                    let saved_call = row
+                        .as_ref()
+                        .map(|r| r.callsign.clone())
+                        .or_else(|| s.callsigns.get(dial).map(str::to_string));
                     if s.presets.len() >= fake::SEED_PRESET_MHZ.len() {
                         s.presets.remove(0);
                     }
-                    let saved_call = row.as_ref().map(|r| r.callsign.clone());
                     s.presets.push(Slot { mhz: dial, row, saved_call });
                 }
             }
@@ -1913,6 +1938,12 @@ impl App {
         self.push_settings();
     }
 
+    /// One line into the diagnostics log the driver can read.
+    ///
+    /// Named for its first use — reporting a thing this build cannot do — and it
+    /// still does that, but the reorder gesture writes its own trace through it
+    /// too. Anything that has to say something to a person and has nowhere else
+    /// to say it comes here.
     fn log_unavailable(self: &Rc<App>, why: &str) {
         {
             let mut s = self.state.borrow_mut();
