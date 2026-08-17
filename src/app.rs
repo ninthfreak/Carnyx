@@ -418,6 +418,25 @@ struct State {
     last_rds_at: Option<std::time::Instant>,
     /// The carrier has gone quiet. Set by the expiry, cleared by the next group.
     rds_stale: bool,
+    /// The station on the current dial, resolved once per (dial, position).
+    ///
+    /// `resolve` is a SQLite query and `push_hero` runs on EVERY wake from the
+    /// tuner queue — a group every 90ms on a station with RDS — so this was
+    /// eleven index walks a second to answer a question whose two inputs change
+    /// on a retune and on a GPS fix. Measured at 1.70ms of `push_all`'s 1.94ms
+    /// (`examples/pushbench.rs`).
+    resolved: Option<(i32, fake::FakeLocation, Option<StationRow>)>,
+    /// The last view handed to each surface, so a republish that would change
+    /// nothing can stop before it replaces a model.
+    ///
+    /// REPLACING A `ModelRc` IS NOT FREE: Slint tears the repeater's items down
+    /// and builds them again. With the nearby list open that is a hundred rows
+    /// rebuilt and re-rendered per wake, and the measurement is brutal — a wake
+    /// plus a frame costs 7ms with the face alone and 56ms with that list on
+    /// screen, against groups arriving every 90ms.
+    last_nearby: Option<crate::stations::NearbyView>,
+    last_presets: Option<Vec<Preset>>,
+    last_diag: Option<Vec<String>>,
     /// The dial the RDS on screen was RESTORED from, when it came off disk
     /// rather than off the air. See [`crate::session`].
     ///
@@ -800,6 +819,10 @@ impl App {
                         .or_else(|| Some(std::time::Instant::now()))
                 }),
                 rds_stale: false,
+                resolved: None,
+                last_nearby: None,
+                last_presets: None,
+                last_diag: None,
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
                 panel_action: None,
@@ -1482,6 +1505,20 @@ impl App {
 
     /// Publish everything. Cheap enough to do wholesale, and a partial publish is
     /// how a face ends up showing one station's name over another's dial.
+    /// One of `push_all`'s six, by index — for `examples/pushbench.rs` only, so a
+    /// measurement can say WHICH of them costs what without every push having to
+    /// be public.
+    pub fn push_one_for_bench(&self, which: u8) {
+        match which {
+            0 => self.push_hero(),
+            1 => self.push_presets(),
+            2 => self.push_meter(),
+            3 => self.push_nearby(),
+            4 => self.push_settings(),
+            _ => self.push_numpad(),
+        }
+    }
+
     pub fn push_all(&self) {
         self.push_hero();
         self.push_presets();
@@ -1491,10 +1528,37 @@ impl App {
         self.push_numpad();
     }
 
+    /// The station licensed on the dial, from the cache when the dial and the fix
+    /// have not moved.
+    ///
+    /// Both inputs are already tracked — a retune sets `dial`, a fix sets
+    /// `location` — so a miss is exactly as rare as a real change. Cloned out of
+    /// the cell in its own statement, because an `if let` scrutinee holds its
+    /// borrow across the body on edition 2021 and the store below takes a
+    /// mutable one.
+    fn hero_row(&self) -> Option<StationRow> {
+        let (key, loc) = {
+            let s = self.state.borrow();
+            (crate::stations::preset_key(f64::from(s.dial)), s.location)
+        };
+        let hit = self.state.borrow().resolved.clone();
+        if let Some((k, l, row)) = hit {
+            if k == key && l == loc {
+                return row;
+            }
+        }
+        let row = {
+            let s = self.state.borrow();
+            resolve(s.db.as_ref(), s.dial, s.location.position())
+        };
+        self.state.borrow_mut().resolved = Some((key, loc, row.clone()));
+        row
+    }
+
     fn push_hero(&self) {
         let ui = self.ui();
+        let row = self.hero_row();
         let s = self.state.borrow();
-        let row = resolve(s.db.as_ref(), s.dial, s.location.position());
         let st = &s.rds_state;
 
         // IDENTITY ORDER, and it matters: the station database is authoritative
@@ -1592,7 +1656,15 @@ impl App {
             .zip(art.iter())
             .map(|(p, a)| to_preset(p, a.clone()))
             .collect();
-        ui.set_presets(ModelRc::from(Rc::new(VecModel::from(rows))));
+        // Same rule as `push_nearby`: an identical model is still a repeater
+        // rebuilt, and the preset band is on screen the whole time.
+        let same = s.last_presets.as_ref() == Some(&rows);
+        drop(s);
+        if !same {
+            self.state.borrow_mut().last_presets = Some(rows.clone());
+            ui.set_presets(ModelRc::from(Rc::new(VecModel::from(rows))));
+        }
+        let s = self.state.borrow();
 
         let n = s.presets.len() as i32;
         if n == 0 {
@@ -1637,9 +1709,20 @@ impl App {
 
     fn push_nearby(&self) {
         let ui = self.ui();
-        let s = self.state.borrow();
-        let dials: Vec<f32> = s.presets.iter().map(|p| p.mhz).collect();
-        let view = s.picker.view(&dials);
+        let view = {
+            let s = self.state.borrow();
+            let dials: Vec<f32> = s.presets.iter().map(|p| p.mhz).collect();
+            s.picker.view(&dials)
+        };
+        // NOTHING CHANGED, SO NOTHING IS REPLACED. Every `set_*` below hands
+        // Slint a new model, and a new model is a repeater rebuilt — a hundred
+        // rows torn down and constructed again, per wake, whether or not one
+        // character of them differs. The published state is identical either way;
+        // this only stops the churn. See `State::last_nearby`.
+        if self.state.borrow().last_nearby.as_ref() == Some(&view) {
+            return;
+        }
+        self.state.borrow_mut().last_nearby = Some(view.clone());
 
         // ALL NINE, OR NONE. They are derived from one state and are only
         // consistent published together — a stale chip list against a fresh row
@@ -1751,7 +1834,15 @@ impl App {
         ui.set_settings_diag_overlay_on(cfg.diag_overlay_on);
         ui.set_settings_rds_capture_on(cfg.rds_capture_on);
         ui.set_settings_debug_on(cfg.debug_on);
-        ui.set_settings_diag_lines(strings(&cfg.log.lines()));
+        // The log is a 200-line ring and this is a 200-string model. Same rule
+        // again, and it matters most here: the diagnostics overlay is the one a
+        // driver leaves open while watching the radio misbehave. The cache write
+        // waits until the borrow is released, at the foot of this function.
+        let lines = cfg.log.lines();
+        let diag_changed = s.last_diag.as_ref() != Some(&lines);
+        if diag_changed {
+            ui.set_settings_diag_lines(strings(&lines));
+        }
         ui.set_settings_diag_actions(ModelRc::from(Rc::new(VecModel::from(
             cfg.actions(nwd_active)
                 .iter()
@@ -1770,8 +1861,12 @@ impl App {
             )
             .into(),
         );
-        // The borrow above must be released before `save_prefs` takes its own.
+        // The borrow above must be released before `save_prefs` takes its own —
+        // and before the diagnostics cache is written back.
         drop(s);
+        if diag_changed {
+            self.state.borrow_mut().last_diag = Some(lines);
+        }
         self.save_prefs();
     }
 
