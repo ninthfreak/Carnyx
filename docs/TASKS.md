@@ -408,36 +408,94 @@ set from one drive. Needs real group captures from the unit to tune against; do
 not start it before #26.
 
 ### 67. Get a foreground service and a boot receiver into the APK
-**PENDING.** Carnyx does not survive being switched away from: return and the
-face redraws and the RadioText re-decodes. CarFM survives because
-`VibeStreamService` runs in the foreground even on the built-in tuner
-(`startNwdControlSession` → `startForegroundMedia` → `startForeground`), which
-pins the process above the launcher's cleaner and the low-memory killer.
-**cargo-apk cannot declare either component** — `ndk_build::manifest::Application`
-has one activity and no `service`, `receiver` or `provider` field, and there is no
-custom-manifest escape hatch. The same absence blocks CarFM's `BootReceiver`,
-which is what brings the app back when the unit wakes on ACC. Needs the APK built
-by something that can write its own manifest: Gradle, or a forked cargo-apk. Until
-then `src/session.rs` survives the restart instead of preventing it, and the
-`session:` line at the top of the log says which of the two restarts happened.
+**THE SERVICE IS IN. THE RECEIVER IS NOT.** Half done, and the half that is done
+is the one that answers "the app looks like it starts fresh when I switch back".
 
-**GRADLE SPIKE CONFIRMED ON THE UNIT.** `android/` holds a complete Gradle build
-of the same APK — wrapper checked in, `tools/build-apk-gradle.sh` runs
-`cargo ndk`, strips, then `gradlew assembleDebug`. It installed over the
-cargo-apk build and ran; the owner's words were "the most complete Carnyx yet".
-So the packager question is settled and the service and receiver are now
-buildable. They are written into `AndroidManifest.xml` as comments, with the
-permissions and API-34 typing each needs, and go in next.
+**What landed.** `android/app/src/main/java/com/ninthfreak/carnyx/CarnyxService.java`
+is a real foreground service, declared in the Gradle manifest with
+`foregroundServiceType="mediaPlayback"` and the three permissions it needs.
+`java/com/ninthfreak/carnyx/CarnyxProcess.java` starts it, `src/android/service.rs`
+binds that over JNI, and `src/lib.rs` calls it once at start-up — after
+`App::with_tuner`, so the notification can carry the dial, and still while the
+activity is in front, because from Android 12 a background
+`startForegroundService` throws.
 
-The risk that mattered was checked beforehand and was absent: Slint resolves to
-plain `NativeActivity`, not GameActivity (`slint-1.17.1/Cargo.toml:64-68` →
-`i-slint-backend-android-activity/native-activity`), and `android.app.NativeActivity`
-is a framework class with no dependency to add. The whole contract between
-packager and Rust turned out to be two lines cargo-apk emits: the activity class
-and the `android.app.lib_name` meta-data.
+**THE PART THAT IS NOT OBVIOUS: it takes THREE files because Android has two
+class loaders here.** Everything in `java/` is dexed by `build.rs`, embedded with
+`include_bytes!` and loaded at run time by an `InMemoryDexClassLoader` — that is
+how a pure NativeActivity reaches binder at all. A manifest-declared component
+cannot live there: Android constructs one through the APPLICATION's class loader,
+which has never heard of a loader Rust built after start-up, so a service class
+in the runtime dex is a `ClassNotFoundException` every time the system tries to
+construct it. So `CarnyxService` is in the GRADLE source set (AGP compiles it into
+the APK's own dex) and only the starter is in the runtime dex. The starter names
+the service by STRING through a `ComponentName`, so neither tree has to resolve
+into the other at compile time.
 
-**Five things bit on the way, all now handled in the script**, and each cost a
-round trip because none of them fails where it is caused:
+**ONLY THE GRADLE BUILD HAS IT.** cargo-apk packages no Java and has no `service`
+field, so under `cargo apk` the class is genuinely absent and the platform refuses
+the component. That path is expected, caught, and logged at info — the app runs
+exactly as before. `tools/build-apk-gradle.sh` is now the build to use on the
+unit, and its header says so.
+
+**POST_NOTIFICATIONS is declared and deliberately never requested.** A runtime
+request needs someone to tap Allow, which on a dashboard at night is nobody — the
+manifest's own note about location, applied here. When it is absent the platform
+suppresses the service's notification but STILL RUNS THE SERVICE IN THE
+FOREGROUND, and the foreground is the entire point. Declaring it lets a driver who
+wants the line grant it in Settings; nothing depends on their doing so.
+
+**`session.rs` is NOT retired and its header now says why.** The service prevents
+the restarts it can; it makes a process expensive to kill, not unkillable, and it
+does not exist at all in the cargo-apk build. The restore covers the rest. That
+file previously said Carnyx "CANNOT HAVE" a service — true of cargo-apk, written
+before the Gradle spike, and corrected.
+
+**WHAT WAS AND WAS NOT VERIFIED — read this before trusting any of it.** There is
+no Android SDK and no NDK on the machine this was written on, so:
+
+- Both Java files compile CLEAN against a real Android API-34 framework jar
+  (`org.robolectric:android-all:14-robolectric-10818077`, fetched for the check
+  and not vendored), with `-Xlint:all` and no diagnostic in our sources. One
+  deprecation was found and removed that way: `Notification.Builder.setPriority`
+  has been dead since API 26, where the channel's importance governs, and 26 is
+  this app's floor.
+- `javap` confirmed the two JNI descriptors the Rust names —
+  `(Landroid/content/Context;)V` and `(Ljava/lang/String;)Z` — are the ones the
+  compiled class actually carries.
+- The manifest parses as XML.
+- The RUST IS NOT COMPILED FOR THE TARGET. `cargo check --target
+  armv7-linux-androideabi` cannot run here: skia-bindings needs an NDK. Every JNI
+  construct in `service.rs` is copied verbatim from `nwd.rs` or `net.rs` rather
+  than composed, which is the most it can be held to without a device.
+- NOTHING HAS RUN. Not the service, not the notification, not the start call.
+
+**Still open — the receiver.** So the app comes back when the unit wakes:
+
+    <receiver android:name=".WakeReceiver"
+              android:exported="true" android:enabled="true">
+        <intent-filter>
+            <action android:name="com.nwd.ACTION_OS_WAKE_UP" />
+            <action android:name="android.intent.action.BOOT_COMPLETED" />
+        </intent-filter>
+    </receiver>
+
+`com.nwd.ACTION_OS_WAKE_UP` is the one that matters and BOOT_COMPLETED is the
+fallback, not the other way round: CarFM's manifest records that THIS UNIT SLEEPS
+on ACC-off rather than shutting down, so BOOT_COMPLETED never fires on an ignition
+cycle (CarFM `android/app/src/main/AndroidManifest.xml:91-94`). It has to be a
+manifest receiver, because the process is killed while the unit sleeps and only a
+manifest-declared receiver gets restarted. It goes in the Gradle source set beside
+the service, for the same class-loader reason.
+
+**Also worth doing, now that the service exists:** the notification line is set
+once at start-up and never updated, so it shows the dial the app opened on. Wiring
+`service::start` to re-post on tune is a few lines (calling it again updates the
+notification); it was left out because the process pinning is what #67 is for and
+a live line is a separate promise.
+
+**FIVE THINGS BIT DURING THE GRADLE SPIKE**, all handled in the script, and each
+cost a round trip because none of them fails where it is caused:
 
 1. `command -v cargo-ndk` asked the wrong question — it is a cargo SUBCOMMAND.
 2. `ANDROID_PLATFORM` PINS `android_jar`'s lookup, so a level you do not have
@@ -474,10 +532,10 @@ round trip because none of them fails where it is caused:
 
 Signing needed nothing: cargo-apk and AGP both default to
 `~/.android/debug.keystore`, alias `androiddebugkey`, so the certificate matches
-and app data survives the swap.
-
-**cargo-apk remains the default build until the service lands**, and the two
-manifests are kept in parity by hand.
+and app data survives the swap. The risk that mattered was checked beforehand and
+was absent: Slint resolves to plain `NativeActivity`, not GameActivity
+(`slint-1.17.1/Cargo.toml:64-68` → `i-slint-backend-android-activity/native-activity`),
+and `android.app.NativeActivity` is a framework class with no dependency to add.
 
 ### 68. Build a stripped release APK for both ABIs
 **PENDING.** armv7-linux-androideabi and aarch64-linux-android. The unit is

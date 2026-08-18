@@ -1,15 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Parity with what cargo-apk generates, and nothing more.
+  The Gradle manifest. Parity with what cargo-apk generates, PLUS the foreground
+  service — which is the one thing cargo-apk cannot express and the reason for
+  moving packagers at all.
 
-  This is a SPIKE. Its only question is whether a Gradle-packaged APK boots
-  Slint's `android_main` on the head unit exactly as the cargo-apk one does, so
-  every element below is a faithful copy of what `[package.metadata.android]`
-  produces today. The foreground service and the wake receiver — the reason for
-  moving packagers at all — go in AFTER that question is answered, not alongside
-  it, because a spike that changes two things cannot tell you which one failed.
+  It began as a spike whose only question was whether a Gradle-packaged APK boots
+  Slint's `android_main` on the head unit exactly as the cargo-apk one does. It
+  does; it installed over the cargo-apk build and ran. So the service (#67) is
+  now declared here for real, and THIS FILE IS NO LONGER A COPY OF THE OTHER ONE:
+  an APK built by cargo-apk has no service and no `CarnyxService` class, and the
+  app detects that at run time rather than assuming either build.
 
-  Where the service and receiver will go is marked at the bottom.
+  The wake receiver is still to come; see the note at the bottom.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -28,6 +30,28 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
+      THE FOREGROUND SERVICE'S THREE PERMISSIONS, and they are not alike.
+
+      FOREGROUND_SERVICE is normal and granted at install. From API 34 it is not
+      enough on its own: a service that declares a `foregroundServiceType` must
+      also hold the matching FOREGROUND_SERVICE_* permission, or `startForeground`
+      throws — hence the second line, paired with `mediaPlayback` below.
+
+      POST_NOTIFICATIONS is the odd one. It is a RUNTIME permission from API 33,
+      and this app never asks for it: the note on location above applies word for
+      word — a request "needs someone to tap Allow, which on a dashboard at night
+      is nobody". Declaring it without requesting it is deliberate and is not the
+      dead-permission smell the note at the bottom of this file warns about. When
+      it is absent the platform suppresses the service's notification but STILL
+      RUNS THE SERVICE IN THE FOREGROUND, and the foreground is the entire point;
+      declaring it is what lets a driver who wants the line turn it on in
+      Settings. Nothing in the app depends on their doing so.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
       PACKAGE VISIBILITY, load-bearing rather than defensive. From targetSdk 30
@@ -89,22 +113,36 @@
         </activity>
 
         <!--
-          ── WHAT COMES NEXT, ONCE THIS BOOTS (#67) ────────────────────────────
-
-          A foreground service, so the process is not a candidate for the
+          THE FOREGROUND SERVICE (#67), so the process is not a candidate for the
           launcher's cleaner or the low-memory killer and the face is still in RAM
-          when the driver comes back:
+          when the driver comes back.
 
-              <service android:name=".CarnyxService"
-                       android:foregroundServiceType="mediaPlayback"
-                       android:exported="false" />
+          `exported="false"`: nothing outside this app has any business starting
+          it. It is started by `CarnyxProcess` from the runtime dex, by
+          ComponentName, at app start-up.
 
-          It needs FOREGROUND_SERVICE and FOREGROUND_SERVICE_MEDIA_PLAYBACK
-          above, a notification channel (API 26+), POST_NOTIFICATIONS on API 33+,
-          and an explicit-type `ServiceCompat.startForeground` call — CarFM does
-          not let the 2-arg form infer the type (VibeStreamService.kt:394-400).
+          `mediaPlayback` is the honest type. The audio bytes never pass through
+          this process — they are analog and MCU-routed — but the unit is playing
+          FM BECAUSE this app claimed the source, and CarFM types its own
+          equivalent service the same way while carrying no audio either
+          (VibeStreamService.kt:726-739). The type is also load-bearing from API
+          34, which pairs it with FOREGROUND_SERVICE_MEDIA_PLAYBACK above.
 
-          And a receiver, so the app comes back when the unit wakes:
+          THE CLASS IS COMPILED BY AGP, from android/app/src/main/java/. It cannot
+          be one of the classes in `java/`: those are dexed by build.rs and loaded
+          at run time by an InMemoryDexClassLoader, and Android constructs a
+          manifest-declared component through the APPLICATION's class loader,
+          which has never heard of it.
+        -->
+        <service
+            android:name=".CarnyxService"
+            android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+
+        <!--
+          ── STILL TO COME (#67's other half) ──────────────────────────────────
+
+          A receiver, so the app comes back when the unit wakes:
 
               <receiver android:name=".WakeReceiver"
                         android:exported="true" android:enabled="true">
@@ -122,8 +160,8 @@
           manifest receiver, because the process is killed while the unit sleeps
           and only a manifest-declared receiver gets restarted.
 
-          Neither is declared yet. A permission or a component with nothing behind
-          it is a prompt the driver answers for no reason.
+          Not declared yet. A component with nothing behind it is worse than an
+          absent one.
         -->
     </application>
 </manifest>

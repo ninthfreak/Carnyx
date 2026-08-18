@@ -198,6 +198,27 @@ fn android_main(android_app: slint::android::AndroidApp) {
         fake::FakeLocation::no_fix(),
     );
 
+    // THE FOREGROUND SERVICE (#67). A process with one is not a candidate for
+    // the launcher's cleaner or the low-memory killer, which is the fault
+    // `session.rs` currently survives rather than prevents.
+    //
+    // AFTER `with_tuner`, NOT BEFORE, for the notification's sake: the dial is
+    // whatever the restore or the tuner's first report settled on, and the face
+    // has it by now. Still start-up, so still in front — which is the constraint
+    // that matters, because from Android 12 a background `startForegroundService`
+    // throws.
+    //
+    // Every failure here is ordinary and none is branched on. Under the DEFAULT
+    // cargo-apk build the service class is not in the APK at all — cargo-apk
+    // packages no Java — so the platform refuses the component and the app
+    // behaves exactly as it did before this existed. That is why `session.rs`
+    // stays: this prevents the restarts it can, and the restore covers the rest.
+    //
+    // SAFETY: same pointers, same lifetime argument as the tuner above.
+    if unsafe { android::service::init(vm, activity) }.is_ok() {
+        android::service::start(ui.get_freq_label().as_str());
+    }
+
     // REAL POSITION, if this unit will give one.
     //
     // `start` returning false is NOT the end of it, and treating it as such is

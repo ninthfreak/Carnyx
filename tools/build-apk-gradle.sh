@@ -12,6 +12,13 @@
 # WHY THIS EXISTS: cargo-apk cannot declare a <service> or a <receiver>, so it
 # cannot produce the foreground service that stops the app being killed when you
 # switch away from it. See android/settings.gradle.kts and task #67.
+#
+# THAT SERVICE IS NOW REAL, AND ONLY THIS SCRIPT PRODUCES IT. The APK this builds
+# declares <service android:name=".CarnyxService"> and carries the class AGP
+# compiles from android/app/src/main/java/. An APK from `cargo apk` has neither,
+# and the app detects that at run time — it logs "no foreground service on this
+# build" and carries on. So the two builds are no longer interchangeable: use
+# this one on the unit unless you are specifically testing the other.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

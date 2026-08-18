@@ -43,6 +43,8 @@ pub mod location;
 pub mod net;
 #[cfg(target_os = "android")]
 pub mod nwd;
+#[cfg(target_os = "android")]
+pub mod service;
 
 #[cfg(target_os = "android")]
 pub use nwd::{init, NwdTuner};

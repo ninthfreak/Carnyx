@@ -14,10 +14,21 @@
 //! candidate for the launcher or the low-memory killer, so switching away and
 //! back was a resume with every byte of state still in RAM.
 //!
-//! Carnyx has no service, and it CANNOT HAVE ONE while it is packaged by
-//! cargo-apk — see the `config_changes` comment in `Cargo.toml` for the schema
-//! that makes that impossible. So the restart is, for now, a fact to be survived
-//! rather than a bug to be fixed, and this file is what survives it.
+//! CARNYX NOW HAS ONE TOO — `src/android/service.rs` and #67 — and this file did
+//! not become redundant when it landed. Two things changed and neither retires
+//! the restore:
+//!
+//! 1. The service only exists in the GRADLE build. cargo-apk packages no Java
+//!    and its manifest schema has no `service` field (see the `config_changes`
+//!    comment in `Cargo.toml`), so an APK built the default way still has no
+//!    service and still takes every restart this file was written for.
+//! 2. A foreground service makes a process EXPENSIVE TO KILL, not unkillable.
+//!    The unit sleeps on ACC-off and the process goes with it; a driver can stop
+//!    the app; the low-memory killer will still take it under real pressure. The
+//!    service prevents the restarts it can and this file survives the rest.
+//!
+//! So the two are a pair, not alternatives, and the `session:` line at the top of
+//! the log still says which restart happened.
 //!
 //! ## What is stored, and what is deliberately not
 //!

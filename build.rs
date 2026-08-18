@@ -1,6 +1,16 @@
 //! Carnyx's build script: the Slint compile, and — for Android targets only —
-//! the Java half of the NWD tuner, turned into a dex that gets embedded in the
-//! shared library.
+//! the Java this library loads at run time, turned into a dex that gets embedded
+//! in the shared library.
+//!
+//! THERE ARE TWO JAVA TREES AND THIS ONE COMPILES ONLY ITS OWN. `java/` is what
+//! is dexed and embedded here: the NWD tuner bridge, HTTPS, location, and the
+//! starter for the foreground service. `android/app/src/main/java/` is compiled
+//! by AGP into the APK's own dex instead, and holds exactly one class —
+//! `CarnyxService` — because Android constructs a manifest-declared component
+//! through the APPLICATION's class loader, which has never heard of the
+//! `InMemoryDexClassLoader` this file's output is loaded into. Adding a service
+//! or a receiver to `JAVA_SOURCES` below would compile and then fail at run time
+//! with a ClassNotFoundException the moment the system tried to construct it.
 //!
 //! ## Why a build script compiles Java at all
 //!
@@ -36,7 +46,8 @@ use std::process::Command;
 
 use android_build::{Dexer, JavaBuild};
 
-/// The Java sources that are ours, relative to `java/`. The two `com/nwd/...`
+/// The Java sources that are ours, relative to `java/` — the RUNTIME dex only;
+/// see the header for the tree this one is not. The two `com/nwd/...`
 /// parcelables are vendor interface code under the interop scope rule recorded
 /// in their own headers; they are listed here because javac needs them, not
 /// because they are ours.
@@ -44,6 +55,7 @@ const JAVA_SOURCES: &[&str] = &[
     "com/ninthfreak/carnyx/NwdBridge.java",
     "com/ninthfreak/carnyx/CarnyxLocation.java",
     "com/ninthfreak/carnyx/CarnyxNet.java",
+    "com/ninthfreak/carnyx/CarnyxProcess.java",
     "com/nwd/radio/service/data/Frequency.java",
     "com/nwd/radio/service/data/RadioPoint.java",
 ];
