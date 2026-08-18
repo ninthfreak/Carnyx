@@ -2,6 +2,31 @@ plugins {
     id("com.android.application")
 }
 
+// ── THE VERSION, DERIVED THE WAY cargo-apk DERIVES IT ───────────────────────
+//
+// Not cosmetic, and not free to pick. cargo-apk packs the crate's semver into a
+// versionCode as (apk_id << 24) | (major << 16) | (minor << 8) | patch with
+// apk_id = 1 (ndk-build-0.10.0 src/cargo.rs:146-151), so 0.1.0 becomes
+// 16777472 — not 1.
+//
+// Android refuses to install a lower versionCode over a higher one. A hand-
+// written `versionCode = 1` here would be a DOWNGRADE against any APK already
+// on the unit from cargo-apk, refused with INSTALL_FAILED_VERSION_DOWNGRADE —
+// which a USB-stick sideload reports as nothing but "App not installed".
+//
+// So it is computed from the same source, and the two packagers stay
+// interchangeable in both directions.
+val cargoVersion: String = file("../../Cargo.toml").readLines()
+    .first { it.startsWith("version = ") }
+    .substringAfter('"')
+    .substringBefore('"')
+
+val cargoVersionCode: Int = cargoVersion
+    .split('.', '-', '+')
+    .take(3)
+    .map { it.toInt() }
+    .let { (major, minor, patch) -> (1 shl 24) or (major shl 16) or (minor shl 8) or patch }
+
 android {
     // AGP 8 took `package` out of the manifest; this is where it lives now. It
     // must stay `com.ninthfreak.carnyx` — the same id cargo-apk emits — or the
@@ -16,11 +41,8 @@ android {
         // note in ../../Cargo.toml. The manifest and the .so have to agree on it.
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        // Tracks `version` in ../../Cargo.toml. Two places, deliberately: Gradle
-        // cannot read Cargo.toml without a parser, and a wrong string here is
-        // cosmetic where a wrong `minSdk` is not.
-        versionName = "0.1.0"
+        versionCode = cargoVersionCode
+        versionName = cargoVersion
 
         // THE HEAD UNIT IS 32-BIT ARM. Dropping armeabi-v7a produces an APK that
         // will not install at all (INSTALL_FAILED_NO_MATCHING_ABIS), which the

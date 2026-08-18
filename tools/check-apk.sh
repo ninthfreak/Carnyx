@@ -135,6 +135,24 @@ if [[ -z "$apksigner" ]]; then
   note "SKIP" "no apksigner found"
 elif "$apksigner" verify "$APK" >/dev/null 2>&1; then
   note "OK" "signed"
+  # WHICH KEY, not just whether. Android refuses to install an APK over one
+  # signed by a different certificate — INSTALL_FAILED_UPDATE_INCOMPATIBLE,
+  # reported on the unit as "App not installed" and nothing else. Two packagers
+  # build this app now, and they only interoperate while both sign with the same
+  # debug key. Print the digest so two APKs can be compared without adb.
+  certs=$("$apksigner" verify --print-certs "$APK" 2>/dev/null)
+  sha=$(sed -n 's/.*certificate SHA-256 digest: *//p' <<< "$certs" | head -1)
+  dn=$(sed -n 's/.*certificate DN: *//p' <<< "$certs" | head -1)
+  [[ -n "$dn" ]] && note "" "signer: $dn"
+  [[ -n "$sha" ]] && note "" "SHA-256: $sha"
+  # Both cargo-apk and Gradle default to ~/.android/debug.keystore with the alias
+  # androiddebugkey, so this is the expected debug identity for both.
+  if [[ "$dn" == *"CN=Android Debug"* ]]; then
+    note "OK" "the standard debug key — the other packager's APK will match"
+  elif [[ -n "$dn" ]]; then
+    note "" "(not the standard debug key; compare this digest against the APK"
+    note "" " already on the unit before installing over it)"
+  fi
 else
   note "FAIL" "not signed, or the signature does not verify"
   fail=1
