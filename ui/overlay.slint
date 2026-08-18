@@ -82,6 +82,10 @@ export component OverlayHeader inherits Rectangle {
     in property <length> pad-v: 0px;
     in property <length> head-height: Metrics.s(78);
     in property <bool> show-close: true;
+    /// The gap between the slot and the ✕. 12 on the three headers that hold a
+    /// title, and a property because the tune overlay's tab bar states its own
+    /// (mini-handoff §3, `margin-right: 16dp`, narrow 12).
+    in property <length> spacing: Metrics.s(12);
 
     callback close();
 
@@ -93,7 +97,7 @@ export component OverlayHeader inherits Rectangle {
         padding-right: root.pad-h;
         padding-top: root.pad-v;
         padding-bottom: root.pad-v;
-        spacing: Metrics.s(12);
+        spacing: root.spacing;
 
         VerticalLayout {
             horizontal-stretch: 1;

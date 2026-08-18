@@ -52,9 +52,9 @@ export struct HeroSnapshot {
 /// way `NearbyState` replaced the picker's overlapping ones.
 export enum Overlay {
     none,
-    /// §6.1 direct-entry numpad.
-    numpad,
-    /// §6.2 nearby-stations picker.
+    /// §6.2 nearby-stations picker — BOTH tabs. The direct-entry keypad used to be
+    /// a fifth value here and its own modal; the mini-handoff folds it into this
+    /// one as a tab, so there is nothing left for a `numpad` value to open.
     nearby,
     /// §6.3 settings panel.
     settings,

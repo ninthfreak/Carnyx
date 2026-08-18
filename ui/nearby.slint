@@ -27,7 +27,19 @@
 
 import { Pal, Metrics } from "tokens.slint";
 import { OverlayCard, OverlayHeader, OverlayBody, OverlayFooter } from "overlay.slint";
+import { FreqPad } from "numpad.slint";
 import { SignalWaves, StarIcon } from "icons.slint";
+
+/// Which half of the tune overlay is showing (mini-handoff §6, `tab`).
+///
+/// The overlay always OPENS on `nearby` — the magnifier-with-tower button in the
+/// status bar is the only way in, and §2 says so — and `freq` is reached by
+/// tapping the second tab. There is no other entry point: the hero's frequency is
+/// display-only text now, and the standalone keypad modal it used to open is gone.
+export enum NearbyTab {
+    nearby,
+    freq,
+}
 
 /// Which of the five mutually exclusive bodies the picker is showing.
 ///
@@ -474,6 +486,68 @@ component StationRow inherits Rectangle {
 // ── Waiting indicator ────────────────────────────────────────────────────────
 
 /// One dot of the busy indicator.
+/// One of the two header tabs (mini-handoff §3).
+///
+/// A label over a hint, both single-line and ellipsized. The ellipsis is not
+/// decoration: an un-elided Text reports its full width as its MINIMUM, so on a
+/// narrow card the pair would refuse to shrink and push the ✕ off the end — the
+/// same reason the title and subtitle it replaces both elide.
+///
+/// THE HINT STAYS `dim` IN BOTH STATES. §3 makes that a contrast rule rather than
+/// a style choice: blue hint text on the active tab's `blueFill` measured 2.3:1
+/// and was rejected. The border, the fill and the blue LABEL are the whole active
+/// tell.
+component TabButton inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> active: false;
+    in property <bool> narrow: false;
+
+    callback clicked();
+
+    horizontal-stretch: 1;
+    min-width: 0px;
+    min-height: Metrics.s(root.narrow ? 50 : 58);
+    border-radius: Metrics.s(12);
+    // 1.5px active / 1px inactive. A border weight, so it stays raw px like the
+    // pill borders in status-bar.slint and ActionButton's own TUNE.
+    border-width: root.active ? 1.5px : 1px;
+    border-color: root.active ? Pal.blue : Pal.border;
+    background: root.active ? Pal.blue-fill : transparent;
+    opacity: touch.pressed ? 0.55 : 1.0;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    VerticalLayout {
+        padding-left: Metrics.s(root.narrow ? 12 : 16);
+        padding-right: Metrics.s(root.narrow ? 12 : 16);
+        padding-top: Metrics.s(root.narrow ? 7 : 8);
+        padding-bottom: Metrics.s(root.narrow ? 7 : 8);
+        spacing: Metrics.s(2);
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: Metrics.s(root.narrow ? 17 : 20);
+            font-weight: 700;
+            color: root.active ? Pal.blue : Pal.text;
+            overflow: elide;
+        }
+        Text {
+            text: root.hint;
+            font-size: Math.max(11px, Metrics.s(root.narrow ? 12 : 13));
+            font-weight: 400;
+            letter-spacing: 0.3px;
+            color: Pal.dim;
+            overflow: elide;
+        }
+    }
+}
+
 component PulseDot inherits Rectangle {
     in property <duration> phase;
 
@@ -527,6 +601,9 @@ export component NearbyOverlay inherits Rectangle {
     // ── Data ──
     /// The rows to draw: already filtered to the current bucket and genre, already
     /// sorted best-signal-first by `rankNearby`'s score. Drawn in arrival order.
+    /// Which tab is up. Host-controlled — §6 says the overlay never owns this in
+    /// the app, only in a preview.
+    in property <NearbyTab> tab: NearbyTab.nearby;
     in property <[NearbyStation]> stations;
     in property <NearbyState> state: NearbyState.list;
     /// The FCC snapshot date, already formatted — "2026-06-14". Empty when there
@@ -567,8 +644,29 @@ export component NearbyOverlay inherits Rectangle {
     /// The back-arrow chip: bucket back to All, genre cleared. A callback of its
     /// own rather than `pick-bucket("All")`, so no bucket label is written down here.
     callback reset-bucket();
-    /// The ✕, the scrim, and every row tap.
+    /// The ✕, the scrim, and every row tap — from the NEARBY tab. §5 splits the
+    /// two: dismissing from the frequency tab abandons entry instead, which is
+    /// `cancel-tune`.
     callback close();
+    /// A tab was tapped. The host sets `tab`; this never sets it itself.
+    callback set-tab(NearbyTab);
+
+    // ── The frequency tab ──
+    //
+    // Straight through to FreqPad, which is where every one of these is
+    // documented. They live on the overlay because §6 puts them on the overlay's
+    // own contract: the tuner state stays in the host.
+    in property <string> freq-display;
+    in property <bool> freq-display-dim: true;
+    in property <bool> freq-error: false;
+    in property <string> freq-error-text;
+    callback freq-key(string);
+    callback freq-back();
+    callback freq-seek(int);
+    callback freq-commit();
+    /// CANCEL, and the ✕ and the scrim while this tab is up. §5: it abandons
+    /// entry and restores the frequency the tab opened on.
+    callback freq-cancel();
 
     // Per-instance metrics that follow the §6.2 width track. `narrow` is decided
     // from the RESOLVED card width, where the geometry is — a layout track like
@@ -619,6 +717,16 @@ export component NearbyOverlay inherits Rectangle {
     function hold-stop() {
         hold.running = false;
     }
+    /// §5's split dismissal. The ✕ and the scrim mean "close" on the nearby tab
+    /// and "abandon entry" on the frequency one, and only the caller knows which
+    /// is up — so the branch is here rather than duplicated at both call sites.
+    function dismissed() {
+        if (root.tab == NearbyTab.freq) {
+            root.freq-cancel();
+        } else {
+            root.close();
+        }
+    }
     function row-tapped(i: int) {
         hold.running = false;
         // A hold that already fired consumes the release, the way RN's Pressable
@@ -638,7 +746,7 @@ export component NearbyOverlay inherits Rectangle {
         // which is 24 here as on every overlay.
         design-width: 900;
         design-height: 600;
-        close => { root.close(); }
+        close => { root.dismissed(); }
 
         // ONE child, not four. OverlayCard stacks whatever it is given vertically,
         // but three of this picker's bands are conditional, and a conditional
@@ -652,38 +760,44 @@ export component NearbyOverlay inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 1;
 
-            // ── header ──
+            // ── header = the tab bar ──
+            //
+            // §3: no separate title/subtitle block any more. One row — two tabs,
+            // then the ✕ — over the same 1dp rule the other overlays have.
+            // `head-height` is a MINIMUM (see OverlayHeader), and it is stated so
+            // the row cannot collapse below the tabs' own 58dp box plus its
+            // padding even before the two Texts are measured.
             OverlayHeader {
-                // A MINIMUM (see OverlayHeader) — dc.html `headerStyle.height`.
-                head-height: Metrics.s(card.narrow ? 62 : 78);
-                pad-h: Metrics.s(card.narrow ? 18 : 28);
-                pad-v: 0px;
-                close => { root.close(); }
+                head-height: Metrics.s(card.narrow ? 70 : 82);
+                pad-h: Metrics.s(card.narrow ? 14 : 20);
+                pad-v: Metrics.s(card.narrow ? 10 : 12);
+                // §3's `margin-right: 16dp (narrow 12)` — the gap between the tab
+                // pair and the ✕, which is this row's own spacing.
+                spacing: Metrics.s(card.narrow ? 12 : 16);
+                close => { root.dismissed(); }
 
-                VerticalLayout {
-                    // dc.html `headerLeftStyle.gap`; the TSX uses a 1dp margin.
-                    spacing: Metrics.s(4);
+                HorizontalLayout {
+                    // §3's `gap: 10dp` BETWEEN the two tabs, which is not the same
+                    // as the gap to the ✕ above.
+                    spacing: Metrics.s(10);
 
-                    Text {
-                        text: "Nearby stations";
-                        font-size: Metrics.s(card.narrow ? 21 : 26);
-                        font-weight: 700;
-                        color: Pal.text;
-                        // Both title and subtitle elide. Not decoration: an
-                        // un-elided Text reports its full width as its MINIMUM, so
-                        // on a narrow card the header would refuse to shrink and
-                        // push the ✕ off the end.
-                        overflow: elide;
+                    TabButton {
+                        label: "Nearby stations";
+                        // §3's hint copy, narrow variant included. Single spaces
+                        // around the interpunct, as in the subtitle this replaces.
+                        hint: card.narrow
+                            ? "Tap to tune · hold to save"
+                            : "Tap to tune · hold to save a preset · best signal first";
+                        active: root.tab == NearbyTab.nearby;
+                        narrow: card.narrow;
+                        clicked => { root.set-tab(NearbyTab.nearby); }
                     }
-                    Text {
-                        // Single spaces around the interpunct, per §6.2 and the TSX.
-                        // The dc.html doubles them; two sources to one.
-                        text: "Tap to tune · hold to save a preset · best signal first";
-                        font-size: Math.max(12px, Metrics.s(14));
-                        font-weight: 400;
-                        letter-spacing: 0.3px;
-                        color: Pal.dim;
-                        overflow: elide;
+                    TabButton {
+                        label: "Enter frequency";
+                        hint: "Type a frequency, or seek";
+                        active: root.tab == NearbyTab.freq;
+                        narrow: card.narrow;
+                        clicked => { root.set-tab(NearbyTab.freq); }
                     }
                 }
             }
@@ -694,7 +808,7 @@ export component NearbyOverlay inherits Rectangle {
             // horizontally scrolling with its scrollbar hidden. Bottom padding is
             // deliberately 0 — the list's own top padding supplies the gap to the
             // first row.
-            if root.show-bucket-bar: Rectangle {
+            if root.tab == NearbyTab.nearby && root.show-bucket-bar: Rectangle {
                 vertical-stretch: 0;
                 min-height: Metrics.s(14) + root.chip-h;
 
@@ -727,7 +841,7 @@ export component NearbyOverlay inherits Rectangle {
             // Replaces the bucket bar entirely; the two are never on screen at once.
             // dc.html `genreBarStyle`: padding '10px <sidePad>px 0', 12dp between
             // the three parts, everything stretched to the grid's height.
-            if root.show-genre-bar: Rectangle {
+            if root.tab == NearbyTab.nearby && root.show-genre-bar: Rectangle {
                 vertical-stretch: 0;
                 min-height: Metrics.s(10) + root.genre-grid-h;
 
@@ -796,7 +910,7 @@ export component NearbyOverlay inherits Rectangle {
             // harmless here because the footer covers the bottom corners. It is only
             // exposed in the one case where the footer is absent (a list with no
             // snapshot date), and only in a screenshot; Skia clips correctly.
-            if root.state == NearbyState.list: OverlayBody {
+            if root.tab == NearbyTab.nearby && root.state == NearbyState.list: OverlayBody {
                 pad-h: root.side-pad;
                 pad-top: Metrics.s(card.narrow ? 12 : 16);
                 pad-bottom: Metrics.s(card.narrow ? 12 : 16);
@@ -821,7 +935,7 @@ export component NearbyOverlay inherits Rectangle {
             // Each line is centred by a HorizontalLayout rather than by a cross-axis
             // alignment, because that is also what caps the body at 520dp AND lets
             // it fall back to the full width when the card is narrower than the cap.
-            if root.state != NearbyState.list: Rectangle {
+            if root.tab == NearbyTab.nearby && root.state != NearbyState.list: Rectangle {
                 vertical-stretch: 1;
 
                 VerticalLayout {
@@ -894,6 +1008,28 @@ export component NearbyOverlay inherits Rectangle {
                 }
             }
 
+            // ── the frequency tab ──
+            //
+            // Replaces all four nearby bands at once, footer included: §4 gives
+            // this tab a body and nothing else, and the FCC line underneath it
+            // would be answering a question nobody asked.
+            //
+            // The side padding is the picker's own, so the readout's edges land on
+            // the same verticals as the station rows above them when the tab is
+            // switched.
+            if root.tab == NearbyTab.freq: FreqPad {
+                side-pad: root.side-pad;
+                display: root.freq-display;
+                display-dim: root.freq-display-dim;
+                error: root.freq-error;
+                error-text: root.freq-error-text;
+                enter(c) => { root.freq-key(c); }
+                backspace => { root.freq-back(); }
+                seek(d) => { root.freq-seek(d); }
+                tune => { root.freq-commit(); }
+                cancel => { root.freq-cancel(); }
+            }
+
             // ── footer ──
             //
             // dc.html `showFooter = showList && !!snapshot`: no rows or no date and
@@ -903,7 +1039,7 @@ export component NearbyOverlay inherits Rectangle {
             // The 48dp height and 28dp side padding are OverlayFooter's defaults —
             // taken from this very file — and are restated rather than inherited, so
             // another overlay retuning the shared default cannot move this one.
-            if root.state == NearbyState.list && root.snapshot != "": OverlayFooter {
+            if root.tab == NearbyTab.nearby && root.state == NearbyState.list && root.snapshot != "": OverlayFooter {
                 foot-height: Metrics.s(48);
                 pad-h: Metrics.s(28);
                 pad-v: 0px;

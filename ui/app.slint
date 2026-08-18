@@ -1,8 +1,7 @@
 import { Pal, Metrics } from "tokens.slint";
 import { Preset, HeroSnapshot, Overlay } from "types.slint";
 import { Face } from "face.slint";
-import { Numpad } from "numpad.slint";
-import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn } from "nearby.slint";
+import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn, NearbyTab } from "nearby.slint";
 import {
     SettingsOverlay, TunerSource, TunerDetail, TunerGlyph, TunerAction, BatteryState,
     DiagAction
@@ -72,7 +71,6 @@ export component AppWindow inherits Window {
     callback toggle-save();
     callback open-settings();
     callback open-nearby();
-    callback open-numpad();
     /// The per-tile logo badge, reorder mode only (§6.4 block 0). Carries the
     /// preset index so Rust can resolve the call sign before the window opens.
     callback open-logo-search(int);
@@ -126,16 +124,20 @@ export component AppWindow inherits Window {
     /// to `none` by the time this fires.
     callback close-overlay();
 
-    // §6.1 numpad.
-    in property <string> numpad-display;
-    in property <bool> numpad-display-dim: true;
-    in property <bool> numpad-error: false;
-    in property <string> numpad-error-text;
-    in property <bool> numpad-can-tune: false;
-    callback numpad-enter(string);
-    callback numpad-backspace();
-    callback numpad-seek(int);
-    callback numpad-tune();
+    // §6.2's frequency tab — the old §6.1 numpad, folded in by the mini-handoff.
+    // `can-tune` is gone with the card: §5 makes TUNE always live and always a
+    // dismissal, tuning only when the buffer is good.
+    in property <NearbyTab> nearby-tab: NearbyTab.nearby;
+    in property <string> freq-display;
+    in property <bool> freq-display-dim: true;
+    in property <bool> freq-error: false;
+    in property <string> freq-error-text;
+    callback set-nearby-tab(NearbyTab);
+    callback freq-key(string);
+    callback freq-back();
+    callback freq-seek(int);
+    callback freq-commit();
+    callback freq-cancel();
 
     // §6.2 nearby picker.
     in property <[NearbyStation]> nearby-stations;
@@ -278,7 +280,6 @@ export component AppWindow inherits Window {
         toggle-save => { root.toggle-save(); }
         open-settings => { root.overlay = Overlay.settings; root.open-settings(); }
         open-nearby => { root.overlay = Overlay.nearby; root.open-nearby(); }
-        open-numpad => { root.overlay = Overlay.numpad; root.open-numpad(); }
         open-logo-search(i) => { root.overlay = Overlay.logo-search; root.open-logo-search(i); }
         claim-audio => { root.claim-audio(); }
         release-audio => { root.release-audio(); }
@@ -302,23 +303,6 @@ export component AppWindow inherits Window {
     // None of the four gates its own visibility — the `if` here is the gate,
     // exactly as OverlayCard's own docs ask for.
 
-    if root.overlay == Overlay.numpad: Numpad {
-        width: root.width;
-        height: root.height;
-        display: root.numpad-display;
-        display-dim: root.numpad-display-dim;
-        error: root.numpad-error;
-        error-text: root.numpad-error-text;
-        can-tune: root.numpad-can-tune;
-        enter(c) => { root.numpad-enter(c); }
-        backspace => { root.numpad-backspace(); }
-        seek(d) => { root.numpad-seek(d); }
-        // TUNE commits; whether the card then closes is Rust's — a rejected
-        // value keeps it up with the buffer intact (Numpad.tsx:57).
-        tune => { root.numpad-tune(); }
-        cancel => { root.dismiss(); }
-    }
-
     if root.overlay == Overlay.nearby: NearbyOverlay {
         width: root.width;
         height: root.height;
@@ -331,6 +315,22 @@ export component AppWindow inherits Window {
         genre: root.nearby-genre;
         show-bucket-bar: root.nearby-show-bucket-bar;
         show-genre-bar: root.nearby-show-genre-bar;
+        tab: root.nearby-tab;
+        freq-display: root.freq-display;
+        freq-display-dim: root.freq-display-dim;
+        freq-error: root.freq-error;
+        freq-error-text: root.freq-error-text;
+        set-tab(t) => { root.set-nearby-tab(t); }
+        freq-key(c) => { root.freq-key(c); }
+        freq-back => { root.freq-back(); }
+        freq-seek(d) => { root.freq-seek(d); }
+        // Both of these CLOSE the overlay, and Rust does it — the same way
+        // `nearby-tune` already does, and for a reason beyond consistency: a
+        // dismissal written here only runs when the tap goes through this
+        // instance, so it would be missing from every path that invokes the
+        // callback directly, `examples/numpadprobe.rs` included.
+        freq-commit => { root.freq-commit(); }
+        freq-cancel => { root.freq-cancel(); }
         tune(i) => { root.nearby-tune(i); }
         save-preset(i) => { root.nearby-save-preset(i); }
         pick-bucket(b) => { root.nearby-pick-bucket(b); }

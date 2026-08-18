@@ -403,7 +403,7 @@ fn main() {
         tuner.seek_async.store(true, Ordering::Relaxed);
         let tunes_before = tuner.tunes.load(Ordering::Relaxed);
 
-        ui.invoke_numpad_seek(1);
+        ui.invoke_freq_seek(1);
         assert_eq!(tuner.seeks.load(Ordering::Relaxed), 1, "the seek was commanded");
         assert_eq!(
             tuner.tunes.load(Ordering::Relaxed),

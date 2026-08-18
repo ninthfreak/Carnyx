@@ -61,8 +61,8 @@ use crate::station::{brand_color, clean_call, format_mhz, plate_label};
 use crate::stations::{NearbyPicker, NearbyState, StationDb, StationRow};
 use crate::{fake, settings};
 use crate::{
-    AppWindow, BatteryState, DiagAction, GenreColumn, HeroSnapshot, NearbyStation, Overlay, Preset,
-    TunerAction, TunerDetail, TunerGlyph, TunerSource,
+    AppWindow, BatteryState, DiagAction, GenreColumn, HeroSnapshot, NearbyStation, NearbyTab,
+    Overlay, Preset, TunerAction, TunerDetail, TunerGlyph, TunerSource,
 };
 
 // ── The event queue ──────────────────────────────────────────────────────────
@@ -495,14 +495,16 @@ struct State {
     /// and held rather than re-read because `push_logo_search` runs on every
     /// keystroke of state the window has — one decode per window, not per push.
     logo_art: Option<Raster>,
+    /// The frequency tab's entry buffer, exactly as typed.
     numpad: String,
-    /// The numpad refused the last TUNE.
+    /// What the dial read when the frequency tab was opened, and what CANCEL puts
+    /// back (mini-handoff §5).
     ///
-    /// STATE, not a predicate over the buffer, because that is what CarFM does:
-    /// `press` clears the flag and `commit` sets it (`Numpad.tsx:44,58`). Deriving
-    /// it from the buffer instead lit the error while a driver was still typing —
-    /// "1" is out of band on the way to "105.1".
-    numpad_error: bool,
+    /// Needed because SEEK runs with the overlay open and leaves the overlay open
+    /// when it lands, so a driver can walk the dial several stations away and then
+    /// change their mind — and "restores the frequency the overlay opened on" has
+    /// to mean something at that point. `None` while the nearby tab is up.
+    freq_restore: Option<f32>,
 }
 
 impl State {
@@ -833,7 +835,7 @@ impl App {
                 art: HashMap::new(),
                 logo_art: None,
                 numpad: String::new(),
-                numpad_error: false,
+                freq_restore: None,
                 prefs_dir,
                 saved,
             }),
@@ -1515,7 +1517,7 @@ impl App {
             2 => self.push_meter(),
             3 => self.push_nearby(),
             4 => self.push_settings(),
-            _ => self.push_numpad(),
+            _ => self.push_freq(),
         }
     }
 
@@ -1525,7 +1527,7 @@ impl App {
         self.push_meter();
         self.push_nearby();
         self.push_settings();
-        self.push_numpad();
+        self.push_freq();
     }
 
     /// The station licensed on the dial, from the cache when the dial and the fix
@@ -1870,28 +1872,28 @@ impl App {
         self.save_prefs();
     }
 
-    fn push_numpad(&self) {
+    fn push_freq(&self) {
         let ui = self.ui();
         let s = self.state.borrow();
         let typed = !s.numpad.is_empty();
         // The buffer is handed over EXACTLY as typed — "104." is a legitimate
         // display string mid-entry and normalising it on the way in would fight
         // the user's fingers.
-        ui.set_numpad_display(if typed {
+        ui.set_freq_display(if typed {
             s.numpad.as_str().into()
         } else {
             SharedString::from(format_mhz(s.dial))
         });
-        // DIM ONLY WHEN THERE IS NOTHING TO SAY. A sweep runs behind this card
-        // and the display follows it, so a scan is as much a reason to be legible
-        // as a typed dial: CarFM's `opacity: buf || scanning ? 1 : 0.45`.
-        ui.set_numpad_display_dim(!typed && !ui.get_scanning());
-        ui.set_numpad_can_tune(typed);
-        // THE REFUSAL IS STATE. Derived from the buffer, it lit while a driver
-        // was still typing — "1" is out of band on the way to "105.1" — where
-        // CarFM shows nothing until TUNE is actually pressed.
-        ui.set_numpad_error(s.numpad_error);
-        ui.set_numpad_error_text(format!("Outside {FM_LO}\u{2013}{FM_HI} band").into());
+        // DIM ONLY WHEN THERE IS NOTHING TO SAY. A sweep runs behind this tab and
+        // the readout follows it, so a scan is as much a reason to be legible as
+        // a typed dial.
+        ui.set_freq_display_dim(!typed && !ui.get_scanning());
+        ui.set_freq_error(typed && !band_prefix_ok(&s.numpad));
+        // ONE DECIMAL ON BOTH ENDS, explicitly. `{FM_HI}` renders 108.0 as "108",
+        // which is how the old card's line read; §4 writes the copy out as
+        // "Outside 87.5–108.0 MHz band" and the band's ends are quoted to a tenth
+        // everywhere else on the face. U+2013 EN DASH between them.
+        ui.set_freq_error_text(format!("Outside {FM_LO:.1}\u{2013}{FM_HI:.1} MHz band").into());
     }
 
     fn push_logo_search(&self) {
@@ -2065,69 +2067,109 @@ impl App {
             app.push_settings();
         });
         on!(on_open_nearby, |app| {
+            // §2: the nearby button opens the overlay on NEARBY STATIONS, always.
+            // The tab is not remembered between visits — a driver who left on the
+            // keypad last time is not asking for it this time, and the button they
+            // pressed says which half they want.
+            {
+                let mut s = app.state.borrow_mut();
+                s.numpad.clear();
+                s.freq_restore = None;
+            }
+            app.ui().set_nearby_tab(NearbyTab::Nearby);
+            app.push_freq();
             app.refresh_nearby();
         });
-        on!(on_open_numpad, |app| {
-            app.state.borrow_mut().numpad.clear();
-            app.push_numpad();
-        });
         on!(on_close_overlay, |app| {
-            app.state.borrow_mut().numpad.clear();
-            app.push_numpad();
+            {
+                let mut s = app.state.borrow_mut();
+                s.numpad.clear();
+                s.freq_restore = None;
+            }
+            app.push_freq();
             app.close_logo_search();
         });
 
-        // ── §6.1 numpad ──
-        on!(on_numpad_enter, |app, c| {
+        // ── §6.2's frequency tab ──
+        on!(on_set_nearby_tab, |app, t| {
+            let t: NearbyTab = t;
+            {
+                let mut s = app.state.borrow_mut();
+                // Either way the buffer goes (§5). Switching away abandons a
+                // half-typed dial; switching in starts clean.
+                s.numpad.clear();
+                // §5: switching TO the frequency tab snapshots the restore point.
+                // Switching away drops it, so a later CANCEL cannot resurrect a
+                // frequency from a visit two taps ago.
+                s.freq_restore = (t == NearbyTab::Freq).then_some(s.dial);
+            }
+            // §5: switching to Nearby stops any running seek. There is no cancel
+            // on the tuner trait — `Tuner::seek` is handed over and let go — so
+            // the only thing that stops a sweep is a tune, which is what the seek
+            // handler below already relies on. Re-tuning the dial it is already
+            // on is that, and nothing else.
+            if t == NearbyTab::Nearby && app.ui().get_scanning() {
+                let dial = app.state.borrow().dial;
+                app.tune(dial);
+            }
+            app.ui().set_nearby_tab(t);
+            app.push_freq();
+        });
+        on!(on_freq_key, |app, c| {
             {
                 let mut s = app.state.borrow_mut();
                 let c: SharedString = c;
                 s.numpad = numpad_press(&s.numpad, c.as_str());
-                // Any key clears the refusal, exactly as CarFM's `press` does.
-                s.numpad_error = false;
             }
-            app.push_numpad();
+            app.push_freq();
         });
-        on!(on_numpad_backspace, |app| {
-            let mut s = app.state.borrow_mut();
-            s.numpad.pop();
-            s.numpad_error = false;
-            drop(s);
-            app.push_numpad();
+        on!(on_freq_back, |app| {
+            app.state.borrow_mut().numpad.pop();
+            app.push_freq();
         });
-        on!(on_numpad_tune, |app| {
+        on!(on_freq_commit, |app| {
+            // §5: "TUNE commits the buffer and closes the overlay. An empty/invalid
+            // buffer closes without retuning." Both halves are here, so the whole
+            // rule is in one place and a probe can drive it.
+            //
+            // A REFUSAL IS NO LONGER A STATE. The old card kept itself up with the
+            // buffer intact and lit an error line; there is no card to keep up now,
+            // and §5 replaced that with the live warning `band_prefix_ok` drives.
             let dial = numpad_commit(&app.state.borrow().numpad);
-            match dial {
-                // A rejected value KEEPS THE CARD UP with the buffer intact —
-                // the error line is the answer, not a dismissal.
-                Some(v) => {
-                    {
-                        let mut s = app.state.borrow_mut();
-                        s.numpad.clear();
-                        s.numpad_error = false;
-                    }
-                    app.ui().set_overlay(Overlay::None);
-                    app.tune(v);
-                }
-                None => {
-                    app.state.borrow_mut().numpad_error = true;
-                    app.push_numpad();
-                }
-            }
-        });
-        on!(on_numpad_seek, |app, dir| {
-            // THE BUFFER GOES FIRST. CarFM's `seek` calls `reset()` before it
-            // hands the sweep on (`Numpad.tsx:43`), and it has to: the display
-            // shows the buffer whenever there is one, so a half-typed dial left
-            // standing would sit there through the whole sweep instead of the
-            // face following it to the station it finds.
             {
                 let mut s = app.state.borrow_mut();
                 s.numpad.clear();
-                s.numpad_error = false;
+                s.freq_restore = None;
             }
-            // Handed over and let go — see `PanelAction::Seek`. Re-tuning after
-            // a hardware seek cancels it.
+            app.ui().set_overlay(Overlay::None);
+            match dial {
+                Some(v) => app.tune(v),
+                None => app.push_freq(),
+            }
+        });
+        on!(on_freq_cancel, |app| {
+            // §5: abandon entry and put back the frequency the tab opened on. The
+            // restore only costs a tune when a SEEK actually moved the dial —
+            // typing never does, so the ordinary CANCEL is free.
+            let restore = {
+                let mut s = app.state.borrow_mut();
+                s.numpad.clear();
+                let dial = s.dial;
+                s.freq_restore.take().filter(|v| *v != dial)
+            };
+            app.ui().set_overlay(Overlay::None);
+            match restore {
+                Some(v) => app.tune(v),
+                None => app.push_freq(),
+            }
+        });
+        on!(on_freq_seek, |app, dir| {
+            // THE BUFFER GOES FIRST. The readout shows the buffer whenever there is
+            // one, so a half-typed dial left standing would sit there through the
+            // whole sweep instead of following it to the station it finds.
+            app.state.borrow_mut().numpad.clear();
+            // Handed over and let go — see `PanelAction::Seek`. Re-tuning after a
+            // hardware seek cancels it.
             app.state.borrow().tuner.seek(dir > 0);
             app.drain_events();
             app.pump_rds_until_settled();
@@ -3079,6 +3121,33 @@ fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
     } else {
         old_next != new_next
     }
+}
+
+/// Could this buffer still become an in-band frequency by typing more?
+///
+/// WHEN THE OUT-OF-BAND LINE LIGHTS, and the one judgement call in this file that
+/// the mini-handoff leaves open. §6 hands `freqError` to the host without saying
+/// when to set it, and §5 makes TUNE close the overlay whatever the buffer holds —
+/// so an error raised BY the commit, the way the old standalone card raised it,
+/// would never be on screen long enough to read. It has to be live.
+///
+/// Live the naive way is worse than useless: "1" is out of band on the way to
+/// "105.1", and a warning that fires on the first keystroke of most valid entries
+/// is a warning drivers learn to ignore. That exact failure is on the record here —
+/// it is why the old card made the refusal state rather than a predicate.
+///
+/// So the test is not "is this out of band" but "can this still get there": true
+/// while some in-band frequency's own display string starts with what has been
+/// typed. Enumerated rather than reasoned about, because the set is 206 values and
+/// a rule would have to re-derive the buffer's own grammar to be right about
+/// "105." and "1" and "108.0" — this cannot disagree with the formatter, since it
+/// asks the formatter.
+fn band_prefix_ok(buf: &str) -> bool {
+    if buf.is_empty() {
+        return true;
+    }
+    let (lo, hi) = ((FM_LO * 10.0) as i32, (FM_HI * 10.0) as i32);
+    (lo..=hi).any(|tenths| format_mhz(tenths as f32 / 10.0).starts_with(buf))
 }
 
 fn numpad_commit(buf: &str) -> Option<f32> {

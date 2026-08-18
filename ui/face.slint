@@ -70,7 +70,6 @@ export component Face inherits Rectangle {
     callback toggle-save();
     callback open-settings();
     callback open-nearby();
-    callback open-numpad();
     /// The reorder-mode logo badge on preset `i` (§6.4).
     callback open-logo-search(int);
     callback claim-audio();
@@ -214,7 +213,6 @@ export component Face inherits Rectangle {
                 hand-off: root.hand-off;
                 step(d) => { root.step-preset(d); }
                 toggle-save => { root.toggle-save(); }
-                open-numpad => { root.open-numpad(); }
                 toggle-audio => { if (root.dead) { root.claim-audio(); } else { root.release-audio(); } }
             }
             Rectangle {
@@ -273,7 +271,6 @@ export component Face inherits Rectangle {
                 hand-off: root.hand-off;
                 step(d) => { root.step-preset(d); }
                 toggle-save => { root.toggle-save(); }
-                open-numpad => { root.open-numpad(); }
                 toggle-audio => { if (root.dead) { root.claim-audio(); } else { root.release-audio(); } }
             }
             Rectangle { vertical-stretch: 1; }

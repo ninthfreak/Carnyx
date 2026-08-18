@@ -21,7 +21,7 @@ use slint::{
 
 use carnyx::app::App;
 use carnyx::fake::FakeLocation;
-use carnyx::{GenreColumn, LogoSearchState, NearbyState, Overlay};
+use carnyx::{GenreColumn, LogoSearchState, NearbyState, NearbyTab, Overlay};
 
 /// The five first-class surfaces of ANDROID §2, plus the states worth a second
 /// look: (name, width, height, dark, state).
@@ -72,15 +72,18 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
 /// put its last row below the fold looks identical to one that fits until it is
 /// actually scrolled.
 const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
-    // §6.1 numpad. `compact` is a HEIGHT track (Metrics.h < 560), so 800×360 is
-    // the branch that matters and 360×800 is NOT compact despite being narrow.
-    ("numpad-head-unit", 1024, 614, false, State::Numpad, 0.0),
-    ("numpad-head-unit-dark", 1024, 614, true, State::Numpad, 0.0),
-    ("numpad-typing", 1024, 614, false, State::NumpadTyping, 0.0),
-    ("numpad-out-of-band", 1024, 614, false, State::NumpadError, 0.0),
-    ("numpad-phone-portrait", 360, 800, false, State::NumpadTyping, 0.0),
-    ("numpad-phone-landscape-compact", 800, 360, false, State::NumpadTyping, 0.0),
-    ("numpad-phone-landscape-scrolled", 800, 360, false, State::NumpadTyping, -6.0),
+    // §6.2's frequency tab — the old §6.1 numpad, folded into the picker by the
+    // mini-handoff. The compact HEIGHT track is gone with the standalone card
+    // (§4 gives one metric set and a scroll container), so 800×360 is no longer a
+    // second branch to photograph — it is the surface where the column has to
+    // scroll, which is a different claim and still worth a shot.
+    ("freq-tab-head-unit", 1024, 614, false, State::FreqTab, 0.0),
+    ("freq-tab-head-unit-dark", 1024, 614, true, State::FreqTab, 0.0),
+    ("freq-tab-typing", 1024, 614, false, State::FreqTyping, 0.0),
+    ("freq-tab-out-of-band", 1024, 614, false, State::FreqError, 0.0),
+    ("freq-tab-phone-portrait", 360, 800, false, State::FreqTyping, 0.0),
+    ("freq-tab-phone-landscape", 800, 360, false, State::FreqTyping, 0.0),
+    ("freq-tab-phone-landscape-scrolled", 800, 360, false, State::FreqTyping, -6.0),
     // §6.2 nearby picker: the list with the bucket row, the drilled-in genre
     // row, and the bodies that replace the list entirely.
     ("nearby-head-unit", 1024, 614, false, State::Nearby, 0.0),
@@ -177,13 +180,14 @@ enum State {
     UnsavedDial,
 
     // ── §6 overlays ──
-    /// §6.1 as it opens: nothing typed, so the display is the live dial, dimmed.
-    Numpad,
-    /// Mid-entry. The buffer is raw — "104." is a legitimate display string and
+    /// The frequency tab as it opens: nothing typed, so the readout is the live
+    /// dial, dimmed.
+    FreqTab,
+    /// Mid-entry. The buffer is raw — "104." is a legitimate readout string and
     /// must NOT be normalised on the way in.
-    NumpadTyping,
-    /// TUNE rejected by the band check: amber display border, the error line.
-    NumpadError,
+    FreqTyping,
+    /// A buffer no further typing can bring into band: the warning line, live.
+    FreqError,
     /// §6.2 with rows and the bucket row.
     Nearby,
     /// Drilled into Music, so the genre row replaces the bucket row and one
@@ -419,12 +423,12 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         State::Stepping => {}
         State::NoGpsFix => driver.set_position(FakeLocation::no_fix()),
         State::UnsavedDial => {
-            // Through the numpad's own callbacks, so the band check, the buffer
+            // Through the tab's own callbacks, so the band check, the buffer
             // rules and the tune all run rather than a property being set.
             for c in ["1", "0", "5", ".", "1"] {
-                ui.invoke_numpad_enter(c.into());
+                ui.invoke_freq_key(c.into());
             }
-            ui.invoke_numpad_tune();
+            ui.invoke_freq_commit();
             driver.settle_meter_for_test();
         }
 
@@ -433,27 +437,34 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         // The App has already filled every one of these from the real services,
         // so each arm below only pushes what makes ITS shot different and then
         // raises the modal.
-        State::Numpad => ui.set_overlay(Overlay::Numpad),
-        State::NumpadTyping => {
-            // A raw mid-entry buffer. Rust owns the input rules and hands the
-            // string over exactly as typed — "104." is legitimate here.
-            ui.set_numpad_display("104.".into());
-            ui.set_numpad_display_dim(false);
-            ui.set_numpad_can_tune(true);
-            ui.set_overlay(Overlay::Numpad);
+        // THROUGH THE REAL CALLBACKS in all three. The tab is reached the only way
+        // the app offers — open the picker, tap the second tab — and the buffer is
+        // typed rather than pushed, so the input rules and the live band check are
+        // what put the shot on screen.
+        State::FreqTab => {
+            ui.invoke_open_nearby();
+            ui.invoke_set_nearby_tab(NearbyTab::Freq);
+            ui.set_overlay(Overlay::Nearby);
         }
-        State::NumpadError => {
-            // THROUGH THE REAL KEYS AND THE REAL REFUSAL. This arm used to push
-            // the four properties by hand, because the error was derived from the
-            // buffer and there was no refusal to reach. It is state now — set by
-            // a commit CarFM would also reject — so the shot can be what a driver
-            // produces: type a dial below the band, press TUNE, read the line.
-            ui.invoke_open_numpad();
-            for c in ["7", "6", ".", "5"] {
-                ui.invoke_numpad_enter(c.into());
+        State::FreqTyping => {
+            ui.invoke_open_nearby();
+            ui.invoke_set_nearby_tab(NearbyTab::Freq);
+            // A raw mid-entry buffer: "104." is legitimate and is not normalised.
+            for c in ["1", "0", "4", "."] {
+                ui.invoke_freq_key(c.into());
             }
-            ui.invoke_numpad_tune();
-            ui.set_overlay(Overlay::Numpad);
+            ui.set_overlay(Overlay::Nearby);
+        }
+        State::FreqError => {
+            // 76.5 is below the band and no further typing can rescue it, which
+            // is exactly when the line is allowed to appear. TUNE is not pressed —
+            // it would close the overlay now (§5), and the warning is live.
+            ui.invoke_open_nearby();
+            ui.invoke_set_nearby_tab(NearbyTab::Freq);
+            for c in ["7", "6", ".", "5"] {
+                ui.invoke_freq_key(c.into());
+            }
+            ui.set_overlay(Overlay::Nearby);
         }
         State::Nearby => ui.set_overlay(Overlay::Nearby),
         State::NearbyGenre => {

@@ -210,7 +210,6 @@ export component HeroCard inherits Rectangle {
     in property <bool> inert: false;
 
     callback toggle-save();
-    callback open-numpad();
     callback toggle-audio();
 
     property <bool> tall: Metrics.tall;
@@ -309,10 +308,11 @@ export component HeroCard inherits Rectangle {
                 font-size: Metrics.freq-size * root.scale;
                 color: Pal.amber;
             }
-            TouchArea {
-                enabled: !root.inert;
-                clicked => { root.open-numpad(); }
-            }
+            // NO TOUCH AREA. The frequency used to open a standalone keypad modal;
+            // the mini-handoff (§2, §7) removes that entry point outright — the
+            // keypad is a tab inside the tune overlay now, reached from the status
+            // bar's nearby button, and this line is display-only text with no
+            // pressed state and no pointer affordance.
         }
     }
 
@@ -406,7 +406,6 @@ export component HeroRow inherits Rectangle {
 
     callback step(int);
     callback toggle-save();
-    callback open-numpad();
     callback toggle-audio();
 
     // ── The step morph (§8) ──
@@ -711,7 +710,6 @@ export component HeroRow inherits Rectangle {
         dead: root.dead;
         scanning: root.scanning;
         toggle-save => { root.toggle-save(); }
-        open-numpad => { root.open-numpad(); }
         toggle-audio => { root.toggle-audio(); }
     }
 

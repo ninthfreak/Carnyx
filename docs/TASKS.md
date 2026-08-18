@@ -618,6 +618,60 @@ the INCOMING card's, so a step between a logo hero and a no-logo hero starts the
 departing card at the new card's height. Cloning the old node is the only fix and
 there is no cloning here.
 
+### 76. Fold the numpad into the tune overlay as a second tab
+**DONE.** The nearby picker and the direct-entry keypad are one 900×600 overlay
+with two tabs — "Nearby stations" and "Enter frequency" — and the hero's frequency
+is display-only text. Built to the mini-handoff "Tune overlay: Nearby / Enter
+frequency tabs", which states it wins over ANDROID §6 where they disagree.
+
+**THE REFERENCES IT NAMES ARE NOT IN THIS TREE.** It cites `NearbyPicker.dc.html`
+at v1.14.6; `docs/design/handoff/` is v1.10.0 and its NearbyPicker has no tabs at
+all — it still draws the title-and-subtitle header this change removes. So every
+new metric comes from the mini-handoff's own §3 and §4, which state all of them,
+and nothing is inferred from a file that is not present. The unchanged halves —
+station list, filter bars, FCC footer — keep the v1.10.0 citations they were built
+with. Worth re-checking against v1.14.6 whenever the bundle is updated.
+
+**Removed:** the standalone numpad modal and its card, `Overlay.numpad`, the
+`open-numpad` callback through Face and HeroRow, and the hero frequency's
+TouchArea. **Restyled, not redrawn:** the keypad, seek row and CANCEL/TUNE pair
+are the same components at §4's sizes — readout 78→62dp, keys 64→48dp at radius
+12, actions 60→52dp, column gap 14→9dp, capped at 440dp and centred. The old
+compact height track is gone; §4 gives one metric set and a scroll container.
+
+**Two host-side decisions the mini-handoff leaves open, both flagged rather than
+buried:**
+
+1. WHEN THE OUT-OF-BAND LINE LIGHTS. §6 hands `freqError` to the host without
+   saying when, and §5 makes TUNE close the overlay whatever the buffer holds — so
+   an error raised BY the commit, as the old card raised it, would never be on
+   screen long enough to read. It has to be live. Live the naive way is worse than
+   useless — "1" is out of band on the way to "105.1" — which is the exact failure
+   already on the record here. So `band_prefix_ok` lights it only when no in-band
+   frequency's own display string still starts with what was typed: "7" warns at
+   once, "1" and "105." never do. Enumerated over the 206 dials rather than
+   reasoned about, so it cannot disagree with the formatter.
+2. THE ERROR COPY'S BAND ENDS. §4 writes "Outside 87.5–108.0 MHz band"; the old
+   line rendered "108" because `{FM_HI}` drops the trailing zero. Now formatted to
+   one decimal on both ends.
+
+**A deviation kept on purpose:** the readout's border turns amber with the
+warning. §4 gives it a plain border and puts the error on its own line; the border
+costs nothing when there is no error and the line alone is easy to miss at a
+glance in a moving car.
+
+Verified by rendering and by driving: `examples/numpadprobe.rs` holds the entry
+rules, the always-closing TUNE, the seek that clears the buffer before it sweeps,
+the CANCEL that restores the frequency the tab opened on, the tab that never
+persists between visits, and ten buffers against the warning rule. Seven shots
+cover both tabs on four surfaces, light and dark, including the 800×360 slice
+where the column has to scroll to reach CANCEL/TUNE.
+
+**Not carried over, because there is nothing left to carry:** §7's "delete the
+standalone numpad dialog" and "remove the hero frequency's pressed/ripple state" —
+the frequency's TouchArea had no pressed state to remove.
+
+
 ---
 
 # COMPLETED (31)
