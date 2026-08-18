@@ -232,6 +232,19 @@ cargo-ndk has no Cargo.toml metadata to read. `tools/build-apk-gradle.sh` reads
 `min_sdk_version` out of `Cargo.toml`, cross-checks it against Gradle's `minSdk`
 so the two cannot drift, and passes it as `--platform`.
 
+**`ANDROID_JAR` is pinned by the script, and has to be.** Slint's backend and
+Carnyx's `build.rs` both locate `android.jar` through `android-build`, which
+prefers `ANDROID_PLATFORM` over looking at what is actually installed — and that
+is a pin, not a preference, so a level you do not have makes every level you do
+have invisible. The panic still says `No Android platforms found`, which reads as
+*install one* when you already have several. The pin is not necessarily yours
+either: cargo-ndk passes its platform level down to the cargo it invokes, so
+unsetting the variable in your shell does not clear what the build script sees.
+That level is an NDK/ABI concern — 26 is correct for the `.so` and irrelevant to
+which JAR is on disk. So the script does not fight it: it resolves a jar that
+exists, preferring the one matching Gradle's `compileSdk`, and exports
+`ANDROID_JAR`, which outranks all of it.
+
 **The one thing Gradle stopped generating for us** is `android.app.lib_name`.
 NativeActivity loads `lib<value>.so`, cargo-apk derived that name from the crate,
 and `android/app/src/main/AndroidManifest.xml` now states it by hand. Get it wrong

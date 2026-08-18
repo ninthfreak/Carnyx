@@ -39,70 +39,40 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 [[ -d "$SDK" ]] || die "The SDK path points at $SDK, which does not exist."
 export ANDROID_HOME="$SDK"
 export ANDROID_SDK_ROOT="$SDK"
-# ── android.jar, resolved THE SAME WAY the build resolves it ────────────────
-#
-# Checked here because otherwise it surfaces 150 crates and several minutes into
-# the build, as a panic from a dependency's build script that names none of this:
-#
-#   i-slint-backend-android-activity build.rs:34: No Android platforms found
+# ── android.jar, PINNED rather than left to be resolved ─────────────────────
 #
 # Slint's Android backend compiles one Java helper of its own, and Carnyx's
-# build.rs compiles the NWD bridge — both need android.jar.
+# build.rs compiles the NWD bridge — both need android.jar, and both locate it
+# through android-build, whose order is (env_paths/mod.rs:70-92):
 #
-# THIS MIRRORS android-build-0.1.4 src/env_paths/mod.rs:70-92 STEP FOR STEP, and
-# it has to: the first version of this check globbed for any installed platform,
-# passed, and the build died anyway. A preflight that resolves differently from
-# the build is worse than no preflight at all.
+#   1. ANDROID_JAR, if set and the file exists — WINS OUTRIGHT.
+#   2. else $SDK/platforms/<V>/android.jar, <V> from ANDROID_PLATFORM /
+#      ANDROID_API_LEVEL / ANDROID_SDK_VERSION.
+#   3. else the highest installed platform.
 #
-#   1. ANDROID_JAR, if set and the file exists — wins outright, nothing else is
-#      consulted.
-#   2. Otherwise $SDK/platforms/<V>/android.jar, where <V> is the FIRST SET of
-#      ANDROID_PLATFORM, ANDROID_API_LEVEL, ANDROID_SDK_VERSION — prefixed
-#      "android-" if it is a bare number, and suffixed "-ext<N>" from
-#      ANDROID_SDK_EXTENSION.
-#   3. ONLY IF none of those three is set: the highest installed platform.
+# STEP 2 IS A PIN, NOT A PREFERENCE: when it is set, step 3 never runs, so one
+# value naming a platform you do not have makes every platform you DO have
+# invisible — and the panic still reads "No Android platforms found", which
+# sounds like "install one" to someone with several installed.
 #
-# STEP 2 IS THE TRAP. Setting ANDROID_PLATFORM PINS the lookup — step 3 never
-# runs — so one stale value makes every platform you have invisible and the error
-# still says "No Android platforms found", which reads as "install one" when you
-# already have several.
-platform_pin="${ANDROID_PLATFORM:-${ANDROID_API_LEVEL:-${ANDROID_SDK_VERSION:-}}}"
+# AND THE PIN IS NOT ALWAYS YOURS. cargo-ndk passes its own platform level down
+# to the cargo it invokes, so unsetting ANDROID_PLATFORM in the shell does not
+# clear it: the build script still sees one, set to whatever API level the
+# cross-compile is targeting. That level is a NDK/ABI concern and has nothing to
+# do with which android.jar you have installed — 26 is right for the .so and
+# wrong for the jar unless you happen to have platforms;android-26.
+#
+# So this does not try to out-argue step 2. It resolves a jar that exists and
+# exports ANDROID_JAR, which outranks all of it.
+compile_sdk=$(sed -n 's/^ *compileSdk = \([0-9][0-9]*\).*/\1/p' android/app/build.gradle.kts | head -1)
 shopt -s nullglob
 installed=("$SDK"/platforms/*/android.jar)
 shopt -u nullglob
 have=""
 for j in "${installed[@]}"; do have="$have $(basename "$(dirname "$j")")"; done
-[[ -n "$have" ]] || have=" (none)"
 
 if [[ -n "${ANDROID_JAR:-}" && -f "${ANDROID_JAR:-}" ]]; then
-  printf 'android.jar: %s (pinned by ANDROID_JAR)\n' "$ANDROID_JAR"
-
-elif [[ -n "$platform_pin" ]]; then
-  want="$platform_pin"
-  [[ "$want" == android-* ]] || want="android-$want"
-  if [[ "$want" != *-ext* && -n "${ANDROID_SDK_EXTENSION:-}" ]]; then
-    ext="${ANDROID_SDK_EXTENSION#-}"; ext="${ext#ext}"
-    [[ -n "$ext" ]] && want="$want-ext$ext"
-  fi
-  if [[ -f "$SDK/platforms/$want/android.jar" ]]; then
-    printf 'android.jar: %s (pinned to %s)\n' "$SDK/platforms/$want/android.jar" "$want"
-  else
-    die "ANDROID_PLATFORM pins the build to '$want', which is not installed.
-
-  looking for: $SDK/platforms/$want/android.jar
-  installed:  $have
-
-This is a PIN, not a preference — with it set, nothing falls back to the highest
-installed platform, so the platforms you do have are ignored and the build fails
-with 'No Android platforms found' as though you had none.
-
-Pick one:
-  unset ANDROID_PLATFORM                    # use the highest installed
-  export ANDROID_PLATFORM=android-34        # or name one from 'installed' above
-  sdkmanager 'platforms;$want'              # or install the one it wants
-
-ANDROID_SDK_EXTENSION is part of the name too, and is currently '${ANDROID_SDK_EXTENSION:-unset}'."
-  fi
+  printf 'android.jar:%s (from your ANDROID_JAR)\n' " $ANDROID_JAR"
 
 elif [[ ${#installed[@]} -eq 0 ]]; then
   die "No Android platform in $SDK/platforms.
@@ -111,16 +81,27 @@ The NDK and build-tools are not enough: Slint's Android backend and Carnyx's own
 build.rs each compile Java against android.jar, and there is none to compile
 against.
 
-Install one — 34 matches compileSdk in android/app/build.gradle.kts:
-  sdkmanager 'platforms;android-34'
+Install one — $compile_sdk matches compileSdk in android/app/build.gradle.kts:
+  sdkmanager 'platforms;android-$compile_sdk'
 
-or in Android Studio: SDK Manager → SDK Platforms → Android 14 (API 34).
+or in Android Studio: SDK Manager → SDK Platforms.
 
 Already have one elsewhere? Point at it directly:
   export ANDROID_JAR=/path/to/android.jar"
 
+elif [[ -f "$SDK/platforms/android-$compile_sdk/android.jar" ]]; then
+  # Preferred, because it is the same level Gradle compiles the Java against.
+  export ANDROID_JAR="$SDK/platforms/android-$compile_sdk/android.jar"
+  printf 'android.jar: android-%s, matching compileSdk (installed:%s)\n' "$compile_sdk" "$have"
+
 else
-  printf 'android.jar: highest installed, from:%s\n' "$have"
+  # Highest installed, by VERSION order — a plain lexicographic max would put
+  # android-9 above android-34, and "36.1" needs a numeric-aware sort too.
+  best=$(for j in "${installed[@]}"; do basename "$(dirname "$j")"; done \
+    | sed 's/^android-//' | sort -V | tail -1)
+  export ANDROID_JAR="$SDK/platforms/android-$best/android.jar"
+  printf 'android.jar: android-%s, highest installed (compileSdk %s is NOT installed; installed:%s)\n' \
+    "$best" "$compile_sdk" "$have"
 fi
 
 NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}}"
