@@ -213,7 +213,7 @@ fn main() {
                 // that as `a == 0` reported a card at the left bezel that was not
                 // there at all.
                 let cut = n > 20 && (a == 0 || b >= w as usize - 1);
-                if cut && worst.map_or(true, |(_, _, _, wn)| n < wn) {
+                if cut && worst.is_none_or(|(_, _, _, wn)| n < wn) {
                     worst = Some((ms, a, b, n));
                 }
                 if i < 13 {

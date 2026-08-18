@@ -493,20 +493,19 @@ because destroying every stored logo on one tap is not something to do without
 one.
 
 ### 70. Finish the accessibility annotations
-**PENDING, and partly done already.** Two files carry them — `ui/numpad.slint`
-(three controls) and `ui/logo-search.slint` (four) — 19 `accessible-*` lines
-between them, including `accessible-checkable`, `accessible-item-selected` and
-`accessible-enabled`. The other eleven have none: `app`, `face`, `hero`, `icons`,
-`nearby`, `overlay`, `presets`, `settings`, `status-bar`, `tokens`, `types` — of
-which `face`, `hero`, `presets`, `nearby`, `settings` and `status-bar` hold real
-controls and are the ones that matter. CarFM sets `accessibilityRole` and
+**PENDING, and partly done already.** Three files carry them — `ui/numpad.slint`
+(6 `accessible-*` lines), `ui/logo-search.slint` (13) and `ui/nearby.slint` (3,
+on #76's TabButton). The other ten have none: `app`, `face`, `hero`, `icons`,
+`overlay`, `presets`, `settings`, `status-bar`, `tokens`, `types` — of which
+`face`, `hero`, `presets`, `settings` and `status-bar` hold real controls and
+are the ones that matter (nearby's station rows and chips are still bare too). CarFM sets `accessibilityRole` and
 `accessibilityLabel` on every control.
 
 ### 71. Verify the remaining CarFM citations
-**PENDING.** 112 line-numbered citations across `ui/`, concentrated in
-`settings.slint` (37), `numpad.slint` (30) and `logo-search.slint` (17), with the
-remaining 28 spread over `overlay`, `nearby`, `presets`, `app`, `hero` and
-`status-bar`. They have never been checked against the lines they name. Ten
+**PENDING.** Line-numbered citations across `ui/`, concentrated in
+`settings.slint` (37) and `logo-search.slint` (17); #76's rewrite cut
+`numpad.slint` from 30 to 8, so the census here is smaller than when this item
+was filed — recount before verifying. They have never been checked against the lines they name. Ten
 behaviour-bearing ones were verified and all held; the rest are mostly chrome,
 where a drifted line number is noise rather than a defect — but a drifted CLAIM
 is not.
@@ -661,15 +660,83 @@ costs nothing when there is no error and the line alone is easy to miss at a
 glance in a moving car.
 
 Verified by rendering and by driving: `examples/numpadprobe.rs` holds the entry
-rules, the always-closing TUNE, the seek that clears the buffer before it sweeps,
-the CANCEL that restores the frequency the tab opened on, the tab that never
-persists between visits, and ten buffers against the warning rule. Seven shots
-cover both tabs on four surfaces, light and dark, including the 800×360 slice
-where the column has to scroll to reach CANCEL/TUNE.
+rules, the always-closing TUNE, the seeks (landed AND still in flight), the
+CANCEL/scrim restore, the tab-switch sweep stop, the same-tab re-tap no-op, and
+fourteen buffers against the warning rule. Shots: seven `freq-tab-*` states over
+three surfaces (1024×614 light+dark, 360×800, 800×360 incl. scrolled — the slice
+where the column must scroll to reach CANCEL/TUNE); the Nearby tab's coverage is
+the pre-existing `nearby-*` group, whose header the tab bar replaced. An earlier
+version of this entry said "seven shots cover both tabs on four surfaces" —
+wrong on both counts, corrected here per the completion-claims rule.
+
+**THE DEEP-REVIEW PASS THAT FOLLOWED (51 raw findings, 18 confirmed) fixed:**
+
+1. CANCEL during an in-flight hardware sweep neither stopped it nor restored —
+   the restore was gated on the dial having MOVED, and on the NWD front end a
+   seek is fire-and-forget: mid-sweep the dial still equals the restore point,
+   so the filter dropped it and the sweep landed after the driver said no. The
+   restore now also fires while a sweep is in flight; the tune is both the stop
+   and the restore.
+2. NOTHING EVER SET `scanning`. The UI property existed, the hero's scanning
+   face, the readout's un-dim-while-sweeping rule and the stop-sweep-on-
+   tab-switch branch all read it — and no production code wrote it, so all three
+   were unreachable on the device. It is app state now: raised when a seek is
+   handed off, cleared by the next frequency report or any tune. The vendor's
+   `notifyRadioScanState(int)` stays unread: its values are undocumented and
+   wiring a guess would be task 49's fabricated-diagnostics failure again.
+   (Steering-wheel seeks deliberately do NOT raise it — CarFM's face shows no
+   scan state for hardware seeks either; only the tab's own SEEK does.)
+3. The live warning CONTRADICTED the commit: it tested display-string prefixes,
+   `numpad_commit` rounds — so "87.46" warned and then tuned 87.5, and "87.4"
+   warned though one more digit rescues it. `entry_can_tune` now asks
+   numpad_commit itself over the keypad's own grammar (search via numpad_press,
+   ≤4 digits + one point), and `committable_buffers_never_warn` walks every
+   typable buffer proving no committable one warns.
+4. A tap on the ALREADY-ACTIVE tab wiped the typed buffer and re-based CANCEL's
+   restore point to the swept dial. Same-tab taps are a no-op now.
+5. TabButton had no 48dp floor — 46px real on 800×360, on the only two controls
+   that reach the keypad, in the commit that argued the floor was mandatory for
+   the keys beneath them. Floored like CloseButton.
+6. The ✕/scrim tab split lived in a private view function no probe could reach —
+   against the same commit's own stated principle. It is `on_nearby_dismiss` in
+   Rust now, and the probe drives it on both tabs, mid-sweep included.
+7. The probe itself certified behaviours it never exercised: its seek tuner was
+   a no-op, so "stops a running seek" asserted a flag nothing set and the
+   CANCEL-restore assertion hid behind a guard that never opened. It now runs a
+   two-mood tuner (lands / hangs mid-sweep) and both fixes were sabotage-tested:
+   re-introducing either bug fails the probe.
+
+**Also recorded, deliberate:** the wide tab hint's doubled spaces around the
+interpuncts are now VERBATIM from §3 (they had been normalised to single); §4's
+tabular numerals are dropped openly (Slint exposes no OpenType features), so the
+readout re-centres per keystroke; the freq column's bottom padding is s(24), not
+§4's 8 — the corner-clip rule wins where no footer covers the card's corners;
+the contract ships one `freq-seek(int)` instead of §6's onSeekUp/onSeekDown plus
+two extra finished-value props (`freq-display-dim`, `freq-error-text`), per the
+house rule that Slint computes nothing; and CANCEL restores the frequency the
+TAB was last switched to (§5's snapshot sentence), which diverges from its
+"overlay opened on" sentence only in the seek-then-tab-bounce sequence.
 
 **Not carried over, because there is nothing left to carry:** §7's "delete the
 standalone numpad dialog" and "remove the hero frequency's pressed/ripple state" —
 the frequency's TouchArea had no pressed state to remove.
+
+
+### 77. Cover the hero rect when a step hands off to nothing
+**PENDING.** When a step discards no card (`hand-off` false — forward off an
+unsaved dial), the morph's first frame shows NO card in the hero rect: the
+resting card hides the moment `m-out` moves, the outgoing card is gated on
+`hand-off`, and the arriving card is still shrunk on the source slot. The
+station that was playing vanishes with no exit, and the centre stays
+under-covered through the early travel. The gating is deliberate — the unsaved
+dial lives in no slot, and flying it into one would draw a lie — but "no
+destination" need not mean "no exit": the departing card could fade in place at
+the hero rect instead of travelling. That is a design decision (what should the
+exit look like?), not a wiring fix, so it is filed rather than improvised.
+`outprobe` deliberately excludes this case; whatever is decided needs a fourth
+claim there. Pre-dates #75's outgoing work in shape — the incoming-only morph
+had the same hole — but #75 made the covered cases good enough that this one now
+stands out.
 
 
 ---

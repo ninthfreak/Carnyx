@@ -41,7 +41,6 @@
 // contract.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { OverlayCard } from "overlay.slint";
 
 // ── The backspace glyph ─────────────────────────────────────────────────────
 //
@@ -255,14 +254,16 @@ component SeekButton inherits Rectangle {
     }
 }
 
-/// CANCEL and TUNE. Same box; TUNE takes the blue border, the blue fill and the
-/// disabled state.
+/// CANCEL and TUNE. Same box; TUNE takes the blue border and the blue fill.
+///
+/// NO DISABLED STATE. The old standalone card dimmed TUNE while the buffer was
+/// empty (Numpad.tsx:125-128); §5 replaced that outright — TUNE is always live
+/// and always a dismissal, tuning only when the buffer commits — so the
+/// `enabled` property went with the card rather than surviving as a dead branch
+/// documented as shipping behaviour.
 component ActionButton inherits Rectangle {
     in property <string> label;
     in property <bool> primary: false;
-    /// TUNE only: false while the buffer is empty (Numpad.tsx:125-128), which dims
-    /// the button to 0.4 and swallows the tap.
-    in property <bool> enabled: true;
     in property <length> box-h;
     in property <length> radius;
     in property <length> label-size;
@@ -280,14 +281,12 @@ component ActionButton inherits Rectangle {
     border-color: root.primary ? Pal.blue : Pal.border;
     // CANCEL has no fill in either reference; only TUNE does.
     background: root.primary ? Pal.blue-fill : transparent;
-    opacity: !root.enabled ? 0.4 : (touch.pressed ? 0.55 : 1.0);
+    opacity: touch.pressed ? 0.55 : 1.0;
 
     accessible-role: button;
     accessible-label: root.label;
 
-    touch := TouchArea {
-        clicked => { if (root.enabled) { root.clicked(); } }
-    }
+    touch := TouchArea { clicked => { root.clicked(); } }
 
     Text {
         text: root.label;
@@ -417,7 +416,15 @@ export component FreqPad inherits Rectangle {
             padding-left: root.side-pad;
             padding-right: root.side-pad;
             padding-top: Metrics.s(8);
-            padding-bottom: Metrics.s(8);
+            // NOT §4's symmetric 8. This tab has no footer band covering the
+            // card's bottom corners, so at full scroll the CANCEL/TUNE row would
+            // rest 8dp deep inside the s(24) corner — exactly the configuration
+            // overlay.slint's clip note forbids (the software renderer clips
+            // square, Skia shaves the row's corner tips). The corner's own depth
+            // is the inset that clears it; the scroll fade hides the extra on
+            // every surface that actually scrolls, and on the 900×600 design
+            // surface the column centres, so the padding never shows at all.
+            padding-bottom: Metrics.s(24);
 
             HorizontalLayout {
                 alignment: center;
@@ -466,6 +473,12 @@ export component FreqPad inherits Rectangle {
                             // Fixed safety colour, both themes, never re-themed (§10).
                             color: Pal.amber;
                             letter-spacing: -1px;
+                            // §4 also asks for TABULAR numerals here, and that is
+                            // dropped OPENLY rather than silently: Slint's Text
+                            // exposes no OpenType feature control (no tnum), so
+                            // the digits render at Atkinson's default widths. The
+                            // readout re-centres per keystroke as a result —
+                            // visible, cosmetic, and not fixable from this file.
                             opacity: root.display-dim ? 0.45 : 1.0;
                         }
 

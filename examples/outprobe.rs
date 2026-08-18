@@ -328,12 +328,6 @@ fn main() {
                 failures += 1;
             }
 
-            // ── 3. It shrinks, and toward the slot it lands in ──
-            //
-            // Sampled only while the card still crosses the band. It is leaving
-            // the band BECAUSE it is shrinking — the row it filled at rest stops
-            // being covered — and `edgeprobe` separately holds that it never
-            // reaches a bezel, so it cannot have left by sliding away.
             // ── 3. Both cards SCALE ──
             //
             // Measured on the card's TOP EDGE rather than its width, because a

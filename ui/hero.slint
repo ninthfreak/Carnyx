@@ -202,11 +202,12 @@ export component HeroCard inherits Rectangle {
     /// Drawn, but it takes no taps.
     ///
     /// For the OUTGOING card in the step morph, which spends the first stretch
-    /// of its flight covering the hero's own rect: its star, its frequency and
-    /// its power button would otherwise swallow taps meant for the card
-    /// underneath — and a save or an audio release aimed at the station now
-    /// playing would land on the one that just left. `PeekCard` carries the same
-    /// property for the same reason.
+    /// of its flight covering the hero's own rect: its star and its power button
+    /// would otherwise swallow taps meant for the card underneath — and a save
+    /// or an audio release aimed at the station now playing would land on the
+    /// one that just left. (The frequency stopped being a tap target when the
+    /// numpad became a tab; the star and the power button are what is left.)
+    /// `PeekCard` carries the same property for the same reason.
     in property <bool> inert: false;
 
     callback toggle-save();
@@ -671,6 +672,15 @@ export component HeroRow inherits Rectangle {
         show-call: root.outgoing.show-call;
         show-freq: root.outgoing.show-freq;
         saved: root.outgoing.saved;
+        // FACE STATE, not station state, so it is NOT in the snapshot: `dead` is
+        // the audio-priority veil and it belongs to the whole face at once. A
+        // morph never STARTS dead (the arm handler skips when dead), but the
+        // release can land mid-flight — and a card flying at full colour through
+        // a face that just went grayscale is the one thing worse than the veil
+        // arriving a frame late. `scanning` is deliberately left at its default:
+        // a sweep started mid-morph belongs to the dial that ARRIVED, and the
+        // departing station claiming it would be a lie about the past.
+        dead: root.dead;
     }
 
     // THE RESTING HERO, and the row's RULER — two jobs that cannot be done by

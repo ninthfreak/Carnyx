@@ -77,7 +77,7 @@ pub fn plate_label(base: Option<&str>, name: &str) -> String {
 }
 
 /// The dial, to one decimal. FM is always MHz, so no unit is ever appended on
-/// the face — the label appears only in the tune numpad.
+/// the face — the label appears only in the tune overlay's frequency tab.
 pub fn format_mhz(mhz: f32) -> String {
     format!("{:.1}", mhz)
 }

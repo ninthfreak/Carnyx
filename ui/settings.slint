@@ -1049,7 +1049,8 @@ component ChevronRow inherits Rectangle {
 /// 3. NO WRAP. React Native's <Text> wraps; a fixed row box cannot. A long probe
 ///    line elides instead of running to two lines. The alternative — a wrapping
 ///    column whose preferred height feeds this box's own height — is the binding
-///    loop this codebase keeps warning about (OverlayCard's `wrap-height` note),
+///    loop this codebase keeps warning about (the note that rode OverlayCard's
+///    since-removed `wrap-height`),
 ///    and a dense debug dump is the wrong place to take that risk.
 ///
 /// THE FONT FLOOR IS 11px, NOT THE FILE'S 12px, and this is the one place that

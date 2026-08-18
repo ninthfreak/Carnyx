@@ -918,7 +918,8 @@ export component LogoSearchOverlay inherits Rectangle {
         // 720 × 560, capped to the surface less 32dp a side and centred. Corner,
         // card background and scrim all stay at their defaults: this overlay is
         // one of the three that use Pal.bg (dc.html `containerStyle`:266 and
-        // LogoSearchOverlay.tsx:150), and only the numpad wants Pal.panel.
+        // LogoSearchOverlay.tsx:150); nothing wants Pal.panel since the numpad
+        // card dissolved into the tune overlay's tab.
         design-width: 720;
         design-height: 560;
         // §6.4 lists the scrim beside Cancel and the ✕ as a way out, and it stays

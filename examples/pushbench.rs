@@ -65,7 +65,7 @@ fn main() {
         ("push_meter", 2),
         ("push_nearby", 3),
         ("push_settings", 4),
-        ("push_numpad", 5),
+        ("push_freq", 5),
     ] {
         parts += bench(name, 200, || app.push_one_for_bench(f));
     }

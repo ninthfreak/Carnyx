@@ -497,6 +497,22 @@ struct State {
     logo_art: Option<Raster>,
     /// The frequency tab's entry buffer, exactly as typed.
     numpad: String,
+    /// A hardware sweep is in flight: WE handed a seek to the tuner and no
+    /// frequency report has come back since.
+    ///
+    /// OWNED HERE, NOT READ FROM THE VENDOR. `notifyRadioScanState(int)` exists
+    /// on the callback interface, but its integer values are undocumented
+    /// (NWD-RADIO-INTEGRATION §2) and nothing has decoded them on the unit, so
+    /// wiring the flag to a guess would be exactly the fabricated-diagnostics
+    /// failure of task 49. Set when a seek is handed off, cleared by the next
+    /// `Frequency` event — a landing and a retune both end a sweep — which is
+    /// honest on every tuner this app has: the fakes land synchronously and the
+    /// NWD front end answers a seek with one `notifyCurrentFrequency`.
+    ///
+    /// Until this existed the UI's `scanning` property was never set at all:
+    /// the hero's scanning face, the readout's un-dim-while-sweeping rule and
+    /// the stop-sweep-on-tab-switch branch were all unreachable in production.
+    scanning: bool,
     /// What the dial read when the frequency tab was opened, and what CANCEL puts
     /// back (mini-handoff §5).
     ///
@@ -835,6 +851,7 @@ impl App {
                 art: HashMap::new(),
                 logo_art: None,
                 numpad: String::new(),
+                scanning: false,
                 freq_restore: None,
                 prefs_dir,
                 saved,
@@ -1247,6 +1264,10 @@ impl App {
                 settle_dotted(&mut s);
             }
             TunerEvent::Frequency(f) => {
+                // However this report came about — a seek landing, a retune, the
+                // vendor walking its own presets — the front end is now ON a
+                // frequency, so no sweep is in flight any more.
+                s.scanning = false;
                 if let Some(mhz) = f.mhz {
                     s.dial = mhz;
                 }
@@ -1563,6 +1584,10 @@ impl App {
         let s = self.state.borrow();
         let st = &s.rds_state;
 
+        // The sweep flag rides the hero push because the hero is its biggest
+        // consumer; the readout's dim rule reads the state directly.
+        ui.set_scanning(s.scanning);
+
         // IDENTITY ORDER, and it matters: the station database is authoritative
         // for what is on this dial, the LEARNED map is that same database's
         // answer from the last time a fix let it speak, the decoded PS is a
@@ -1872,6 +1897,33 @@ impl App {
         self.save_prefs();
     }
 
+    /// §5's abandon-entry: CANCEL, and the ✕ or scrim while the frequency tab
+    /// is up. Closes the overlay and puts back the frequency the tab opened on.
+    ///
+    /// THE RESTORE FIRES ON TWO CONDITIONS, not one. A moved dial is the obvious
+    /// case — a seek landed somewhere else. The second is a sweep still in
+    /// FLIGHT: on the NWD front end a seek is fire-and-forget and `s.dial` does
+    /// not move until `notifyCurrentFrequency` lands, so mid-sweep the dial
+    /// still EQUALS the restore point — and a dial-equality test alone concluded
+    /// there was nothing to do, dropped the restore, and let the sweep land on a
+    /// new station after the driver had said no to it. Tuning the restore point
+    /// is both halves at once: it is the documented sweep-cancel and it is the
+    /// restore.
+    fn freq_cancel(self: &Rc<App>) {
+        let restore = {
+            let mut s = self.state.borrow_mut();
+            s.numpad.clear();
+            let dial = s.dial;
+            let sweeping = s.scanning;
+            s.freq_restore.take().filter(|v| *v != dial || sweeping)
+        };
+        self.ui().set_overlay(Overlay::None);
+        match restore {
+            Some(v) => self.tune(v),
+            None => self.push_freq(),
+        }
+    }
+
     fn push_freq(&self) {
         let ui = self.ui();
         let s = self.state.borrow();
@@ -1887,8 +1939,8 @@ impl App {
         // DIM ONLY WHEN THERE IS NOTHING TO SAY. A sweep runs behind this tab and
         // the readout follows it, so a scan is as much a reason to be legible as
         // a typed dial.
-        ui.set_freq_display_dim(!typed && !ui.get_scanning());
-        ui.set_freq_error(typed && !band_prefix_ok(&s.numpad));
+        ui.set_freq_display_dim(!typed && !s.scanning);
+        ui.set_freq_error(typed && !entry_can_tune(&s.numpad));
         // ONE DECIMAL ON BOTH ENDS, explicitly. `{FM_HI}` renders 108.0 as "108",
         // which is how the old card's line read; §4 writes the copy out as
         // "Outside 87.5–108.0 MHz band" and the band's ends are quoted to a tenth
@@ -1996,6 +2048,11 @@ impl App {
         {
             let mut s = self.state.borrow_mut();
             s.dial = mhz;
+            // A retune is the documented way to cancel a hardware sweep (see
+            // `apply_panel_action`), so whatever sweep was in flight is not any
+            // more — and on a front end that answers with no further frequency
+            // report, nothing else would ever clear the flag.
+            s.scanning = false;
             // A retune is a new station: the level from the old one is not a
             // reading of this one.
             s.level = None;
@@ -2093,7 +2150,15 @@ impl App {
         // ── §6.2's frequency tab ──
         on!(on_set_nearby_tab, |app, t| {
             let t: NearbyTab = t;
-            {
+            // A TAP ON THE TAB THAT IS ALREADY UP IS NOT A SWITCH. TabButton
+            // fires unconditionally — `active` is display-only — so without this
+            // gate a stray tap on the active "Enter frequency" tab wiped a
+            // half-typed dial and, worse, re-based CANCEL's restore point to
+            // wherever a seek had just swept to.
+            if t == app.ui().get_nearby_tab() {
+                return;
+            }
+            let sweeping = {
                 let mut s = app.state.borrow_mut();
                 // Either way the buffer goes (§5). Switching away abandons a
                 // half-typed dial; switching in starts clean.
@@ -2102,13 +2167,14 @@ impl App {
                 // Switching away drops it, so a later CANCEL cannot resurrect a
                 // frequency from a visit two taps ago.
                 s.freq_restore = (t == NearbyTab::Freq).then_some(s.dial);
-            }
+                s.scanning
+            };
             // §5: switching to Nearby stops any running seek. There is no cancel
             // on the tuner trait — `Tuner::seek` is handed over and let go — so
-            // the only thing that stops a sweep is a tune, which is what the seek
-            // handler below already relies on. Re-tuning the dial it is already
-            // on is that, and nothing else.
-            if t == NearbyTab::Nearby && app.ui().get_scanning() {
+            // the only thing that stops a sweep is a tune. Mid-sweep `s.dial` is
+            // still where the sweep STARTED (the landing has not reported), so
+            // this puts the driver back exactly there.
+            if t == NearbyTab::Nearby && sweeping {
                 let dial = app.state.borrow().dial;
                 app.tune(dial);
             }
@@ -2134,7 +2200,7 @@ impl App {
             //
             // A REFUSAL IS NO LONGER A STATE. The old card kept itself up with the
             // buffer intact and lit an error line; there is no card to keep up now,
-            // and §5 replaced that with the live warning `band_prefix_ok` drives.
+            // and §5 replaced that with the live warning `entry_can_tune` drives.
             let dial = numpad_commit(&app.state.borrow().numpad);
             {
                 let mut s = app.state.borrow_mut();
@@ -2148,26 +2214,42 @@ impl App {
             }
         });
         on!(on_freq_cancel, |app| {
-            // §5: abandon entry and put back the frequency the tab opened on. The
-            // restore only costs a tune when a SEEK actually moved the dial —
-            // typing never does, so the ordinary CANCEL is free.
-            let restore = {
-                let mut s = app.state.borrow_mut();
-                s.numpad.clear();
-                let dial = s.dial;
-                s.freq_restore.take().filter(|v| *v != dial)
-            };
-            app.ui().set_overlay(Overlay::None);
-            match restore {
-                Some(v) => app.tune(v),
-                None => app.push_freq(),
+            app.freq_cancel();
+        });
+        on!(on_nearby_dismiss, |app| {
+            // THE ✕ AND THE SCRIM, from either tab. §5 splits the two meanings —
+            // "just closes" on the station list, "abandons entry and restores"
+            // on the keypad — and the branch lives HERE rather than in the view
+            // for the same reason TUNE's close does: a rule written into the
+            // overlay instance only runs when the tap goes through that
+            // instance, which is unreachable from every probe.
+            if app.ui().get_nearby_tab() == NearbyTab::Freq {
+                app.freq_cancel();
+            } else {
+                {
+                    let mut s = app.state.borrow_mut();
+                    s.numpad.clear();
+                    s.freq_restore = None;
+                }
+                app.ui().set_overlay(Overlay::None);
+                app.push_freq();
             }
         });
         on!(on_freq_seek, |app, dir| {
-            // THE BUFFER GOES FIRST. The readout shows the buffer whenever there is
-            // one, so a half-typed dial left standing would sit there through the
-            // whole sweep instead of following it to the station it finds.
-            app.state.borrow_mut().numpad.clear();
+            {
+                let mut s = app.state.borrow_mut();
+                // THE BUFFER GOES FIRST. The readout shows the buffer whenever
+                // there is one, so a half-typed dial left standing would sit
+                // there through the whole sweep instead of following it to the
+                // station it finds.
+                s.numpad.clear();
+                // The sweep is in flight from here until a frequency report
+                // lands. On the fakes that is the very next drain; on the NWD
+                // front end it is however long the search takes, and this flag
+                // is what CANCEL and the tab switch read to know a tune is still
+                // owed.
+                s.scanning = true;
+            }
             // Handed over and let go — see `PanelAction::Seek`. Re-tuning after a
             // hardware seek cancels it.
             app.state.borrow().tuner.seek(dir > 0);
@@ -3086,15 +3168,6 @@ fn numpad_press(buf: &str, key: &str) -> String {
     format!("{buf}{key}")
 }
 
-/// What the buffer tunes to, or `None` if it tunes to nothing.
-///
-/// CarFM's `commit` (`Numpad.tsx:56-60`): parse, ROUND TO A TENTH, then check the
-/// band. The rounding is the part that was missing — "105.55" tuned 105.55 here
-/// and 105.6 in CarFM, and a dial is a tenth or it is not a dial.
-///
-/// `Math.round` breaks ties toward +∞ and Rust's `round` away from zero; every
-/// value that reaches this is positive, so the two agree. It is written down
-/// because that is only true while the band floor stays above zero.
 /// Does a step actually DISCARD the card in the slot the outgoing hero lands in?
 ///
 /// The ghost stands for a card that is about to stop existing, so drawing one
@@ -3123,7 +3196,8 @@ fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
     }
 }
 
-/// Could this buffer still become an in-band frequency by typing more?
+/// Could this buffer, or anything the keypad still lets the driver type after
+/// it, commit to a dial?
 ///
 /// WHEN THE OUT-OF-BAND LINE LIGHTS, and the one judgement call in this file that
 /// the mini-handoff leaves open. §6 hands `freqError` to the host without saying
@@ -3136,20 +3210,36 @@ fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
 /// is a warning drivers learn to ignore. That exact failure is on the record here —
 /// it is why the old card made the refusal state rather than a predicate.
 ///
-/// So the test is not "is this out of band" but "can this still get there": true
-/// while some in-band frequency's own display string starts with what has been
-/// typed. Enumerated rather than reasoned about, because the set is 206 values and
-/// a rule would have to re-derive the buffer's own grammar to be right about
-/// "105." and "1" and "108.0" — this cannot disagree with the formatter, since it
-/// asks the formatter.
-fn band_prefix_ok(buf: &str) -> bool {
-    if buf.is_empty() {
+/// THE FIRST CUT OF THIS RULE WAS WRONG TOO, in the other direction. It asked
+/// whether some in-band dial's DISPLAY STRING starts with the buffer — which
+/// contradicts the commit it warns about, because `numpad_commit` parses and
+/// ROUNDS: "87.46" commits to 87.5 and no display string starts with "87.46", so
+/// the line said "Outside the band" over a buffer TUNE then tuned. And "87.4"
+/// warned even though appending a digit rescues it. So the rule now asks the only
+/// two functions whose answer matters: does `numpad_commit` take this buffer, or
+/// any extension of it that `numpad_press` would actually let the driver type?
+/// The search IS the keypad's grammar — at most four digits and one point, a few
+/// thousand nodes at worst — so the three functions cannot disagree by
+/// construction. `committable_buffers_never_warn` proves the whole space.
+fn entry_can_tune(buf: &str) -> bool {
+    if numpad_commit(buf).is_some() {
         return true;
     }
-    let (lo, hi) = ((FM_LO * 10.0) as i32, (FM_HI * 10.0) as i32);
-    (lo..=hi).any(|tenths| format_mhz(tenths as f32 / 10.0).starts_with(buf))
+    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "."].iter().any(|k| {
+        let next = numpad_press(buf, k);
+        next != buf && entry_can_tune(&next)
+    })
 }
 
+/// What the buffer tunes to, or `None` if it tunes to nothing.
+///
+/// CarFM's `commit` (`Numpad.tsx:56-60`): parse, ROUND TO A TENTH, then check the
+/// band. The rounding is the part that was missing — "105.55" tuned 105.55 here
+/// and 105.6 in CarFM, and a dial is a tenth or it is not a dial.
+///
+/// `Math.round` breaks ties toward +∞ and Rust's `round` away from zero; every
+/// value that reaches this is positive, so the two agree. It is written down
+/// because that is only true while the band floor stays above zero.
 fn numpad_commit(buf: &str) -> Option<f32> {
     let parsed = buf.parse::<f32>().ok().filter(|v| v.is_finite())?;
     let dial = (parsed * 10.0).round() / 10.0;
@@ -3526,6 +3616,43 @@ mod tests {
         assert_eq!(numpad_commit(""), None);
         assert_eq!(numpad_commit("."), None);
         assert_eq!(numpad_commit("1.2.3"), None);
+    }
+
+    /// The live warning and the commit must agree: a buffer that commits, or that
+    /// the keypad can still carry to a commit, never warns; a buffer no typing
+    /// can rescue always does.
+    #[test]
+    fn entry_warning_only_when_stuck() {
+        for ok in ["1", "10", "105", "105.", "8", "9", "0", "87.5", "108.0", "87.4", "87.46", "087."] {
+            assert!(entry_can_tune(ok), "{ok:?} can still reach a dial");
+        }
+        for stuck in ["7", "6", "12", "120", "109", "108.1", "1080"] {
+            assert!(!entry_can_tune(stuck), "{stuck:?} is beyond rescue");
+        }
+    }
+
+    /// Exhaustive, not sampled: every buffer the keypad can physically produce is
+    /// walked, and any that `numpad_commit` accepts must not be warning — the
+    /// exact contradiction the display-string-prefix rule shipped with.
+    #[test]
+    fn committable_buffers_never_warn() {
+        fn walk(buf: String, count: &mut u32) {
+            for k in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "."] {
+                let next = numpad_press(&buf, k);
+                if next != buf {
+                    if numpad_commit(&next).is_some() {
+                        assert!(entry_can_tune(&next), "{next:?} commits but would warn");
+                    }
+                    *count += 1;
+                    walk(next, count);
+                }
+            }
+        }
+        let mut count = 0;
+        walk(String::new(), &mut count);
+        // The grammar is 4 digits + one point; if this collapses, the walk is
+        // not covering the keypad any more.
+        assert!(count > 10_000, "only {count} buffers walked");
     }
 
     /// The wheel and the panel buttons, which decoded to a log line and nothing

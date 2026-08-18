@@ -119,10 +119,15 @@ export component AppWindow inherits Window {
     // property below is navigation state, the same class of thing as the
     // picker's own `hold-index`, not a formatted string or a hashed colour.
     in-out property <Overlay> overlay: Overlay.none;
-    /// The ✕, CANCEL, the scrim — every overlay's single dismissal. Rust resets
-    /// whatever that overlay was holding; the `overlay` property is already back
-    /// to `none` by the time this fires.
+    /// The dismissal of the overlays WITHOUT a split to make — settings, logo
+    /// search, and the nearby row-tap's close. Rust resets whatever that overlay
+    /// was holding; the `overlay` property is already back to `none` by the time
+    /// this fires. The tune overlay's ✕ and scrim do NOT come through here: §5
+    /// gives them two meanings, so they go to `nearby-dismiss` and Rust decides.
     callback close-overlay();
+    /// The tune overlay's ✕ or scrim, either tab. Rust branches: "just closes"
+    /// on the station list, abandon-entry-and-restore on the keypad (§5).
+    callback nearby-dismiss();
 
     // §6.2's frequency tab — the old §6.1 numpad, folded in by the mini-handoff.
     // `can-tune` is gone with the card: §5 makes TUNE always live and always a
@@ -336,7 +341,10 @@ export component AppWindow inherits Window {
         pick-bucket(b) => { root.nearby-pick-bucket(b); }
         pick-genre(g) => { root.nearby-pick-genre(g); }
         reset-bucket => { root.nearby-reset-bucket(); }
+        // The row-tap's close: a tune already commanded in Rust, nothing to
+        // branch on. The ✕ and the scrim take the other road below.
         close => { root.dismiss(); }
+        dismissed => { root.nearby-dismiss(); }
     }
 
     if root.overlay == Overlay.settings: SettingsOverlay {

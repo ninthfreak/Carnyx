@@ -1,10 +1,11 @@
 // Shared modal chrome (ANDROID §6) — the scrim, the centred card, and the three
 // bands every overlay is built out of.
 //
-// Four overlays sit in this frame: the tune numpad (§6.1), the nearby picker
-// (§6.2), settings (§6.3) and the logo-search window (§6.4). Three of the four
-// scroll. Nothing here knows what any of them contain; an overlay supplies its
-// own design size and its own children and gets the frame for free.
+// Three overlays sit in this frame: the tune overlay (§6.2 — the nearby picker
+// and, since the mini-handoff folded the old §6.1 numpad in as its second tab,
+// the frequency keypad too), settings (§6.3) and the logo-search window (§6.4).
+// All three scroll. Nothing here knows what any of them contain; an overlay
+// supplies its own design size and its own children and gets the frame for free.
 //
 // WHERE THE NUMBERS COME FROM. The sizing rule is §6's preamble verbatim. The
 // chrome — card radius, scrim, header rule, close button, padding — is read off
@@ -17,6 +18,9 @@
 //                                               SettingsPanel.tsx:653, LogoSearchOverlay.tsx:376
 //   card   borderRadius 24, overflow hidden,    same four lines
 //          shadow 0.35 / blur 50 / offset-y 20
+//
+// (Numpad.tsx is cited for the values it agreed on while its overlay existed;
+// the numpad is a tab inside the picker now and brings no chrome of its own.)
 //
 // This component does NOT gate its own visibility. The caller wraps it in an
 // `if`, the way Face wraps its own conditional regions.
@@ -71,9 +75,9 @@ export component CloseButton inherits Rectangle {
 /// logo tile + two text lines.
 ///
 /// Heights and paddings differ per overlay, so both are properties rather than
-/// constants (dc.html `headerStyle`):
-///   Settings     head-height s(76)              pad-h s(26)   pad-v 0
-///   Nearby       head-height s(narrow?62:78)    pad-h s(narrow?18:28)   pad-v 0
+/// constants (dc.html `headerStyle`, and the mini-handoff's §3 for the tab bar):
+///   Settings     head-height s(76)              pad-h s(26)             pad-v 0
+///   Tune (tabs)  head-height s(narrow?70:82)    pad-h s(narrow?14:20)   pad-v s(narrow?10:12)
 ///   LogoSearch   head-height 0                  pad-h s(narrow?16:22)   pad-v s(narrow?14:16)
 /// `head-height` is a MINIMUM, not a fixed height — §10 requires font scale to
 /// ×1.5 without overlap, so a header must be able to grow past its design height.
@@ -209,7 +213,7 @@ export component OverlayFooter inherits Rectangle {
 ///     nearby := OverlayCard {
 ///         design-width: 900; design-height: 600;
 ///         close => { root.close-nearby(); }
-///         OverlayHeader { head-height: Metrics.s(nearby.narrow ? 62 : 78); … }
+///         OverlayHeader { head-height: Metrics.s(nearby.narrow ? 70 : 82); … }
 ///         OverlayBody { … }
 ///         OverlayFooter { … }
 ///     }
@@ -222,28 +226,20 @@ export component OverlayFooter inherits Rectangle {
 /// already carrying 0, so the caller does not have to remember which band grows.
 export component OverlayCard inherits Rectangle {
     /// The overlay's DESIGN size in design dp — the raw §6 numbers, not lengths:
-    /// numpad 440 (wrap-height), nearby 900×600, settings 700×576. LogoSearch is
-    /// 720×560 (LogoSearchOverlay.tsx:47). They are ramped through Metrics.s here,
-    /// like every other design dimension on the face, and then capped below.
+    /// the tune overlay 900×600, settings 700×576, LogoSearch 720×560
+    /// (LogoSearchOverlay.tsx:47). They are ramped through Metrics.s here, like
+    /// every other design dimension on the face, and then capped below.
+    ///
+    /// There used to be a `wrap-height` mode here — §6.1's "height wraps
+    /// content", for the standalone numpad card. The mini-handoff folded that
+    /// card into the tune overlay as a tab, its last caller went with it, and a
+    /// sizing mode nothing exercises is a binding-loop hazard standing guard
+    /// over nothing — so it is GONE, not dormant. An overlay that needs
+    /// wrap-to-content again reintroduces it deliberately, with its old warning:
+    /// read the content's PREFERRED height only, and never combine it with an
+    /// OverlayBody that stretches to fill the card.
     in property <float> design-width: 700;
     in property <float> design-height: 576;
-
-    /// §6.1's "height wraps content" — the numpad. The card takes its children's
-    /// preferred height instead of `design-height`, still capped by the surface.
-    ///
-    /// THE ONE PLACE A BINDING LOOP COULD APPEAR IN THIS FILE. It reads the
-    /// content's PREFERRED height, never its resolved one, which is the same move
-    /// HeroRow makes for its content-sized tall track; the content's measuring
-    /// width comes from `card-w`, which depends on nothing vertical. If this ever
-    /// does loop, the fix is for the numpad to state a `design-height` and leave
-    /// this false — do not try to read `card.height` back out.
-    ///
-    /// DO NOT COMBINE `wrap-height` WITH AN `OverlayBody`. A body that stretches
-    /// to fill the card while the card sizes itself to the body is the loop this
-    /// property is one step away from. Wrapping is for a fixed-metric column (the
-    /// numpad's display + seek row + keypad + actions); anything that can outgrow
-    /// the surface states a `design-height` and scrolls instead.
-    in property <bool> wrap-height: false;
 
     /// Per-side surface inset. §6: `width = min(designW, screenW − 32dp)`, i.e.
     /// 16dp a side. Deliberately RAW px and not Metrics.s(16): this is not a design
@@ -258,11 +254,11 @@ export component OverlayCard inherits Rectangle {
     /// (Numpad.tsx:34).
     in property <length> corner: Metrics.s(24);
 
-    /// Pal.bg on the picker, settings and logo search (their dc.html
-    /// `containerStyle` and their TSX cards). The numpad alone uses Pal.panel
-    /// (Numpad.tsx:65) — a real disagreement between the numpad and the other
-    /// three, and the numpad has no dc.html to settle it, so it stays the caller's
-    /// choice with the three-of-four value as the default.
+    /// Pal.bg on all three overlays (their dc.html `containerStyle` and their
+    /// TSX cards). The property survives its one dissenter: the standalone
+    /// numpad card was Pal.panel (Numpad.tsx:65), and when the mini-handoff
+    /// folded the numpad into the picker as a tab, the tab took the picker's
+    /// card and the disagreement dissolved.
     in property <color> card-background: Pal.bg;
 
     /// rgba(0,0,0,0.45), identical in all four TSX overlays and NOT themed.
@@ -288,9 +284,7 @@ export component OverlayCard inherits Rectangle {
     out property <length> card-w: Math.max(0px,
         Math.min(Metrics.s(root.design-width), root.width - 2 * root.edge-margin));
     out property <length> max-card-h: Math.max(0px, root.height - 2 * root.edge-margin);
-    out property <length> card-h: root.wrap-height
-        ? Math.min(content.preferred-height, root.max-card-h)
-        : Math.min(Metrics.s(root.design-height), root.max-card-h);
+    out property <length> card-h: Math.min(Metrics.s(root.design-height), root.max-card-h);
 
     /// The overlay width track from §6.2 — "clamped below ~620dp wide". Both
     /// NearbyPicker.tsx:125 and LogoSearchOverlay.tsx:49 test the resolved card
@@ -338,10 +332,6 @@ export component OverlayCard inherits Rectangle {
             clicked => { }
         }
 
-        // A Rectangle wrapping the column, not the column itself: `wrap-height`
-        // reads `content.preferred-height`, and a Rectangle-around-a-layout is the
-        // shape HeroCard/HeroRow already prove reports a content height correctly
-        // in this codebase.
         content := Rectangle {
             x: 0;
             y: 0;

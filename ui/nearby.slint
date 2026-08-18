@@ -507,7 +507,11 @@ component TabButton inherits Rectangle {
 
     horizontal-stretch: 1;
     min-width: 0px;
-    min-height: Metrics.s(root.narrow ? 50 : 58);
+    // §10's "hit targets ≥ 48dp in real dp" floor, exactly as on CloseButton and
+    // the keypad's tap-floor beneath this row. It is LIVE, not spare: the ramp
+    // takes s(50) to 46px on an 800×360 slice, and these two buttons are the
+    // only way to reach the keypad at all.
+    min-height: Math.max(48px, Metrics.s(root.narrow ? 50 : 58));
     border-radius: Metrics.s(12);
     // 1.5px active / 1px inactive. A border weight, so it stays raw px like the
     // pill borders in status-bar.slint and ActionButton's own TUNE.
@@ -539,7 +543,7 @@ component TabButton inherits Rectangle {
         }
         Text {
             text: root.hint;
-            font-size: Math.max(11px, Metrics.s(root.narrow ? 12 : 13));
+            font-size: Math.max(12px, Metrics.s(root.narrow ? 12 : 13));
             font-weight: 400;
             letter-spacing: 0.3px;
             color: Pal.dim;
@@ -717,16 +721,12 @@ export component NearbyOverlay inherits Rectangle {
     function hold-stop() {
         hold.running = false;
     }
-    /// §5's split dismissal. The ✕ and the scrim mean "close" on the nearby tab
-    /// and "abandon entry" on the frequency one, and only the caller knows which
-    /// is up — so the branch is here rather than duplicated at both call sites.
-    function dismissed() {
-        if (root.tab == NearbyTab.freq) {
-            root.freq-cancel();
-        } else {
-            root.close();
-        }
-    }
+    /// §5's split dismissal — the ✕ and the scrim mean "close" on the nearby
+    /// tab and "abandon entry" on the frequency one. One callback, no branch:
+    /// the branch is RUST'S (`on_nearby_dismiss`), for the same reason TUNE's
+    /// close is — a rule written into a view function is unreachable from every
+    /// probe, and this is exactly the rule a probe has to be able to drive.
+    callback dismissed();
     function row-tapped(i: int) {
         hold.running = false;
         // A hold that already fired consumes the release, the way RN's Pressable
@@ -783,11 +783,14 @@ export component NearbyOverlay inherits Rectangle {
 
                     TabButton {
                         label: "Nearby stations";
-                        // §3's hint copy, narrow variant included. Single spaces
-                        // around the interpunct, as in the subtitle this replaces.
+                        // §3's hint copy VERBATIM, doubled spaces included: the
+                        // wide variant is quoted with two spaces around each
+                        // interpunct and the narrow one with single — the
+                        // difference is the spec's, and the mini-handoff outranks
+                        // the subtitle this row replaced.
                         hint: card.narrow
                             ? "Tap to tune · hold to save"
-                            : "Tap to tune · hold to save a preset · best signal first";
+                            : "Tap to tune  ·  hold to save a preset  ·  best signal first";
                         active: root.tab == NearbyTab.nearby;
                         narrow: card.narrow;
                         clicked => { root.set-tab(NearbyTab.nearby); }
