@@ -254,6 +254,15 @@ export component Face inherits Rectangle {
                 has-next: root.has-next;
                 prev-preset: root.prev-preset;
                 next-preset: root.next-preset;
+                // THE TALL TRACK GETS THE MORPH TOO. §8's note is explicit: the
+                // peek cards animate on both layout tracks, and only the
+                // preset-band chevrons are wide-only. This binding was added to
+                // the wide HeroRow above and missed here, which would have left
+                // the discarded card popping out of existence on the tall track
+                // while the wide one faded it correctly — the harder half of a
+                // bug to notice, because the track that is looked at most is the
+                // one that works.
+                ghost-preset: root.ghost-preset;
                 step(d) => { root.step-preset(d); }
                 toggle-save => { root.toggle-save(); }
                 open-numpad => { root.open-numpad(); }

@@ -178,14 +178,29 @@ fn main() {
     ui.invoke_step_preset(1);
     println!("after step: nonce={} dir={}", ui.get_step_nonce(), ui.get_step_dir());
 
-    // Sampled across the 520ms window. 100ms lands INSIDE the far card's 120ms
-    // delay, which is the beat that is one number away from being absent.
+    // THE SEQUENCE IS COPIED FROM `shot.rs`, which has photographed this morph
+    // mid-travel all along — so the harness can drive a Slint animation, and the
+    // first version of this probe simply drove it wrong.
+    //
+    // Two things matter. Nothing is RENDERED for the first 40ms, deliberately:
+    // that is the condition the head unit is in, busy tuning, and the travel has
+    // to survive never having been drawn at its starting point. And nothing calls
+    // `common::pump` — its `drain_current()` republishes the hero mid-morph and
+    // its `draw_if_needed(|_| {})` hands the renderer a closure that draws
+    // nothing. Here it is bare: advance the clock, render, look.
+    std::thread::sleep(Duration::from_millis(40));
+
     let mut seen = Vec::new();
     let mut animated = false;
-    let mut elapsed = 0u64;
+    let mut elapsed = 40u64;
     for at in [40u64, 100, 260, 520, 760] {
-        pump_fine(&window, Duration::from_millis(at - elapsed));
-        elapsed = at;
+        while elapsed < at {
+            let step = 20.min(at - elapsed);
+            std::thread::sleep(Duration::from_millis(step));
+            slint::platform::update_timers_and_animations();
+            elapsed += step;
+        }
+        slint::platform::update_timers_and_animations();
         if window.has_active_animations() {
             animated = true;
         }

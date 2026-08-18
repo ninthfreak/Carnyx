@@ -454,43 +454,64 @@ export component HeroRow inherits Rectangle {
     property <float> m-ghost: 0;
     property <float> m-far: 0;
 
-    /// Where the outgoing card starts: the hero's own footprint. Centre to
-    /// centre, matching the hero's `enter-dx`, and the scale that makes a peek
-    /// exactly as wide as the hero it is standing in for.
-    property <length> prev-cx: root.start-x + root.peek-inset + root.peek-mid;
-    property <length> next-cx: root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid;
-    property <length> hero-cx: root.card-x + root.card-w / 2;
-    property <length> exit-dx: root.fwd
-        ? root.hero-cx - root.prev-cx
-        : root.hero-cx - root.next-cx;
-    property <length> exit-dy: (root.height - root.resolved-card-h) / 2 - root.peek-y;
-    property <float> hero-scale: root.card-w / root.peek-w;
+    /// Where the outgoing card STARTS — the hero's footprint, expressed as a real
+    /// rect rather than as an offset.
+    ///
+    /// TWO THINGS MAKE THE OFFSET FORM WRONG, and the first cut used it.
+    ///
+    /// A PeekCard's `x`/`y` are its TOP-LEFT and its size is `card-w * scale`, so
+    /// raising the scale grows it right and down, not about its middle. Moving it
+    /// by a centre-to-centre delta — which is right for the hero, whose size never
+    /// changes — leaves a growing card sitting half a card off its mark. So the
+    /// endpoints are computed as positions and interpolated directly: at `m-out`
+    /// 1 the card IS the target rect, at 0 it IS the resting one, and nothing has
+    /// to be corrected for growth.
+    ///
+    /// And a peek is SQUARE. Scaling to the hero's width would make a card
+    /// `card-w` on a side — about 635 on the wide track, against a row barely 340
+    /// tall — so it would burst out of the row top and bottom on the way past.
+    /// The square is fitted to the SMALLER of the hero's two dimensions, which
+    /// keeps it inside the hero's own box on both layout tracks.
+    property <length> out-size: Math.min(root.card-w, root.resolved-card-h);
+    property <float> out-scale: root.out-size / root.peek-w;
+    property <length> out-x: root.card-x + (root.card-w - root.out-size) / 2;
+    property <length> out-y: (root.height - root.out-size) / 2;
+    property <length> prev-rest-x: root.start-x + root.peek-inset;
+    property <length> next-rest-x: root.card-x + root.card-w - root.overlap + root.peek-inset;
     property <float> peek-rest: root.dead ? 0.28 : 0.6;
 
     if root.has-prev: PeekCard {
-        // On a forward step this card is the OUTGOING HERO, so it is displaced
-        // to the hero's footprint and shrinks home. On a back step it is the
+        // On a forward step this card is the OUTGOING HERO, so it starts on the
+        // hero's footprint and shrinks home. On a back step it is the
         // newly-reachable station and only fades.
-        x: root.start-x + root.peek-inset
-            + (root.fwd ? root.exit-dx * root.m-out : 0px);
-        y: root.peek-y + (root.fwd ? root.exit-dy * root.m-out : 0px);
+        x: root.fwd
+            ? root.prev-rest-x + (root.out-x - root.prev-rest-x) * root.m-out
+            : root.prev-rest-x;
+        y: root.fwd
+            ? root.peek-y + (root.out-y - root.peek-y) * root.m-out
+            : root.peek-y;
         card-w: root.peek-w;
-        scale: root.fwd ? 0.88 + (root.hero-scale - 0.88) * root.m-out : 0.88;
+        scale: root.fwd ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "left";
         preset: root.prev-preset;
-        // Travelling: full strength, settling to the peek's 0.6. Arriving:
-        // 0 → 0.6, held at nothing through the 120ms delay.
+        // Travelling: full strength, settling to the peek's 0.6 — the spec's
+        // "resolves to the card's existing base scale rather than identity, so it
+        // doesn't pop when the animation clears". Arriving: 0 → 0.6, held at
+        // nothing through the 120ms delay.
         opacity: root.fwd
             ? root.peek-rest + (1.0 - root.peek-rest) * root.m-out
             : root.peek-rest * (1.0 - root.m-far);
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
-        x: root.card-x + root.card-w - root.overlap + root.peek-inset
-            + (root.fwd ? 0px : root.exit-dx * root.m-out);
-        y: root.peek-y + (root.fwd ? 0px : root.exit-dy * root.m-out);
+        x: root.fwd
+            ? root.next-rest-x
+            : root.next-rest-x + (root.out-x - root.next-rest-x) * root.m-out;
+        y: root.fwd
+            ? root.peek-y
+            : root.peek-y + (root.out-y - root.peek-y) * root.m-out;
         card-w: root.peek-w;
-        scale: root.fwd ? 0.88 : 0.88 + (root.hero-scale - 0.88) * root.m-out;
+        scale: root.fwd ? 0.88 : 0.88 + (root.out-scale - 0.88) * root.m-out;
         side: "right";
         preset: root.next-preset;
         opacity: root.fwd
@@ -508,9 +529,7 @@ export component HeroRow inherits Rectangle {
     // `inert`, because it sits on top of the real card and must not swallow a
     // second tap. Conditional, so it is not an invisible touch target at rest.
     if root.m-ghost > 0.001: PeekCard {
-        x: root.fwd
-            ? root.start-x + root.peek-inset
-            : root.card-x + root.card-w - root.overlap + root.peek-inset;
+        x: root.fwd ? root.prev-rest-x : root.next-rest-x;
         y: root.peek-y;
         card-w: root.peek-w;
         side: root.fwd ? "left" : "right";
