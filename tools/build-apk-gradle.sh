@@ -39,6 +39,44 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 [[ -d "$SDK" ]] || die "The SDK path points at $SDK, which does not exist."
 export ANDROID_HOME="$SDK"
 export ANDROID_SDK_ROOT="$SDK"
+# ── A PLATFORM, not just build-tools and an NDK ─────────────────────────────
+#
+# Checked here because otherwise it surfaces 150 crates and several minutes into
+# the build, as a panic from a dependency's build script that names none of this:
+#
+#   i-slint-backend-android-activity build.rs:34: No Android platforms found
+#
+# Slint's Android backend compiles one Java helper of its own, and Carnyx's
+# build.rs compiles the NWD bridge — both need `android.jar`. `android-build`
+# looks for ANDROID_JAR first, then the highest `platforms/android-NN/android.jar`
+# under the SDK (android-build-0.1.4 src/env_paths/mod.rs:70-92). An SDK with
+# build-tools and an NDK but no platform installed satisfies everything else and
+# fails only here.
+shopt -s nullglob
+platform_jars=("$SDK"/platforms/android-*/android.jar)
+shopt -u nullglob
+if [[ -n "${ANDROID_JAR:-}" && -f "${ANDROID_JAR:-}" ]]; then
+  : # An explicit override wins, and android-build honours it before looking.
+elif [[ ${#platform_jars[@]} -eq 0 ]]; then
+  die "No Android platform in $SDK/platforms.
+
+The NDK and build-tools are not enough: Slint's Android backend and Carnyx's own
+build.rs each compile Java against android.jar, and there is none to compile
+against.
+
+Install one — 34 matches compileSdk in android/app/build.gradle.kts:
+  sdkmanager 'platforms;android-34'
+
+or in Android Studio: SDK Manager → SDK Platforms → Android 14 (API 34).
+
+Already have one elsewhere? Point at it directly:
+  export ANDROID_JAR=/path/to/android.jar"
+else
+  printf 'SDK platforms found:'
+  for j in "${platform_jars[@]}"; do printf ' %s' "$(basename "$(dirname "$j")")"; done
+  printf '\n'
+fi
+
 NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}}"
 [[ -n "$NDK" ]] || die "No NDK: set ANDROID_NDK_ROOT (and ANDROID_NDK, which skia-bindings reads)."
 export ANDROID_NDK_HOME="$NDK"
