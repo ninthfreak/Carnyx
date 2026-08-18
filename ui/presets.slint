@@ -242,7 +242,24 @@ export component PeekCard inherits Rectangle {
 
     callback selected();
 
-    property <float> scale: 0.88;
+    /// A GHOST during the hero morph: drawn, but it must not eat the tap that
+    /// the real card underneath it is there to receive.
+    in property <bool> inert: false;
+
+    /// The card's uniform scale, and the reason the hero morph can shrink one of
+    /// these at all.
+    ///
+    /// Slint 1.17 exposes no scale transform to user code — `Transform` is
+    /// compiled but carries `//-is_internal` (i-slint-compiler-1.17.1
+    /// builtins.slint:500-507) — so a peek is scaled by ARITHMETIC instead: every
+    /// dimension below multiplies through this one number, including the border,
+    /// the corner radius, the padding, the plate and the frequency type. That is
+    /// what makes it animatable as a unit, where animating a width would re-lay
+    /// the card out each frame and read as jitter.
+    ///
+    /// 0.88 at rest, matching CarFM's `scale(0.88)` on the peek slots. The morph
+    /// starts it at `card-w(hero) / card-w(peek)` and lets it settle back here.
+    in property <float> scale: 0.88;
     // Peek plate geometry: 92% of the card, capped at 184, aspect-locked 16/10 —
     // the SAME landscape box as a real logo and as the call-sign form.
     property <length> plate-w: Math.min(Math.round(root.card-w / 1px * 0.92) * 1px, Metrics.s(184));
@@ -264,7 +281,10 @@ export component PeekCard inherits Rectangle {
     border-radius: Metrics.s(24) * root.scale;
     background: Pal.panel;
 
-    touch := TouchArea { clicked => { root.selected(); } }
+    touch := TouchArea {
+        enabled: !root.inert;
+        clicked => { root.selected(); }
+    }
 
     VerticalLayout {
         padding: root.pad * root.scale;

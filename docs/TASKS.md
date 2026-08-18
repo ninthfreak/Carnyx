@@ -531,6 +531,45 @@ between-launch session restore, and the push-rate work (`push_all` 1.94ms →
 0.10ms, a wake plus a frame with the nearby list open 56ms → 10ms, all measured
 on x86 by `examples/pushbench.rs`).
 
+
+### 74. Make the probe harness able to drive a Slint animation
+**PENDING, and it blocks judging any animation off the unit.** No probe in this
+tree has ever exercised a Slint ANIMATION: `shot.rs` captures static states and
+every other probe reads properties. `examples/morphprobe.rs` was written to watch
+the preset-step morph as pixels over time and cannot — `has_active_animations()`
+is false at every sample, so its numbers say nothing about the morph and it exits
+INCONCLUSIVE rather than reporting failures it has not earned.
+
+Ruled out already, so the next attempt does not repeat them: the presets exist and
+both peeks are live; audio is on, so the morph is not being correctly skipped for
+a dead face; the nonce and direction reach the face; `changed step-nonce` fires
+and its note prints; pumping at 2ms so a frame lands inside the 16ms arming window
+changes nothing; and rendering for real during the pump — rather than handing
+`draw_if_needed` a closure that ignores the renderer, which is what `common::pump`
+does — changes nothing either.
+
+Worth trying next: a `Platform` with a controllable `duration_since_start`, which
+would make animations deterministic instead of wall-clock, and would let a probe
+step to an exact point in a 520ms window rather than racing it.
+
+Until this is solved, every animation in the face is verifiable ONLY on the unit,
+which is how the step morph came to ship with three of its four beats missing.
+
+### 75. Grow the hero card during the step morph
+**PENDING.** CarFM's morph FLIPs the incoming hero from the source peek's rect to
+the hero rect, interpolating position on a cubic ease-out and SIZE on a quintic
+one so the scale settles slightly ahead of the travel. Carnyx travels the card and
+does not resize it.
+
+`PeekCard` can be scaled because every dimension in it multiplies through one
+`scale` property — that is what makes the outgoing card's shrink possible.
+`HeroCard` cannot: 159 lines of independently derived metrics, paddings, corner
+radii, font sizes and a marquee whose width is MEASURED from its own text, so a
+uniform scale there is a rebuild of the component rather than a property. Slint
+1.17 still exposes no scale transform to user code — `Transform` carries
+`//-is_internal` (i-slint-compiler-1.17.1 builtins.slint:500-507) — and animating
+`width`/`height` re-lays the card out every frame, which reads as jitter.
+
 ---
 
 # COMPLETED (31)

@@ -318,6 +318,11 @@ export component HeroCard inherits Rectangle {
 export component HeroRow inherits Rectangle {
     in property <Preset> prev-preset;
     in property <Preset> next-preset;
+    /// The station the discarded peek held BEFORE the step, captured by Rust in
+    /// `step_morph` while the geometry is still at rest. CarFM clones the DOM
+    /// node for this; there is no cloning here, so the content is carried across
+    /// instead and drawn as a ghost that fades out.
+    in property <Preset> ghost-preset;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
     in property <length> card-w;
@@ -422,23 +427,96 @@ export component HeroRow inherits Rectangle {
     // layout how tall it is in order to tell it how tall to be is a binding loop.
     min-height: root.card-fill ? root.peek-h : Math.max(card.preferred-height, root.peek-h);
 
+    // ── The three beats that are NOT the hero (§8) ──
+    //
+    // CarFM's morph is four things at once, and this used to be one of them. The
+    // hero travelled and everything else POPPED: the outgoing station appeared in
+    // its peek slot fully formed, the discarded card vanished between frames, and
+    // the station arriving from further out snapped in at full strength. Three of
+    // the four beats were simply missing.
+    //
+    // Which slot plays which part is the direction mapping, and it is the whole
+    // of the wiring. Stepping FORWARD (dir > 0): the hero goes to the PREV slot,
+    // the new hero comes from the NEXT slot, and the old prev card is discarded.
+    // Back is mirrored.
+    //
+    //   dir > 0   left  = the outgoing hero arriving, over the ghost of old prev
+    //             right = the newly-reachable station, fading in
+    //   dir < 0   mirrored
+    //
+    // The four beats are driven by three progress properties rather than by
+    // referencing elements from `states`, because the peeks are conditional and a
+    // state cannot name an element that may not exist. Each runs 1 → 0 across the
+    // transition with its own duration and delay, which is what lets the far card
+    // lag the cards in motion.
+    property <bool> fwd: root.step-dir > 0;
+    property <float> m-out: 0;
+    property <float> m-ghost: 0;
+    property <float> m-far: 0;
+
+    /// Where the outgoing card starts: the hero's own footprint. Centre to
+    /// centre, matching the hero's `enter-dx`, and the scale that makes a peek
+    /// exactly as wide as the hero it is standing in for.
+    property <length> prev-cx: root.start-x + root.peek-inset + root.peek-mid;
+    property <length> next-cx: root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid;
+    property <length> hero-cx: root.card-x + root.card-w / 2;
+    property <length> exit-dx: root.fwd
+        ? root.hero-cx - root.prev-cx
+        : root.hero-cx - root.next-cx;
+    property <length> exit-dy: (root.height - root.resolved-card-h) / 2 - root.peek-y;
+    property <float> hero-scale: root.card-w / root.peek-w;
+    property <float> peek-rest: root.dead ? 0.28 : 0.6;
+
     if root.has-prev: PeekCard {
-        x: root.start-x + root.peek-inset;
-        y: root.peek-y;
+        // On a forward step this card is the OUTGOING HERO, so it is displaced
+        // to the hero's footprint and shrinks home. On a back step it is the
+        // newly-reachable station and only fades.
+        x: root.start-x + root.peek-inset
+            + (root.fwd ? root.exit-dx * root.m-out : 0px);
+        y: root.peek-y + (root.fwd ? root.exit-dy * root.m-out : 0px);
         card-w: root.peek-w;
+        scale: root.fwd ? 0.88 + (root.hero-scale - 0.88) * root.m-out : 0.88;
         side: "left";
         preset: root.prev-preset;
-        opacity: root.dead ? 0.28 : 0.6;
+        // Travelling: full strength, settling to the peek's 0.6. Arriving:
+        // 0 → 0.6, held at nothing through the 120ms delay.
+        opacity: root.fwd
+            ? root.peek-rest + (1.0 - root.peek-rest) * root.m-out
+            : root.peek-rest * (1.0 - root.m-far);
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
-        x: root.card-x + root.card-w - root.overlap + root.peek-inset;
-        y: root.peek-y;
+        x: root.card-x + root.card-w - root.overlap + root.peek-inset
+            + (root.fwd ? 0px : root.exit-dx * root.m-out);
+        y: root.peek-y + (root.fwd ? 0px : root.exit-dy * root.m-out);
         card-w: root.peek-w;
+        scale: root.fwd ? 0.88 : 0.88 + (root.hero-scale - 0.88) * root.m-out;
         side: "right";
         preset: root.next-preset;
-        opacity: root.dead ? 0.28 : 0.6;
+        opacity: root.fwd
+            ? root.peek-rest * (1.0 - root.m-far)
+            : root.peek-rest + (1.0 - root.peek-rest) * root.m-out;
         selected => { root.step(1); }
+    }
+
+    // The discarded card. CarFM stamps an absolutely-positioned CLONE over the
+    // peek that is about to be replaced, so it can keep existing after React
+    // swaps the slot's content; `ghost-preset` is that clone — Rust captures the
+    // slot's station BEFORE tuning and it is drawn here, fading 0.6 → 0, for as
+    // long as the morph runs.
+    //
+    // `inert`, because it sits on top of the real card and must not swallow a
+    // second tap. Conditional, so it is not an invisible touch target at rest.
+    if root.m-ghost > 0.001: PeekCard {
+        x: root.fwd
+            ? root.start-x + root.peek-inset
+            : root.card-x + root.card-w - root.overlap + root.peek-inset;
+        y: root.peek-y;
+        card-w: root.peek-w;
+        side: root.fwd ? "left" : "right";
+        preset: root.ghost-preset;
+        opacity: root.peek-rest * root.m-ghost;
+        inert: true;
     }
     // Above the peeks, so they tuck behind it.
     card := HeroCard {
@@ -492,6 +570,11 @@ export component HeroRow inherits Rectangle {
     states [
         entering when root.arming: {
             card.x: root.card-x + root.enter-dx;
+            // The other three beats, armed at their start values in the same
+            // frame as the hero's and released by the same transition.
+            root.m-out: 1.0;
+            root.m-ghost: 1.0;
+            root.m-far: 1.0;
             // NO OPACITY. The card travels at full strength, because that is
             // what CarFM's does: its `centerTransform` is translate and scale
             // only, and the two opacity animations in that morph belong to the
@@ -508,6 +591,28 @@ export component HeroRow inherits Rectangle {
                 animate card.x {
                     duration: 520ms;
                     easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+                }
+                // The outgoing card's travel and shrink, on the same 520ms as
+                // the hero. CarFM gives position a cubic ease-out and size a
+                // quintic one, so the card settles its scale slightly ahead of
+                // its travel; one property cannot carry two curves, and the
+                // cubic is the one the eye reads as the movement.
+                animate root.m-out {
+                    duration: 520ms;
+                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+                }
+                // The clone leaving: 0.6 → 0, linear, over the full window.
+                animate root.m-ghost {
+                    duration: 520ms;
+                    easing: linear;
+                }
+                // The station arriving from further out: 0 → 0.6 AFTER a 120ms
+                // delay, so it lags the cards in motion instead of appearing
+                // with them. The delay is the beat itself, not a detail.
+                animate root.m-far {
+                    duration: 400ms;
+                    delay: 120ms;
+                    easing: linear;
                 }
             }
         }

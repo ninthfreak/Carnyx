@@ -2879,9 +2879,30 @@ impl App {
     /// A COUNTER, not a flag. Two steps in the same direction must both animate,
     /// and a flag that is already true changes nothing — so `HeroRow` watches the
     /// nonce, and the direction is only meaningful when it moves.
+    /// Arm the hero morph, and hand the face the card it is about to lose.
+    ///
+    /// CALLED BEFORE THE TUNE, while the peeks still hold the pre-step stations.
+    /// One of them is about to be discarded outright — stepping forward, the old
+    /// PREV card is replaced by the outgoing hero and never appears again — and
+    /// CarFM keeps it on screen by stamping an absolutely-positioned clone of the
+    /// node before React replaces its content.
+    ///
+    /// Nothing here can clone an element, so the STATION is carried across
+    /// instead: whichever peek is about to be overwritten is copied into
+    /// `ghost-preset`, and the face draws it as a card that fades 0.6 → 0 over
+    /// the morph. Read from the UI rather than recomputed from the preset list,
+    /// because what has to fade out is exactly what the driver was looking at.
     fn step_morph(self: &Rc<App>, dir: i32) {
         let ui = self.ui();
-        ui.set_step_dir(dir.signum());
+        let dir = dir.signum();
+        // Forward discards the PREV card, back discards the NEXT one — the slot
+        // the outgoing hero is about to land in.
+        ui.set_ghost_preset(if dir > 0 {
+            ui.get_prev_preset()
+        } else {
+            ui.get_next_preset()
+        });
+        ui.set_step_dir(dir);
         ui.set_step_nonce(ui.get_step_nonce().wrapping_add(1));
     }
 
