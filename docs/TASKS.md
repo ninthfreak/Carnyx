@@ -557,19 +557,32 @@ through `common::pump`, which drains the tuner queue mid-morph and hands
 left in the tree asserting something untrue.
 
 ### 75. Grow the hero card during the step morph
-**PENDING.** CarFM's morph FLIPs the incoming hero from the source peek's rect to
-the hero rect, interpolating position on a cubic ease-out and SIZE on a quintic
-one so the scale settles slightly ahead of the travel. Carnyx travels the card and
-does not resize it.
+**PENDING, and it now costs more than polish.** CarFM's morph FLIPs the incoming
+hero from the source peek's rect to the hero rect, interpolating position on a
+cubic ease-out and SIZE on a quintic one so the scale settles slightly ahead of
+the travel. Carnyx travels the card and does not resize it.
 
 `PeekCard` can be scaled because every dimension in it multiplies through one
 `scale` property — that is what makes the outgoing card's shrink possible.
 `HeroCard` cannot: 159 lines of independently derived metrics, paddings, corner
 radii, font sizes and a marquee whose width is MEASURED from its own text, so a
 uniform scale there is a rebuild of the component rather than a property. Slint
-1.17 still exposes no scale transform to user code — `Transform` carries
+1.17 exposes no scale transform to user code — `Transform` carries
 `//-is_internal` (i-slint-compiler-1.17.1 builtins.slint:500-507) — and animating
 `width`/`height` re-lays the card out every frame, which reads as jitter.
+
+**WHAT IT COSTS TODAY.** Because the card cannot shrink, centring it on the
+source peek slot pushed a quarter of it past the bezel — the save star gone on a
+forward step, the power button on a back one, and about 40% off-screen on the
+tall track. The travel is therefore CLAMPED to the room the card has, which fixes
+the clipping and shortens the throw: 348px → 171px on the wide track, and only
+21px on the tall one, where the hero nearly fills the row. So the morph is now
+barely perceptible on the tall track. Growing the card is what would restore the
+full travel, because a card that starts small has somewhere to start.
+
+`examples/edgeprobe.rs` holds the line meanwhile — both tracks, both directions,
+failing if the card is ever narrower than at rest or touching an edge. Verified
+by mutation: removing the clamp fails all four cases.
 
 ---
 

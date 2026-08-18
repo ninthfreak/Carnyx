@@ -54,7 +54,7 @@ export component AppWindow inherits Window {
     /// The station the discarded peek held before a step — the ghost that
     /// fades out during the hero morph. See `step_morph` in src/app.rs.
     in property <Preset> ghost-preset;
-    in property <bool> ghost-live: true;
+    in property <bool> hand-off: true;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
     in property <bool> audio-active: true;
@@ -263,7 +263,7 @@ export component AppWindow inherits Window {
         prev-preset: root.prev-preset;
         next-preset: root.next-preset;
         ghost-preset: root.ghost-preset;
-        ghost-live: root.ghost-live;
+        hand-off: root.hand-off;
         has-prev: root.has-prev;
         has-next: root.has-next;
         audio-active: root.audio-active;

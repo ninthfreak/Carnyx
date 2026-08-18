@@ -323,11 +323,19 @@ export component HeroRow inherits Rectangle {
     /// node for this; there is no cloning here, so the content is carried across
     /// instead and drawn as a ghost that fades out.
     in property <Preset> ghost-preset;
-    /// Whether anything is actually being discarded this step. False when the
-    /// slot's occupant does not change — stepping forward off an unsaved dial
-    /// leaves the prev slot showing the same card — and a ghost of nothing is
-    /// worse than no ghost.
-    in property <bool> ghost-live: true;
+    /// Whether the landing slot CHANGES HANDS this step.
+    ///
+    /// False when its occupant is the same card before and after. Stepping
+    /// forward off an unsaved dial is the case: `push_hero` shows the last entry
+    /// on the left and the first on the right, so landing on entry 0 leaves the
+    /// prev slot showing the last entry — exactly what was already there.
+    ///
+    /// GATES BOTH THE GHOST AND THE FLIGHT. A first cut wired it to the ghost
+    /// only, which suppressed the fade of nothing but still FLIPPED the unchanged
+    /// card up to the hero's footprint and back, leaving its own slot empty for
+    /// the whole 520ms while the station that actually departed — the unsaved
+    /// dial — was not animated at all.
+    in property <bool> hand-off: true;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
     in property <length> card-w;
@@ -400,15 +408,41 @@ export component HeroRow inherits Rectangle {
     /// the card enters from the right.
     ///
     /// CENTRE TO CENTRE, which is what CarFM animates
-    /// (`translateX(cx(source) - cx(center))`). Edge to edge is a much longer
-    /// throw — the hero is far wider than a peek — and it hangs the card off the
-    /// side of the row at the start of the travel.
+    /// (`translateX(cx(source) - cx(center))`) — AND THEN CLAMPED TO THE ROW,
+    /// which CarFM does not need to do and this has to.
+    ///
+    /// CarFM's incoming hero is SCALED DOWN to the peek's footprint at the start
+    /// of the FLIP, so centring it on the peek slot puts a small card in a small
+    /// slot and nothing leaves the screen. Slint exposes no scale transform to
+    /// user code, so this card travels at FULL SIZE (see #75) — and centring a
+    /// 635px card on a slot whose centre is 348px off the row's leaves a quarter
+    /// of it past the window edge.
+    ///
+    /// That was not theoretical. Rendered on the wide track, the first frame put
+    /// the card at 548..1023 in a 1024px window, cut flat at the bezel with the
+    /// save star gone; a back step mirrored it and cut the power button off the
+    /// left. The tall track was worse — about 40% of the card off-screen. The
+    /// comment that used to sit here claimed centre-to-centre AVOIDED exactly
+    /// this, which was wrong: it hangs the card off the row just as edge-to-edge
+    /// would, only by less.
+    ///
+    /// So the throw is capped at the room the card actually has. The travel is
+    /// shorter than CarFM's, which is the honest consequence of not being able to
+    /// shrink the card: a card that starts where it fits and moves less is a
+    /// worse match for the reference than one that starts small, and a much
+    /// better one than a card sliding off the screen.
     property <length> peek-mid: root.peek-w * 0.88 / 2;
+    property <length> room-right: Math.max(0px, root.width - root.card-x - root.card-w);
+    property <length> room-left: Math.max(0px, root.card-x);
     property <length> enter-dx: root.step-dir > 0
-        ? (root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid)
-            - (root.card-x + root.card-w / 2)
-        : (root.start-x + root.peek-inset + root.peek-mid)
-            - (root.card-x + root.card-w / 2);
+        ? Math.min(
+            (root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid)
+                - (root.card-x + root.card-w / 2),
+            root.room-right)
+        : Math.max(
+            (root.start-x + root.peek-inset + root.peek-mid)
+                - (root.card-x + root.card-w / 2),
+            -root.room-left);
 
     property <length> peek-w: Metrics.peek-w;
     property <length> overlap: Metrics.peek-overlap;
@@ -484,19 +518,23 @@ export component HeroRow inherits Rectangle {
     property <length> prev-rest-x: root.start-x + root.peek-inset;
     property <length> next-rest-x: root.card-x + root.card-w - root.overlap + root.peek-inset;
     property <float> peek-rest: root.dead ? 0.28 : 0.6;
+    /// Which slot the outgoing hero actually flies into — nothing flies when the
+    /// slot does not change hands.
+    property <bool> flies-left: root.fwd && root.hand-off;
+    property <bool> flies-right: !root.fwd && root.hand-off;
 
     if root.has-prev: PeekCard {
         // On a forward step this card is the OUTGOING HERO, so it starts on the
         // hero's footprint and shrinks home. On a back step it is the
         // newly-reachable station and only fades.
-        x: root.fwd
+        x: root.flies-left
             ? root.prev-rest-x + (root.out-x - root.prev-rest-x) * root.m-out
             : root.prev-rest-x;
-        y: root.fwd
+        y: root.flies-left
             ? root.peek-y + (root.out-y - root.peek-y) * root.m-out
             : root.peek-y;
         card-w: root.peek-w;
-        scale: root.fwd ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
+        scale: root.flies-left ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "left";
         preset: root.prev-preset;
         // THERE ARE EXACTLY TWO OPACITY ANIMATIONS IN THIS MORPH, and neither is
@@ -517,24 +555,24 @@ export component HeroRow inherits Rectangle {
         //
         // Only when THIS card is the one travelling: `m-out` is shared by both
         // slots, and the peek that is standing still stays tappable.
-        inert: root.fwd && root.m-out > 0.001;
+        inert: root.flies-left && root.m-out > 0.001;
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
-        x: root.fwd
-            ? root.next-rest-x
-            : root.next-rest-x + (root.out-x - root.next-rest-x) * root.m-out;
-        y: root.fwd
-            ? root.peek-y
-            : root.peek-y + (root.out-y - root.peek-y) * root.m-out;
+        x: root.flies-right
+            ? root.next-rest-x + (root.out-x - root.next-rest-x) * root.m-out
+            : root.next-rest-x;
+        y: root.flies-right
+            ? root.peek-y + (root.out-y - root.peek-y) * root.m-out
+            : root.peek-y;
         card-w: root.peek-w;
-        scale: root.fwd ? 0.88 : 0.88 + (root.out-scale - 0.88) * root.m-out;
+        scale: root.flies-right ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "right";
         preset: root.next-preset;
         weight: root.fwd
             ? root.peek-rest * (1.0 - root.m-far)
             : root.peek-rest;
-        inert: !root.fwd && root.m-out > 0.001;
+        inert: root.flies-right && root.m-out > 0.001;
         selected => { root.step(1); }
     }
 
@@ -546,7 +584,7 @@ export component HeroRow inherits Rectangle {
     //
     // `inert`, because it sits on top of the real card and must not swallow a
     // second tap. Conditional, so it is not an invisible touch target at rest.
-    if root.ghost-live && root.m-ghost > 0.001: PeekCard {
+    if root.hand-off && root.m-ghost > 0.001: PeekCard {
         x: root.fwd ? root.prev-rest-x : root.next-rest-x;
         y: root.peek-y;
         card-w: root.peek-w;

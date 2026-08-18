@@ -87,7 +87,15 @@ cargo run --example panelprobe   # every steering-wheel code, both edges
 cargo run --example warmprobe    # the between-launch restore
 cargo run --example stereoprobe  # the STEREO pill's settle window
 cargo run --example pollprobe    # the level schedule and the getter poll
+cargo run --example edgeprobe    # the hero card never leaves the screen mid-morph
 ```
+
+`edgeprobe` is the one that reads PIXELS rather than properties, and it exists
+because the defect it catches was invisible to everything else. Every property
+was correct — the nonce, the direction, the travel — while a quarter of the hero
+card sat past the bezel for the first hundred milliseconds of every preset step.
+`shots/hero-step-morph.png` did not show it either, because that shot catches a
+frame late enough that the card is already back inside the row.
 
 `pollprobe` also pins where the poll RUNS. The vendor getters are binder calls
 into the head unit's radio service; CarFM makes them from React Native's

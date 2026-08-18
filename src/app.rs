@@ -2927,7 +2927,7 @@ impl App {
         } else {
             ui.get_next_preset()
         });
-        ui.set_ghost_live(discards);
+        ui.set_hand_off(discards);
         ui.set_step_dir(dir);
         ui.set_step_nonce(ui.get_step_nonce().wrapping_add(1));
     }
