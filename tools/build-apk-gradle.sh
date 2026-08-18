@@ -23,23 +23,50 @@ JNI_DIR="android/app/src/main/jniLibs"
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n%s\n' "$*" >&2; exit 1; }
 
-# ── The three environment variables, and why there are three ────────────────
+# ── The environment, and why it takes four names for two directories ────────
 # cargo-ndk reads ANDROID_NDK_HOME. skia-bindings reads ANDROID_NDK and nothing
-# else (build_support/platform/android.rs:69) and panics without it. The SDK
-# tools want ANDROID_HOME. This is the same trap the README documents for the
-# cargo-apk build; moving packagers does not fix it, because it is skia's.
-[[ -n "${ANDROID_HOME:-}" ]] || die "ANDROID_HOME is not set — see the README's Building section."
+# else (build_support/platform/android.rs:69) and panics without it. The SDK is
+# ANDROID_HOME to some tools and ANDROID_SDK_ROOT to others. So: accept whatever
+# is set, export all of them, and let no tool downstream go looking. This is the
+# same trap the README documents for the cargo-apk build; changing packagers does
+# not fix it, because half of it is skia's.
+#
+# ANDROID_SDK_ROOT is the newer name and plenty of setups export only that one.
+# Accept either, and export both, rather than refusing a machine that is set up
+# correctly under the other spelling.
+SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+[[ -n "$SDK" ]] || die "Neither ANDROID_HOME nor ANDROID_SDK_ROOT is set — see the README's Building section."
+[[ -d "$SDK" ]] || die "The SDK path points at $SDK, which does not exist."
+export ANDROID_HOME="$SDK"
+export ANDROID_SDK_ROOT="$SDK"
 NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}}"
 [[ -n "$NDK" ]] || die "No NDK: set ANDROID_NDK_ROOT (and ANDROID_NDK, which skia-bindings reads)."
 export ANDROID_NDK_HOME="$NDK"
 export ANDROID_NDK="$NDK"
 [[ -d "$NDK" ]] || die "ANDROID_NDK_ROOT points at $NDK, which does not exist."
 
-command -v cargo-ndk >/dev/null 2>&1 || die "cargo-ndk is not installed:
+# ASK CARGO, NOT THE PATH.
+#
+# `cargo ndk` is a cargo SUBCOMMAND. What matters is whether cargo can dispatch
+# to it, which is not the same question as whether a binary called `cargo-ndk` is
+# visible to `command -v` in a non-interactive shell — cargo resolves subcommands
+# through its own directory as well as PATH, and a script does not inherit an
+# interactive shell's full setup. The first version of this check asked the wrong
+# one and refused a machine that had cargo-ndk installed and working.
+if ! ndk_version=$(cargo ndk --version 2>&1); then
+  die "cargo ndk will not run here.
+
+Install it with:
   cargo install cargo-ndk
 
-It is what sets the cross-compiler, linker and sysroot for each ABI — the job
-cargo-apk was doing before, and the reason this is not just 'cargo build'."
+It sets the cross-compiler, linker and sysroot for each ABI — the job cargo-apk
+was doing before, and the reason this is not just 'cargo build'.
+
+If it IS installed, this is a path problem rather than a missing tool:
+  cargo             $(command -v cargo || echo '(not found)')
+  cargo-ndk binary  $(command -v cargo-ndk || echo '(not on PATH)')
+  cargo ndk said    ${ndk_version:-(no output)}"
+fi
 
 # ── 1. Rust ─────────────────────────────────────────────────────────────────
 # -o writes straight into the jniLibs layout Gradle expects:
@@ -49,6 +76,7 @@ cargo-apk was doing before, and the reason this is not just 'cargo build'."
 # dropped from the command line would otherwise linger from a previous run and
 # ship in an APK that no longer builds it.
 say "1/3  cargo ndk — compiling libcarnyx.so for: ${ABIS[*]}"
+printf '     %s\n     NDK %s\n' "$ndk_version" "$NDK"
 rm -rf "$JNI_DIR"
 mkdir -p "$JNI_DIR"
 targets=()
