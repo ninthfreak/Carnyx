@@ -215,6 +215,23 @@ spike that changes two things cannot tell you which one failed.
 Until it is confirmed on the unit, **cargo-apk remains the default build** and
 the two manifests are kept in parity by hand.
 
+**The API level has to be passed to cargo-ndk explicitly**, and this is the trap
+that costs the most time to discover. cargo-ndk defaults to API 21 and puts it in
+the target triple it hands cc-rs — `--target=armv7a-linux-androideabi21`, last on
+the compiler line, so it wins. skia-bindings hardcodes 26. The two disagree and
+the build dies at the very end, in libc++:
+
+```
+locale:776: error: 'strtof_l' is unavailable: introduced in Android 26
+```
+
+Skia's own 258 GN targets build fine at 26 and link `libskia.a`; only the four
+binding `.cpp` files get 21, so you pay the entire Skia build before finding out.
+cargo-apk avoided this by deriving its `CXXFLAGS` from `min_sdk_version`;
+cargo-ndk has no Cargo.toml metadata to read. `tools/build-apk-gradle.sh` reads
+`min_sdk_version` out of `Cargo.toml`, cross-checks it against Gradle's `minSdk`
+so the two cannot drift, and passes it as `--platform`.
+
 **The one thing Gradle stopped generating for us** is `android.app.lib_name`.
 NativeActivity loads `lib<value>.so`, cargo-apk derived that name from the crate,
 and `android/app/src/main/AndroidManifest.xml` now states it by hand. Get it wrong

@@ -152,6 +152,46 @@ If it IS installed, this is a path problem rather than a missing tool:
   cargo ndk said    ${ndk_version:-(no output)}"
 fi
 
+# ── THE API LEVEL, AND WHY IT IS NOT cargo-ndk's DEFAULT ────────────────────
+#
+# cargo-ndk defaults to API 21 and puts it in the target triple it hands cc-rs:
+# --target=armv7a-linux-androideabi21, LAST on the compiler line, so it wins.
+# skia-bindings meanwhile hardcodes 26 and passes -D__ANDROID_API__=26. The two
+# halves then disagree and the build dies deep in libc++:
+#
+#   locale:776: error: 'strtof_l' is unavailable: introduced in Android 26
+#
+# because bionic marks strtof_l/strtod_l __INTRODUCED_IN(26) and the availability
+# check reads the level in the TRIPLE, not the -D. Skia's own 258 GN targets
+# build fine at 26 and link libskia.a; only the four binding .cpp files compiled
+# by cc-rs get 21, so the failure arrives at the very end of a long build.
+#
+# This is the same disagreement Cargo.toml documents at min_sdk_version — it was
+# hit once before at 23, under cargo-apk, and cargo-apk fixed it by deriving its
+# CXXFLAGS from that key. cargo-ndk has no Cargo.toml metadata to read, so the
+# level has to be passed explicitly.
+#
+# Read from Cargo.toml rather than written twice, and cross-checked against the
+# Gradle minSdk, so the three cannot drift apart silently.
+API=$(sed -n 's/^min_sdk_version = \([0-9][0-9]*\).*/\1/p' Cargo.toml | head -1)
+[[ -n "$API" ]] || die "Could not read min_sdk_version from Cargo.toml."
+gradle_min=$(sed -n 's/^ *minSdk = \([0-9][0-9]*\).*/\1/p' android/app/build.gradle.kts | head -1)
+[[ "$gradle_min" == "$API" ]] || die "API level mismatch, and these must agree:
+  Cargo.toml min_sdk_version   $API
+  build.gradle.kts minSdk      ${gradle_min:-(not found)}"
+
+# Verified against the installed cargo-ndk rather than assumed, because getting
+# the flag name wrong costs a full Skia rebuild to discover.
+if ! cargo ndk --help 2>&1 | grep -q -- '--platform'; then
+  die "This cargo-ndk has no --platform flag, so the API level cannot be set:
+
+  $ndk_version
+
+Without it the bindings compile at cargo-ndk's default (21) while skia-bindings
+compiles at 26, and the build fails in libc++ on strtof_l. Check 'cargo ndk
+--help' for the equivalent flag on this version."
+fi
+
 # ── 1. Rust ─────────────────────────────────────────────────────────────────
 # -o writes straight into the jniLibs layout Gradle expects:
 # armeabi-v7a/libcarnyx.so, arm64-v8a/libcarnyx.so.
@@ -160,12 +200,13 @@ fi
 # dropped from the command line would otherwise linger from a previous run and
 # ship in an APK that no longer builds it.
 say "1/3  cargo ndk — compiling libcarnyx.so for: ${ABIS[*]}"
-printf '     %s\n     NDK %s\n' "$ndk_version" "$NDK"
+printf '     %s\n     NDK %s\n     API %s (from Cargo.toml min_sdk_version)\n' \
+  "$ndk_version" "$NDK" "$API"
 rm -rf "$JNI_DIR"
 mkdir -p "$JNI_DIR"
 targets=()
 for abi in "${ABIS[@]}"; do targets+=(-t "$abi"); done
-cargo ndk "${targets[@]}" -o "$JNI_DIR" build --lib
+cargo ndk "${targets[@]}" --platform "$API" -o "$JNI_DIR" build --lib
 
 for abi in "${ABIS[@]}"; do
   [[ -f "$JNI_DIR/$abi/libcarnyx.so" ]] \
