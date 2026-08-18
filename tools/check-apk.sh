@@ -64,6 +64,44 @@ else
 fi
 echo
 
+# ── Where the bytes are ────────────────────────────────────────────────────
+# Because "the APK is too big" has been answered by reasoning twice now and been
+# wrong once. This prints the actual largest entries, stored and compressed, so
+# the next question is settled by looking rather than by inference.
+echo "Largest entries"
+unzip -v "$APK" 2>/dev/null \
+  | awk 'NR>3 && NF>=8 && $1 ~ /^[0-9]+$/ {
+      name = $8; for (i = 9; i <= NF; i++) name = name " " $i
+      printf "  %8.1f MB stored  %8.1f MB in APK   %s\n", $1/1048576, $3/1048576, name
+    }' \
+  | sort -rn | head -6
+echo
+
+# Debug sections are the difference between an 86 MB APK and a 172 MB one, and
+# they are invisible from the outside — a stripped and an unstripped library look
+# identical in a listing except for the number beside them. So look inside.
+readelf=$(command -v llvm-readelf || command -v readelf || true)
+if [[ -n "$readelf" ]]; then
+  tmp=$(mktemp -d)
+  if unzip -qo "$APK" 'lib/*/libcarnyx.so' -d "$tmp" 2>/dev/null; then
+    while read -r so; do
+      [[ -z "$so" ]] && continue
+      abi=$(basename "$(dirname "$so")")
+      n=$("$readelf" -S "$so" 2>/dev/null | grep -c '\.debug_')
+      if [[ "$n" -eq 0 ]]; then
+        note "OK" "$abi: stripped, no .debug_* sections"
+      else
+        note "FAIL" "$abi: NOT stripped — $n .debug_* sections still in the library"
+        fail=1
+      fi
+    done < <(find "$tmp" -name 'libcarnyx.so')
+  fi
+  rm -rf "$tmp"
+else
+  note "SKIP" "no readelf — cannot tell whether the library is stripped"
+fi
+echo
+
 # ── Manifest ───────────────────────────────────────────────────────────────
 # android:exported must be declared on the launcher activity or Android 12+
 # refuses the package outright (targetSdk >= 31).
