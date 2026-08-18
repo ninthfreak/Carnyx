@@ -450,12 +450,22 @@ round trip because none of them fails where it is caused:
 4. `versionCode` — cargo-apk derives 16777472 from the crate semver; a
    hand-written `1` would have been refused as a downgrade. Now derived the same
    way, so the two packagers install over each other in both directions.
-5. Nothing stripped the libraries: 172.2 MB against cargo-apk's 86.4 MB, exactly
-   double, being the DWARF for 1158 Skia translation units across two ABIs.
+5. Nothing stripped the libraries: 172.2 MB against cargo-apk's 86.4 MB.
    `strip = "split"` is a cargo-apk-only key. The script now splits the symbols
    out with the NDK's `llvm-objcopy`/`llvm-strip` itself rather than relying on
    AGP, which only strips when it can find an NDK and merely warns when it
-   cannot.
+   cannot. **The flag was wrong twice before it was right**: `--strip-debug`
+   removes the DWARF but leaves `.symtab`, and with Skia linked statically that
+   table is most of what is left — libraries stayed at 95.0/78.9 MB with every
+   `.debug_*` section already gone. `--strip-unneeded` takes both and keeps
+   `.dynsym`, which `System.loadLibrary` needs; never `--strip-all`. Final:
+   46.1 MB (arm64) and 28.9 MB (armv7) on disk, ~30 MB packaged against
+   cargo-apk's 86.4, since Gradle deflates entries where cargo-apk stores them.
+
+   Two of those rounds were spent on the wrong file — a stale APK left in the
+   tree. `tools/check-apk.sh` now takes the most recently built APK rather than a
+   fixed path, and fails when a file is much larger than the sum of its own
+   entries, which is what a stale copy looks like from the outside.
 
 Signing needed nothing: cargo-apk and AGP both default to
 `~/.android/debug.keystore`, alias `androiddebugkey`, so the certificate matches
