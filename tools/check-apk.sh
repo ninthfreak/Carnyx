@@ -110,11 +110,27 @@ if [[ -n "$readelf" ]]; then
     while read -r so; do
       [[ -z "$so" ]] && continue
       abi=$(basename "$(dirname "$so")")
-      n=$("$readelf" -S "$so" 2>/dev/null | grep -c '\.debug_')
-      if [[ "$n" -eq 0 ]]; then
-        note "OK" "$abi: stripped, no .debug_* sections"
+      sections=$("$readelf" -S "$so" 2>/dev/null)
+      dwarf=$(grep -c '\.debug_' <<< "$sections")
+      symtab=$(grep -c '\.symtab' <<< "$sections")
+      dynsym=$(grep -c '\.dynsym' <<< "$sections")
+      mb=$(stat -c%s "$so" | awk '{printf "%.1f", $1/1048576}')
+      # BOTH tables, because checking only for DWARF was how an unstripped-enough
+      # library passed once: every .debug_* gone, .symtab still there, and the
+      # file still 95 MB.
+      if [[ "$dwarf" -eq 0 && "$symtab" -eq 0 ]]; then
+        note "OK" "$abi: fully stripped, ${mb} MB"
+      elif [[ "$dwarf" -eq 0 ]]; then
+        note "FAIL" "$abi: DWARF gone but .symtab remains — ${mb} MB, needs --strip-unneeded"
+        fail=1
       else
-        note "FAIL" "$abi: NOT stripped — $n .debug_* sections still in the library"
+        note "FAIL" "$abi: NOT stripped — $dwarf .debug_* sections, ${mb} MB"
+        fail=1
+      fi
+      # The one thing stripping must never take: NativeActivity resolves the
+      # library through this.
+      if [[ "$dynsym" -eq 0 ]]; then
+        note "FAIL" "$abi: .dynsym is GONE — nothing can load this library"
         fail=1
       fi
     done < <(find "$tmp" -name 'libcarnyx.so')

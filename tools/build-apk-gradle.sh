@@ -212,10 +212,22 @@ done
 # SPLIT, not discard, matching what cargo-apk did: the symbols are written
 # beside the build so a native crash from the unit can still be symbolicated.
 #
-# --strip-debug and NOT --strip-all: this is a shared library reached through
-# System.loadLibrary and JNI, so .dynsym must survive. --strip-debug removes the
-# DWARF and leaves the dynamic symbol table alone, which is the whole of the
-# saving anyway.
+# --strip-unneeded, and the flag matters more than it looks.
+#
+# The first cut used --strip-debug, which removes the DWARF and stops there,
+# leaving .symtab — the STATIC symbol table — in place. With Skia linked
+# statically that table is a large share of the library, and the measured result
+# was libraries still at 95.0 MB (arm64) and 78.9 MB (armv7) with every .debug_*
+# section already gone. Stripping had run and the file was still fat.
+#
+# --strip-unneeded removes both, and is what cargo-apk's plain `strip` was doing
+# all along. Verified rather than assumed, on a shared library exporting
+# android_main: --strip-debug left .symtab present, --strip-unneeded removed it,
+# and android_main survived in .dynsym under both.
+#
+# NEVER --strip-all: this library is reached through System.loadLibrary and JNI,
+# so .dynsym has to survive. --strip-unneeded is precisely the flag that means
+# "everything not needed for that".
 say "2/4  stripping debug symbols out of the libraries"
 strip_tool=$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | cut -d' ' -f1)
 objcopy_tool=$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-objcopy | cut -d' ' -f1)
@@ -232,7 +244,7 @@ for abi in "${ABIS[@]}"; do
   mkdir -p "$SYMBOLS/$abi"
   before=$(stat -c%s "$so")
   "$objcopy_tool" --only-keep-debug "$so" "$SYMBOLS/$abi/libcarnyx.so.debug"
-  "$strip_tool" --strip-debug "$so"
+  "$strip_tool" --strip-unneeded "$so"
   after=$(stat -c%s "$so")
   printf '     %-12s %6.1f MB → %5.1f MB   (symbols kept in %s)\n' \
     "$abi" "$(echo "$before" | awk '{print $1/1048576}')" \

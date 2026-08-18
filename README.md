@@ -224,9 +224,16 @@ alone. AGP does strip native libraries, but only when it can find an NDK, and it
 degrades to a warning when it cannot — so the size would silently double again
 the day the NDK moved. `tools/build-apk-gradle.sh` runs the NDK's `llvm-objcopy`
 and `llvm-strip` itself, and keeps the symbols beside the build so a native crash
-off the unit can still be symbolicated. `--strip-debug`, never `--strip-all`:
-this library is reached through `System.loadLibrary` and JNI, so `.dynsym` has to
-survive.
+off the unit can still be symbolicated.
+
+The flag is `--strip-unneeded`, and it matters more than it looks. The first cut
+used `--strip-debug`, which removes the DWARF and stops — leaving `.symtab`, the
+static symbol table, in place. With Skia linked statically that table is a large
+share of the library: measured, the libraries were still 95.0 MB and 78.9 MB with
+every `.debug_*` section already gone. `--strip-unneeded` removes both, which is
+what cargo-apk's plain `strip` was doing all along. Never `--strip-all` — this
+library is reached through `System.loadLibrary` and JNI, so `.dynsym` has to
+survive, and `tools/check-apk.sh` fails the build if it does not.
 
 **`versionCode` is derived from `Cargo.toml`, not written by hand.** cargo-apk
 packs the crate semver as `(1 << 24) | (major << 16) | (minor << 8) | patch`, so
