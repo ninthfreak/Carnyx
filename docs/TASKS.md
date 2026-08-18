@@ -462,10 +462,15 @@ round trip because none of them fails where it is caused:
    46.1 MB (arm64) and 28.9 MB (armv7) on disk, ~30 MB packaged against
    cargo-apk's 86.4, since Gradle deflates entries where cargo-apk stores them.
 
-   Two of those rounds were spent on the wrong file — a stale APK left in the
-   tree. `tools/check-apk.sh` now takes the most recently built APK rather than a
-   fixed path, and fails when a file is much larger than the sum of its own
-   entries, which is what a stale copy looks like from the outside.
+   Two of those rounds were spent on a file that was current and still wrong.
+   **AGP packages incrementally, updating the existing APK in place rather than
+   writing a fresh zip**, so when the libraries shrank by ~100 MB the obsolete
+   bytes stayed in the file as dead space: the central directory listed only the
+   live entries, every tool agreed the archive was ~30 MB, and the file stayed
+   172.2 MB with a fresh timestamp. Rebuilding did not shift it; deleting it and
+   rebuilding did. `tools/build-apk-gradle.sh` now removes the APK before Gradle
+   runs, and `tools/check-apk.sh` takes the most recently built APK rather than a
+   fixed path and fails when a file is much larger than the sum of its entries.
 
 Signing needed nothing: cargo-apk and AGP both default to
 `~/.android/debug.keystore`, alias `androiddebugkey`, so the certificate matches

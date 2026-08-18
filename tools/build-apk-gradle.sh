@@ -259,9 +259,27 @@ done
 # The wrapper is checked in, so this needs no Gradle on the PATH — only a JDK 17
 # or newer, which Android Studio's bundled jbr satisfies.
 say "3/4  gradle — packaging the APK"
+
+# DELETE THE OLD APK FIRST, and this is not tidiness.
+#
+# AGP packages incrementally: it UPDATES the existing APK in place rather than
+# writing a fresh zip. That is normally a speed win, but when an entry shrinks a
+# lot the obsolete bytes stay in the file as dead space — the central directory
+# points only at the live entries, so the archive reads as correct and every tool
+# that lists it agrees, while the file on disk stays the old size.
+#
+# Measured here: after stripping took the libraries from 95.0/78.9 MB down to
+# 46.1/28.9, `unzip -v` totalled about 30 MB of entries and the file was still
+# 172.2 MB, with a current timestamp because it really was being rewritten.
+# Rebuilding did not shift it. Deleting it and rebuilding did.
+#
+# Packaging is seconds against a build measured in Skia, so a fresh zip every
+# time is free.
+APK="android/app/build/outputs/apk/debug/app-debug.apk"
+rm -f "$APK"
+
 (cd android && ./gradlew --console=plain assembleDebug)
 
-APK="android/app/build/outputs/apk/debug/app-debug.apk"
 [[ -f "$APK" ]] || die "Gradle finished but there is no APK at $APK."
 
 # ── 4. The pre-flight check ─────────────────────────────────────────────────
