@@ -194,19 +194,65 @@ for abi in "${ABIS[@]}"; do
     || die "cargo-ndk reported success but $JNI_DIR/$abi/libcarnyx.so is not there."
 done
 
-# ── 2. Gradle ───────────────────────────────────────────────────────────────
+# ── 2. Strip, the way cargo-apk's `strip = "split"` did ─────────────────────
+#
+# MEASURED, not theorised: the first Gradle APK came out at 172.2 MB against
+# cargo-apk's 86.4 MB — exactly double — because nothing was stripping the
+# libraries. Skia is compiled -g -gdwarf-2 and statically linked into this one
+# library, so unstripped it carries the DWARF for 1158 Skia translation units,
+# twice over for two ABIs. That debug info is the entire difference.
+#
+# `strip = "split"` in Cargo.toml is a [package.metadata.android] key, which is
+# cargo-apk's alone; Gradle never reads that table. AGP does strip native
+# libraries itself, but only when it can locate an NDK, and it degrades to a
+# warning rather than an error when it cannot — so relying on it means the size
+# silently doubles again the day the NDK moves. Doing it here is deterministic
+# and needs no NDK version pinned in a tracked file.
+#
+# SPLIT, not discard, matching what cargo-apk did: the symbols are written
+# beside the build so a native crash from the unit can still be symbolicated.
+#
+# --strip-debug and NOT --strip-all: this is a shared library reached through
+# System.loadLibrary and JNI, so .dynsym must survive. --strip-debug removes the
+# DWARF and leaves the dynamic symbol table alone, which is the whole of the
+# saving anyway.
+say "2/4  stripping debug symbols out of the libraries"
+strip_tool=$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | cut -d' ' -f1)
+objcopy_tool=$(echo "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-objcopy | cut -d' ' -f1)
+if [[ ! -x "$strip_tool" || ! -x "$objcopy_tool" ]]; then
+  die "No llvm-strip/llvm-objcopy under $NDK/toolchains/llvm/prebuilt/*/bin.
+
+Without them the APK ships unstripped and is roughly twice the size it should
+be — 172 MB against 86 MB when this was measured."
+fi
+SYMBOLS="android/app/build/outputs/symbols"
+rm -rf "$SYMBOLS"
+for abi in "${ABIS[@]}"; do
+  so="$JNI_DIR/$abi/libcarnyx.so"
+  mkdir -p "$SYMBOLS/$abi"
+  before=$(stat -c%s "$so")
+  "$objcopy_tool" --only-keep-debug "$so" "$SYMBOLS/$abi/libcarnyx.so.debug"
+  "$strip_tool" --strip-debug "$so"
+  after=$(stat -c%s "$so")
+  printf '     %-12s %6.1f MB → %5.1f MB   (symbols kept in %s)\n' \
+    "$abi" "$(echo "$before" | awk '{print $1/1048576}')" \
+    "$(echo "$after" | awk '{print $1/1048576}')" "$SYMBOLS/$abi"
+done
+
+# ── 3. Gradle ───────────────────────────────────────────────────────────────
 # The wrapper is checked in, so this needs no Gradle on the PATH — only a JDK 17
 # or newer, which Android Studio's bundled jbr satisfies.
-say "2/3  gradle — packaging the APK"
+say "3/4  gradle — packaging the APK"
 (cd android && ./gradlew --console=plain assembleDebug)
 
 APK="android/app/build/outputs/apk/debug/app-debug.apk"
 [[ -f "$APK" ]] || die "Gradle finished but there is no APK at $APK."
 
-# ── 3. The pre-flight check ─────────────────────────────────────────────────
+# ── 4. The pre-flight check ─────────────────────────────────────────────────
 # There is no adb on this unit, so this is the last chance to catch a bad APK on
 # a machine that can still tell you why. It checks the ABIs, the manifest, the
-# signature, and — the one that matters most for a hand-written manifest — that
-# android.app.lib_name names a library the APK actually contains.
-say "3/3  checking it before it goes on the stick"
+# signature and its certificate, and — the one that matters most for a
+# hand-written manifest — that android.app.lib_name names a library the APK
+# actually contains.
+say "4/4  checking it before it goes on the stick"
 ./tools/check-apk.sh "$APK"

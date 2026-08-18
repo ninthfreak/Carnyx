@@ -205,15 +205,35 @@ switched away from — CarFM stays alive because a foreground service pins its
 process — and why it does not come back when the unit wakes on ACC. Gradle writes
 its own manifest, so both become possible. That is task **#67**.
 
-**What the spike is asking, and what it is not.** It packages *exactly* what
-cargo-apk packages today — same package id, permissions, `queries`, theme,
-`configChanges`, `launchMode`, assets — and adds nothing. The one question is
-whether a Gradle-built APK boots `android_main` on the unit the way the cargo-apk
-one does. The service and the receiver go in **after** that answer, because a
-spike that changes two things cannot tell you which one failed.
+**It is confirmed on the unit.** The Gradle APK installed over the cargo-apk
+build and ran. It packages *exactly* what cargo-apk packages — same package id,
+version, permissions, `queries`, theme, `configChanges`, `launchMode`, assets,
+and the same debug certificate, so it upgrades in place and app data survives.
+The service and the receiver were deliberately left out of the spike, so that a
+single trip to the car answered a single question; they are written into
+`AndroidManifest.xml` as comments and go in next.
 
-Until it is confirmed on the unit, **cargo-apk remains the default build** and
-the two manifests are kept in parity by hand.
+**cargo-apk remains the default build until the service lands**, and the two
+manifests are kept in parity by hand.
+
+**The libraries are stripped by the script, not by AGP.** The first Gradle APK
+came out at 172.2 MB against cargo-apk's 86.4 MB — exactly double, all of it the
+DWARF for 1158 Skia translation units across two ABIs. `strip = "split"` in
+`Cargo.toml` is a `[package.metadata.android]` key and belongs to cargo-apk
+alone. AGP does strip native libraries, but only when it can find an NDK, and it
+degrades to a warning when it cannot — so the size would silently double again
+the day the NDK moved. `tools/build-apk-gradle.sh` runs the NDK's `llvm-objcopy`
+and `llvm-strip` itself, and keeps the symbols beside the build so a native crash
+off the unit can still be symbolicated. `--strip-debug`, never `--strip-all`:
+this library is reached through `System.loadLibrary` and JNI, so `.dynsym` has to
+survive.
+
+**`versionCode` is derived from `Cargo.toml`, not written by hand.** cargo-apk
+packs the crate semver as `(1 << 24) | (major << 16) | (minor << 8) | patch`, so
+`0.1.0` is 16777472. A literal `1` in Gradle would be a downgrade against any
+cargo-apk build already installed, refused as
+`INSTALL_FAILED_VERSION_DOWNGRADE` — which the on-device installer reports only
+as "App not installed".
 
 **The API level has to be passed to cargo-ndk explicitly**, and this is the trap
 that costs the most time to discover. cargo-ndk defaults to API 21 and puts it in

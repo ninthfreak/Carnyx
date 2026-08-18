@@ -421,24 +421,48 @@ by something that can write its own manifest: Gradle, or a forked cargo-apk. Unt
 then `src/session.rs` survives the restart instead of preventing it, and the
 `session:` line at the top of the log says which of the two restarts happened.
 
-**Gradle spike written, NOT yet confirmed on the unit.** `android/` holds a
-complete Gradle build of the same APK — wrapper checked in, `tools/build-apk-gradle.sh`
-runs `cargo ndk` then `gradlew assembleDebug`. It packages exactly what cargo-apk
-packages and adds nothing; the service and receiver are marked in the manifest as
-comments and go in only once the spike boots. The risk that mattered was checked
-and is absent: Slint resolves to plain `NativeActivity`, not GameActivity
-(`slint-1.17.1/Cargo.toml:64-68` → `i-slint-backend-android-activity/native-activity`),
-and `android.app.NativeActivity` is a framework class with no dependency to add.
+**GRADLE SPIKE CONFIRMED ON THE UNIT.** `android/` holds a complete Gradle build
+of the same APK — wrapper checked in, `tools/build-apk-gradle.sh` runs
+`cargo ndk`, strips, then `gradlew assembleDebug`. It installed over the
+cargo-apk build and ran; the owner's words were "the most complete Carnyx yet".
+So the packager question is settled and the service and receiver are now
+buildable. They are written into `AndroidManifest.xml` as comments, with the
+permissions and API-34 typing each needs, and go in next.
 
-**Nothing in `android/` has been built or run.** The container has no SDK and no
-NDK, and `dl.google.com` is refused by the proxy so the Android Gradle Plugin
-cannot even be resolved here. What WAS verified: both scripts parse (`bash -n`),
-the manifest is well-formed XML, its `configChanges` string is byte-identical to
-`Cargo.toml`'s, and the new `lib_name` check in `tools/check-apk.sh` extracts the
-right value from a realistic `aapt dump xmltree`. Nothing beyond that.
+The risk that mattered was checked beforehand and was absent: Slint resolves to
+plain `NativeActivity`, not GameActivity (`slint-1.17.1/Cargo.toml:64-68` →
+`i-slint-backend-android-activity/native-activity`), and `android.app.NativeActivity`
+is a framework class with no dependency to add. The whole contract between
+packager and Rust turned out to be two lines cargo-apk emits: the activity class
+and the `android.app.lib_name` meta-data.
 
-Next step is the owner's: run `./tools/build-apk-gradle.sh`, carry the APK out,
-and report whether the face comes up.
+**Five things bit on the way, all now handled in the script**, and each cost a
+round trip because none of them fails where it is caused:
+
+1. `command -v cargo-ndk` asked the wrong question — it is a cargo SUBCOMMAND.
+2. `ANDROID_PLATFORM` PINS `android_jar`'s lookup, so a level you do not have
+   makes every level you do have invisible; the panic still says "No Android
+   platforms found". cargo-ndk sets it too, so unsetting it in the shell does not
+   clear it. The script now exports `ANDROID_JAR`, which outranks all of it.
+3. cargo-ndk defaults to API 21 while skia-bindings hardcodes 26, and the triple
+   wins over the `-D`, so libc++ fails on `strtof_l` after the whole Skia build.
+   `--platform` is now read from `min_sdk_version`.
+4. `versionCode` — cargo-apk derives 16777472 from the crate semver; a
+   hand-written `1` would have been refused as a downgrade. Now derived the same
+   way, so the two packagers install over each other in both directions.
+5. Nothing stripped the libraries: 172.2 MB against cargo-apk's 86.4 MB, exactly
+   double, being the DWARF for 1158 Skia translation units across two ABIs.
+   `strip = "split"` is a cargo-apk-only key. The script now splits the symbols
+   out with the NDK's `llvm-objcopy`/`llvm-strip` itself rather than relying on
+   AGP, which only strips when it can find an NDK and merely warns when it
+   cannot.
+
+Signing needed nothing: cargo-apk and AGP both default to
+`~/.android/debug.keystore`, alias `androiddebugkey`, so the certificate matches
+and app data survives the swap.
+
+**cargo-apk remains the default build until the service lands**, and the two
+manifests are kept in parity by hand.
 
 ### 68. Build a stripped release APK for both ABIs
 **PENDING.** armv7-linux-androideabi and aarch64-linux-android. The unit is
