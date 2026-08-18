@@ -1,5 +1,5 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset, Overlay } from "types.slint";
+import { Preset, HeroSnapshot, Overlay } from "types.slint";
 import { Face } from "face.slint";
 import { Numpad } from "numpad.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn } from "nearby.slint";
@@ -54,6 +54,9 @@ export component AppWindow inherits Window {
     /// The station the discarded peek held before a step — the ghost that
     /// fades out during the hero morph. See `step_morph` in src/app.rs.
     in property <Preset> ghost-preset;
+    /// The hero as it stood before the step — the card that flies OUT during the
+    /// morph. Captured alongside `ghost-preset`; see `step_morph` in src/app.rs.
+    in property <HeroSnapshot> outgoing;
     in property <bool> hand-off: true;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
@@ -263,6 +266,7 @@ export component AppWindow inherits Window {
         prev-preset: root.prev-preset;
         next-preset: root.next-preset;
         ghost-preset: root.ghost-preset;
+        outgoing: root.outgoing;
         hand-off: root.hand-off;
         has-prev: root.has-prev;
         has-next: root.has-next;

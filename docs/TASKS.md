@@ -557,39 +557,66 @@ through `common::pump`, which drains the tuner queue mid-morph and hands
 left in the tree asserting something untrue.
 
 ### 75. Grow the hero card during the step morph
-**DONE.** `HeroCard` now carries a `scale`, and the step morph is a real FLIP:
-the incoming hero starts at the source peek's footprint and grows into the hero
-rect, position and size both driven by `m-out` so nothing can drift out of step.
+**DONE, both halves.** The step morph is a real FLIP in both directions: the
+incoming hero starts at the source peek's footprint and grows into the hero rect,
+and the OUTGOING card is now a real `HeroCard` carrying the station that was
+playing, starting on the hero's own rect and shrinking into the slot it lands in.
 
 Slint 1.17.1 is the newest release and still exposes no scale transform to user
-code (`Transform` carries `//-is_internal`), so the card is scaled by ARITHMETIC —
-every dimension multiplies through one number: padding, corner radius, border,
-shadow, layout spacing, the logo plate, the star, the power button and all three
-font sizes. The same trick `PeekCard` already used.
+code (`Transform` carries `//-is_internal`), so both cards are scaled by
+ARITHMETIC — every dimension multiplies through one number: padding, corner
+radius, border, shadow, layout spacing, the logo plate, the star, the power button
+and all three font sizes. The same trick `PeekCard` already used.
 
 The note that used to sit here called this infeasible because a marquee measures
 its own text. That was wrong: the marquee is `RadioTextStrip`, a SIBLING of the
-card. Nothing inside `HeroCard` measures text, and the whole change was 13 groups
-of edits.
+card. Nothing inside `HeroCard` measures text.
 
-**It collapsed three defects at once.** The travel clamp is gone — a card shrunk
-to the peek's footprint centres inside the slot and cannot overflow, so the full
-348px throw is back on the wide track and the tall track is no longer a 21px
-twitch. And the outgoing beat became visible, because the hero no longer has to
-be impersonated by a square.
+**The outgoing half.** It was a `PeekCard` standing in for the hero. That is
+CarFM's shape — its peek node IS the outgoing card, FLIPped from the hero's rect —
+but CarFM uses a NON-UNIFORM transform that stretches the peek's content out to
+635x180 on the way. Nothing here can distort an element, so the square was fitted
+to `min(card-w, card-h)` and the departing station was represented for the whole
+520ms by a 180px square that had never been on screen. Carrying the hero across
+instead is better than the stretch, not a substitute for it: the first frame of
+the morph is now the face exactly as it stood. `HeroSnapshot` is that capture,
+taken in `step_morph` before the tune for the same reason `ghost-preset` is.
 
-Verified by rendering: `examples/scaleprobe.rs` confirms the card takes real
-intermediate sizes, `examples/edgeprobe.rs` confirms it never reaches a bezel on
-either track in either direction, and frames dumped at 40/140/280/460ms show the
-incoming hero growing out of the peek slot while the outgoing shrinks away over
-the fading ghost and the far card arrives.
+**It collapsed four defects.** The travel clamp is gone — a card shrunk to the
+peek's footprint centres inside the slot and cannot overflow, so the full 348px
+throw is back on the wide track and the tall track is no longer a 21px twitch. The
+outgoing beat became visible. And the hero's rect is no longer a HOLE during the
+arming window, which is however long a synchronous retune takes on a head unit —
+that hole was the "hero card disappears for a moment" reported from the car.
 
-**Still open, and smaller than it was:** the OUTGOING card is a `PeekCard`
-standing in for the hero, and a square cannot map onto a 635x180 rect under a
-uniform scale. CarFM FLIPs the real node with a non-uniform transform, which
-distorts its content; nothing here can. Making the outgoing element a scaled
-`HeroCard` too — now possible — is the remaining step, and needs the departing
-station plumbed through the way `ghost-preset` already is.
+**A bug shipped in the first half, found and fixed here.** On the tall track the
+row takes its height from the card, and the card that flew was also the card the
+row measured — so its preferred height shrank with its own scale and the height
+binding multiplied by the scale AGAIN. The hero collapsed quadratically and its
+rect was empty at frame 0, and the row's `min-height` collapsed with it, re-laying
+the face out mid-morph. The wide track hid all of it, because there the height is
+98% of the row and never asks the card anything. The resting hero is now a
+separate, never-scaled card that the row measures; the two that fly are drawn only
+while the morph runs.
+
+Verified by rendering: `examples/outprobe.rs` differences the morph's first frame
+against the frame taken before the step and requires it back identical, measures
+the scaling on the cards' TOP EDGES (widths merge on the tall track, heights do
+not), and reads the direction mapping off the two slots either side of the hero.
+Four configurations, both tracks, both directions. `examples/edgeprobe.rs`
+confirms neither card ever reaches a bezel.
+
+**`examples/scaleprobe.rs` is deleted rather than kept.** Its predicate for "a
+card body" was `r < 236 || g < 238 || b < 241 || |r-b| > 6`, and the page
+background is `#EEF1F5` — `|238-245| = 7`. It matched the background, so it had
+been measuring the GAPS between cards and passing for the wrong reason. `outprobe`
+covers what it claimed to.
+
+**Still open, and cosmetic:** the departing card is not pixel-exact at frame 0 on
+the tall track. `HeroCard` takes its height from the row, and the row's height is
+the INCOMING card's, so a step between a logo hero and a no-logo hero starts the
+departing card at the new card's height. Cloning the old node is the only fix and
+there is no cloning here.
 
 ---
 

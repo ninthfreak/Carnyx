@@ -8,7 +8,7 @@
 // preset tiles and peek cards).
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset } from "types.slint";
+import { Preset, HeroSnapshot } from "types.slint";
 import { PeekCard } from "presets.slint";
 import { StarIcon, PowerIcon } from "icons.slint";
 
@@ -96,6 +96,8 @@ component PowerButton inherits Rectangle {
     in property <bool> dead: false;
     /// Scales with the hero card it sits on — see HeroCard's `scale`.
     in property <float> scale: 1.0;
+    /// Drawn but not tappable — see HeroCard's `inert`.
+    in property <bool> inert: false;
     callback toggled();
 
     property <float> ring: 0;
@@ -119,7 +121,10 @@ component PowerButton inherits Rectangle {
         background: Pal.power-on;
         opacity: root.ring < 0.7 ? 0.5 * (1 - root.ring / 0.7) : 0;
     }
-    touch := TouchArea { clicked => { root.toggled(); } }
+    touch := TouchArea {
+        enabled: !root.inert;
+        clicked => { root.toggled(); }
+    }
     PowerIcon {
         size: Math.round(Metrics.star / 1px * 0.58) * 1px * root.scale;
         color: root.dead ? #FFFFFF : Pal.dim;
@@ -193,6 +198,16 @@ export component HeroCard inherits Rectangle {
     /// its own text. That was wrong: the marquee is `RadioTextStrip`, a SIBLING of
     /// this card, not a child of it. Nothing inside this component measures text.
     in property <float> scale: 1.0;
+
+    /// Drawn, but it takes no taps.
+    ///
+    /// For the OUTGOING card in the step morph, which spends the first stretch
+    /// of its flight covering the hero's own rect: its star, its frequency and
+    /// its power button would otherwise swallow taps meant for the card
+    /// underneath — and a save or an audio release aimed at the station now
+    /// playing would land on the one that just left. `PeekCard` carries the same
+    /// property for the same reason.
+    in property <bool> inert: false;
 
     callback toggle-save();
     callback open-numpad();
@@ -294,7 +309,10 @@ export component HeroCard inherits Rectangle {
                 font-size: Metrics.freq-size * root.scale;
                 color: Pal.amber;
             }
-            TouchArea { clicked => { root.open-numpad(); } }
+            TouchArea {
+                enabled: !root.inert;
+                clicked => { root.open-numpad(); }
+            }
         }
     }
 
@@ -310,7 +328,10 @@ export component HeroCard inherits Rectangle {
         border-width: root.saved ? 0px : 1px * root.scale;
         border-color: Pal.border;
         opacity: star-touch.pressed ? 0.55 : 1.0;
-        star-touch := TouchArea { clicked => { root.toggle-save(); } }
+        star-touch := TouchArea {
+            enabled: !root.inert;
+            clicked => { root.toggle-save(); }
+        }
         StarIcon {
             size: Metrics.s(30) * root.scale;
             filled: root.saved;
@@ -331,6 +352,7 @@ export component HeroCard inherits Rectangle {
         x: root.corner;
         y: root.corner;
         scale: root.scale;
+        inert: root.inert;
         dead: root.dead;
         toggled => { root.toggle-audio(); }
     }
@@ -347,6 +369,11 @@ export component HeroRow inherits Rectangle {
     /// node for this; there is no cloning here, so the content is carried across
     /// instead and drawn as a ghost that fades out.
     in property <Preset> ghost-preset;
+    /// The hero as it stood BEFORE the step — what the OUTGOING card draws.
+    /// Captured by Rust in `step_morph` alongside `ghost-preset`, and for the
+    /// same reason: by the time the morph runs the hero already holds the new
+    /// station, so the old one has to have been carried across.
+    in property <HeroSnapshot> outgoing;
     /// Whether the landing slot CHANGES HANDS this step.
     ///
     /// False when its occupant is the same card before and after. Stepping
@@ -495,100 +522,96 @@ export component HeroRow inherits Rectangle {
     // the new hero comes from the NEXT slot, and the old prev card is discarded.
     // Back is mirrored.
     //
-    //   dir > 0   left  = the outgoing hero arriving, over the ghost of old prev
-    //             right = the newly-reachable station, fading in
+    //   dir > 0   left  = the DESTINATION: where the outgoing hero lands, over
+    //                     the ghost of the old prev card
+    //             right = the SOURCE the incoming hero grows out of, with the
+    //                     newly-reachable station fading in behind it
     //   dir < 0   mirrored
     //
-    // The four beats are driven by three progress properties rather than by
+    // The four beats are driven by four progress properties rather than by
     // referencing elements from `states`, because the peeks are conditional and a
     // state cannot name an element that may not exist. Each runs 1 → 0 across the
     // transition with its own duration and delay, which is what lets the far card
-    // lag the cards in motion.
+    // lag the cards in motion and the departing card dissolve only after it has
+    // landed.
     property <bool> fwd: root.step-dir > 0;
     property <float> m-out: 0;
     property <float> m-ghost: 0;
     property <float> m-far: 0;
+    property <float> m-settle: 0;
+    /// A morph is on screen. Gates the resting card out and the flying pair in.
+    property <bool> morphing: root.m-out > 0.001;
 
-    /// Where the outgoing card STARTS — the hero's footprint, expressed as a real
-    /// rect rather than as an offset.
-    ///
-    /// TWO THINGS MAKE THE OFFSET FORM WRONG, and the first cut used it.
-    ///
-    /// A PeekCard's `x`/`y` are its TOP-LEFT and its size is `card-w * scale`, so
-    /// raising the scale grows it right and down, not about its middle. Moving it
-    /// by a centre-to-centre delta — which is right for the hero, whose size never
-    /// changes — leaves a growing card sitting half a card off its mark. So the
-    /// endpoints are computed as positions and interpolated directly: at `m-out`
-    /// 1 the card IS the target rect, at 0 it IS the resting one, and nothing has
-    /// to be corrected for growth.
-    ///
-    /// And a peek is SQUARE. Scaling to the hero's width would make a card
-    /// `card-w` on a side — about 635 on the wide track, against a row barely 340
-    /// tall — so it would burst out of the row top and bottom on the way past.
-    /// The square is fitted to the SMALLER of the hero's two dimensions, which
-    /// keeps it inside the hero's own box on both layout tracks.
-    property <length> out-size: Math.min(root.card-w, root.resolved-card-h);
-    property <float> out-scale: root.out-size / root.peek-w;
-    property <length> out-x: root.card-x + (root.card-w - root.out-size) / 2;
-    property <length> out-y: (root.height - root.out-size) / 2;
     property <length> prev-rest-x: root.start-x + root.peek-inset;
     property <length> next-rest-x: root.card-x + root.card-w - root.overlap + root.peek-inset;
     property <float> peek-rest: root.dead ? 0.28 : 0.6;
-    /// Which slot the outgoing hero actually flies into — nothing flies when the
-    /// slot does not change hands.
-    property <bool> flies-left: root.fwd && root.hand-off;
-    property <bool> flies-right: !root.fwd && root.hand-off;
 
+    /// THE OUTGOING HERO'S FLIP — the mirror of the incoming one.
+    ///
+    /// This card used to be a `PeekCard` standing in for the hero: the
+    /// destination peek started on the hero's footprint and shrank home. That IS
+    /// CarFM's shape — its peek node is the outgoing card, FLIPped from the
+    /// hero's rect — but CarFM does it with a NON-UNIFORM transform that stretches
+    /// the peek's content out to 635x180 on the way. Nothing here can distort an
+    /// element, so the square had to be fitted to `min(card-w, card-h)` instead,
+    /// and the station that left was represented for the whole 520ms by a 180px
+    /// square that had never been on screen.
+    ///
+    /// Now that `HeroCard` scales, the card that leaves is a REAL HERO CARD
+    /// carrying the station that was playing, so the first frame of the morph is
+    /// the face as it stood before the step — which is what a FLIP is. It is not
+    /// a workaround for the missing transform; it is better than the transform,
+    /// because nothing is stretched.
+    ///
+    /// Interpolated as a CENTRE and a SCALE off the same `m-out` as the incoming
+    /// hero, so the card leaving and the card arriving cannot drift apart.
+    property <length> dst-cx: root.fwd
+        ? root.prev-rest-x + root.peek-mid
+        : root.next-rest-x + root.peek-mid;
+    property <length> dst-cy: root.peek-y + root.peek-mid;
+    /// 1.0 where the travel starts, `hero-fit` where it lands — the same fit the
+    /// incoming hero uses, so both cards meet the peek slots on their WIDTH.
+    /// Fitting on height instead would land a 559px card in a 158px slot.
+    property <float> out-s: root.hero-fit + (1.0 - root.hero-fit) * root.m-out;
+    property <length> out-cx: root.dst-cx + (root.hero-rest-cx - root.dst-cx) * root.m-out;
+    property <length> out-cy: root.dst-cy + (root.hero-rest-cy - root.dst-cy) * root.m-out;
+
+    /// The slot that CHANGES HANDS cross-dissolves. The ghost of its old occupant
+    /// fades out while the card underneath — the outgoing station, already
+    /// swapped in by Rust — fades up to meet it, so the slot carries one card's
+    /// worth of weight the whole way across instead of briefly stacking two at
+    /// 0.6 and reading as a bright double exposure. A slot that keeps its
+    /// occupant simply sits at rest.
+    property <float> dst-weight: root.hand-off
+        ? root.peek-rest * (1.0 - root.m-ghost)
+        : root.peek-rest;
+    /// The station arriving from further out.
+    property <float> far-weight: root.peek-rest * (1.0 - root.m-far);
+
+    // THE PEEKS NO LONGER FLY, and neither is `inert` any more. Until the
+    // outgoing card became a `HeroCard` the destination peek WAS the outgoing
+    // card, so it had to be displaced onto the hero's footprint — which put it
+    // centred over the hero for the first stretch, where its TouchArea would have
+    // taken taps meant for the hero and stepped the radio a second time the
+    // driver never asked for. Both cards stand still now, the card in flight is
+    // the one that is `inert`, and a tap on a peek during the morph does the
+    // ordinary thing.
     if root.has-prev: PeekCard {
-        // On a forward step this card is the OUTGOING HERO, so it starts on the
-        // hero's footprint and shrinks home. On a back step it is the
-        // newly-reachable station and only fades.
-        x: root.flies-left
-            ? root.prev-rest-x + (root.out-x - root.prev-rest-x) * root.m-out
-            : root.prev-rest-x;
-        y: root.flies-left
-            ? root.peek-y + (root.out-y - root.peek-y) * root.m-out
-            : root.peek-y;
+        x: root.prev-rest-x;
+        y: root.peek-y;
         card-w: root.peek-w;
-        scale: root.flies-left ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "left";
         preset: root.prev-preset;
-        // THERE ARE EXACTLY TWO OPACITY ANIMATIONS IN THIS MORPH, and neither is
-        // this one. The spec names them — the clone leaving and the far card
-        // arriving — and CarFM's outgoing card animates its TRANSFORM only,
-        // holding its 0.6 base the whole way across. A first cut ramped this card
-        // 1.0 → 0.6 as well, which made the outgoing station read as a
-        // full-strength panel beside the hero for the first stretch and then
-        // visibly dim. It travels and shrinks at a constant 0.6.
-        weight: root.fwd
-            ? root.peek-rest
-            : root.peek-rest * (1.0 - root.m-far);
-        // INERT WHILE IT IS OVER THE HERO. Displaced, this card is centred on the
-        // hero card and its TouchArea would take taps meant for the hero — so a
-        // tap on the face during the 520ms morph would step the radio a second
-        // time the driver never asked for. A disabled TouchArea does not
-        // intercept, so the hero underneath receives them.
-        //
-        // Only when THIS card is the one travelling: `m-out` is shared by both
-        // slots, and the peek that is standing still stays tappable.
-        inert: root.flies-left && root.m-out > 0.001;
+        weight: root.fwd ? root.dst-weight : root.far-weight;
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
-        x: root.flies-right
-            ? root.next-rest-x + (root.out-x - root.next-rest-x) * root.m-out
-            : root.next-rest-x;
-        y: root.flies-right
-            ? root.peek-y + (root.out-y - root.peek-y) * root.m-out
-            : root.peek-y;
+        x: root.next-rest-x;
+        y: root.peek-y;
         card-w: root.peek-w;
-        scale: root.flies-right ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "right";
         preset: root.next-preset;
-        weight: root.fwd
-            ? root.peek-rest * (1.0 - root.m-far)
-            : root.peek-rest;
-        inert: root.flies-right && root.m-out > 0.001;
+        weight: root.fwd ? root.far-weight : root.dst-weight;
         selected => { root.step(1); }
     }
 
@@ -609,17 +632,75 @@ export component HeroRow inherits Rectangle {
         weight: root.peek-rest * root.m-ghost;
         inert: true;
     }
-    // Above the peeks, so they tuck behind it.
+    // THE CARD THAT LEAVES. Above the peeks and the ghost, so it reads as a card
+    // in flight rather than something buried in the row — and BELOW the incoming
+    // hero, so the arriving station is never occluded by the departing one. That
+    // is CarFM's z-order too: the peeks tuck under the hero container, and its
+    // outgoing card is a peek.
+    //
+    // GATED ON `hand-off`, exactly like the ghost. When the destination slot keeps
+    // its occupant there is nowhere for this card to land, and flying it into a
+    // slot it does not end up in would draw the driver a lie. Stepping forward off
+    // an unsaved dial is that case: the dial is not stored anywhere, so it leaves
+    // without going into a slot, and the centre is held by the incoming hero
+    // growing in.
+    //
+    // NOT PIXEL-EXACT AT FRAME 0, and the reason is worth saying rather than
+    // discovering. `HeroCard` takes its height from the row, and on the tall track
+    // the row's height is the INCOMING card's preferred height — so a step between
+    // a logo hero and a no-logo hero starts this card at the new card's height
+    // rather than the old one's. Cloning the departing node is the only way round
+    // that, and there is no cloning here; carrying the station across is.
+    if root.hand-off && root.m-settle > 0.001: HeroCard {
+        scale: root.out-s;
+        width: root.card-w * root.out-s;
+        height: root.resolved-card-h * root.out-s;
+        x: root.out-cx - self.width / 2;
+        y: root.out-cy - self.height / 2;
+        // THE ONE OPACITY THIS MORPH GAINED, and it is a landing, not a fade-out.
+        // `m-settle` holds at 1 for the whole travel and only then dissolves over
+        // 200ms, so the card leaves as a solid object and hands over to the peek
+        // that has firmed up underneath it. Fading it while it flew made the
+        // station read as a ghost of itself rather than as the card departing —
+        // and this tree already has a ghost, which is a different card.
+        opacity: root.m-settle;
+        inert: true;
+        ident: root.outgoing.ident;
+        freq-label: root.outgoing.freq-label;
+        logo: root.outgoing.logo;
+        has-logo: root.outgoing.has-logo;
+        show-call: root.outgoing.show-call;
+        show-freq: root.outgoing.show-freq;
+        saved: root.outgoing.saved;
+    }
+
+    // THE RESTING HERO, and the row's RULER — two jobs that cannot be done by
+    // one flying card, which is what the first cut of #75 tried.
+    //
+    // On the tall track the parent gives this row no height of its own, so the
+    // row measures the card: `resolved-card-h` is `card.preferred-height`. Put
+    // the scale on that same card and the measurement scales with it — the card
+    // is then laid out at `preferred-height * scale`, and its height binding
+    // multiplies by the scale AGAIN, so the hero shrank quadratically and its
+    // rect was empty at frame 0. The row's own `min-height` collapsed with it,
+    // re-laying the whole face out under the driver mid-morph. The wide track
+    // hid all of it, because there `resolved-card-h` is 98% of the row and never
+    // asks the card anything. `examples/outprobe.rs` is what caught it.
+    //
+    // So this card never scales and never moves. The two that fly are separate
+    // elements, drawn only while the morph runs, and the incoming one lands
+    // exactly on this rect — the handover is between two cards that coincide.
     card := HeroCard {
-        // THE FLIP. Position and size both come from `m-out`, so there is no
-        // separate animation on this element and no state that displaces it —
-        // one progress property drives the hero and the three beats beside it,
-        // which is what keeps them in step.
-        scale: root.hero-s;
-        width: root.card-w * root.hero-s;
-        height: root.resolved-card-h * root.hero-s;
-        x: root.hero-cx - self.width / 2;
-        y: root.hero-cy - self.height / 2;
+        width: root.card-w;
+        height: root.resolved-card-h;
+        x: root.card-x;
+        y: (root.height - root.resolved-card-h) / 2;
+        // HIDDEN, NOT REMOVED. An `if` would take it out of the tree and its
+        // height with it, which is the collapse this card exists to prevent.
+        // `inert` alongside, so an invisible card cannot take the taps its star
+        // and power button would otherwise still receive.
+        opacity: root.morphing ? 0 : 1;
+        inert: root.morphing;
         ident: root.ident;
         freq-label: root.freq-label;
         logo: root.logo;
@@ -632,6 +713,31 @@ export component HeroRow inherits Rectangle {
         toggle-save => { root.toggle-save(); }
         open-numpad => { root.open-numpad(); }
         toggle-audio => { root.toggle-audio(); }
+    }
+
+    // THE CARD THAT ARRIVES. Above the departing one, so the station coming in
+    // is never occluded by the station going out — CarFM's z-order, where the
+    // peeks tuck under the hero container and its outgoing card is a peek.
+    //
+    // Position and size both come from `m-out`, so there is no separate
+    // animation on this element and no state that displaces it: one progress
+    // property drives all four beats, which is what keeps them in step.
+    if root.morphing: HeroCard {
+        scale: root.hero-s;
+        width: root.card-w * root.hero-s;
+        height: root.resolved-card-h * root.hero-s;
+        x: root.hero-cx - self.width / 2;
+        y: root.hero-cy - self.height / 2;
+        inert: true;
+        ident: root.ident;
+        freq-label: root.freq-label;
+        logo: root.logo;
+        has-logo: root.has-logo;
+        show-call: root.show-call;
+        show-freq: root.show-freq;
+        saved: root.saved;
+        dead: root.dead;
+        scanning: root.scanning;
     }
 
     // ── The travel ──
@@ -662,6 +768,7 @@ export component HeroRow inherits Rectangle {
             root.m-out: 1.0;
             root.m-ghost: 1.0;
             root.m-far: 1.0;
+            root.m-settle: 1.0;
             // NO OPACITY. The card travels at full strength, because that is
             // what CarFM's does: its `centerTransform` is translate and scale
             // only, and the two opacity animations in that morph belong to the
@@ -690,6 +797,16 @@ export component HeroRow inherits Rectangle {
                 animate root.m-far {
                     duration: 400ms;
                     delay: 120ms;
+                    easing: linear;
+                }
+                // The card that left, dissolving into the peek it landed on.
+                // The DELAY is the whole of it: `m-out` is eased out, so the
+                // travel is all but over by 320ms, and this holds the departing
+                // card at full strength until then. Starting the fade at t=0
+                // would dissolve it in mid-air over the hero's own rect.
+                animate root.m-settle {
+                    duration: 200ms;
+                    delay: 320ms;
                     easing: linear;
                 }
             }

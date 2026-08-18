@@ -25,6 +25,28 @@ export struct Preset {
     has-logo: bool,
 }
 
+/// The hero exactly as it stood BEFORE a preset step — the card that flies out
+/// during the morph (§8).
+///
+/// CarFM does not need this: it FLIPs the peek slot's own DOM node from the
+/// hero's rect with a non-uniform transform, so the departing card is the peek,
+/// stretched. Nothing here can distort an element, so the outgoing card is a
+/// real `HeroCard` and it needs the hero's content — which by the time the morph
+/// runs has already been replaced, because Rust tunes synchronously. Captured in
+/// `step_morph` before the tune, for the same reason `ghost-preset` is.
+///
+/// Read off the UI rather than recomputed from the preset list: what has to
+/// leave the screen is exactly what the driver was looking at.
+export struct HeroSnapshot {
+    ident: string,
+    freq-label: string,
+    logo: image,
+    has-logo: bool,
+    show-call: bool,
+    show-freq: bool,
+    saved: bool,
+}
+
 /// Which modal is up (ANDROID §6). One value, not four booleans: the four
 /// overlays are mutually exclusive, and four flags can contradict each other the
 /// way `NearbyState` replaced the picker's overlapping ones.

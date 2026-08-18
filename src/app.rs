@@ -61,8 +61,8 @@ use crate::station::{brand_color, clean_call, format_mhz, plate_label};
 use crate::stations::{NearbyPicker, NearbyState, StationDb, StationRow};
 use crate::{fake, settings};
 use crate::{
-    AppWindow, BatteryState, DiagAction, GenreColumn, NearbyStation, Overlay, Preset, TunerAction,
-    TunerDetail, TunerGlyph, TunerSource,
+    AppWindow, BatteryState, DiagAction, GenreColumn, HeroSnapshot, NearbyStation, Overlay, Preset,
+    TunerAction, TunerDetail, TunerGlyph, TunerSource,
 };
 
 // ── The event queue ──────────────────────────────────────────────────────────
@@ -2917,6 +2917,10 @@ impl App {
     /// `ghost-preset`, and the face draws it as a card that fades 0.6 → 0 over
     /// the morph. Read from the UI rather than recomputed from the preset list,
     /// because what has to fade out is exactly what the driver was looking at.
+    ///
+    /// The HERO is carried across the same way, and for the same reason — see
+    /// `outgoing` below. Two snapshots, two different cards: the ghost is the
+    /// peek that stops existing, `outgoing` is the station that was playing.
     fn step_morph(self: &Rc<App>, dir: i32, discards: bool) {
         let ui = self.ui();
         let dir = dir.signum();
@@ -2926,6 +2930,22 @@ impl App {
             ui.get_prev_preset()
         } else {
             ui.get_next_preset()
+        });
+        // And the HERO ITSELF, because the card that flies out is a real hero
+        // card now, not a peek standing in for one. Same reason as the ghost, one
+        // step further: `tune` runs synchronously on the caller's next line, so by
+        // the time a frame is drawn the hero already holds the station that
+        // ARRIVED. Read off the UI rather than rebuilt from the preset list — a
+        // station tuned by hand is not in that list at all, and it is still the
+        // card the driver was looking at.
+        ui.set_outgoing(HeroSnapshot {
+            ident: ui.get_ident(),
+            freq_label: ui.get_freq_label(),
+            logo: ui.get_logo(),
+            has_logo: ui.get_has_logo(),
+            show_call: ui.get_show_call(),
+            show_freq: ui.get_show_freq(),
+            saved: ui.get_saved(),
         });
         ui.set_hand_off(discards);
         ui.set_step_dir(dir);

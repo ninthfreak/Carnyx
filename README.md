@@ -88,15 +88,27 @@ cargo run --example warmprobe    # the between-launch restore
 cargo run --example stereoprobe  # the STEREO pill's settle window
 cargo run --example pollprobe    # the level schedule and the getter poll
 cargo run --example edgeprobe    # the hero card never leaves the screen mid-morph
-cargo run --example scaleprobe   # the step morph is a FLIP, not a slide
+cargo run --example outprobe     # the step morph is a FLIP in BOTH directions
 ```
 
-`edgeprobe` is the one that reads PIXELS rather than properties, and it exists
-because the defect it catches was invisible to everything else. Every property
+`edgeprobe` and `outprobe` are the ones that read PIXELS rather than properties,
+and they exist because the defects they catch were invisible to everything else. Every property
 was correct — the nonce, the direction, the travel — while a quarter of the hero
 card sat past the bezel for the first hundred milliseconds of every preset step.
 `shots/hero-step-morph.png` did not show it either, because that shot catches a
 frame late enough that the card is already back inside the row.
+
+`outprobe` holds the morph's other half: that the card which LEAVES is the hero
+itself, starting on the hero's own rect. Its first frame is differenced against
+the frame taken before the step and has to come back identical — a FLIP that
+begins anywhere else is not a FLIP. It also measures the scaling on the cards'
+TOP EDGES rather than their widths, because on the tall track the arriving card
+sits at the same height as the departing one and a width measurement merges the
+two into one answer. Heights do not merge. `OUTPROBE_DUMP=1` writes the frames it
+judged and `DUMP_AT_MS=280` writes one from mid-flight, because a measurement
+that disagrees with the picture is a measurement pointed at the wrong thing —
+which is how the probe this one replaces spent its whole life reporting the gaps
+BETWEEN the cards as though they were a card.
 
 `pollprobe` also pins where the poll RUNS. The vendor getters are binder calls
 into the head unit's radio service; CarFM makes them from React Native's

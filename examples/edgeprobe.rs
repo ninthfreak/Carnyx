@@ -19,6 +19,20 @@
 //! footprint and grows, which cannot overflow and needs no clamp. This holds
 //! that line — both layout tracks, both directions, failing if the card ever
 //! reaches a screen edge.
+//!
+//! WHAT IT COVERS, checked by sabotage rather than asserted. Deleting the scale
+//! from the outgoing card — restoring the exact defect above, a full-size card
+//! travelling to a peek slot — fails all four configurations here. Pushing the
+//! travel 400px past the slot fails the wide track only.
+//!
+//! WHAT IT DOES NOT COVER, for the same reason the second sabotage survives on
+//! one track: this measures the card while it is HERO-SIZED, in a band above the
+//! peek slots, and a card shrunk to a peek's footprint has left that band. That
+//! is the right scope rather than a gap in it. The tall track's peek slots run
+//! off both bezels at rest by design — they tuck under the hero and are clipped —
+//! so a card that has shrunk into one of them is SUPPOSED to be clipped exactly
+//! as the peek it lands on is. Leaving the screen is a defect at full size and
+//! the layout at a peek's size.
 
 use std::rc::Rc;
 
@@ -38,11 +52,7 @@ impl Platform for Headless {
     }
 }
 
-/// The longest run of near-white pixels on row `y` — the hero card's plate.
-///
-/// A truncated card is a SHORTER run, which is what makes this measurable at
-/// all: the card's own width never changes, so any frame whose run is narrower
-/// than the resting one has had part of it cut away by the window edge.
+/// The longest run of near-white pixels on row `y` — a card body.
 fn white_run(buf: &[PremultipliedRgbaColor], w: usize, y: usize) -> (usize, usize, usize) {
     let mut best = (0usize, 0usize, 0usize);
     let mut run_start = None;
@@ -68,8 +78,67 @@ fn white_run(buf: &[PremultipliedRgbaColor], w: usize, y: usize) -> (usize, usiz
     best
 }
 
-/// Antialiasing on a rounded corner moves the measured edge by a pixel or two.
-const TOL: usize = 4;
+/// The widest run anywhere in a band of rows.
+fn band_run(
+    buf: &[PremultipliedRgbaColor],
+    w: usize,
+    rows: std::ops::Range<usize>,
+) -> (usize, usize, usize) {
+    let mut best = (0usize, 0usize, 0usize);
+    for y in rows {
+        let r = white_run(buf, w, y);
+        if r.2 > best.2 {
+            best = r;
+        }
+    }
+    best
+}
+
+/// The resting hero's row span, grown from a scanline known to cross it.
+///
+/// Duplicated from `outprobe`, which is where the reasoning is written out. The
+/// short version: a row is the card's when its widest run matches the card's
+/// width to within a tenth AND starts at the same left edge, and that pair is
+/// what makes a generous gap safe — the card's own star, power button, call sign
+/// and frequency break the run over more than a hundred consecutive rows.
+fn hero_rows(
+    buf: &[PremultipliedRgbaColor],
+    w: usize,
+    h: usize,
+    scan_y: usize,
+    a: usize,
+    n: usize,
+) -> (usize, usize) {
+    let ok = |y: usize| {
+        let r = white_run(buf, w, y);
+        r.2 * 10 >= n * 9 && r.0.abs_diff(a) <= 6
+    };
+    let (mut top, mut gap) = (scan_y, 0);
+    for y in (0..scan_y).rev() {
+        if ok(y) {
+            top = y;
+            gap = 0;
+        } else {
+            gap += 1;
+            if gap > 250 {
+                break;
+            }
+        }
+    }
+    let (mut bottom, mut gap) = (scan_y, 0);
+    for y in scan_y + 1..h {
+        if ok(y) {
+            bottom = y;
+            gap = 0;
+        } else {
+            gap += 1;
+            if gap > 250 {
+                break;
+            }
+        }
+    }
+    (top, bottom)
+}
 
 fn main() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
@@ -103,8 +172,23 @@ fn main() {
 
             slint::platform::update_timers_and_animations();
             render(&mut buffer);
-            let (_, _, rest_n) = white_run(&buffer, w as usize, scan_y);
+            let (rest_a, _, rest_n) = white_run(&buffer, w as usize, scan_y);
             assert!(rest_n > 50, "{track}: no card found on the scanline at rest");
+            // A BAND, NOT THE SCANLINE, and the tall track is why. The peek slots
+            // there run off both bezels at rest by design — they tuck under the
+            // hero and are clipped — and the arriving card, shrunk into one of
+            // them, sits at the same height as the departing hero. On a scanline
+            // through the middle of the row their two runs merge into a single
+            // answer that reaches x=359, and this probe read that as the HERO at
+            // the bezel: a card 293px wide and one 40px wide reported as one card
+            // 326px wide, touching an edge neither of them touches. Measured
+            // instead in the top fifth of the card's own rows, which is above the
+            // peeks on both tracks and which the arriving card cannot reach until
+            // it has grown most of the way home. `outprobe` derives the same band
+            // and says more about why.
+            let (top, bottom) = hero_rows(&buffer, w as usize, h as usize, scan_y, rest_a, rest_n);
+            let band = top + 6..top + 6 + ((bottom - top) / 5).max(10);
+            let (_, _, base_n) = band_run(&buffer, w as usize, band.clone());
 
             ui.invoke_step_preset(dir);
             // Past the 16ms arm timer WITHOUT rendering — the condition the head
@@ -117,7 +201,7 @@ fn main() {
                 slint::platform::update_timers_and_animations();
                 render(&mut buffer);
                 let ms = t0.elapsed().as_millis();
-                let (a, b, n) = white_run(&buffer, w as usize, scan_y);
+                let (a, b, n) = band_run(&buffer, w as usize, band.clone());
                 // NOT a width comparison any more. Since #75 the hero legitimately
                 // SHRINKS during the flip — it starts at the peek's footprint —
                 // so "narrower than at rest" is now the correct state for most of
@@ -128,7 +212,6 @@ fn main() {
                 // shorter than at rest and simply is not on this row. Reading
                 // that as `a == 0` reported a card at the left bezel that was not
                 // there at all.
-                let _ = rest_n;
                 let cut = n > 20 && (a == 0 || b >= w as usize - 1);
                 if cut && worst.map_or(true, |(_, _, _, wn)| n < wn) {
                     worst = Some((ms, a, b, n));
@@ -139,7 +222,7 @@ fn main() {
             }
 
             match worst {
-                None => println!("  OK   {track:<4} dir {dir:>2}: card stays whole, {rest_n}px at rest"),
+                None => println!("  OK   {track:<4} dir {dir:>2}: card stays whole, {base_n}px at rest"),
                 Some((ms, a, b, n)) => {
                     println!(
                         "  FAIL {track:<4} dir {dir:>2}: at t+{ms}ms the card is x {a}..{b} \
