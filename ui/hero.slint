@@ -94,32 +94,34 @@ export component RadioTextStrip inherits Rectangle {
 // expanding ring once it is released, to draw the eye back. This is NOT a mute.
 component PowerButton inherits Rectangle {
     in property <bool> dead: false;
+    /// Scales with the hero card it sits on — see HeroCard's `scale`.
+    in property <float> scale: 1.0;
     callback toggled();
 
     property <float> ring: 0;
     init => { self.ring = 1; }
     animate ring { duration: 1800ms; easing: ease-out; iteration-count: -1; }
 
-    width: Metrics.star;
-    height: Metrics.star;
-    border-radius: Metrics.s(16);
+    width: Metrics.star * root.scale;
+    height: Metrics.star * root.scale;
+    border-radius: Metrics.s(16) * root.scale;
     background: root.dead ? Pal.power-on : transparent;
-    border-width: root.dead ? 0px : 1px;
+    border-width: root.dead ? 0px : 1px * root.scale;
     border-color: Pal.border;
     opacity: touch.pressed ? 0.6 : 1.0;
 
     if root.dead: Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: Metrics.star * (1 + 0.9 * root.ring);
+        width: Metrics.star * root.scale * (1 + 0.9 * root.ring);
         height: self.width;
-        border-radius: Metrics.s(16) * (1 + 0.9 * root.ring);
+        border-radius: Metrics.s(16) * root.scale * (1 + 0.9 * root.ring);
         background: Pal.power-on;
         opacity: root.ring < 0.7 ? 0.5 * (1 - root.ring / 0.7) : 0;
     }
     touch := TouchArea { clicked => { root.toggled(); } }
     PowerIcon {
-        size: Math.round(Metrics.star / 1px * 0.58) * 1px;
+        size: Math.round(Metrics.star / 1px * 0.58) * 1px * root.scale;
         color: root.dead ? #FFFFFF : Pal.dim;
     }
 }
@@ -131,6 +133,7 @@ component HeroLogo inherits Rectangle {
     in property <image> logo;
     in property <length> logo-h;
     in property <length> max-w;
+    in property <float> scale: 1.0;
 
     // Before the source is known, assume the 16/10 landscape shape the rest of
     // the face uses for logo plates, so the plate can never render one frame at
@@ -138,16 +141,16 @@ component HeroLogo inherits Rectangle {
     property <float> aspect: (root.logo.height > 0)
         ? (root.logo.width / root.logo.height) : 1.6;
 
-    width: Math.min(root.max-w, Math.round(root.logo-h / 1px * root.aspect) * 1px) + 16px;
-    height: root.logo-h + 8px;
-    border-radius: Metrics.s(16);
+    width: Math.min(root.max-w, Math.round(root.logo-h / 1px * root.aspect) * 1px) + 16px * root.scale;
+    height: root.logo-h + 8px * root.scale;
+    border-radius: Metrics.s(16) * root.scale;
     background: #FFFFFF;
     clip: true;
 
     Image {
         source: root.logo;
         image-fit: contain;
-        width: parent.width - 16px;
+        width: parent.width - 16px * root.scale;
         height: root.logo-h;
     }
 }
@@ -176,14 +179,29 @@ export component HeroCard inherits Rectangle {
     in property <bool> scanning: false;
     in property <int> scan-dir: 0;
 
+    /// THE CARD'S UNIFORM SCALE — the whole of #75, and what lets the step morph
+    /// be a FLIP instead of a slide.
+    ///
+    /// Slint 1.17.1 is the newest there is and exposes no scale transform to user
+    /// code (`Transform` carries `//-is_internal`), so this card is scaled by
+    /// ARITHMETIC: every dimension below multiplies through this one number —
+    /// padding, corner radius, border, shadow, the logo plate, the star, the
+    /// power button and all three font sizes. That is what makes it animatable as
+    /// a unit, and it is the same trick `PeekCard` already uses.
+    ///
+    /// A previous note here said this was infeasible because a marquee measures
+    /// its own text. That was wrong: the marquee is `RadioTextStrip`, a SIBLING of
+    /// this card, not a child of it. Nothing inside this component measures text.
+    in property <float> scale: 1.0;
+
     callback toggle-save();
     callback open-numpad();
     callback toggle-audio();
 
     property <bool> tall: Metrics.tall;
-    property <length> pad-v: Metrics.s(root.tall ? 30 : 24);
-    property <length> pad-h: Metrics.s(root.tall ? 26 : 30);
-    property <length> corner: Metrics.s(root.tall ? 16 : 18);
+    property <length> pad-v: Metrics.s(root.tall ? 30 : 24) * root.scale;
+    property <length> pad-h: Metrics.s(root.tall ? 26 : 30) * root.scale;
+    property <length> corner: Metrics.s(root.tall ? 16 : 18) * root.scale;
 
     // Hero logo growth (LOGO-SIZING §2.1): three tiers, stepping up as the call
     // sign and frequency rows are hidden. Both hidden is the logo default and the
@@ -196,15 +214,15 @@ export component HeroCard inherits Rectangle {
             : root.hidden == 1
                 ? (root.tall ? 152 : Metrics.landscape ? 171 : 205)
                 : (root.tall ? 188 : Metrics.landscape ? 215 : 256)),
-        Math.round(Metrics.h * 0.42) * 1px);
-    property <length> logo-max-w: root.width - Metrics.s(root.tall ? 52 : 60);
+        Math.round(Metrics.h * 0.42) * 1px) * root.scale;
+    property <length> logo-max-w: root.width - Metrics.s(root.tall ? 52 : 60) * root.scale;
 
-    border-width: 1px;
-    border-radius: 28px;
+    border-width: 1px * root.scale;
+    border-radius: 28px * root.scale;
     border-color: Pal.border;
     background: Pal.panel;
-    drop-shadow-blur: root.dead ? 0px : 22px;
-    drop-shadow-offset-y: root.dead ? 0px : 14px;
+    drop-shadow-blur: root.dead ? 0px : 22px * root.scale;
+    drop-shadow-offset-y: root.dead ? 0px : 14px * root.scale;
     drop-shadow-color: #0000002E;
 
     VerticalLayout {
@@ -212,7 +230,7 @@ export component HeroCard inherits Rectangle {
         padding-bottom: root.pad-v;
         padding-left: root.pad-h;
         padding-right: root.pad-h;
-        spacing: Metrics.s(14);
+        spacing: Metrics.s(14) * root.scale;
         alignment: center;
 
         if root.scanning: Text {
@@ -220,27 +238,32 @@ export component HeroCard inherits Rectangle {
             horizontal-alignment: center;
             font-family: Font.face; font-weight: Font.bold;
             font-italic: true;
-            font-size: Metrics.call-size;
-            letter-spacing: -1px;
+            font-size: Metrics.call-size * root.scale;
+            letter-spacing: -1px * root.scale;
             color: Pal.dim;
         }
 
         // Real logo REPLACES the big call sign; the call sign becomes a small
         // label beneath it.
         if !root.scanning && root.has-logo: VerticalLayout {
-            spacing: 8px;
+            spacing: 8px * root.scale;
             alignment: center;
             HorizontalLayout {
                 alignment: center;
-                HeroLogo { logo: root.logo; logo-h: root.logo-h; max-w: root.logo-max-w; }
+                HeroLogo {
+                    logo: root.logo;
+                    logo-h: root.logo-h;
+                    max-w: root.logo-max-w;
+                    scale: root.scale;
+                }
             }
             if root.show-call && root.ident != "": Text {
                 text: root.ident;
                 horizontal-alignment: center;
                 overflow: elide;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.s(root.tall ? 22 : 26);
-                letter-spacing: 0.5px;
+                font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
+                letter-spacing: 0.5px * root.scale;
                 color: Pal.dim;
             }
         }
@@ -253,22 +276,22 @@ export component HeroCard inherits Rectangle {
             horizontal-alignment: center;
             overflow: elide;
             font-family: Font.face; font-weight: Font.bold;
-            font-size: Metrics.call-size;
-            letter-spacing: -1px;
+            font-size: Metrics.call-size * root.scale;
+            letter-spacing: -1px * root.scale;
             color: Pal.text;
         }
 
         // Always show the frequency when there is no name, even if the user turned
         // the frequency line off — otherwise the hero would be blank.
         if root.scanning || root.show-freq || root.ident == "": Rectangle {
-            height: freq.preferred-height + 6px;
+            height: freq.preferred-height + 6px * root.scale;
             freq := Text {
-                y: 6px;
+                y: 6px * root.scale;
                 width: parent.width;
                 text: root.freq-label;
                 horizontal-alignment: center;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.freq-size;
+                font-size: Metrics.freq-size * root.scale;
                 color: Pal.amber;
             }
             TouchArea { clicked => { root.open-numpad(); } }
@@ -278,18 +301,18 @@ export component HeroCard inherits Rectangle {
     // The star ALWAYS sits in the card's top-right corner, on both tracks — never
     // inline with the station identity. It is not part of the centred group.
     if !root.scanning: Rectangle {
-        x: root.width - root.corner - Metrics.star;
+        x: root.width - root.corner - Metrics.star * root.scale;
         y: root.corner;
-        width: Metrics.star;
-        height: Metrics.star;
-        border-radius: Metrics.s(16);
+        width: Metrics.star * root.scale;
+        height: Metrics.star * root.scale;
+        border-radius: Metrics.s(16) * root.scale;
         background: root.saved ? Pal.blue-fill : transparent;
-        border-width: root.saved ? 0px : 1px;
+        border-width: root.saved ? 0px : 1px * root.scale;
         border-color: Pal.border;
         opacity: star-touch.pressed ? 0.55 : 1.0;
         star-touch := TouchArea { clicked => { root.toggle-save(); } }
         StarIcon {
-            size: Metrics.s(30);
+            size: Metrics.s(30) * root.scale;
             filled: root.saved;
             color: Pal.amber;
             outline: Pal.dim;
@@ -300,13 +323,14 @@ export component HeroCard inherits Rectangle {
     // power button is drawn ABOVE it, in full colour — the one element that keeps
     // its colour on a dead face.
     if root.dead: Rectangle {
-        border-radius: 28px;
+        border-radius: 28px * root.scale;
         background: Pal.hero-veil;
     }
 
     if !root.scanning: PowerButton {
         x: root.corner;
         y: root.corner;
+        scale: root.scale;
         dead: root.dead;
         toggled => { root.toggle-audio(); }
     }
@@ -398,7 +422,7 @@ export component HeroRow inherits Rectangle {
         }
         root.morph-note("dir=" + root.step-dir
             + " dead=" + (root.dead ? "yes" : "no")
-            + " travel=" + Math.round(root.enter-dx / 1px) + "px"
+            + " fit=" + Math.round(root.hero-fit * 100) + "%"
             + " cardw=" + Math.round(root.card-w / 1px)
             + " peekw=" + Math.round(root.peek-w / 1px));
     }
@@ -407,42 +431,34 @@ export component HeroRow inherits Rectangle {
     /// the new station came from. Stepping to NEXT takes the right-hand peek, so
     /// the card enters from the right.
     ///
-    /// CENTRE TO CENTRE, which is what CarFM animates
-    /// (`translateX(cx(source) - cx(center))`) — AND THEN CLAMPED TO THE ROW,
-    /// which CarFM does not need to do and this has to.
+    /// THE HERO'S FLIP — from the source peek's footprint to its own rect.
     ///
-    /// CarFM's incoming hero is SCALED DOWN to the peek's footprint at the start
-    /// of the FLIP, so centring it on the peek slot puts a small card in a small
-    /// slot and nothing leaves the screen. Slint exposes no scale transform to
-    /// user code, so this card travels at FULL SIZE (see #75) — and centring a
-    /// 635px card on a slot whose centre is 348px off the row's leaves a quarter
-    /// of it past the window edge.
+    /// This is a real FLIP now, because `HeroCard` scales (#75). It was a slide
+    /// before, and every problem the slide had came from the card never changing
+    /// size: centring a full-size 635px card on a peek slot 348px off the row's
+    /// centre put a quarter of it past the bezel, so the throw had to be clamped,
+    /// which on the tall track cut it to 21px and left a twitch.
     ///
-    /// That was not theoretical. Rendered on the wide track, the first frame put
-    /// the card at 548..1023 in a 1024px window, cut flat at the bezel with the
-    /// save star gone; a back step mirrored it and cut the power button off the
-    /// left. The tall track was worse — about 40% of the card off-screen. The
-    /// comment that used to sit here claimed centre-to-centre AVOIDED exactly
-    /// this, which was wrong: it hangs the card off the row just as edge-to-edge
-    /// would, only by less.
+    /// Shrunk to the peek's footprint the card is 180 wide, so centring it there
+    /// puts it INSIDE the slot and nothing needs clamping. The full travel is
+    /// back.
     ///
-    /// So the throw is capped at the room the card actually has. The travel is
-    /// shorter than CarFM's, which is the honest consequence of not being able to
-    /// shrink the card: a card that starts where it fits and moves less is a
-    /// worse match for the reference than one that starts small, and a much
-    /// better one than a card sliding off the screen.
+    /// Interpolated as a CENTRE and a SCALE rather than as a corner offset, so
+    /// the card stays centred on its path at every instant instead of only at the
+    /// two ends.
     property <length> peek-mid: root.peek-w * 0.88 / 2;
-    property <length> room-right: Math.max(0px, root.width - root.card-x - root.card-w);
-    property <length> room-left: Math.max(0px, root.card-x);
-    property <length> enter-dx: root.step-dir > 0
-        ? Math.min(
-            (root.card-x + root.card-w - root.overlap + root.peek-inset + root.peek-mid)
-                - (root.card-x + root.card-w / 2),
-            root.room-right)
-        : Math.max(
-            (root.start-x + root.peek-inset + root.peek-mid)
-                - (root.card-x + root.card-w / 2),
-            -root.room-left);
+    property <float> hero-fit: root.peek-w * 0.88 / root.card-w;
+    /// 1.0 at rest, `hero-fit` at the far end of the travel.
+    property <float> hero-s: 1.0 - (1.0 - root.hero-fit) * root.m-out;
+    /// The slot the incoming station came from: NEXT on a forward step.
+    property <length> src-cx: root.fwd
+        ? root.next-rest-x + root.peek-mid
+        : root.prev-rest-x + root.peek-mid;
+    property <length> src-cy: root.peek-y + root.peek-mid;
+    property <length> hero-rest-cx: root.card-x + root.card-w / 2;
+    property <length> hero-rest-cy: root.height / 2;
+    property <length> hero-cx: root.hero-rest-cx + (root.src-cx - root.hero-rest-cx) * root.m-out;
+    property <length> hero-cy: root.hero-rest-cy + (root.src-cy - root.hero-rest-cy) * root.m-out;
 
     property <length> peek-w: Metrics.peek-w;
     property <length> overlap: Metrics.peek-overlap;
@@ -595,20 +611,15 @@ export component HeroRow inherits Rectangle {
     }
     // Above the peeks, so they tuck behind it.
     card := HeroCard {
-        // WHAT THIS IS NOT: CarFM's morph SCALES the card between the peek
-        // footprint and the hero footprint, on two sampled easings. Slint 1.17
-        // exposes no scale transform to user code — `Transform` is compiled but
-        // internal, "the type exists as an internal type, but cannot be accessed
-        // in this scope" — and animating `width`/`height` instead re-lays the
-        // card out every frame while its type stays a fixed size, which reads as
-        // reflow jitter rather than growth. So this is a travel-and-fade over
-        // the same 520ms and the same easing, and the card does not change size.
-        //
-        // The RESTING geometry is here; the state below is what displaces it.
-        x: root.card-x;
-        y: (root.height - root.resolved-card-h) / 2;
-        width: root.card-w;
-        height: root.resolved-card-h;
+        // THE FLIP. Position and size both come from `m-out`, so there is no
+        // separate animation on this element and no state that displaces it —
+        // one progress property drives the hero and the three beats beside it,
+        // which is what keeps them in step.
+        scale: root.hero-s;
+        width: root.card-w * root.hero-s;
+        height: root.resolved-card-h * root.hero-s;
+        x: root.hero-cx - self.width / 2;
+        y: root.hero-cy - self.height / 2;
         ident: root.ident;
         freq-label: root.freq-label;
         logo: root.logo;
@@ -644,9 +655,10 @@ export component HeroRow inherits Rectangle {
     // machine — not a rendered frame — is what decides the value being left.
     states [
         entering when root.arming: {
-            card.x: root.card-x + root.enter-dx;
-            // The other three beats, armed at their start values in the same
-            // frame as the hero's and released by the same transition.
+            // ONE PROGRESS PROPERTY FOR ALL FOUR BEATS. `card.x` used to be
+            // displaced here and animated separately; now the hero's centre and
+            // its scale are both derived from `m-out`, so the hero and the cards
+            // beside it cannot drift out of step.
             root.m-out: 1.0;
             root.m-ghost: 1.0;
             root.m-far: 1.0;
@@ -663,23 +675,6 @@ export component HeroRow inherits Rectangle {
             // NO `in` BLOCK either. Going in must be instantaneous, or the card
             // visibly slides AWAY to the peek slot before coming back.
             out {
-                // CUBIC EASE-OUT, which is what the spec says and what
-                // `easeMove = p => 1 - (1 - p)**3` is in CarFM. This was
-                // `cubic-bezier(0.25, 0.1, 0.25, 1)` — that is CSS `ease`, an
-                // ease-IN-out, and the difference is visible rather than
-                // academic: a third of the way through the window `ease` has
-                // moved 60% of the distance where an ease-out has moved 73%, so
-                // the card crept away from the tap before it went anywhere.
-                // Sampled against 1-(1-p)^3, this curve tracks it to 0.002.
-                animate card.x {
-                    duration: 520ms;
-                    easing: cubic-bezier(0.33, 1, 0.68, 1);
-                }
-                // The outgoing card's travel and shrink, on the same 520ms as
-                // the hero. CarFM gives position a cubic ease-out and size a
-                // quintic one, so the card settles its scale slightly ahead of
-                // its travel; one property cannot carry two curves, and the
-                // cubic is the one the eye reads as the movement.
                 animate root.m-out {
                     duration: 520ms;
                     easing: cubic-bezier(0.33, 1, 0.68, 1);

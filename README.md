@@ -88,6 +88,7 @@ cargo run --example warmprobe    # the between-launch restore
 cargo run --example stereoprobe  # the STEREO pill's settle window
 cargo run --example pollprobe    # the level schedule and the getter poll
 cargo run --example edgeprobe    # the hero card never leaves the screen mid-morph
+cargo run --example scaleprobe   # the step morph is a FLIP, not a slide
 ```
 
 `edgeprobe` is the one that reads PIXELS rather than properties, and it exists

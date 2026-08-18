@@ -15,9 +15,10 @@
 //! forward step and the power button gone on a back one. On the tall track it
 //! was about 40%.
 //!
-//! So the throw is now clamped to the room the card actually has, and this is
-//! what holds that line: it renders both layout tracks in both directions and
-//! fails if the card is ever narrower than it is at rest, or touching an edge.
+//! #75 fixed it properly: `HeroCard` scales, so the card starts AT the peek's
+//! footprint and grows, which cannot overflow and needs no clamp. This holds
+//! that line — both layout tracks, both directions, failing if the card ever
+//! reaches a screen edge.
 
 use std::rc::Rc;
 
@@ -117,7 +118,18 @@ fn main() {
                 render(&mut buffer);
                 let ms = t0.elapsed().as_millis();
                 let (a, b, n) = white_run(&buffer, w as usize, scan_y);
-                let cut = n + TOL < rest_n || a == 0 || b >= w as usize - 1;
+                // NOT a width comparison any more. Since #75 the hero legitimately
+                // SHRINKS during the flip — it starts at the peek's footprint —
+                // so "narrower than at rest" is now the correct state for most of
+                // the window. What must never happen is the card reaching a
+                // bezel, which is what the unclamped slide did.
+                // `n == 0` is "no card crosses this scanline", which is now an
+                // ordinary state: shrunk to the peek's footprint the hero is far
+                // shorter than at rest and simply is not on this row. Reading
+                // that as `a == 0` reported a card at the left bezel that was not
+                // there at all.
+                let _ = rest_n;
+                let cut = n > 20 && (a == 0 || b >= w as usize - 1);
                 if cut && worst.map_or(true, |(_, _, _, wn)| n < wn) {
                     worst = Some((ms, a, b, n));
                 }
@@ -131,7 +143,7 @@ fn main() {
                 Some((ms, a, b, n)) => {
                     println!(
                         "  FAIL {track:<4} dir {dir:>2}: at t+{ms}ms the card is x {a}..{b} \
-                         ({n}px of {rest_n}) — it is off the screen edge"
+                         ({n}px) — it has reached a screen edge"
                     );
                     failures += 1;
                 }

@@ -557,32 +557,39 @@ through `common::pump`, which drains the tuner queue mid-morph and hands
 left in the tree asserting something untrue.
 
 ### 75. Grow the hero card during the step morph
-**PENDING, and it now costs more than polish.** CarFM's morph FLIPs the incoming
-hero from the source peek's rect to the hero rect, interpolating position on a
-cubic ease-out and SIZE on a quintic one so the scale settles slightly ahead of
-the travel. Carnyx travels the card and does not resize it.
+**DONE.** `HeroCard` now carries a `scale`, and the step morph is a real FLIP:
+the incoming hero starts at the source peek's footprint and grows into the hero
+rect, position and size both driven by `m-out` so nothing can drift out of step.
 
-`PeekCard` can be scaled because every dimension in it multiplies through one
-`scale` property — that is what makes the outgoing card's shrink possible.
-`HeroCard` cannot: 159 lines of independently derived metrics, paddings, corner
-radii, font sizes and a marquee whose width is MEASURED from its own text, so a
-uniform scale there is a rebuild of the component rather than a property. Slint
-1.17 exposes no scale transform to user code — `Transform` carries
-`//-is_internal` (i-slint-compiler-1.17.1 builtins.slint:500-507) — and animating
-`width`/`height` re-lays the card out every frame, which reads as jitter.
+Slint 1.17.1 is the newest release and still exposes no scale transform to user
+code (`Transform` carries `//-is_internal`), so the card is scaled by ARITHMETIC —
+every dimension multiplies through one number: padding, corner radius, border,
+shadow, layout spacing, the logo plate, the star, the power button and all three
+font sizes. The same trick `PeekCard` already used.
 
-**WHAT IT COSTS TODAY.** Because the card cannot shrink, centring it on the
-source peek slot pushed a quarter of it past the bezel — the save star gone on a
-forward step, the power button on a back one, and about 40% off-screen on the
-tall track. The travel is therefore CLAMPED to the room the card has, which fixes
-the clipping and shortens the throw: 348px → 171px on the wide track, and only
-21px on the tall one, where the hero nearly fills the row. So the morph is now
-barely perceptible on the tall track. Growing the card is what would restore the
-full travel, because a card that starts small has somewhere to start.
+The note that used to sit here called this infeasible because a marquee measures
+its own text. That was wrong: the marquee is `RadioTextStrip`, a SIBLING of the
+card. Nothing inside `HeroCard` measures text, and the whole change was 13 groups
+of edits.
 
-`examples/edgeprobe.rs` holds the line meanwhile — both tracks, both directions,
-failing if the card is ever narrower than at rest or touching an edge. Verified
-by mutation: removing the clamp fails all four cases.
+**It collapsed three defects at once.** The travel clamp is gone — a card shrunk
+to the peek's footprint centres inside the slot and cannot overflow, so the full
+348px throw is back on the wide track and the tall track is no longer a 21px
+twitch. And the outgoing beat became visible, because the hero no longer has to
+be impersonated by a square.
+
+Verified by rendering: `examples/scaleprobe.rs` confirms the card takes real
+intermediate sizes, `examples/edgeprobe.rs` confirms it never reaches a bezel on
+either track in either direction, and frames dumped at 40/140/280/460ms show the
+incoming hero growing out of the peek slot while the outgoing shrinks away over
+the fading ghost and the far card arrives.
+
+**Still open, and smaller than it was:** the OUTGOING card is a `PeekCard`
+standing in for the hero, and a square cannot map onto a 635x180 rect under a
+uniform scale. CarFM FLIPs the real node with a non-uniform transform, which
+distorts its content; nothing here can. Making the outgoing element a scaled
+`HeroCard` too — now possible — is the remaining step, and needs the departing
+station plumbed through the way `ghost-preset` already is.
 
 ---
 

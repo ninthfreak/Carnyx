@@ -1,26 +1,19 @@
-//! Does the outgoing peek card actually SCALE, or does it snap?
+//! Does the card actually SCALE during the step morph, or only move?
 //!
-//! The driver reports "stuttery movement, no scaling". The hero's travel is an
-//! animation on an ELEMENT property (`card.x`) and visibly works. The three
-//! beats added beside it are animations on ROOT properties (`m-out`, `m-ghost`,
-//! `m-far`) declared inside the same state transition — and if Slint does not
-//! apply a transition to a root property, those snap from 1 to 0 in a single
-//! frame while the hero glides. One frame of a displaced, enlarged card is
-//! exactly what "stutter with no scaling" looks like.
+//! It only moved, and the driver's words were exact: "stuttery movement, no
+//! scaling". Measured here rather than reasoned about — position interpolated
+//! smoothly while every frame held the same size.
 //!
-//! MEASURED ANSWER: the position animates smoothly and the SIZE never changes.
+//! The cause was arithmetic, not Slint. The hero card is 635 wide by 180 TALL
+//! and a peek is 180 by 180 — identical heights — so fitting a growing square to
+//! `min(card-w, resolved-card-h)` fitted it to a size the peek already was: a
+//! 0.2% change. Slint animates a hand-rolled scale perfectly well; there was
+//! simply nothing to animate.
 //!
-//! Not because Slint cannot animate a hand-rolled scale — swapping `out-size` to
-//! `card-w` makes the card take real intermediate widths (141 -> 124 -> 74), so
-//! relayout-driven scaling interpolates fine. It is arithmetic. The hero card is
-//! 635 wide by 180 TALL and a peek is 180 by 180: identical heights. Fitting the
-//! growing square to `min(card-w, resolved-card-h)` therefore fits it to 180,
-//! giving out-scale 180/205 = 0.878 against a resting 0.88 — a 0.2% change.
-//!
-//! The real fix is #75: a `scale` on HeroCard, so the outgoing card can be the
-//! hero shrinking from the hero's RECT the way CarFM FLIPs its actual node,
-//! rather than a square peek standing in for a rectangle. This probe fails until
-//! then, on purpose.
+//! #75 fixed it at the root by giving `HeroCard` its own `scale`, so the morph is
+//! a real FLIP: the incoming hero starts at the source peek's footprint and grows
+//! into the hero rect. This holds that line — it fails if the card ever stops
+//! taking intermediate sizes across the window.
 
 use std::rc::Rc;
 
@@ -77,6 +70,21 @@ fn plate_run(buf: &[PremultipliedRgbaColor], w: usize, y: usize) -> (usize, usiz
     best
 }
 
+fn dump(name: &str, buf: &[PremultipliedRgbaColor], w: u32, h: u32) {
+    let _ = std::fs::create_dir_all("shots");
+    let mut rgba = Vec::with_capacity(buf.len() * 4);
+    for p in buf {
+        let a = u32::from(p.alpha);
+        let un = |c: u8| if a == 0 { 0u8 } else { ((u32::from(c)) * 255 / a).min(255) as u8 };
+        rgba.extend_from_slice(&[un(p.red), un(p.green), un(p.blue), p.alpha]);
+    }
+    let f = std::fs::File::create(format!("shots/{name}.png")).unwrap();
+    let mut e = png::Encoder::new(std::io::BufWriter::new(f), w, h);
+    e.set_color(png::ColorType::Rgba);
+    e.set_depth(png::BitDepth::Eight);
+    e.write_header().unwrap().write_image_data(&rgba).unwrap();
+}
+
 fn main() {
     let (w, h) = (1024u32, 614u32);
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
@@ -108,6 +116,27 @@ fn main() {
 
     ui.invoke_step_preset(1);
     std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // ONE FRAME, AT A CHOSEN MOMENT. Writing a PNG costs about 650ms, which is
+    // longer than the whole 520ms morph — so dumping inside the sampling loop
+    // photographs the same late frame over and over. When DUMP_AT_MS is set this
+    // advances the clock to that instant, writes one frame and stops.
+    if let Ok(at) = std::env::var("DUMP_AT_MS") {
+        let at: u64 = at.parse().expect("DUMP_AT_MS");
+        // REAL elapsed time, not accumulated sleeps: a render costs more than
+        // the sleep between them, so counting sleeps overshot the whole 520ms
+        // window and photographed the resting face at every requested instant.
+        let t0 = std::time::Instant::now();
+        while (t0.elapsed().as_millis() as u64) < at {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            slint::platform::update_timers_and_animations();
+            render(&mut buffer);
+        }
+        let (a, b, n) = plate_run(&buffer, w as usize, scan_y);
+        println!("t+{at}ms : widest card body x {a}..{b} (w {n})");
+        dump(&format!("flip-{at:04}"), &buffer, w, h);
+        return;
+    }
 
     let t0 = std::time::Instant::now();
     let mut widths = Vec::new();
