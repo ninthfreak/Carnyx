@@ -48,6 +48,7 @@ export component Face inherits Rectangle {
     /// The station the discarded peek held before a step — the ghost that
     /// fades out during the hero morph. See `step_morph` in src/app.rs.
     in property <Preset> ghost-preset;
+    in property <bool> ghost-live: true;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
 
@@ -206,6 +207,7 @@ export component Face inherits Rectangle {
                 prev-preset: root.prev-preset;
                 next-preset: root.next-preset;
                 ghost-preset: root.ghost-preset;
+                ghost-live: root.ghost-live;
                 step(d) => { root.step-preset(d); }
                 toggle-save => { root.toggle-save(); }
                 open-numpad => { root.open-numpad(); }
@@ -263,6 +265,7 @@ export component Face inherits Rectangle {
                 // bug to notice, because the track that is looked at most is the
                 // one that works.
                 ghost-preset: root.ghost-preset;
+                ghost-live: root.ghost-live;
                 step(d) => { root.step-preset(d); }
                 toggle-save => { root.toggle-save(); }
                 open-numpad => { root.open-numpad(); }

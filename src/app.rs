@@ -2563,11 +2563,36 @@ impl App {
                 (active + dir).rem_euclid(n)
             }
         };
-        let mhz = self.state.borrow().presets[next as usize].mhz;
+        let (mhz, moves, discards) = {
+            let s = self.state.borrow();
+            let n = s.presets.len() as i32;
+            let mhz = s.presets[next as usize].mhz;
+            let active = s.active();
+
+            // §8: THE MORPH RUNS ONLY WHEN THE FREQUENCY ACTUALLY CHANGES.
+            // CarFM's is in `componentDidUpdate` behind exactly that test, and
+            // without it a step that lands where the dial already is still plays
+            // the whole 520ms — cards flying for a swap that never happened. The
+            // reachable case is a single preset, where `(active + dir) % 1` is
+            // `active`, so every press re-tunes the station already playing.
+            let moves = (mhz - s.dial).abs() as f64 > crate::stations::FREQ_EPS;
+
+            // AND WHETHER ANYTHING IS ACTUALLY DISCARDED. The ghost stands for a
+            // card that is about to stop existing, so it is only honest when the
+            // slot's occupant changes. Stepping forward off an UNSAVED dial is
+            // the case that breaks it: with no active preset the peeks show the
+            // last and first entries, and after landing on entry 0 the prev slot
+            // still shows the last entry — the same card. Fading a card out on
+            // top of an identical one is a ghost of nothing.
+            let discards = step_discards(n, active, next, dir);
+            (mhz, moves, discards)
+        };
         // ARM THE MORPH BEFORE THE TUNE. This is a FLIP: the hero is put back
         // where the incoming station came from and travels to where it belongs,
         // so the cards must already hold the new stations when it starts.
-        self.step_morph(dir);
+        if moves {
+            self.step_morph(dir, discards);
+        }
         self.tune(mhz);
     }
 
@@ -2892,7 +2917,7 @@ impl App {
     /// `ghost-preset`, and the face draws it as a card that fades 0.6 → 0 over
     /// the morph. Read from the UI rather than recomputed from the preset list,
     /// because what has to fade out is exactly what the driver was looking at.
-    fn step_morph(self: &Rc<App>, dir: i32) {
+    fn step_morph(self: &Rc<App>, dir: i32, discards: bool) {
         let ui = self.ui();
         let dir = dir.signum();
         // Forward discards the PREV card, back discards the NEXT one — the slot
@@ -2902,6 +2927,7 @@ impl App {
         } else {
             ui.get_next_preset()
         });
+        ui.set_ghost_live(discards);
         ui.set_step_dir(dir);
         ui.set_step_nonce(ui.get_step_nonce().wrapping_add(1));
     }
@@ -3007,6 +3033,34 @@ fn numpad_press(buf: &str, key: &str) -> String {
 /// `Math.round` breaks ties toward +∞ and Rust's `round` away from zero; every
 /// value that reaches this is positive, so the two agree. It is written down
 /// because that is only true while the band floor stays above zero.
+/// Does a step actually DISCARD the card in the slot the outgoing hero lands in?
+///
+/// The ghost stands for a card that is about to stop existing, so drawing one
+/// when the slot's occupant does not change is a ghost of nothing — two
+/// identical cards, one fading out on top of the other.
+///
+/// The peeks are derived from the active index the same way `push_hero` derives
+/// them, including its rule that an UNSAVED dial (`active < 0`) shows the last
+/// entry on the left and the first on the right. That rule is what makes the
+/// answer interesting: stepping forward off an unsaved dial lands on entry 0,
+/// whose prev is the last entry — exactly what was already there.
+fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
+    if n <= 0 {
+        return false;
+    }
+    let (old_prev, old_next) = if active < 0 {
+        (n - 1, 0)
+    } else {
+        ((active - 1).rem_euclid(n), (active + 1).rem_euclid(n))
+    };
+    let (new_prev, new_next) = ((next - 1).rem_euclid(n), (next + 1).rem_euclid(n));
+    if dir > 0 {
+        old_prev != new_prev
+    } else {
+        old_next != new_next
+    }
+}
+
 fn numpad_commit(buf: &str) -> Option<f32> {
     let parsed = buf.parse::<f32>().ok().filter(|v| v.is_finite())?;
     let dial = (parsed * 10.0).round() / 10.0;
@@ -3289,6 +3343,44 @@ mod tests {
         assert_eq!(bare.name(), "87.9");
         assert_eq!(bare.call(), "87.9");
         assert_eq!(bare.base(), "");
+    }
+
+    /// THE GHOST ONLY EXISTS WHEN A CARD REALLY GOES.
+    ///
+    /// Written because the first cut stamped one unconditionally, and the case
+    /// it gets wrong is not exotic: an unsaved dial is what the face shows every
+    /// time the driver tunes somewhere that is not a preset.
+    #[test]
+    fn a_step_discards_a_card_only_when_the_slot_changes_hands() {
+        // The ordinary case, six presets, sitting on entry 2. Forward, the prev
+        // slot goes from entry 1 to entry 2; back, the next slot goes from 3 to 2.
+        assert!(step_discards(6, 2, 3, 1), "forward off a preset discards prev");
+        assert!(step_discards(6, 2, 1, -1), "back off a preset discards next");
+
+        // AN UNSAVED DIAL. `push_hero` shows the last entry on the left and the
+        // first on the right, so stepping forward lands on entry 0 — whose prev
+        // is the last entry, which is already the card in that slot.
+        assert!(!step_discards(6, -1, 0, 1), "forward off an unsaved dial discards nothing");
+        // Backwards off the same dial lands on the last entry, whose next is
+        // entry 0 — again already there.
+        assert!(!step_discards(6, -1, 5, -1), "back off an unsaved dial discards nothing");
+
+        // ONE PRESET. Every slot is the same entry, so nothing can be discarded
+        // in either direction. (The step is refused before this by the
+        // frequency guard, but the answer must still be honest.)
+        assert!(!step_discards(1, 0, 0, 1));
+        assert!(!step_discards(1, 0, 0, -1));
+
+        // TWO PRESETS, where prev and next are the same card. Stepping from 0 to
+        // 1 moves the prev slot from entry 1 to entry 0, so a card does go.
+        assert!(step_discards(2, 0, 1, 1));
+
+        // Wrapping at the ends behaves like anywhere else.
+        assert!(step_discards(6, 5, 0, 1), "wrapping forward still discards");
+        assert!(step_discards(6, 0, 5, -1), "wrapping back still discards");
+
+        // An empty strip cannot be stepped, and must not answer true.
+        assert!(!step_discards(0, -1, 0, 1));
     }
 
     /// THE NUMPAD'S ENTRY RULES, which used to be a six-character cap.

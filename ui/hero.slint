@@ -323,6 +323,11 @@ export component HeroRow inherits Rectangle {
     /// node for this; there is no cloning here, so the content is carried across
     /// instead and drawn as a ghost that fades out.
     in property <Preset> ghost-preset;
+    /// Whether anything is actually being discarded this step. False when the
+    /// slot's occupant does not change — stepping forward off an unsaved dial
+    /// leaves the prev slot showing the same card — and a ghost of nothing is
+    /// worse than no ghost.
+    in property <bool> ghost-live: true;
     in property <bool> has-prev: false;
     in property <bool> has-next: false;
     in property <length> card-w;
@@ -494,13 +499,25 @@ export component HeroRow inherits Rectangle {
         scale: root.fwd ? 0.88 + (root.out-scale - 0.88) * root.m-out : 0.88;
         side: "left";
         preset: root.prev-preset;
-        // Travelling: full strength, settling to the peek's 0.6 — the spec's
-        // "resolves to the card's existing base scale rather than identity, so it
-        // doesn't pop when the animation clears". Arriving: 0 → 0.6, held at
-        // nothing through the 120ms delay.
-        opacity: root.fwd
-            ? root.peek-rest + (1.0 - root.peek-rest) * root.m-out
+        // THERE ARE EXACTLY TWO OPACITY ANIMATIONS IN THIS MORPH, and neither is
+        // this one. The spec names them — the clone leaving and the far card
+        // arriving — and CarFM's outgoing card animates its TRANSFORM only,
+        // holding its 0.6 base the whole way across. A first cut ramped this card
+        // 1.0 → 0.6 as well, which made the outgoing station read as a
+        // full-strength panel beside the hero for the first stretch and then
+        // visibly dim. It travels and shrinks at a constant 0.6.
+        weight: root.fwd
+            ? root.peek-rest
             : root.peek-rest * (1.0 - root.m-far);
+        // INERT WHILE IT IS OVER THE HERO. Displaced, this card is centred on the
+        // hero card and its TouchArea would take taps meant for the hero — so a
+        // tap on the face during the 520ms morph would step the radio a second
+        // time the driver never asked for. A disabled TouchArea does not
+        // intercept, so the hero underneath receives them.
+        //
+        // Only when THIS card is the one travelling: `m-out` is shared by both
+        // slots, and the peek that is standing still stays tappable.
+        inert: root.fwd && root.m-out > 0.001;
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
@@ -514,9 +531,10 @@ export component HeroRow inherits Rectangle {
         scale: root.fwd ? 0.88 : 0.88 + (root.out-scale - 0.88) * root.m-out;
         side: "right";
         preset: root.next-preset;
-        opacity: root.fwd
+        weight: root.fwd
             ? root.peek-rest * (1.0 - root.m-far)
-            : root.peek-rest + (1.0 - root.peek-rest) * root.m-out;
+            : root.peek-rest;
+        inert: !root.fwd && root.m-out > 0.001;
         selected => { root.step(1); }
     }
 
@@ -528,13 +546,13 @@ export component HeroRow inherits Rectangle {
     //
     // `inert`, because it sits on top of the real card and must not swallow a
     // second tap. Conditional, so it is not an invisible touch target at rest.
-    if root.m-ghost > 0.001: PeekCard {
+    if root.ghost-live && root.m-ghost > 0.001: PeekCard {
         x: root.fwd ? root.prev-rest-x : root.next-rest-x;
         y: root.peek-y;
         card-w: root.peek-w;
         side: root.fwd ? "left" : "right";
         preset: root.ghost-preset;
-        opacity: root.peek-rest * root.m-ghost;
+        weight: root.peek-rest * root.m-ghost;
         inert: true;
     }
     // Above the peeks, so they tuck behind it.
@@ -607,9 +625,17 @@ export component HeroRow inherits Rectangle {
             // NO `in` BLOCK either. Going in must be instantaneous, or the card
             // visibly slides AWAY to the peek slot before coming back.
             out {
+                // CUBIC EASE-OUT, which is what the spec says and what
+                // `easeMove = p => 1 - (1 - p)**3` is in CarFM. This was
+                // `cubic-bezier(0.25, 0.1, 0.25, 1)` — that is CSS `ease`, an
+                // ease-IN-out, and the difference is visible rather than
+                // academic: a third of the way through the window `ease` has
+                // moved 60% of the distance where an ease-out has moved 73%, so
+                // the card crept away from the tap before it went anywhere.
+                // Sampled against 1-(1-p)^3, this curve tracks it to 0.002.
                 animate card.x {
                     duration: 520ms;
-                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+                    easing: cubic-bezier(0.33, 1, 0.68, 1);
                 }
                 // The outgoing card's travel and shrink, on the same 520ms as
                 // the hero. CarFM gives position a cubic ease-out and size a
@@ -618,7 +644,7 @@ export component HeroRow inherits Rectangle {
                 // cubic is the one the eye reads as the movement.
                 animate root.m-out {
                     duration: 520ms;
-                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
+                    easing: cubic-bezier(0.33, 1, 0.68, 1);
                 }
                 // The clone leaving: 0.6 → 0, linear, over the full window.
                 animate root.m-ghost {

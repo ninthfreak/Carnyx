@@ -272,7 +272,17 @@ export component PeekCard inherits Rectangle {
 
     width: root.card-w * root.scale;
     height: root.card-w * root.scale;
-    opacity: touch.pressed ? 0.35 : 0.6;
+    /// The card's weight at rest. 0.6 is §8's peek opacity; the hero row lowers
+    /// it to 0.28 on a dead face and drives it during the morph.
+    ///
+    /// SEPARATE FROM `opacity` ON PURPOSE. This used to be
+    /// `opacity: touch.pressed ? 0.35 : 0.6`, and every call site binds `opacity`
+    /// from outside — so Slint's inlining kept the outer expression and threw
+    /// this one away, leaving a peek card that gave no acknowledgement at all
+    /// when pressed while every other control in the file dims. Splitting the
+    /// two lets the row set the weight and the card keep its own press feedback.
+    in property <float> weight: 0.6;
+    opacity: touch.pressed && !root.inert ? root.weight * 0.58 : root.weight;
     // CarFM scales the whole card with a transform, so its 1dp border comes out at
     // 0.88 too. Authoring the size directly means the border has to be scaled by
     // hand or the peek reads a touch heavier than the real one.

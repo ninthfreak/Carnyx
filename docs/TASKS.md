@@ -532,28 +532,29 @@ between-launch session restore, and the push-rate work (`push_all` 1.94ms →
 on x86 by `examples/pushbench.rs`).
 
 
-### 74. Make the probe harness able to drive a Slint animation
-**PENDING, and it blocks judging any animation off the unit.** No probe in this
-tree has ever exercised a Slint ANIMATION: `shot.rs` captures static states and
-every other probe reads properties. `examples/morphprobe.rs` was written to watch
-the preset-step morph as pixels over time and cannot — `has_active_animations()`
-is false at every sample, so its numbers say nothing about the morph and it exits
-INCONCLUSIVE rather than reporting failures it has not earned.
+### 74. Make the morph shot deterministic
+**PENDING.** `examples/shot.rs` renders `hero-step-morph` by stepping a preset,
+sleeping past the arm timer WITHOUT drawing, then advancing the clock four times —
+so the frame it catches depends on wall-clock timing. Measured: two runs of
+identical code differ by about 40,000 pixels, while a static shot like `tuned` is
+bit-identical run to run. That makes the one shot covering this animation useless
+as a regression baseline; a change can only be judged by looking at it.
 
-Ruled out already, so the next attempt does not repeat them: the presets exist and
-both peeks are live; audio is on, so the morph is not being correctly skipped for
-a dead face; the nonce and direction reach the face; `changed step-nonce` fires
-and its note prints; pumping at 2ms so a frame lands inside the 16ms arming window
-changes nothing; and rendering for real during the pump — rather than handing
-`draw_if_needed` a closure that ignores the renderer, which is what `common::pump`
-does — changes nothing either.
+Worth trying: a `Platform` with a controllable `duration_since_start`, which would
+make animations deterministic and let a shot name an exact point in the 520ms
+window instead of racing it. That would also allow a shot per BEAT — one inside
+the far card's 120ms delay, where the card must still be invisible, which is the
+beat most likely to regress silently.
 
-Worth trying next: a `Platform` with a controllable `duration_since_start`, which
-would make animations deterministic instead of wall-clock, and would let a probe
-step to an exact point in a 520ms window rather than racing it.
-
-Until this is solved, every animation in the face is verifiable ONLY on the unit,
-which is how the step morph came to ship with three of its four beats missing.
+**A CORRECTION.** This item previously said no probe in this tree had ever driven
+a Slint animation and that the morph could only be judged on the unit. That was
+wrong: `shot.rs` has photographed this morph mid-travel all along, and it is what
+verified the work — the ghost, the travelling card and the faded far peek are all
+visible in `shots/hero-step-morph.png`. The probe written alongside that claim,
+`examples/morphprobe.rs`, never started the animation because it drove the loop
+through `common::pump`, which drains the tuner queue mid-morph and hands
+`draw_if_needed` a closure that renders nothing. It has been deleted rather than
+left in the tree asserting something untrue.
 
 ### 75. Grow the hero card during the step morph
 **PENDING.** CarFM's morph FLIPs the incoming hero from the source peek's rect to
