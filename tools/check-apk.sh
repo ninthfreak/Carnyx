@@ -98,6 +98,23 @@ unzip -v "$APK" 2>/dev/null \
       printf "  %8.1f MB stored  %8.1f MB in APK   %s\n", $1/1048576, $3/1048576, name
     }' \
   | sort -rn | head -6
+
+# ADD THEM UP AND COMPARE WITH THE FILE. A zip is its entries plus a few KB of
+# directory and signing block, so if the file on disk is much larger than the sum
+# of what is inside it, the file being weighed is not the file being read — a
+# stale copy, a different output, or a directory total. That mismatch has already
+# cost a round trip.
+entry_bytes=$(unzip -v "$APK" 2>/dev/null \
+  | awk 'NR>3 && NF>=8 && $1 ~ /^[0-9]+$/ { t += $3 } END { print t+0 }')
+file_bytes=$(stat -c%s "$APK")
+printf '  %s\n' "-----"
+printf '  %8.1f MB   sum of every entry, compressed\n' "$(awk -v b="$entry_bytes" 'BEGIN{print b/1048576}')"
+printf '  %8.1f MB   %s\n' "$(awk -v b="$file_bytes" 'BEGIN{print b/1048576}')" "$APK"
+if [[ "$entry_bytes" -gt 0 ]] && awk -v f="$file_bytes" -v e="$entry_bytes" 'BEGIN{exit !(f > e*1.5 + 8388608)}'; then
+  note "FAIL" "the file is far larger than its own contents — you are not weighing this APK"
+  note "" "(check the path above against whatever reported the other number)"
+  fail=1
+fi
 echo
 
 # Debug sections are the difference between an 86 MB APK and a 172 MB one, and

@@ -237,7 +237,11 @@ if [[ ! -x "$strip_tool" || ! -x "$objcopy_tool" ]]; then
 Without them the APK ships unstripped and is roughly twice the size it should
 be — 172 MB against 86 MB when this was measured."
 fi
-SYMBOLS="android/app/build/outputs/symbols"
+# NOT under build/outputs/. The extracted debug info is roughly the size of the
+# libraries it came out of, and putting it beside the APK made "how big is the
+# output" an ambiguous question — the directory total and the APK differ by a
+# hundred megabytes and neither is wrong.
+SYMBOLS="android/app/build/symbols"
 rm -rf "$SYMBOLS"
 for abi in "${ABIS[@]}"; do
   so="$JNI_DIR/$abi/libcarnyx.so"
