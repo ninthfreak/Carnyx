@@ -10,16 +10,39 @@
 #   ./tools/check-apk.sh path/to/some.apk
 set -uo pipefail
 
-# Two packagers produce an APK now. With no argument, take whichever exists —
-# cargo-apk's first, since it is still the default build.
+# Two packagers produce an APK now, and both leave one on disk. With no
+# argument, take the one BUILT MOST RECENTLY — that is the one just made and the
+# one about to go on the stick.
+#
+# Preferring a fixed order was the first attempt and it was wrong: cargo-apk's
+# APK sits in the tree from earlier builds, so checking "cargo-apk first" quietly
+# reported on a stale artifact while the driver was asking about the new one. A
+# checker that examines a different file from the one you are holding is worse
+# than no checker.
 CARGO_APK="target/debug/apk/carnyx.apk"
 GRADLE_APK="android/app/build/outputs/apk/debug/app-debug.apk"
 if [[ $# -ge 1 ]]; then
   APK="$1"
-elif [[ -f "$CARGO_APK" ]]; then
-  APK="$CARGO_APK"
 else
-  APK="$GRADLE_APK"
+  APK=""
+  newest=0
+  for cand in "$CARGO_APK" "$GRADLE_APK"; do
+    [[ -f "$cand" ]] || continue
+    t=$(stat -c%Y "$cand" 2>/dev/null || echo 0)
+    if [[ "$t" -gt "$newest" ]]; then newest="$t"; APK="$cand"; fi
+  done
+  [[ -n "$APK" ]] || APK="$GRADLE_APK"
+  # Say which, and name the other, so a stale pick is visible rather than silent.
+  for cand in "$CARGO_APK" "$GRADLE_APK"; do
+    [[ -f "$cand" ]] || continue
+    if [[ "$cand" == "$APK" ]]; then
+      printf 'Checking  %s   (built %s — the newer)\n' \
+        "$cand" "$(date -d "@$(stat -c%Y "$cand")" '+%Y-%m-%d %H:%M')"
+    else
+      printf 'Ignoring  %s   (built %s)\n' \
+        "$cand" "$(date -d "@$(stat -c%Y "$cand")" '+%Y-%m-%d %H:%M')"
+    fi
+  done
 fi
 # Both, always. The unit is 32-bit ARM, so armeabi-v7a is what actually installs
 # today — but the project ships both, and an APK quietly missing one is the kind
