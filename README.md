@@ -185,13 +185,19 @@ desktop application, and the head unit is the only target that matters.
 rustup target add aarch64-linux-android armv7-linux-androideabi
 cargo install cargo-apk
 
-export ANDROID_HOME=~/Android/Sdk
+export ANDROID_HOME=~/Android/Sdk             # only if it is not the default path
 export ANDROID_NDK_ROOT=~/Android/Sdk/ndk/<version>
 export ANDROID_NDK="$ANDROID_NDK_ROOT"       # yes, a third one — see below
 export JAVA_HOME=<android-studio>/jbr        # only if javac is not on PATH
 
 cargo apk build --lib
 ```
+
+`ANDROID_HOME` is optional here: cargo-apk reaches the SDK through
+`android-build`, which falls back to `~/Android/Sdk` (`~/Library/Android/sdk` on
+macOS). The NDK variables are not optional for this path — `cargo apk` does not
+search the SDK for one, and `skia-bindings` reads `ANDROID_NDK` directly. The
+Gradle script does search, which is why it needs none of these.
 
 `ANDROID_NDK` is not a typo for `ANDROID_NDK_ROOT`. cargo-apk reads the latter;
 `skia-bindings` reads `ANDROID_NDK` and nothing else
@@ -207,7 +213,7 @@ stick. (`cargo apk run` and `adb install` exist, but this unit is not on adb.)
 ./tools/check-apk.sh
 ```
 
-### The same APK, built by Gradle — a spike
+### The same APK, built by Gradle — and the one with the service
 
 ```sh
 cargo install cargo-ndk
@@ -215,8 +221,24 @@ cargo install cargo-ndk
 ```
 
 Lands at **`android/app/build/outputs/apk/debug/app-debug.apk`** and runs the
-same pre-flight check. Same environment variables as above; the Gradle wrapper is
-checked in, so nothing but a JDK 17+ is needed on top of the SDK.
+same pre-flight check. The Gradle wrapper is checked in, so nothing but a JDK 17+
+is needed on top of the SDK.
+
+**THIS IS NOW THE BUILD TO PUT ON THE UNIT.** The two packagers stopped being
+interchangeable when the foreground service landed (#67): the service is a
+`<service>` declaration plus a class AGP compiles into the APK, and cargo-apk can
+produce neither. An APK from `cargo apk` still runs — it detects the absence and
+logs `no foreground service on this build` — but it takes every restart the
+service exists to prevent.
+
+**It needs no environment variables** if your SDK is where Android Studio puts
+it. The script looks at `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
+`~/Android/Sdk` (`~/Library/Android/sdk` on macOS) — the same order the
+`android-build` crate uses, which is how `cargo apk` has always found it — and
+then looks for the NDK under `$ANDROID_SDK/ndk/<version>`, newest first, before
+falling back to `ndk-bundle`. It prints which of them it used. Set the variables
+only if your install is somewhere else; a variable that IS set and points nowhere
+stops the build rather than being quietly ignored.
 
 **Why a second packager at all.** cargo-apk cannot declare a `<service>` or a
 `<receiver>`: `ndk_build::manifest::Application` has one activity and no field

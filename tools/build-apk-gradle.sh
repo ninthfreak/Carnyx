@@ -41,9 +41,52 @@ die() { printf '\n%s\n' "$*" >&2; exit 1; }
 # ANDROID_SDK_ROOT is the newer name and plenty of setups export only that one.
 # Accept either, and export both, rather than refusing a machine that is set up
 # correctly under the other spelling.
-SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-[[ -n "$SDK" ]] || die "Neither ANDROID_HOME nor ANDROID_SDK_ROOT is set — see the README's Building section."
-[[ -d "$SDK" ]] || die "The SDK path points at $SDK, which does not exist."
+#
+# AND FALL BACK TO THE DEFAULT INSTALL PATH, because the OTHER build already
+# does. `cargo apk` reaches the SDK through the `android-build` crate, whose
+# order is ANDROID_HOME, then ANDROID_SDK_ROOT, then the platform's default
+# location (env_paths/mod.rs:41-56, find_android_sdk.rs) — so a stock Android
+# Studio install builds with cargo-apk and no environment variables at all. This
+# script used to refuse that machine, which made "it worked last time" true and
+# "it works now" false for no reason the user could see. Same order, same paths.
+case "$(uname -s)" in
+  Darwin) DEFAULT_SDK="$HOME/Library/Android/sdk" ;;
+  *)      DEFAULT_SDK="$HOME/Android/Sdk" ;;
+esac
+
+# A VARIABLE THAT IS SET AND WRONG IS AN ERROR, NOT A REASON TO LOOK ELSEWHERE.
+# Falling through to the default path there would build against an SDK the user
+# did not name while telling them nothing — so the fallback applies only when
+# nothing is set at all, and a typo stops the build against its own value.
+SDK=""
+SDK_FROM=""
+if [[ -n "${ANDROID_HOME:-}" ]]; then
+  [[ -d "$ANDROID_HOME" ]] || die "\$ANDROID_HOME is set to $ANDROID_HOME, which is not a directory.
+
+Fix it or unset it — unset, this script looks in $DEFAULT_SDK."
+  SDK="$ANDROID_HOME"; SDK_FROM="\$ANDROID_HOME"
+elif [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then
+  [[ -d "$ANDROID_SDK_ROOT" ]] || die "\$ANDROID_SDK_ROOT is set to $ANDROID_SDK_ROOT, which is not a directory.
+
+Fix it or unset it — unset, this script looks in $DEFAULT_SDK."
+  SDK="$ANDROID_SDK_ROOT"; SDK_FROM="\$ANDROID_SDK_ROOT"
+elif [[ -d "$DEFAULT_SDK" ]]; then
+  SDK="$DEFAULT_SDK"; SDK_FROM="the default path"
+fi
+
+[[ -n "$SDK" ]] || die "No Android SDK.
+
+Looked at, in this order:
+  \$ANDROID_HOME       ${ANDROID_HOME:-(not set)}
+  \$ANDROID_SDK_ROOT   ${ANDROID_SDK_ROOT:-(not set)}
+  the default path    $DEFAULT_SDK (not a directory)
+
+If yours is somewhere else, point at it:
+  export ANDROID_HOME=/path/to/Sdk
+
+See the README's Building section."
+
+printf 'SDK:         %s (from %s)\n' "$SDK" "$SDK_FROM"
 export ANDROID_HOME="$SDK"
 export ANDROID_SDK_ROOT="$SDK"
 # ── android.jar, PINNED rather than left to be resolved ─────────────────────
@@ -111,11 +154,45 @@ else
     "$best" "$compile_sdk" "$have"
 fi
 
+# THE NDK, and the same fallback for the same reason. Android Studio installs it
+# under the SDK as ndk/<version> (older setups: ndk-bundle), so a machine with a
+# working NDK and no ANDROID_NDK_ROOT is an ordinary machine, not a broken one.
+# Highest version wins, by VERSION order — `sort -V`, because a lexicographic max
+# puts 26.1.10909125 below 9.0.0.
 NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}}"
-[[ -n "$NDK" ]] || die "No NDK: set ANDROID_NDK_ROOT (and ANDROID_NDK, which skia-bindings reads)."
+NDK_FROM="\$ANDROID_NDK_ROOT"
+if [[ -z "$NDK" ]]; then
+  shopt -s nullglob
+  ndks=("$SDK"/ndk/*/)
+  shopt -u nullglob
+  if [[ ${#ndks[@]} -gt 0 ]]; then
+    best_ndk=$(for d in "${ndks[@]}"; do basename "${d%/}"; done | sort -V | tail -1)
+    NDK="$SDK/ndk/$best_ndk"
+    NDK_FROM="the SDK's ndk/ directory"
+  elif [[ -d "$SDK/ndk-bundle" ]]; then
+    NDK="$SDK/ndk-bundle"
+    NDK_FROM="the SDK's ndk-bundle"
+  fi
+fi
+
+[[ -n "$NDK" ]] || die "No NDK.
+
+Looked at \$ANDROID_NDK_ROOT, \$ANDROID_NDK_HOME, \$ANDROID_NDK, then
+$SDK/ndk/<version> and $SDK/ndk-bundle.
+
+Install one — in Android Studio: SDK Manager -> SDK Tools -> NDK (Side by side),
+or:
+  sdkmanager --install 'ndk;27.0.12077973'
+
+Then either let this script find it under the SDK, or point at it:
+  export ANDROID_NDK_ROOT=/path/to/ndk/<version>"
+
+[[ -d "$NDK" ]] || die "The NDK is set to $NDK, which is not a directory.
+
+Fix it or unset it — unset, this script looks under $SDK/ndk."
+printf 'NDK:         %s (from %s)\n' "$NDK" "$NDK_FROM"
 export ANDROID_NDK_HOME="$NDK"
 export ANDROID_NDK="$NDK"
-[[ -d "$NDK" ]] || die "ANDROID_NDK_ROOT points at $NDK, which does not exist."
 
 # ASK CARGO, NOT THE PATH.
 #
