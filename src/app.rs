@@ -495,6 +495,9 @@ struct State {
     /// and held rather than re-read because `push_logo_search` runs on every
     /// keystroke of state the window has — one decode per window, not per push.
     logo_art: Option<Raster>,
+    /// The position `picker` was built from, so a fix that has not moved can be
+    /// dropped without re-deriving anything. `None` until the first build.
+    picker_at: Option<(f64, f64)>,
     /// The frequency tab's entry buffer, exactly as typed.
     numpad: String,
     /// A hardware sweep is in flight: WE handed a seek to the tuner and no
@@ -850,6 +853,7 @@ impl App {
                 worker,
                 art: HashMap::new(),
                 logo_art: None,
+                picker_at: None,
                 numpad: String::new(),
                 scanning: false,
                 freq_restore: None,
@@ -1559,6 +1563,14 @@ impl App {
     /// the cell in its own statement, because an `if let` scrutinee holds its
     /// borrow across the body on edition 2021 and the store below takes a
     /// mutable one.
+    ///
+    /// "HAVE NOT MOVED" IS A DISTANCE, NOT `==`. It was `==` on the whole
+    /// `FakeLocation`, which compares two f64s exactly — so the metres of noise a
+    /// stationary GPS produces missed the cache on every fix and re-ran the
+    /// lookup, forever, at whatever cadence the unit reports. The station
+    /// licensed on a frequency does not change because the car moved a street's
+    /// width; `NEARBY_REFRESH_M` is the same threshold the nearby query uses and
+    /// for the same reason.
     fn hero_row(&self) -> Option<StationRow> {
         let (key, loc) = {
             let s = self.state.borrow();
@@ -1566,7 +1578,14 @@ impl App {
         };
         let hit = self.state.borrow().resolved.clone();
         if let Some((k, l, row)) = hit {
-            if k == key && l == loc {
+            // The fix flag is compared exactly — losing or gaining a lock is a
+            // real change and must miss — and only the POSITION is given slack.
+            let same_place = match (l.position(), loc.position()) {
+                (Some(a), Some(b)) => metres_between(a, b) < Self::NEARBY_REFRESH_M,
+                (None, None) => true,
+                _ => false,
+            };
+            if k == key && same_place {
                 return row;
             }
         }
@@ -2772,12 +2791,44 @@ impl App {
         }
     }
 
+    /// How far the car has to move before the nearby list is worth re-deriving.
+    ///
+    /// THE COST THIS AVOIDS IS PAID EVERY TWO SECONDS, FOREVER. A parked car with
+    /// a lock produces a fix on that cadence and every one of them re-ran the
+    /// whole query — bounding box, rank, view, publish — to conclude that nothing
+    /// had changed. `examples/pushbench.rs` measures it: 2.1ms per fix on a
+    /// desktop, and this unit is a 32-bit ARM head unit.
+    ///
+    /// 250 METRES, against a 100km radius and a list whose distances are shown to
+    /// the kilometre. Nothing on screen can change over less than that: the
+    /// nearest station's distance is rounded past it, the ranking is by a score
+    /// dominated by ERP and log-distance, and no station enters or leaves a 100km
+    /// circle because the car shifted a street's width. It is two orders of
+    /// magnitude below the radius and one above ordinary standing-still GPS
+    /// noise, which is metres.
+    const NEARBY_REFRESH_M: f64 = 250.0;
+
     fn refresh_nearby(&self) {
+        // A FIX THAT HAS NOT MOVED IS NOT NEWS. Cheap and exact — the comparison
+        // is against the position the current picker was BUILT from, not the last
+        // fix seen, so a car creeping 10m at a time can never accumulate its way
+        // past the threshold without the list being rebuilt.
+        {
+            let s = self.state.borrow();
+            if let (Some(built), Some(now)) = (s.picker_at, s.location.position()) {
+                if s.picker.located() && metres_between(built, now) < Self::NEARBY_REFRESH_M {
+                    return;
+                }
+            }
+        }
         let learned = {
             let mut s = self.state.borrow_mut();
             let (db, loc, snap) = (s.db.as_ref(), s.location, s.snapshot.clone());
             let picker = build_picker(db, loc, snap);
             s.picker = picker;
+            // Recorded even when there is no fix (None), so the guard above
+            // cannot skip the first located refresh after one arrives.
+            s.picker_at = loc.position();
 
             // LEARN WHAT THIS FIX REVEALED. One good lock fills the local band,
             // and every no-fix start afterwards can name a station from it —
@@ -3308,6 +3359,18 @@ fn resolve(db: Option<&StationDb>, mhz: f32, at: Option<(f64, f64)>) -> Option<S
         .filter(|(_, km)| *km <= crate::stations::NEARBY_RADIUS_KM)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(r, _)| r)
+}
+
+/// Metres between two fixes, near enough for a threshold.
+///
+/// EQUIRECTANGULAR, NOT HAVERSINE, and that is not a corner cut: over the few
+/// hundred metres this is asked about, the two agree to far better than the
+/// threshold's own precision, and this is on the path every GPS fix takes.
+fn metres_between(a: (f64, f64), b: (f64, f64)) -> f64 {
+    const M_PER_DEG_LAT: f64 = 111_320.0;
+    let dlat = (a.0 - b.0) * M_PER_DEG_LAT;
+    let dlon = (a.1 - b.1) * M_PER_DEG_LAT * a.0.to_radians().cos();
+    (dlat * dlat + dlon * dlon).sqrt()
 }
 
 fn build_picker(

@@ -71,6 +71,39 @@ fn main() {
     }
     println!("  {:<22} {parts:>8.3} ms", "(sum)");
 
+    // ── WHAT A LIVE FIX COSTS, which is the cadence nobody chose ────────────
+    //
+    // `set_position` is the seam every GPS fix lands on, and it re-runs the whole
+    // nearby query: bounding box, rank, view, publish. A parked car with a lock
+    // produces a fix every two seconds FOREVER — the app's own comment in
+    // `refresh_nearby` says so — and every one of them pays this, whether the car
+    // moved or not.
+    //
+    // TWO CASES, because they should not cost the same. A jittered fix is a car
+    // standing still: metres of GPS noise, the same stations, the same list. A
+    // moved fix is a car that has actually gone somewhere. Only the second has
+    // any work to do.
+    println!("\nwhat one GPS fix costs (parked cars produce one every 2s):");
+    let base = carnyx::fake::FakeLocation::default();
+    let mut n = 0u32;
+    let jitter = bench("fix, jittered 3m", 50, || {
+        n += 1;
+        // ~3 metres, alternating, which is ordinary standing-still GPS noise.
+        let d = if n % 2 == 0 { 0.000027 } else { -0.000027 };
+        app.set_position(carnyx::fake::FakeLocation { lat: base.lat + d, ..base });
+    });
+    let mut m = 0u32;
+    let moved = bench("fix, moved 5km", 50, || {
+        m += 1;
+        let d = f64::from(m % 10) * 0.0045;
+        app.set_position(carnyx::fake::FakeLocation { lat: base.lat + d, ..base });
+    });
+    println!(
+        "  a parked car pays {:.1} ms every 2s to learn it has not moved",
+        jitter
+    );
+    let _ = moved;
+
     // What the queue actually delivers on a station with RDS: a group every 90ms,
     // each one waking the loop.
     let per_second = 1000.0 / 90.0;

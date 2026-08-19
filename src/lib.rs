@@ -9,6 +9,7 @@ slint::include_modules!();
 pub mod android;
 pub mod app;
 pub mod callsigns;
+pub mod crashlog;
 pub mod fake;
 pub mod logos;
 pub mod prefs;
@@ -119,6 +120,12 @@ fn android_main(android_app: slint::android::AndroidApp) {
     let files_dir_for_prefs = files_dir
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    // THE PANIC HOOK, before anything that can panic. A crash on this unit was
+    // undiagnosable — no adb, no console, and the diagnostics log dies with the
+    // process — so the next launch reads what this leaves behind. See
+    // `crashlog`.
+    crashlog::install(&files_dir_for_prefs);
 
     let db_path = files_dir
         .map(|dir| {
@@ -232,6 +239,15 @@ fn android_main(android_app: slint::android::AndroidApp) {
     } else {
         "service: none — this build has no service class, or the platform refused it"
     });
+
+    // WHAT KILLED THE LAST RUN, if anything did and it went through Rust's panic
+    // machinery. Read once and deleted, so it is reported for the drive after
+    // the crash and not for every drive thereafter. Silence here is not proof of
+    // a clean end — an OOM kill, a Java exception or a signal leaves nothing —
+    // but it narrows the next question a great deal.
+    if let Some(why) = crashlog::take(&files_dir_for_prefs) {
+        _driver.log_platform(&format!("crash: the last run panicked — {why}"));
+    }
 
     // REAL POSITION, if this unit will give one.
     //
