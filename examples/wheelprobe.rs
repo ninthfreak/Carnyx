@@ -16,12 +16,22 @@
 //!
 //! `drain_events` empties the tuner queue BEFORE it applies the deferred panel
 //! action (`app.rs`, "the panel key, after the queue is empty"). The frequency
-//! report therefore lands on `state.dial` first, and `step_preset` then computes
+//! report therefore landed on `state.dial` first, and `step_preset` computed
 //! `active()` — its idea of WHERE THE DRIVER IS — from the vendor's dial rather
 //! than from ours.
 //!
-//! This probe injects both, in the order the MCU produces them, and prints where
-//! the strip actually lands against where the driver asked to go.
+//! ## What it measured, before and after
+//!
+//! Before the fix: 0/6 wrong with a silent tuner, 5/6 wrong in every case where
+//! the vendor also spoke. After: 0/6 in all four.
+//!
+//! ## Reading this probe
+//!
+//! THE STARTING POSITION IS SET BY TUNING, never by `vendor_reports`. That is
+//! not incidental: the fix's whole content is that a frequency REPORT no longer
+//! moves the app's idea of where the strip is, so setting up a case with one
+//! would prove nothing about a driver who tuned. `tune_for_test` is the driver's
+//! path; `vendor_reports` is the radio moving on its own.
 
 use std::rc::Rc;
 
@@ -85,7 +95,7 @@ fn main() {
     println!("A. wheel press, vendor silent (what panelprobe tests)");
     let mut wrong_quiet = 0;
     for (i, from) in STRIP.iter().enumerate() {
-        vendor_reports(*from);
+        driver.tune_for_test(*from);
         driver.drain_events();
         carnyx::android::ingest_panel_key(PRESET_NEXT, "down".into());
         driver.drain_events();
@@ -110,7 +120,7 @@ fn main() {
     println!("\nB. wheel press, vendor walks its own bank to 99.9 (not in our strip)");
     let mut wrong_loud = 0;
     for (i, from) in STRIP.iter().enumerate() {
-        vendor_reports(*from);
+        driver.tune_for_test(*from);
         driver.drain_events();
         // ONE PRESS, TWO EFFECTS, in the order the MCU produces them.
         carnyx::android::ingest_panel_key(PRESET_NEXT, "down".into());
@@ -134,7 +144,7 @@ fn main() {
     println!("\nC. wheel press, vendor bank lands on 105.5, which IS our #2");
     let mut wrong_collide = 0;
     for (i, from) in STRIP.iter().enumerate() {
-        vendor_reports(*from);
+        driver.tune_for_test(*from);
         driver.drain_events();
         carnyx::android::ingest_panel_key(PRESET_NEXT, "down".into());
         vendor_reports(105.5);
@@ -160,7 +170,7 @@ fn main() {
     println!("\nD. vendor reports in a LATER drain — the NEXT press is the one that misses");
     let mut wrong_late = 0;
     for (i, from) in STRIP.iter().enumerate() {
-        vendor_reports(*from);
+        driver.tune_for_test(*from);
         driver.drain_events();
         // Press one: clean, and it lands where it should.
         carnyx::android::ingest_panel_key(PRESET_NEXT, "down".into());
@@ -184,6 +194,38 @@ fn main() {
             if ok { "ok" } else { "WRONG" }
         );
     }
+
+    // ── THE RELEASE EDGE, with the string the DEVICE really sends.
+    //
+    // `panel_action` refuses a release with `action.eq_ignore_ascii_case("up")`,
+    // and its own doc says "the MCU sends the press and the release as separate
+    // broadcasts, and acting on both steps two stations for one push". But
+    // `NwdBridge.java:531` calls `safePanelKey(key, a)` with `a` = the INTENT
+    // ACTION — "com.nwd.action.ACTION_KEY_VALUE" — so on the unit that guard
+    // compares against a string it never receives and cannot fire. Only
+    // `panelprobe` passes the literal "up", which is why it looked guarded.
+    //
+    // Whether that costs a double step depends on drain timing, because
+    // `panel_action` is one Option and not a queue. Both timings, measured.
+    const REAL: &str = "com.nwd.action.ACTION_KEY_VALUE";
+    println!("\nE. both edges as the DEVICE sends them, with the real action string");
+    driver.tune_for_test(STRIP[0]);
+    driver.drain_events();
+    carnyx::android::ingest_panel_key(PRESET_NEXT, REAL.into());
+    carnyx::android::ingest_panel_key(PRESET_NEXT, REAL.into());
+    driver.drain_events();
+    render();
+    let same_drain = ui.get_freq_label().to_string();
+    driver.tune_for_test(STRIP[0]);
+    driver.drain_events();
+    carnyx::android::ingest_panel_key(PRESET_NEXT, REAL.into());
+    driver.drain_events();
+    carnyx::android::ingest_panel_key(PRESET_NEXT, REAL.into());
+    driver.drain_events();
+    render();
+    let split_drain = ui.get_freq_label().to_string();
+    println!("   both edges in ONE drain  : {} -> {same_drain}  (want {})", STRIP[0], STRIP[1]);
+    println!("   edges in SEPARATE drains : {} -> {split_drain}  (want {})", STRIP[0], STRIP[1]);
 
     println!(
         "\nwrong steps — quiet tuner: {wrong_quiet}/6, vendor off-strip: {wrong_loud}/6, \

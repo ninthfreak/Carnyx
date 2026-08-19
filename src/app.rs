@@ -365,6 +365,20 @@ struct State {
     rds_state: RdsState,
     stream: fake::FakeRdsStream,
     presets: Vec<Slot>,
+    /// The dial THIS APP last put on the air deliberately, as opposed to one the
+    /// radio reported having moved to on its own. `None` until the app tunes
+    /// anything, which is the ordinary state for the first press of a run.
+    ///
+    /// Set by [`App::tune`], so every deliberate path — the keypad, the nearby
+    /// list, a preset tap, the peek cards, the wheel — records itself with no
+    /// call site having to remember to. NOT set by the `Frequency` arm, and that
+    /// asymmetry is the point: the vendor walking its own hardware preset bank
+    /// arrives there and must not be mistaken for the driver going somewhere.
+    ///
+    /// Cleared by a hardware seek, which IS the driver deliberately leaving the
+    /// strip, so stepping afterwards behaves exactly as it did before any of
+    /// this: off-strip means the next press lands on entry 0.
+    asserted: Option<f32>,
     /// Where `prefs.json` lives — the app's data directory on the device.
     prefs_dir: std::path::PathBuf,
     /// The last thing written, so an unchanged state does not rewrite the file.
@@ -539,6 +553,33 @@ impl State {
     fn active(&self) -> i32 {
         active_index(self.dial, &self.presets)
     }
+
+    /// Where the STRIP is, which is not always where the radio is.
+    ///
+    /// `active` answers "is the thing playing one of the driver's presets" and
+    /// must read `dial`, because that is what the star and the lit tile are
+    /// about. THIS answers a different question — "which entry does the next
+    /// step move on from" — and reading `dial` for it is the defect this
+    /// exists to close.
+    ///
+    /// THE VENDOR MOVES `dial` WITHOUT BEING ASKED. Its service steps its own
+    /// hardware preset bank on the same wheel press the app is reacting to, and
+    /// the frequency it lands on arrives as an ordinary `Frequency` event that
+    /// sets `dial` like any other. A step computed from that walks the strip
+    /// from wherever the VENDOR'S bank happens to be: off-strip it resolves to
+    /// -1 and every press lands on entry 0, which is the reported "going next
+    /// goes backwards"; on-strip it resolves to some unrelated index, which is
+    /// the reported "skips presets".
+    ///
+    /// A FREQUENCY AND NOT AN INDEX, deliberately. `reorder_preset` argues
+    /// against storing an index — "`active()` re-derives from the same dial and
+    /// simply lands on a different index, which is why it was never stored" —
+    /// and that argument is right and applies here too. Storing the dial the app
+    /// last asserted keeps the property: a drag re-resolves it to the entry's
+    /// new position, and deleting that entry drops cleanly to -1.
+    fn anchor(&self) -> i32 {
+        step_anchor(self.asserted, self.dial, &self.presets)
+    }
 }
 
 /// What a press on the head unit's own panel means to this app.
@@ -552,7 +593,11 @@ enum PanelAction {
     /// arrows do rather than a silent jump, so the wheel and the face behave
     /// identically — and the hardware bank the service just stepped is not the
     /// strip the driver can see.
-    Step(i32),
+    ///
+    /// `from` IS THE STRIP POSITION AS IT WAS WHEN THE KEY ARRIVED, and carrying
+    /// it is the fix for the wheel stepping from the wrong place. See
+    /// [`App::step_preset_from`].
+    Step { dir: i32, from: i32 },
     /// Hand the seek to the tuner and take whatever dial it settles on.
     Seek(bool),
 }
@@ -798,6 +843,10 @@ impl App {
                 rds_state: warm.as_ref().map(|(_, rds, _)| rds.clone()).unwrap_or_default(),
                 stream: fake::FakeRdsStream::new(),
                 presets,
+                // NOT seeded from the restored dial. A warm restore is the app
+                // saying where the radio WAS, not the app putting it there, and
+                // the first `Frequency` event may well contradict it.
+                asserted: None,
                 // The last dial beats the seed, which is a Madison frequency
                 // from the host fake. The tuner overwrites it the moment it
                 // connects; until then this is the better guess by far.
@@ -1469,9 +1518,15 @@ impl App {
                 s.settings
                     .log
                     .push(&stamp(), &format!("panel key {code} ({named}) {action}"));
-                if let Some(next) = panel_action(key, &action) {
-                    s.panel_action = Some(next);
-                }
+                // THE ANCHOR IS READ HERE, NOT WHERE THE ACTION RUNS, and that
+                // is the whole fix. `drain_events` applies the action only after
+                // this queue is EMPTY — and one wheel press puts two things in
+                // it, because the vendor service steps its own hardware bank on
+                // the same press and reports the frequency it landed on. By the
+                // time the action ran, `dial` was the vendor's dial and the step
+                // was computed from a position the driver was never in.
+                let anchor = s.anchor();
+                s.panel_action = panel_action(key, &action, anchor).or(s.panel_action);
             }
             TunerEvent::Illumination { ui_mode, .. } => {
                 s.settings.log.push(&stamp(), &format!("illumination {ui_mode}"));
@@ -1720,7 +1775,12 @@ impl App {
         }
         // With no active preset, prev is the last entry and next the first —
         // which is what the peek cards show on an unsaved dial.
-        let active = s.active();
+        //
+        // THE ANCHOR, NOT THE DIAL, so the cards name the stations a press will
+        // actually reach. They differ only once the vendor has moved the radio
+        // out from under the strip, and in that case a peek drawn off `dial`
+        // would promise one station and the wheel would deliver another.
+        let active = s.anchor();
         let (prev, next) = if active < 0 {
             (n - 1, 0)
         } else {
@@ -2067,6 +2127,12 @@ impl App {
         {
             let mut s = self.state.borrow_mut();
             s.dial = mhz;
+            // WHERE THE APP PUT THE STRIP, recorded once for every deliberate
+            // tune in the program. See `State::asserted`: this is the half of
+            // the wheel fix that survives BETWEEN drains, where capturing the
+            // anchor as the key arrives cannot help, because by the next press
+            // the vendor has already moved `dial` on its own hop.
+            s.asserted = Some(mhz);
             // A retune is the documented way to cancel a hardware sweep (see
             // `apply_panel_action`), so whatever sweep was in flight is not any
             // more — and on a front end that answers with no further frequency
@@ -2432,6 +2498,17 @@ impl App {
         self.toggle_save();
     }
 
+    /// Tune the way the DRIVER does, for probes that need a starting position.
+    ///
+    /// `examples/wheelprobe.rs` needs to put the strip somewhere before it
+    /// presses a button, and it must not do that by faking a frequency report:
+    /// a report is the RADIO saying where it went, and since the wheel fix that
+    /// deliberately no longer moves the app's idea of where the strip is. Using
+    /// one to set up a test would prove nothing about a driver who tuned.
+    pub fn tune_for_test(self: &Rc<App>, mhz: f32) {
+        self.tune(mhz);
+    }
+
     /// Take the meter to where a settled poll would leave it, for the screenshot
     /// harness only.
     ///
@@ -2655,10 +2732,16 @@ impl App {
     /// borrows the state `apply_event` is already holding.
     fn apply_panel_action(self: &Rc<App>, action: PanelAction) {
         match action {
-            PanelAction::Step(dir) => self.step_preset(dir),
+            PanelAction::Step { dir, from } => self.step_preset_from(dir, from),
             PanelAction::Seek(up) => {
                 {
-                    let s = self.state.borrow();
+                    let mut s = self.state.borrow_mut();
+                    // THE DRIVER IS LEAVING THE STRIP ON PURPOSE, which is the
+                    // one case where the app should forget where it had put
+                    // them. Stepping after a seek then behaves exactly as it
+                    // always did: the landed dial is off-strip, so the next
+                    // press lands on entry 0.
+                    s.asserted = None;
                     s.tuner.seek(up);
                 }
                 // NO RE-TUNE AFTER, and there used to be one.
@@ -2689,13 +2772,30 @@ impl App {
     /// hardware step running "the SAME animated stepPreset ... not a silent
     /// frequency jump".
     fn step_preset(self: &Rc<App>, dir: i32) {
+        let from = self.state.borrow().anchor();
+        self.step_preset_from(dir, from);
+    }
+
+    /// The step itself, from a strip position the CALLER decided.
+    ///
+    /// SPLIT OUT SO THE WHEEL CAN NAME ITS OWN ORIGIN. The on-screen arrows and
+    /// the peek cards act the instant they are touched, so reading the anchor
+    /// inside is the same as reading it outside. A wheel press is DEFERRED —
+    /// `drain_events` runs it only once the tuner queue is empty — and in the
+    /// meantime the vendor service, which stepped its own hardware preset bank
+    /// on the very same press, reports the frequency it landed on and moves
+    /// `dial`. Reading the anchor inside therefore read the VENDOR'S position;
+    /// `from` carries the driver's.
+    fn step_preset_from(self: &Rc<App>, dir: i32, from: i32) {
         let next = {
             let s = self.state.borrow();
             let n = s.presets.len() as i32;
             if n == 0 {
                 return;
             }
-            let active = s.active();
+            // A strip that shrank since the key arrived cannot honour the old
+            // index, and stepping off the end of it would panic below.
+            let active = if from >= n { -1 } else { from };
             if active < 0 {
                 if dir > 0 {
                     0
@@ -2710,7 +2810,7 @@ impl App {
             let s = self.state.borrow();
             let n = s.presets.len() as i32;
             let mhz = s.presets[next as usize].mhz;
-            let active = s.active();
+            let active = if from >= n { -1 } else { from };
 
             // §8: THE MORPH RUNS ONLY WHEN THE FREQUENCY ACTUALLY CHANGES.
             // CarFM's is in `componentDidUpdate` behind exactly that test, and
@@ -3309,7 +3409,15 @@ fn numpad_commit(buf: &str) -> Option<f32> {
     (FM_LO..=FM_HI).contains(&dial).then_some(dial)
 }
 
-fn panel_action(key: Option<crate::android::PanelKey>, action: &str) -> Option<PanelAction> {
+/// `from` is the strip position the caller read BEFORE any of the vendor's own
+/// traffic could move it — see the `PanelKey` arm of `apply_event`, which is the
+/// only caller that matters and reads it out of the same borrow that receives
+/// the key.
+fn panel_action(
+    key: Option<crate::android::PanelKey>,
+    action: &str,
+    from: i32,
+) -> Option<PanelAction> {
     use crate::android::PanelKey as K;
     if action.eq_ignore_ascii_case("up") {
         return None;
@@ -3318,8 +3426,8 @@ fn panel_action(key: Option<crate::android::PanelKey>, action: &str) -> Option<P
         // The service has ALREADY stepped its own hardware preset bank and a
         // broadcast cannot be cancelled, so this reasserts the strip the driver
         // can actually see.
-        K::PresetNext => Some(PanelAction::Step(1)),
-        K::PresetPrev => Some(PanelAction::Step(-1)),
+        K::PresetNext => Some(PanelAction::Step { dir: 1, from }),
+        K::PresetPrev => Some(PanelAction::Step { dir: -1, from }),
         K::SearchUp | K::SeekUp => Some(PanelAction::Seek(true)),
         K::SearchDown | K::SeekDown => Some(PanelAction::Seek(false)),
         // BAND, AMS and INTRO are not refused so much as absent: this app is
@@ -3421,6 +3529,14 @@ fn active_index(dial: f32, presets: &[Slot]) -> i32 {
         .iter()
         .position(|p| crate::stations::preset_key(f64::from(p.mhz)) == key)
         .map_or(-1, |i| i as i32)
+}
+
+/// [`State::anchor`]'s rule, as a free function so it can be tested without a
+/// window: a whole `State` needs a Slint `AppWindow`, a database and a tuner to
+/// build, and this is the one line that decides where every wheel press starts
+/// from.
+fn step_anchor(asserted: Option<f32>, dial: f32, presets: &[Slot]) -> i32 {
+    active_index(asserted.unwrap_or(dial), presets)
 }
 
 /// The preset chip's ladder box, in dp.
@@ -3599,6 +3715,66 @@ mod tests {
         assert_eq!(bare.base(), "");
     }
 
+    /// WHERE A WHEEL PRESS STEPS FROM, and why it is not simply the dial.
+    ///
+    /// THE BUG THIS CLOSES, in the driver's words: "from certain presets, going
+    /// 'next' skips presets or actually goes backwards", consistently. One wheel
+    /// press makes the vendor service step its OWN hardware preset bank — that
+    /// is `PanelKey::PresetNext`'s documented behaviour and cannot be cancelled
+    /// — and the frequency it lands on arrives as an ordinary `Frequency` event
+    /// that moves `dial`. `drain_events` applies the deferred press only once
+    /// that queue is EMPTY, so the step used to be computed from the vendor's
+    /// dial: off-strip it resolved to -1 and every press went to entry 0, which
+    /// is the "backwards"; on-strip it resolved to an unrelated index, which is
+    /// the "skips".
+    ///
+    /// It read as consistent because the vendor's bank is a fixed list walked
+    /// deterministically, so the same starting preset missed the same way every
+    /// time.
+    #[test]
+    fn the_step_anchor_ignores_a_dial_the_app_did_not_choose() {
+        let strip: Vec<Slot> = [102.1_f32, 88.7, 105.5, 98.1, 96.3, 94.1]
+            .iter()
+            .map(|&mhz| Slot { mhz, row: None, saved_call: None })
+            .collect();
+
+        // Nothing asserted yet — the first press of a run — falls back to the
+        // dial, which is the behaviour that was always right.
+        assert_eq!(step_anchor(None, 105.5, &strip), 2);
+        assert_eq!(step_anchor(None, 99.9, &strip), -1);
+
+        // THE FIX. The app put the driver on 105.5; the vendor then moved the
+        // radio to its own bank entry. The strip is still on 105.5.
+        assert_eq!(step_anchor(Some(105.5), 99.9, &strip), 2, "vendor off-strip");
+        // And the case that read as a SKIP rather than a reset: the vendor's
+        // bank entry is a dial the driver also has, so the old rule resolved it
+        // to a real, wrong index instead of to -1.
+        assert_eq!(step_anchor(Some(102.1), 105.5, &strip), 0, "vendor on-strip");
+
+        // A DELIBERATE TUNE ELSEWHERE IS NOT IGNORED. `tune` sets `asserted`, so
+        // the keypad, the nearby list and a preset tap all move the anchor —
+        // only the radio reporting its own movement does not.
+        assert_eq!(step_anchor(Some(99.9), 105.5, &strip), -1, "the driver left the strip");
+
+        // A FREQUENCY AND NOT AN INDEX, which is what survives a reorder: the
+        // same anchor resolves to wherever its entry was dragged to.
+        let dragged: Vec<Slot> = [88.7_f32, 105.5, 102.1, 98.1, 96.3, 94.1]
+            .iter()
+            .map(|&mhz| Slot { mhz, row: None, saved_call: None })
+            .collect();
+        assert_eq!(step_anchor(Some(102.1), 99.9, &dragged), 2, "follows the drag");
+        // And deleting the anchored entry drops cleanly rather than pointing at
+        // whatever slid into its index.
+        let deleted: Vec<Slot> = [88.7_f32, 105.5, 98.1]
+            .iter()
+            .map(|&mhz| Slot { mhz, row: None, saved_call: None })
+            .collect();
+        assert_eq!(step_anchor(Some(102.1), 99.9, &deleted), -1, "the entry is gone");
+
+        // An empty strip has no anchor and must not panic.
+        assert_eq!(step_anchor(Some(102.1), 102.1, &[]), -1);
+    }
+
     /// THE GHOST ONLY EXISTS WHEN A CARD REALLY GOES.
     ///
     /// Written because the first cut stamped one unconditionally, and the case
@@ -3736,25 +3912,40 @@ mod tests {
     fn a_panel_press_becomes_an_action_and_a_release_does_not() {
         use crate::android::PanelKey as K;
 
-        // The two that matter most on the wheel.
-        assert_eq!(panel_action(Some(K::PresetNext), "down"), Some(PanelAction::Step(1)));
-        assert_eq!(panel_action(Some(K::PresetPrev), "down"), Some(PanelAction::Step(-1)));
-        // Both search codes and both seek codes reach the same two answers.
-        assert_eq!(panel_action(Some(K::SearchUp), "down"), Some(PanelAction::Seek(true)));
-        assert_eq!(panel_action(Some(K::SeekUp), "down"), Some(PanelAction::Seek(true)));
-        assert_eq!(panel_action(Some(K::SearchDown), "down"), Some(PanelAction::Seek(false)));
-        assert_eq!(panel_action(Some(K::SeekDown), "down"), Some(PanelAction::Seek(false)));
+        // The two that matter most on the wheel. The anchor rides along on both,
+        // UNCHANGED — this function must not have an opinion about it, because
+        // its whole job is to carry the caller's reading of the strip through to
+        // a step that happens later.
+        assert_eq!(
+            panel_action(Some(K::PresetNext), "down", 3),
+            Some(PanelAction::Step { dir: 1, from: 3 })
+        );
+        assert_eq!(
+            panel_action(Some(K::PresetPrev), "down", 3),
+            Some(PanelAction::Step { dir: -1, from: 3 })
+        );
+        // Including -1, which is a real anchor and means "off the strip".
+        assert_eq!(
+            panel_action(Some(K::PresetNext), "down", -1),
+            Some(PanelAction::Step { dir: 1, from: -1 })
+        );
+        // Both search codes and both seek codes reach the same two answers, and
+        // a seek carries no anchor because it does not step the strip.
+        assert_eq!(panel_action(Some(K::SearchUp), "down", 0), Some(PanelAction::Seek(true)));
+        assert_eq!(panel_action(Some(K::SeekUp), "down", 0), Some(PanelAction::Seek(true)));
+        assert_eq!(panel_action(Some(K::SearchDown), "down", 0), Some(PanelAction::Seek(false)));
+        assert_eq!(panel_action(Some(K::SeekDown), "down", 0), Some(PanelAction::Seek(false)));
 
         // THE RELEASE DOES NOTHING. The MCU sends both edges, and acting on both
         // steps two stations for one push.
-        assert_eq!(panel_action(Some(K::PresetNext), "up"), None);
-        assert_eq!(panel_action(Some(K::PresetNext), "UP"), None);
+        assert_eq!(panel_action(Some(K::PresetNext), "up", 0), None);
+        assert_eq!(panel_action(Some(K::PresetNext), "UP", 0), None);
 
         // Buttons this app has no answer for, and the unknown code 14 that
         // arrived eight times in CarFM's drive log and is in no vendor table.
-        assert_eq!(panel_action(Some(K::Ams), "down"), None);
-        assert_eq!(panel_action(Some(K::ChangeBand), "down"), None);
-        assert_eq!(panel_action(None, "down"), None);
+        assert_eq!(panel_action(Some(K::Ams), "down", 0), None);
+        assert_eq!(panel_action(Some(K::ChangeBand), "down", 0), None);
+        assert_eq!(panel_action(None, "down", 0), None);
         assert_eq!(K::from_code(14), None);
     }
 
