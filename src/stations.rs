@@ -315,48 +315,43 @@ pub struct Ranked {
     pub genre: Option<String>,
 }
 
-/// Rank rows already prefiltered to the bounding box, best first.
-///
-/// The order of the four steps is the behaviour and must not drift:
-/// trim by TRUE distance (the box is a superset — this is what actually enforces
-/// the radius, not the SQL), score, sort descending, and only THEN cap. Capping
-/// before the sort would let the limit hide a better station.
-///
-/// A NaN SCORE RANKS LAST, EXPLICITLY, and this is not defensive tidiness. The
-/// clamps above propagate NaN the way `Math.max` does, and `NaN > radius` is
-/// false so a NaN-distance row survives the trim — NaN genuinely reaches this
-/// sort. The comparator that looks like JavaScript's rule,
-/// `partial_cmp(..).unwrap_or(Equal)`, is not a total order: with NaN, 1, 2 it
-/// claims NaN == 1 and NaN == 2 while 1 < 2, and Rust's sort DETECTS that and
-/// panics — in release too, because the check lives in `core`. Mapping NaN to
-/// `NEG_INFINITY` first gives a real total order and leaves the unrankable rows
-/// tied, so the stable sort keeps their input order.
-///
-/// `sort_by` is stable, as JavaScript's `Array#sort` has been required to be
-/// since ES2019, so equal scores keep the order SQLite returned them in and the
-/// two implementations agree row for row.
-/// How far a small transmitter is worth listing, from its own ERP.
+/// How far a transmitter is worth listing, from its own ERP.
 ///
 /// ANCHORED ON A PUBLISHED CONTOUR, not on a number someone liked. The FCC's
 /// LP100 class — 100 W at 30m HAAT — is protected to 60 dBuV/m at 5.6 km, and
 /// that is the regulator's own statement of where an LPFM serves. Free-space
 /// field goes as sqrt(ERP)/distance, which is the same law
-/// `receivability_score` uses, so any other small transmitter's equal-field
-/// distance is 5.6km x sqrt(erp / 100W).
+/// `receivability_score` uses, so any other transmitter's equal-field distance
+/// is 5.6km x sqrt(erp / 100W).
+///
+/// APPLIES TO EVERY SERVICE, which it did not always. The anchor is an LPFM
+/// figure but the law is not: `sqrt(ERP)` carries the same curve up as it does
+/// down, and it hands a 100 kW station 531 km — so a full-power licence never
+/// needed exempting from this, and exempting it by service code only ever
+/// spared the weak rows the rule exists to remove. [`within_reach`] records
+/// what that cost.
 ///
 /// THE 3x IS THE ONE JUDGEMENT, and it is a field strength rather than a
 /// preference: three times the distance is 20*log10(3) = 9.5 dB down, so this is
 /// the ~50 dBuV/m contour. That is fringe — well below the 70 dBuV/m the FCC
 /// calls city grade — but it is still usable mono in a moving car, which is the
-/// question this list answers. It is deliberately generous; the data barely
-/// notices. Measured over the shipped table, moving the margin from 3x to 5x
-/// changes the result by ONE row in Madison and by nothing at all in Chicago,
-/// New York or Los Angeles, because the translators this removes sit at a median
-/// of 81-87km where no threshold in this range can save them.
+/// question this list answers. It is deliberately generous.
+///
+/// IT IS ALSO THE ONLY LEVER LEFT, and it now moves more than it used to. While
+/// `within_reach` exempted full-power FM, going from 3x to 5x changed Madison by
+/// one row and Chicago, New York and Los Angeles by nothing. With the exemption
+/// gone the same change is worth +2 Madison, +1 Chicago, +2 New York, +1 Los
+/// Angeles, +4 Bozeman, +0 central Nevada — still small, but no longer nothing,
+/// because full-power rows are now near the cut as well as translators. If the
+/// list ever looks short in flat country this constant is the thing to move.
 ///
 /// The ERP default matches `receivability_score`'s: an unknown ERP is assumed
-/// small rather than absent, which here means 50 W and a 11.9km reach.
-fn small_station_reach_km(erp_kw: Option<f64>) -> f64 {
+/// small rather than absent, which here means 50 W and a 11.9km reach. A NaN ERP
+/// is NOT defaulted — `clamp_min` passes NaN through, so the reach is NaN, every
+/// comparison against it is false, and the row is dropped. That is the wanted
+/// answer for a corrupt row, and it is why [`rank_nearby`] can no longer put a
+/// NaN score into its own sort; see [`score_order`].
+fn reach_km(erp_kw: Option<f64>) -> f64 {
     /// FCC LP100: 100 W at 30m HAAT, 60 dBuV/m protected contour.
     const LP100_KM: f64 = 5.6;
     const LP100_KW: f64 = 0.1;
@@ -368,13 +363,78 @@ fn small_station_reach_km(erp_kw: Option<f64>) -> f64 {
 
 /// Is this row close enough to be worth offering?
 ///
-/// FULL-POWER FM IS NOT TOUCHED. It keeps the whole `NEARBY_RADIUS_KM`: a
-/// 100 kW class C genuinely does reach 100km, the ranking already orders them,
-/// and narrowing them is a different question from this one.
+/// POWER DECIDES, NOT THE LICENCE CATEGORY. This deliberately does not look at
+/// `service`, and the earlier version did:
+///
+/// ```text
+/// row.service == "FM" || distance_km <= reach_km(row.erp_kw)   // was
+/// ```
+///
+/// That exemption was justified as protecting big stations from a formula
+/// derived for small ones, and it never did. `reach_km` already returns 531km
+/// for 100 kW and 130km for 6 kW, so above 3.54 kW — the power whose reach
+/// equals `NEARBY_RADIUS_KM` — the test cannot fire inside the search at all.
+/// 7,831 of the 10,646 `FM` rows are above that line and were unaffected by the
+/// exemption in either direction. It was load-bearing ONLY for the 2,610 below
+/// it and the 205 with no ERP.
+///
+/// AND THOSE ARE THE ROWS IT SHOULD NOT HAVE SPARED. "Full power" is a licence
+/// category, not a wattage: 132 of the 183 sub-100 W `FM` rows sit below
+/// 92.0 MHz, in the reserved non-commercial band, where a small educational
+/// licence is ordinary. So the old rule dropped an 89 W translator at 90km and
+/// kept WFAR — FIFTEEN WATTS — at the same distance, on the wording of the
+/// licence rather than the signal. Also spared: KGCM at ONE watt and 13km,
+/// KBPK at 19 W and 30km, WRRC at 20 W and 78km.
+///
+/// WHAT IT COSTS, measured through the real query: 59→58 rows in Madison,
+/// 63→61 Chicago, 65→61 New York, 58→54 Los Angeles, 32→29 Bozeman. Every row
+/// removed was among the LAST FOUR of its list — Madison lost its 59th of 59,
+/// Los Angeles its 55th through 58th of 58 — because the score is the same
+/// physics as the filter, so a row that barely fails reach also barely scores.
+/// In none of those five did the dedupe hand the freed dial to another station:
+/// there was none behind it to hand it to.
+///
+/// THE HONEST COST IS THE MARGIN CALLS. WSUP (2.5 kW at 96.1km, reach 84.0) and
+/// WFRS (1.7 kW at 70.8km, reach 69.3 — inside 2%) are now cut, and a 3x fringe
+/// margin is nowhere near accurate enough to adjudicate 2%. They go because one
+/// rule applied to everything is worth more than a second threshold tuned to
+/// rescue two rows, and because the table has no HAAT column, so there is no
+/// data with which to model the height a full-power licence usually buys.
 fn within_reach(row: &StationRow, distance_km: f64) -> bool {
-    row.service == "FM" || distance_km <= small_station_reach_km(row.erp_kw)
+    distance_km <= reach_km(row.erp_kw)
 }
 
+/// Order two scores, best first, without aborting on NaN.
+///
+/// REGRESSION GUARD WITH A HISTORY. The comparator that looks like JavaScript's
+/// rule, `partial_cmp(..).unwrap_or(Equal)`, is not a total order: with NaN, 1, 2
+/// it claims NaN == 1 and NaN == 2 while 1 < 2, and Rust's sort DETECTS that and
+/// panics — in release too, because the check lives in `core`. That aborted the
+/// process. Mapping NaN to `NEG_INFINITY` first gives a real total order and
+/// leaves the unrankable rows tied at the tail, so the stable sort keeps their
+/// input order.
+///
+/// NO LONGER REACHABLE FROM [`rank_nearby`], AND STILL HERE ON PURPOSE. A NaN
+/// score needs a NaN ERP or a NaN distance, and [`within_reach`] now rejects
+/// both — every comparison against a NaN reach is false, so the row never gets
+/// scored. That makes this defence in depth rather than the live path, and it is
+/// extracted into its own function so the guarantee is tested directly instead of
+/// through a filter that could quietly stop delivering NaN to it.
+fn score_order(a: f64, b: f64) -> std::cmp::Ordering {
+    let key = |s: f64| if s.is_nan() { f64::NEG_INFINITY } else { s };
+    key(b).total_cmp(&key(a))
+}
+
+/// Rank rows already prefiltered to the bounding box, best first.
+///
+/// The order of the four steps is the behaviour and must not drift:
+/// trim by TRUE distance (the box is a superset — this is what actually enforces
+/// the radius, not the SQL), score, sort descending, and only THEN cap. Capping
+/// before the sort would let the limit hide a better station.
+///
+/// `sort_by` is stable, as JavaScript's `Array#sort` has been required to be
+/// since ES2019, so equal scores keep the order SQLite returned them in and the
+/// two implementations agree row for row.
 pub fn rank_nearby(
     lat: f64,
     lon: f64,
@@ -404,8 +464,7 @@ pub fn rank_nearby(
             genre: None,
         });
     }
-    let key = |s: f64| if s.is_nan() { f64::NEG_INFINITY } else { s };
-    out.sort_by(|a, b| key(b.score).total_cmp(&key(a.score)));
+    out.sort_by(|a, b| score_order(a.score, b.score));
 
     // ONE STATION PER FREQUENCY. A DELIBERATE DIVERGENCE FROM CarFM.
     //
@@ -1320,36 +1379,68 @@ mod tests {
     /// REGRESSION — a NaN score used to abort the process.
     ///
     /// `partial_cmp(..).unwrap_or(Equal)` looks like JavaScript's NaN rule but is
-    /// not a total order, and Rust's sort detects that and panics, in release as
-    /// well as debug. It does not trip on tidy input, so the NaN rows here are
-    /// scattered irregularly across enough of them to reach the detecting path.
+    /// not a total order, and Rust's sort can detect that and panic, in release
+    /// as well as debug.
+    ///
+    /// SABOTAGE-CHECKED, and the result corrected what this comment first
+    /// claimed. Putting the naive comparator back does NOT abort on this
+    /// fixture — it fails the sink assertion below, first NaN at index 35
+    /// instead of 86. So what this test guards is the ORDER, and the abort is
+    /// guarded only in the sense that a comparator producing this order is the
+    /// same one that aborts on other inputs. Worth stating plainly rather than
+    /// claiming a stronger check than the fixture performs.
+    ///
+    /// STRAIGHT AT `score_order`, not through `rank_nearby`, and that is the
+    /// point. `within_reach` now drops a NaN-ERP row before it can be scored — so
+    /// routing this through the query would test the FILTER while claiming to
+    /// test the SORT, and would keep passing if the guard were deleted. The
+    /// sibling test below pins the filter half.
     #[test]
     fn a_nan_score_sinks_instead_of_aborting() {
         let nan_at = [1usize, 2, 5, 8, 13, 21, 34, 55, 60, 61, 62, 70, 71, 90];
-        let rows: Vec<StationRow> = (0..100)
+        let mut scores: Vec<f64> = (0..100)
             .map(|i| {
-                let erp = if nan_at.contains(&i) {
-                    Some(f64::NAN)
+                if nan_at.contains(&i) {
+                    f64::NAN
                 } else {
-                    Some(1.0 + (i * 37 % 97) as f64)
-                };
-                // One row per dial across the band, so all hundred survive the
-                // one-row-per-frequency rule and the sort is what is measured.
-                row_on(
-                    87.5 + i as f64 * 0.2,
-                    "WNAN",
-                    43.0 + (i % 11) as f64 * 0.01,
-                    -89.4 - (i % 7) as f64 * 0.01,
-                    erp,
-                    None,
-                )
+                    (i * 37 % 97) as f64
+                }
             })
             .collect();
-        let out = rank_nearby(43.0731, -89.4012, 500.0, 1000, rows);
-        assert_eq!(out.len(), 100, "every row is inside the radius");
-        let first_nan = out.iter().position(|s| s.score.is_nan());
-        assert_eq!(first_nan, Some(86), "the 14 NaN rows sink to the tail");
-        assert!(out[..86].windows(2).all(|w| w[0].score >= w[1].score));
+        // The abort was here: an intransitive comparator, detected inside `core`.
+        scores.sort_by(|a, b| score_order(*a, *b));
+        assert_eq!(scores.iter().filter(|s| s.is_nan()).count(), 14);
+        assert_eq!(
+            scores.iter().position(|s| s.is_nan()),
+            Some(86),
+            "the 14 unrankable values sink to the tail"
+        );
+        assert!(
+            scores[..86].windows(2).all(|w| w[0] >= w[1]),
+            "and the rest are still ordered best first"
+        );
+    }
+
+    /// The other half: a corrupt ERP never reaches the sort in the first place.
+    ///
+    /// `clamp_min` passes NaN through, so `reach_km` is NaN, so every comparison
+    /// in `within_reach` is false and the row is dropped. Dropping it is the
+    /// wanted answer — a row whose power is not a number cannot be ranked against
+    /// one whose power is — but it is a CONSEQUENCE of removing the full-power
+    /// exemption rather than something chosen, and it deserves to be pinned
+    /// rather than discovered.
+    #[test]
+    fn a_row_whose_erp_is_not_a_number_is_dropped_before_scoring() {
+        assert!(reach_km(Some(f64::NAN)).is_nan());
+        let mut nan_erp = row_on(101.5, "WNAN", 43.071, -89.401, Some(f64::NAN), None);
+        nan_erp.service = "FM".to_string();
+        assert!(!within_reach(&nan_erp, 0.5), "not even from half a km away");
+
+        let good = row_on(103.5, "WOK", 43.071, -89.401, Some(10.0), None);
+        let out = rank_nearby(43.07, -89.40, NEARBY_RADIUS_KM, 50, vec![nan_erp, good]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].row.callsign, "WOK");
+        assert!(out.iter().all(|r| !r.score.is_nan()));
     }
 
     // ── The shipped database ─────────────────────────────────────────────────
@@ -1435,21 +1526,22 @@ mod tests {
 
     /// The whole query, pinned against the real table at a real position. Every
     /// number here was produced by running CarFM's formulae over the same file —
-    /// EXCEPT the row COUNT, which is this project's one deliberate divergence
-    /// from CarFM's picker: `rank_nearby` keeps one row per frequency. CarFM
-    /// keeps all 120 and truncates to 100; this keeps one row per dial — 75 of
-    /// them on the dedupe alone, 59 once the reach filter has also dropped the
-    /// small transmitters that were never receivable — and the cap no longer
-    /// binds. The ORDER and the per-row arithmetic below are untouched by that
-    /// and are still CarFM's, which is what this test is for.
+    /// EXCEPT the row COUNT, which is this project's deliberate divergence from
+    /// CarFM's picker: `rank_nearby` keeps one row per frequency, and only rows
+    /// inside their own reach. CarFM keeps all 120 and truncates to 100; this
+    /// keeps 75 on the dedupe alone, 59 once the reach filter spared full-power
+    /// FM, and 58 now that reach is decided on power rather than on the licence
+    /// category — so the cap no longer binds. The ORDER and the per-row
+    /// arithmetic below are untouched by all three and are still CarFM's, which
+    /// is what this test is for.
     #[test]
     fn the_madison_query_returns_what_carfm_returned() {
         let db = db();
         let (lat, lon) = (43.07, -89.40);
 
         // The prefilter is a superset; 156 rows are in the box, 120 are inside
-        // the circle, dropping small transmitters past their own reach and then
-        // keeping one row per dial leaves 59 — under the 100 cap, so the cap
+        // the circle, dropping every transmitter past its own reach and then
+        // keeping one row per dial leaves 58 — under the 100 cap, so the cap
         // keeps all of them.
         let b = bounding_box(lat, lon, NEARBY_RADIUS_KM);
         let in_box: i64 = db
@@ -1462,10 +1554,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(in_box, 156);
-        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 59);
+        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 58);
 
         let out = db.nearby(lat, lon, NEARBY_RADIUS_KM, NEARBY_LIMIT).unwrap();
-        assert_eq!(out.len(), 59, "one row per dial, and 59 is under the cap");
+        assert_eq!(out.len(), 58, "one row per dial, and 58 is under the cap");
 
         // THE INVARIANT THE DIVERGENCE EXISTS FOR. A dial holds one station, so
         // the list must never offer two.
@@ -1504,21 +1596,26 @@ mod tests {
 
         // The weakest row kept. CarFM's was W278DE, a translator at 92.65km —
         // the hundredth of 120, cut off by the cap. It is not here at all now:
-        // a 250 W translator at 93km is far outside its own reach. The tail is a
-        // full-power station instead, which is the point of the whole change.
+        // a 250 W translator at 93km is far outside its own reach.
+        //
+        // The tail was WSUP until #82: 2.5 kW at 96.1km, kept only because its
+        // licence said "full power" while its reach said 84km. With power rather
+        // than the licence category deciding, the last row is WGFB — 2.4 kW,
+        // reach 82.303km, sitting at 82.218km. It is on the list by EIGHTY-FIVE
+        // METRES, which is the cut landing exactly where it should: the last row
+        // in is the last row that fits.
         let last = out.last().unwrap();
-        assert_eq!(last.row.callsign, "WSUP");
-        assert_eq!(last.distance_km, 96.0860346268237);
-        assert_eq!(last.score, -35.67380533049158);
+        assert_eq!(last.row.callsign, "WGFB");
+        assert_eq!(last.distance_km, 82.21802752996807);
+        assert_eq!(last.score, -34.49722865348642);
     }
 
-    /// A small transmitter is listed only within its own reach, and a big one is
-    /// not touched.
+    /// A transmitter is listed only within its own reach, whatever it is called.
     #[test]
-    fn translators_and_lpfm_are_dropped_past_their_reach() {
+    fn a_transmitter_is_dropped_past_its_own_reach() {
         // 100 W LPFM reaches 16.8km; 250 W translator 26.6km.
-        assert!((small_station_reach_km(Some(0.1)) - 16.8).abs() < 0.05);
-        assert!((small_station_reach_km(Some(0.25)) - 26.56).abs() < 0.05);
+        assert!((reach_km(Some(0.1)) - 16.8).abs() < 0.05);
+        assert!((reach_km(Some(0.25)) - 26.56).abs() < 0.05);
 
         let at = |svc: &str, erp: Option<f64>, km: f64| {
             let mut r = row_on(101.5, "WTEST", 43.0, -89.4, erp, None);
@@ -1531,9 +1628,26 @@ mod tests {
         assert!(!at("FX", Some(0.25), 80.0), "a translator 80km away is not");
         // A 9 W translator at 94km — central Nevada's entire band — reaches 5km.
         assert!(!at("FX", Some(0.009), 94.0));
-        // Full-power keeps the whole radius; narrowing it is a different question.
+
+        // A BIG STATION NEEDS NO EXEMPTION, which is the whole reason the old
+        // one could go: sqrt(ERP) carries the curve up as readily as down.
+        assert!(reach_km(Some(100.0)) > 500.0, "100 kW reaches 531km");
         assert!(at("FM", Some(100.0), 95.0));
-        assert!(at("FM", Some(0.5), 95.0), "even a weak full-power row is kept");
+        assert!(at("FM", Some(6.0), 95.0), "6 kW reaches 130km");
+        // 3.543 kW is where reach meets the 100km search radius. Above that the
+        // test cannot fire inside the search at all; below it, it can.
+        assert!(at("FM", Some(3.6), 99.9));
+        assert!(!at("FM", Some(3.4), 99.9));
+
+        // AND A WEAK FULL-POWER ROW IS NOW CUT LIKE ANY OTHER. These are four
+        // the old `service == "FM"` short-circuit spared, at the powers and
+        // distances they really have in the shipped table.
+        assert!(!at("FM", Some(0.001), 13.4), "KGCM, one watt at 13km");
+        assert!(!at("FM", Some(0.019), 29.6), "KBPK, 19 W at 30km");
+        assert!(!at("FM", Some(0.015), 90.8), "WFAR, 15 W at 91km");
+        assert!(!at("FM", Some(0.02), 78.0), "WRRC, 20 W at 78km");
+        // The margin call the change deliberately accepts losing: inside 2%.
+        assert!(!at("FM", Some(1.7), 70.8), "WFRS, 1.7 kW at 70.8km");
     }
 
     /// THE ORDER OF THE TWO RULES, which is load-bearing.
@@ -1551,8 +1665,10 @@ mod tests {
         let near = haversine_km(43.07, -89.40, 43.4, -89.4);
         let far = haversine_km(43.07, -89.40, 43.9, -89.4);
         assert!(near < far, "the translator is the nearer of the two");
-        // ...and is well past its own 26.6km reach, so the dial is WBIG's.
-        assert!(near > small_station_reach_km(Some(0.25)));
+        // ...and is well past its own 26.6km reach, while WBIG at 100 kW is
+        // inside its 531km one, so the dial is WBIG's.
+        assert!(near > reach_km(Some(0.25)));
+        assert!(far < reach_km(Some(100.0)));
         let out = rank_nearby(43.07, -89.40, NEARBY_RADIUS_KM, 50, vec![fx, fm]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].row.callsign, "WBIG", "the dial falls to the station behind it");
@@ -1899,17 +2015,17 @@ mod tests {
 
         assert_eq!(v.state, NearbyState::List);
         assert_eq!(v.snapshot, "2026-07-16");
-        // 59: one row per dial, and no small transmitter past its own reach —
-        // see `rank_nearby`. The head of the list is untouched by both; the TAIL
-        // is where the duplicates and the unhearable translators were.
-        assert_eq!(v.stations.len(), 59);
+        // 58: one row per dial, and no transmitter past its own reach — see
+        // `rank_nearby`. The head of the list is untouched by both; the TAIL is
+        // where the duplicates and the unhearable transmitters were.
+        assert_eq!(v.stations.len(), 58);
         assert_eq!(v.stations[0].freq, "102.5");
         assert_eq!(v.stations[0].call, "WNWC");
         assert_eq!(v.stations[0].meta, "Madison");
         assert_eq!(v.stations[0].distance, "10 km");
         assert_eq!(v.stations[0].signal_pairs, 4);
-        assert_eq!(v.stations.last().unwrap().call, "WSUP");
-        assert_eq!(v.stations.last().unwrap().distance, "96 km");
+        assert_eq!(v.stations.last().unwrap().call, "WGFB");
+        assert_eq!(v.stations.last().unwrap().distance, "82 km");
         assert_eq!(v.stations.last().unwrap().signal_pairs, 0);
 
         // Both presets are on the list and both are starred, and nothing else is.
@@ -1922,14 +2038,19 @@ mod tests {
         // CarFM's 100 rows produced [22, 31, 29, 13, 5], with 22 stations showing
         // no arcs at all because the co-channel rows nobody can hear dragged the
         // bottom of the range down. Over one row per dial the same arithmetic
-        // gives [6, 25, 19, 5, 4] — the arcs now rank what can be tuned against
-        // what else can be tuned. `station_strength` documents that any filter
+        // gives [8, 24, 17, 6, 3] — the arcs now rank what can be tuned against
+        // what else can be tuned. `strength_of` documents that any filter
         // re-normalises; this is that, applied twice more.
+        //
+        // #82 moved it again, and the shape is the tell: dropping WSUP raised the
+        // floor of the range by a point, so every surviving row measures a little
+        // lower against a shorter scale. That is re-normalisation, not a signal
+        // getting worse.
         let mut hist = [0usize; 5];
         for s in &v.stations {
             hist[s.signal_pairs as usize] += 1;
         }
-        assert_eq!(hist, [6, 25, 19, 5, 4]);
+        assert_eq!(hist, [8, 24, 17, 6, 3]);
 
         // No genres in the shipped data, so the filter is not offered.
         assert!(!v.show_bucket_bar);

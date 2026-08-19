@@ -956,6 +956,13 @@ can actually hear. Filtering first hands the dial to the station behind it.
 C genuinely reaches that far, the ranking already orders them, and narrowing them
 is a different question.
 
+> **SUPERSEDED BY #82**, which removed that exemption. The reasoning in the
+> paragraph above does not survive being checked: `reach_km` already returns
+> 531km for 100 kW, so the filter was never going to cut a big station inside a
+> 100km search, and the exemption only ever spared weak ones. Kept as written
+> because the table below is #81's measurement and is still the record of what
+> #81 did; #82 carries the current numbers.
+
 Effect, measured through the real query (rows, and of those, small transmitters):
 
 | | before #78 | after #78 | after #81 |
@@ -978,7 +985,80 @@ is about reach and not about service.
 
 **Still open:** nothing here narrows full-power FM, and a class A at 95km is
 listed. That is defensible (it can be receivable on flat ground) and is where the
-next question would go if the list still feels long.
+next question would go if the list still feels long. **Closed by #82.**
+
+### 82. Decide reach on power, not on the licence category
+**DONE.** #81's reach filter exempted `service == "FM"` from the distance test.
+That exemption is gone; `within_reach` is now one line for every service:
+
+```rust
+distance_km <= reach_km(row.erp_kw)
+```
+
+**THE EXEMPTION NEVER PROTECTED WHAT IT WAS WRITTEN TO PROTECT.** It was
+justified as sparing big stations from a formula derived for small ones, and
+`reach_km` scales as `sqrt(ERP)` — it returns 531km for 100 kW and 130km for
+6 kW. Above **3.543 kW**, the power whose reach equals the 100km search radius,
+the test cannot fire inside the search at all. 7,831 of the 10,646 `FM` rows are
+above that line, so for three quarters of them the exemption changed nothing in
+either direction. It was load-bearing only for the 2,610 below it and the 205
+with no ERP.
+
+**AND THOSE ARE THE ROWS IT SHOULD NOT HAVE SPARED.** "Full power" is a licence
+category, not a wattage: 132 of the 183 sub-100 W `FM` rows sit below 92.0 MHz,
+in the reserved non-commercial band, where a small educational licence is
+ordinary. The old rule therefore dropped an 89 W translator at 90km and kept
+WFAR — **fifteen watts** — at the same distance, on the wording of the licence
+rather than the signal. Also spared: KGCM at ONE watt and 13km, KBPK at 19 W and
+30km, WRRC at 20 W and 78km.
+
+Effect, measured through the real query:
+
+| | after #81 | after #82 | removed |
+|---|---|---|---|
+| Madison | 59 | **58** | WSUP |
+| Chicago | 63 | **61** | WXNU, WZKL |
+| New York | 65 | **61** | WFRS, WTSR, WRRC, WFAR |
+| Los Angeles | 58 | **54** | KCRU, KMLA, KJAI, KBPK |
+| Bozeman MT | 32 | **29** | KYPX, KYPB, KGCM |
+| central Nevada | 0 | **0** | — |
+
+**EVERY REMOVED ROW WAS AMONG THE LAST FOUR OF ITS LIST** — Madison lost its
+59th of 59, Los Angeles its 55th through 58th of 58 — because the score is the
+same physics as the filter, so a row that barely fails reach also barely scores.
+In none of the six did the dedupe hand the freed dial to another station: there
+was none behind it to hand it to. The head of each list is unchanged; Madison's
+best eight are still CarFM's best eight.
+
+The new Madison tail is the cut landing where it should. WGFB is 2.4 kW with a
+reach of 82.303km, sitting at 82.218km — on the list by **85 metres**, and last
+because it barely fits. `the_madison_query_returns_what_carfm_returned` pins it
+to the digit.
+
+**THE HONEST COST IS THE MARGIN CALLS.** WSUP (2.5 kW at 96.1km, reach 84.0) and
+WFRS (1.7 kW at 70.8km, reach 69.3 — inside 2%) are now cut, and a 3x fringe
+margin is nowhere near accurate enough to adjudicate a 2% difference. They go
+anyway: one rule applied to everything is worth more than a second threshold
+tuned to rescue two rows, and the table has no HAAT column, so there is no data
+with which to model the antenna height a full-power licence usually buys. If the
+list later looks short in flat country, the lever is `FRINGE`, which is one
+constant and now governs every service at once — and it moves more than it did:
+3x to 5x was worth one row in Madison and nothing in Chicago, New York or Los
+Angeles while full power was exempt, and is now worth +2, +1, +2, +1, +4 Bozeman,
++0 central Nevada.
+
+**A SIDE EFFECT WORTH NAMING: a NaN ERP is now dropped rather than ranked.**
+`clamp_min` passes NaN through, so `reach_km` is NaN, so every comparison in
+`within_reach` is false. That is the wanted answer for a corrupt row, but it also
+means `rank_nearby` can no longer put a NaN into its own sort — which would have
+quietly hollowed out the regression test for the NaN abort. The comparator
+is now `score_order`, a named function tested directly on a `Vec<f64>`, so the
+guard survives independently of whatever filters run upstream of it.
+
+Pinned by: `a_transmitter_is_dropped_past_its_own_reach` (break-even either side
+of 3.543 kW, and all four weak rows the exemption used to spare),
+`a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
+`a_nan_score_sinks_instead_of_aborting` (the sort half).
 
 
 ---
