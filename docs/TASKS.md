@@ -1047,6 +1047,32 @@ constant and now governs every service at once — and it moves more than it did
 Angeles while full power was exempt, and is now worth +2, +1, +2, +1, +4 Bozeman,
 +0 central Nevada.
 
+**A SECOND SIDE EFFECT, FOUND BY REVIEW AFTER THE FACT AND NOT BY THIS ENTRY.**
+The reach filter also shrinks the LEARNED CALL-SIGN MAP, which the measurements
+above treat purely as a change to the nearby list. `refresh_nearby` feeds
+`Callsigns::relearn` from `picker.rows()` — the already reach-filtered, deduped
+ranked rows, then filtered to `service == "FM"` — so every full-power row the
+reach test now cuts is also lost as an identity source. That map is the second
+rank in `push_hero` and the `saved_call` fallback in `toggle_save`, and it is the
+ONLY thing that can name a dial with no GPS fix.
+
+Measured both ways, because the raw count badly overstates it:
+
+| | FM rows in radius cut by reach | dials that lose their call sign |
+|---|---|---|
+| Madison | 3 of 59 | **1** |
+| Chicago | 24 of 107 | **2** |
+| New York | 48 of 125 | **2** |
+| Bozeman MT | 4 of 23 | **3** |
+
+The gap is the one-row-per-dial rule from #78: the map only ever held one entry
+per frequency, so most of the cut rows were never in it. **Left as it stands.** A
+station past its own reach is one the driver cannot hear, so declining to name
+its dial is consistent with the rest of this change — and the alternative, a
+second unfiltered query on every position change, is what feeding from the
+picker's rows exists to avoid. Recorded because #82 shipped claiming to change
+only the list.
+
 **A SIDE EFFECT WORTH NAMING: a NaN ERP is now dropped rather than ranked.**
 `clamp_min` passes NaN through, so `reach_km` is NaN, so every comparison in
 `within_reach` is false. That is the wanted answer for a corrupt row, but it also

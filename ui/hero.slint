@@ -573,8 +573,9 @@ export component HeroRow inherits Rectangle {
     /// a workaround for the missing transform; it is better than the transform,
     /// because nothing is stretched.
     ///
-    /// Interpolated as a CENTRE and a SCALE off the same `m-out` as the incoming
-    /// hero, so the card leaving and the card arriving cannot drift apart.
+    /// Interpolated as a CENTRE off `m-out` and a SCALE off `m-scale`, the same
+    /// pair the incoming hero uses — so the card leaving and the card arriving
+    /// cannot drift apart, while size still settles ahead of position.
     property <length> dst-cx: root.fwd
         ? root.prev-rest-x + root.peek-mid
         : root.next-rest-x + root.peek-mid;
@@ -686,8 +687,8 @@ export component HeroRow inherits Rectangle {
         y: root.out-cy - self.height / 2;
         // THE ONE OPACITY THIS MORPH GAINED, and it is a landing, not a fade-out.
         // `m-settle` holds at 1 for the whole travel and only then dissolves over
-        // 200ms, so the card leaves as a solid object and hands over to the peek
-        // that has firmed up underneath it. Fading it while it flew made the
+        // 140ms from 380ms, so the card leaves as a solid object and hands over
+        // to the peek that has firmed up underneath it. Fading it while it flew made the
         // station read as a ghost of itself rather than as the card departing —
         // and this tree already has a ghost, which is a different card.
         opacity: root.m-settle;
@@ -754,9 +755,10 @@ export component HeroRow inherits Rectangle {
     // is never occluded by the station going out — CarFM's z-order, where the
     // peeks tuck under the hero container and its outgoing card is a peek.
     //
-    // Position and size both come from `m-out`, so there is no separate
-    // animation on this element and no state that displaces it: one progress
-    // property drives all four beats, which is what keeps them in step.
+    // Position comes from `m-out` and size from `m-scale`, so there is no
+    // separate animation on this element and no state that displaces it: the two
+    // progress properties are driven from one transition, which is what keeps
+    // every beat in step while letting scale lead.
     if root.morphing: HeroCard {
         scale: root.hero-s;
         width: root.card-w * root.hero-s;
@@ -796,10 +798,12 @@ export component HeroRow inherits Rectangle {
     // machine — not a rendered frame — is what decides the value being left.
     states [
         entering when root.arming: {
-            // ONE PROGRESS PROPERTY FOR ALL FOUR BEATS. `card.x` used to be
-            // displaced here and animated separately; now the hero's centre and
-            // its scale are both derived from `m-out`, so the hero and the cards
-            // beside it cannot drift out of step.
+            // ONE TRANSITION FOR EVERY BEAT. `card.x` used to be displaced here
+            // and animated separately; now the hero's centre comes from `m-out`
+            // and its scale from `m-scale`, both left by this one state, so the
+            // hero and the cards beside it cannot drift out of step. Two curves,
+            // one clock — see the `out` block for why scale is the faster of
+            // them.
             root.m-out: 1.0;
             root.m-scale: 1.0;
             root.m-ghost: 1.0;

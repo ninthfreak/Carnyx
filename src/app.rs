@@ -464,9 +464,17 @@ struct State {
     /// run that is happening now. Read from the last run's snapshot; written
     /// back into the next one.
     launches: u32,
-    /// A panel action is being applied right now, so a drain re-entered from
-    /// inside it must not apply another. See `drain_events`.
-    applying_panel: bool,
+    /// A retune or a panel action is in flight, so a drain re-entered from
+    /// inside one must not start another. See `drain_events`.
+    ///
+    /// NAMED FOR THE RETUNE, NOT THE PANEL KEY, and the first cut got that
+    /// wrong: it was set only around `apply_panel_action` inside `drain_events`,
+    /// which left every UI-initiated `tune` — a preset tap, the keypad, the
+    /// nearby list — draining with the flag CLEAR. That drain would take a
+    /// queued wheel key, run a whole second step, and then the outer `tune`
+    /// would write its own older `dial` and `asserted` on top: the front end
+    /// left on one station with the face and the anchor naming another.
+    busy: bool,
     /// What a panel key asked for, applied after the drain.
     ///
     /// DEFERRED, because `apply_event` holds a mutable borrow of this struct and
@@ -898,7 +906,7 @@ impl App {
                 last_diag: None,
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
-                applying_panel: false,
+                busy: false,
                 panel_action: None,
                 callsigns,
                 store,
@@ -1071,16 +1079,16 @@ impl App {
         loop {
             let pending = {
                 let mut s = self.state.borrow_mut();
-                if s.applying_panel {
+                if s.busy {
                     None
                 } else {
                     s.panel_action.take()
                 }
             };
             let Some(action) = pending else { break };
-            self.state.borrow_mut().applying_panel = true;
+            self.state.borrow_mut().busy = true;
             self.apply_panel_action(action);
-            self.state.borrow_mut().applying_panel = false;
+            self.state.borrow_mut().busy = false;
         }
         // Once, after the whole batch: a position change re-runs the nearby
         // query and re-resolves the hero and the strip, and none of that is
@@ -2164,16 +2172,31 @@ impl App {
                 return;
             }
         }
+        // MARKED BUSY ACROSS THE DRAIN, so the nested drain below cannot take a
+        // queued wheel key and run a second step whose target this function then
+        // overwrites. The key stays pending and `drain_events`' loop applies it
+        // once this tune's writes have landed.
+        //
+        // AND THE ANCHOR IS WRITTEN BEFORE THE DRAIN, unlike the dial. A key
+        // arriving mid-tune has its strip position read the moment it lands, and
+        // reading it from a stale `asserted` anchored the step on where the
+        // driver was BEFORE this tune — so two presses advanced one station and
+        // the second was a no-op under the `moves` gate. `dial` still comes
+        // after, because the drain exists to flush stale frequency reports
+        // before this function asserts the dial it just commanded.
+        self.state.borrow_mut().busy = true;
+        self.state.borrow_mut().asserted = Some(mhz);
         self.drain_events();
         {
             let mut s = self.state.borrow_mut();
+            s.busy = false;
             s.dial = mhz;
-            // WHERE THE APP PUT THE STRIP, recorded once for every deliberate
-            // tune in the program. See `State::asserted`: this is the half of
-            // the wheel fix that survives BETWEEN drains, where capturing the
-            // anchor as the key arrives cannot help, because by the next press
-            // the vendor has already moved `dial` on its own hop.
-            s.asserted = Some(mhz);
+            // `asserted` — where the app put the strip — was written ABOVE, before
+            // the drain, for the reason given there. It is the half of the wheel
+            // fix that survives BETWEEN drains, where capturing the anchor as the
+            // key arrives cannot help, because by the next press the vendor has
+            // already moved `dial` on its own hop.
+            //
             // A retune is the documented way to cancel a hardware sweep (see
             // `apply_panel_action`), so whatever sweep was in flight is not any
             // more — and on a front end that answers with no further frequency
@@ -2375,6 +2398,15 @@ impl App {
                 // is what CANCEL and the tab switch read to know a tune is still
                 // owed.
                 s.scanning = true;
+                // AND THE STRIP IS LEFT DELIBERATELY, exactly as `PanelAction::Seek`
+                // does. That arm had this line and this one did not, which put the
+                // rule on the DEAD path only: `PanelKey` records that this fascia
+                // has no seek button, so `on_freq_seek` is the only seek there is.
+                // Without it a stale `asserted` survived the sweep and the next
+                // ch+ stepped from where the driver had been BEFORE seeking —
+                // where reading `dial` used to give -1 and land on entry 0. A
+                // regression introduced with the anchor itself.
+                s.asserted = None;
             }
             // Handed over and let go — see `PanelAction::Seek`. Re-tuning after a
             // hardware seek cancels it.
@@ -2936,7 +2968,16 @@ impl App {
         // THE ANCHOR STILL MOVES. The driver pressed the button and the strip's
         // position is now this entry, whatever the radio was already doing; only
         // the command to the tuner is skipped. `tune` would have set this.
-        self.state.borrow_mut().asserted = Some(mhz);
+        {
+            let mut s = self.state.borrow_mut();
+            s.asserted = Some(mhz);
+            // AND IT CLEARS A LATCHED SWEEP, which `tune` was also doing here.
+            // `tune`'s own note: on a front end that answers a seek with no
+            // further frequency report, nothing else would ever clear this. Skip
+            // the tune and the flag stays set, so the hero keeps the sweeping
+            // face for the rest of the session.
+            s.scanning = false;
+        }
         // AND IT STILL PUBLISHES, which the first cut of this forgot. `tune` was
         // doing that too, so skipping it left the face on the PREVIOUS station
         // while the radio sat on the new one — a display lie, and worse than the
@@ -3871,6 +3912,70 @@ mod tests {
         crate::android::ingest_panel_key(62, real.into());
         driver.drain_events();
         assert_eq!(label(&ui), format_mhz(strip[1]).to_string(), "one step, not two");
+    }
+
+    /// THE SEEK THIS UNIT ACTUALLY HAS LEAVES THE STRIP.
+    ///
+    /// `PanelAction::Seek` cleared `asserted` and `on_freq_seek` did not, which
+    /// put the rule on the DEAD path only — `PanelKey` records that this fascia
+    /// has no seek button, so the on-screen one is the only seek there is. A
+    /// stale anchor then survived the sweep and the next step went from where the
+    /// driver had been BEFORE seeking. Found by review, after the anchor itself
+    /// had shipped.
+    #[test]
+    fn an_on_screen_seek_leaves_the_strip_behind() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("seek");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        // On entry 0, then seek away to whatever the fake lands on.
+        driver.tune_for_test(strip[0]);
+        driver.drain_events();
+        ui.invoke_freq_seek(1);
+        driver.drain_events();
+        let landed = ui.get_freq_label().to_string();
+        assert_ne!(landed, format_mhz(strip[0]).to_string(), "the seek moved the dial");
+
+        // Now step. Off the strip, the rule is entry 0 — NOT entry 1, which is
+        // what stepping from the pre-seek anchor would give.
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+        assert_eq!(
+            ui.get_freq_label().to_string(),
+            format_mhz(strip[0]).to_string(),
+            "a step after a seek starts from off-strip, not from the old anchor"
+        );
+    }
+
+    /// A UI TUNE DOES NOT LET A QUEUED WHEEL KEY RUN INSIDE IT.
+    ///
+    /// `tune` drains before it writes `dial`, so a key sitting in the queue was
+    /// applied by that nested drain and its step's target was then overwritten by
+    /// the outer tune — the front end left on one station with the face naming
+    /// another. The `busy` flag closes it; this holds that the queued key still
+    /// gets its turn afterwards rather than being dropped.
+    #[test]
+    fn a_queued_wheel_key_waits_for_a_tune_in_flight() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("busy");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        driver.tune_for_test(strip[0]);
+        driver.drain_events();
+
+        // A wheel key lands, and before any drain the driver taps a tile.
+        crate::android::ingest_panel_key(62, "down".into());
+        ui.invoke_select_preset(3);
+        driver.drain_events();
+
+        // The tap and then the key, in that order, each landing once: entry 3,
+        // then one step on from it. The failure this guards against ended on
+        // entry 1 with the face showing entry 3.
+        assert_eq!(
+            ui.get_freq_label().to_string(),
+            format_mhz(strip[4]).to_string(),
+            "the tap lands, then the queued key steps once from where it left off"
+        );
     }
 
     /// A ONE-ENTRY STRIP DOES NOT RE-TUNE THE STATION ALREADY PLAYING.

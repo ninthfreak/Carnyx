@@ -872,10 +872,6 @@ struct FakeState {
     level: i32,
     audio: bool,
     ill_watching: bool,
-    /// How many times `tune` has been ACCEPTED, so a test can tell a step that
-    /// re-commands the front end from one that leaves it alone. Nothing in the
-    /// app reads it; the real tuner has no such counter and needs none.
-    tunes: u32,
 }
 
 impl FakeTuner {
@@ -891,7 +887,6 @@ impl FakeTuner {
                 level: 62,
                 audio: false,
                 ill_watching: false,
-                tunes: 0,
             }),
             available: true,
         }
@@ -923,16 +918,6 @@ impl FakeTuner {
     /// Pretend the MCU pushed a group. The string is the vendor's 16 hex chars.
     pub fn push_rds_hex(&self, hex: &str) {
         ingest_rds_group(hex);
-    }
-
-    /// How many tunes this fake has ACCEPTED.
-    ///
-    /// Only the fake exposes this. It exists so a test can tell a preset step
-    /// that re-commands the front end from one that correctly leaves it alone —
-    /// the difference between `step_preset_from` on a one-entry strip blanking
-    /// the RDS every press and doing nothing.
-    pub fn tunes(&self) -> u32 {
-        self.lock().tunes
     }
 
     /// Pretend the wheel was pressed.
@@ -996,7 +981,6 @@ impl Tuner for FakeTuner {
             let mut s = self.lock();
             s.raw = raw;
             s.ps = String::new();
-            s.tunes += 1;
             s.band
         };
         ingest_frequency(band as i32, raw, String::new(), -1);
