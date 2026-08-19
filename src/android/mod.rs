@@ -222,22 +222,60 @@ pub fn band_plan_from_raw(flat: &[i32]) -> Vec<BandPoint> {
 /// The wheel is not a media key on this unit — the MCU broadcasts
 /// `com.nwd.action.ACTION_KEY_VALUE` and the event never enters Android's input
 /// pipeline at all, which is why capturing it any other way saw nothing.
+///
+/// ## THIS IS A SOFTWARE TABLE, NOT AN INVENTORY OF BUTTONS
+///
+/// Every variant below is a row of the vendor's decompiled dispatch table, which
+/// covers its whole product line. It says what the SERVICE would do with a code,
+/// not that anything on this fascia can send one. Read as a button list it is
+/// simply wrong, and it has already been read that way once: an audit reported
+/// that a "wheel-driven seek" never sets the scanning flag, which is true of the
+/// code and describes an operation this hardware cannot start.
+///
+/// WHAT THE OWNER ACTUALLY HAS, stated so the mistake is not available again:
+///
+/// * Steering wheel — `ch+` / `ch-`, volume up/down, and a `mode` button that
+///   switches apps.
+/// * Head unit — the Android navigation buttons and a volume control.
+///
+/// So `ch+` and `ch-` are [`Self::PresetNext`] and [`Self::PresetPrev`], and
+/// THEY ARE THE ONLY TWO THIS APP CAN EVER RECEIVE AS RADIO COMMANDS. There is
+/// no seek button, no search button, no band button, no AMS and no intro. The
+/// variants for those are decode-only: they exist so the diagnostics log can
+/// name a code rather than print "unknown", and so a different fascia is
+/// understood if this ever meets one.
+///
+/// Volume and `mode` are handled by the MCU and the system; whether they also
+/// broadcast is unknown. Code 14 — eight times in CarFM's drive log of
+/// 2026-08-03, in no vendor table — is the open question there, and one of those
+/// two buttons is the obvious suspect. Not investigated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelKey {
+    /// Decode-only on this unit — no such button. See the type's own note.
     ChangeBand,
+    /// Decode-only on this unit — no such button.
     SearchUp,
+    /// Decode-only on this unit — no such button.
     SearchDown,
+    /// Decode-only on this unit — no such button.
     SeekUp,
+    /// Decode-only on this unit — no such button.
     SeekDown,
-    /// Auto memory store.
+    /// Auto memory store. Decode-only on this unit — no such button.
     Ams,
+    /// Decode-only on this unit — no such button.
     Intro,
+    /// `ch+` on the wheel, and ONE OF THE ONLY TWO CODES THIS UNIT SENDS.
+    ///
     /// Steps the SERVICE's own hardware preset bank, not ours. A normal
     /// broadcast cannot be cancelled, so the service acts regardless and the app
     /// reasserts its own preset immediately after.
     PresetNext,
+    /// `ch-` on the wheel. The other of the two. See [`Self::PresetNext`].
     PresetPrev,
+    /// Decode-only on this unit — no such button.
     ChangeFmBand,
+    /// Decode-only on this unit — no such button.
     ChangeAmBand,
 }
 

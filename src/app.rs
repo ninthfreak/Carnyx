@@ -2774,6 +2774,20 @@ impl App {
     fn apply_panel_action(self: &Rc<App>, action: PanelAction) {
         match action {
             PanelAction::Step { dir, from } => self.step_preset_from(dir, from),
+            // UNREACHABLE ON THIS UNIT, and kept anyway. Its four codes — search
+            // and seek, up and down — are rows of the vendor's decompiled
+            // dispatch table, and the fascia has no button for any of them: the
+            // wheel is `ch+`/`ch-`, volume and `mode`, and the head unit has the
+            // Android navigation buttons and a volume control.
+            // `crate::android::PanelKey` carries the full inventory.
+            //
+            // SAID HERE BECAUSE AN AUDIT MISSED IT. This arm does not set
+            // `s.scanning = true` where the on-screen seek does, which was
+            // reported as "CANCEL cannot abort a wheel-started sweep" — true of
+            // the code, and describing a sweep this hardware cannot start.
+            // `on_freq_seek` is the only seek there is, and it sets the flag.
+            // Making this arm match would be tidying an unreachable branch;
+            // recording that it IS unreachable is worth more.
             PanelAction::Seek(up) => {
                 {
                     let mut s = self.state.borrow_mut();
