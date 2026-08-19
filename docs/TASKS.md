@@ -837,6 +837,93 @@ had the same hole — but #75 made the covered cases good enough that this one n
 stands out.
 
 
+### 78. One station per frequency in the nearby list — a CarFM divergence
+**DONE, and it is a DELIBERATE DIVERGENCE from the reference.** `rank_nearby`
+now keeps only the highest-scoring row on each dial before it truncates. CarFM
+keeps every licence and truncates to 100; this keeps one per frequency.
+
+**IT IS A CORRECTNESS FIX, NOT A TIDY-UP.** A dial holds one station, so a second
+row on 88.7 offers the driver something the receiver cannot give them — and
+because the 100 cap was spent on those duplicates, real frequencies fell off the
+bottom. Measured through the shipped table and the real query:
+
+| | in range | shown before | freqs covered | freqs in range | **never shown** |
+|---|---|---|---|---|---|
+| Madison | 120 | 100 | 69 | 75 | **6** |
+| Chicago | 172 | 100 | 61 | 75 | **14** |
+| New York | 236 | 100 | 63 | 90 | **27** |
+| Los Angeles | 152 | 100 | 57 | 68 | **11** |
+| rural Nevada | 5 | 5 | 4 | 4 | 0 |
+
+After: 75, 75, 90 and 68 rows — fewer rows AND every frequency with a licence in
+range. The cap can never bind again: the FM band has 101 channels at 0.2MHz
+spacing and the densest metro measured has 90.
+
+**Where it came from.** The owner asked "there could never be 100 different
+stations all within tunable range, could there?" There could not, and the list was
+never claiming there were — it was showing licence records. The table is 10,646
+full-power FM, 8,279 FX translators and 1,808 FL LPFM.
+
+**WHAT IT GIVES UP, all three checked rather than assumed:**
+
+1. A translator or LPFM can be the only row on a frequency a full-power station
+   also licenses — 1 to 7 frequencies per metro. Every case examined was right:
+   Madison 102.9 keeps a 1km LPFM over a station 76km away, Chicago 97.5 a 1km
+   translator over one at 92km. Displacement only happens when the small
+   transmitter is very much closer, which is when it is what the radio receives.
+2. Those displaced full-power rows no longer reach `Callsigns::relearn`, which
+   filters to `service == "FM"`, so a few frequencies lose their learned no-fix
+   name. The name lost belonged to a station 80-90km away nobody could hear.
+3. The 1-5 signal arcs re-normalise, and the shift says the old range was wrong:
+   CarFM's 100 rows gave `[22, 31, 29, 13, 5]` — 22 stations with no arcs at all,
+   because unhearable co-channel rows dragged the bottom down. One row per dial
+   gives `[6, 13, 32, 19, 5]`. `station_strength` already documents that any
+   filter re-normalises.
+
+**Not given up:** the ORDER, and every per-row number. The eight best rows at
+Madison are the eight CarFM produced, and `the_madison_query_returns_what_carfm_returned`
+still pins each row's distance and score to CarFM's own arithmetic. Only the row
+COUNT and the tail moved. The test now also asserts the invariant the divergence
+exists for: no two shown rows share a frequency.
+
+**Still open, deliberately:** service is not filtered. A 100W LPFM at 80km is in
+the list and not on the radio. Flooring the score, or dropping FX/FL past some
+distance, is a separate decision and would be a second divergence.
+
+### 79. Stop re-deriving the nearby list for a car that has not moved
+**DONE.** Every GPS fix re-ran the whole query — bounding box over 20,733 rows,
+rank, view, publish — and the app's own comment records that a parked car with a
+lock produces one every two seconds. `hero_row`'s cache made it worse: it compared
+the fix with `==` on two f64s, so metres of GPS noise missed it on every fix and
+re-ran the licensed-station lookup as well.
+
+Both now ask whether the car has moved 250m, against a 100km radius and distances
+shown to the kilometre. Compared against the position the picker was BUILT from,
+not the last fix seen, so a car creeping 10m at a time cannot accumulate past the
+threshold unnoticed. `examples/pushbench.rs` gained the case and measures it:
+
+    before   fix, jittered 3m   2.148 ms      fix, moved 5km   2.156 ms
+    after    fix, jittered 3m   0.001 ms      fix, moved 5km   2.026 ms
+
+Desktop x86; the unit is 32-bit ARM. A real move still costs what it costs.
+
+### 80. Make a crash on the unit say what it was
+**DONE.** "The whole app crashes if I stay on the window too long" had nothing
+behind it: a Rust panic goes to logcat, the unit has no adb, and the diagnostics
+log dies with the process. `src/crashlog.rs` is a panic hook that writes the
+message and location to a file beside the session snapshot; the next launch reads
+it into the settings log as `crash: the last run panicked — …` and deletes it.
+
+Catches Rust panics — BorrowMutError, unwrap on None, index out of bounds. Cannot
+catch a Java exception, an OOM kill or a SIGSEGV in Skia, and that absence is
+itself a narrowing: a crash with no `crash:` line is one of those three. Verified
+by installing the hook and panicking for real, not only by unit-testing its
+halves.
+
+**THE CRASH ITSELF IS NOT DIAGNOSED AND NOT FIXED.** This is instrumentation, not
+a repair. Next step is a drive that reproduces it and a look at the log.
+
+
 ---
 
 # COMPLETED (31)

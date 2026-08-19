@@ -3853,7 +3853,9 @@ mod tests {
         let located = build_picker(Some(&db), fake::FakeLocation::default(), None);
         let view = located.view(&[]);
         assert_eq!(view.state, NearbyState::List);
-        assert_eq!(view.stations.len(), 100);
+        // One row per dial (`rank_nearby`), which at Madison is 75 of the 120 in
+        // range — under the 100 cap, so nothing is truncated any more.
+        assert_eq!(view.stations.len(), 75);
         assert_eq!(view.stations[0].call, "WNWC");
         // NoGps is the difference between "nothing is in range" and "we do not
         // know where we are", and it must survive a working database.

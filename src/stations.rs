@@ -358,6 +358,53 @@ pub fn rank_nearby(
     }
     let key = |s: f64| if s.is_nan() { f64::NEG_INFINITY } else { s };
     out.sort_by(|a, b| key(b.score).total_cmp(&key(a.score)));
+
+    // ONE STATION PER FREQUENCY. A DELIBERATE DIVERGENCE FROM CarFM.
+    //
+    // A dial holds one station, so two rows on 88.7 is not extra information —
+    // it offers the driver something the receiver cannot give them, and the
+    // co-channel station they cannot hear is exactly the one this sort scored
+    // lower. Up to this line the list is a licence table; after it, it is a list
+    // of things that can be tuned.
+    //
+    // AND IT PUTS BACK FREQUENCIES THE CAP WAS HIDING, which is why this is a
+    // correctness fix and not a tidy-up. `limit` truncates AFTER this, so
+    // duplicates no longer spend the budget. Measured against the shipped table:
+    //
+    //   Madison      120 in range, 100 shown covering 69 freqs of 75 — 6 unreachable
+    //   Chicago      172 in range, 100 shown covering 61 freqs of 75 — 14 unreachable
+    //   New York     236 in range, 100 shown covering 63 freqs of 90 — 27 unreachable
+    //   Los Angeles  152 in range, 100 shown covering 57 freqs of 68 — 11 unreachable
+    //
+    // After: 75, 75, 90 and 68 rows, every frequency with a licence in range
+    // shown, and the 100 cap no longer binding anywhere (the FM band has 101
+    // channels at 0.2MHz spacing, so it never can again).
+    //
+    // THE SURVIVOR IS THE HIGHEST-SCORING, which is the point: on a shared
+    // frequency the strongest signal captures the receiver. `sort_by` above is
+    // stable and best-first, so first-seen-wins is best-wins. `relearn` has
+    // always resolved its own duplicates the same way ("a nearer station already
+    // claimed this dial").
+    //
+    // WHAT THIS GIVES UP, all three checked rather than assumed:
+    //
+    //  1. A translator or LPFM can now be the only row on a frequency a
+    //     full-power station also licenses. That happens on 1-7 frequencies per
+    //     metro, and every case examined was right: Madison 102.9 keeps a 1km
+    //     LPFM over a station 76km away, Chicago 97.5 a 1km translator over one
+    //     at 92km. Displacement only happens when the small transmitter is very
+    //     much closer, which is when it is what the radio actually receives.
+    //  2. Those displaced full-power rows no longer reach `Callsigns::relearn`,
+    //     which filters to `service == "FM"` — so a handful of frequencies lose
+    //     their learned no-fix name. The name they lost belonged to a station
+    //     80-90km away that the driver could not hear.
+    //  3. The 1-5 signal arcs re-normalise, because `station_strength` reads the
+    //     ends of the SHOWN list. Already true of every filter change, and
+    //     documented there as such; the range is now over tunable stations
+    //     rather than over duplicates nobody can receive.
+    let mut seen: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    out.retain(|r| seen.insert(preset_key(r.row.frequency_mhz)));
+
     out.truncate(limit);
     out
 }
@@ -1149,10 +1196,27 @@ mod tests {
     // ── Ranking ──────────────────────────────────────────────────────────────
 
     fn row(call: &str, lat: f64, lon: f64, erp: Option<f64>, class: Option<&str>) -> StationRow {
+        row_on(101.5, call, lat, lon, erp, class)
+    }
+
+    /// The same, on a chosen dial.
+    ///
+    /// NEEDED SINCE `rank_nearby` KEEPS ONE ROW PER FREQUENCY. The tests below
+    /// that exercise the SORT — stability, NaN handling — would otherwise hand it
+    /// a hundred rows on 101.5 and get one back, and would be asserting about the
+    /// dedupe while claiming to be about the ordering.
+    fn row_on(
+        freq: f64,
+        call: &str,
+        lat: f64,
+        lon: f64,
+        erp: Option<f64>,
+        class: Option<&str>,
+    ) -> StationRow {
         StationRow {
             callsign: call.to_string(),
             callsign_base: call.split('-').next().unwrap_or(call).to_string(),
-            frequency_mhz: 101.5,
+            frequency_mhz: freq,
             service: "FM".to_string(),
             station_class: class.map(str::to_string),
             erp_kw: erp,
@@ -1194,9 +1258,11 @@ mod tests {
     fn equal_scores_keep_the_order_sql_returned_them_in() {
         // Two rows at the same distance and ERP tie exactly; a stable sort must
         // leave them as they arrived.
+        // Distinct dials, so the tie is decided by the sort and not by the
+        // one-row-per-frequency rule.
         let rows = vec![
-            row("WAAA", 43.10, -89.40, Some(10.0), None),
-            row("WBBB", 43.10, -89.40, Some(10.0), None),
+            row_on(101.5, "WAAA", 43.10, -89.40, Some(10.0), None),
+            row_on(103.5, "WBBB", 43.10, -89.40, Some(10.0), None),
         ];
         let out = rank_nearby(43.0731, -89.4012, 100.0, 50, rows);
         assert_eq!(out[0].row.callsign, "WAAA");
@@ -1219,7 +1285,10 @@ mod tests {
                 } else {
                     Some(1.0 + (i * 37 % 97) as f64)
                 };
-                row(
+                // One row per dial across the band, so all hundred survive the
+                // one-row-per-frequency rule and the sort is what is measured.
+                row_on(
+                    87.5 + i as f64 * 0.2,
                     "WNAN",
                     43.0 + (i % 11) as f64 * 0.01,
                     -89.4 - (i % 7) as f64 * 0.01,
@@ -1317,14 +1386,20 @@ mod tests {
     }
 
     /// The whole query, pinned against the real table at a real position. Every
-    /// number here was produced by running CarFM's formulae over the same file.
+    /// number here was produced by running CarFM's formulae over the same file —
+    /// EXCEPT the row COUNT, which is this project's one deliberate divergence
+    /// from CarFM's picker: `rank_nearby` keeps one row per frequency. CarFM
+    /// keeps all 120 and truncates to 100; this keeps 75, one per dial, and the
+    /// cap no longer binds. The ORDER and the per-row arithmetic below are
+    /// untouched by that and are still CarFM's, which is what this test is for.
     #[test]
     fn the_madison_query_returns_what_carfm_returned() {
         let db = db();
         let (lat, lon) = (43.07, -89.40);
 
         // The prefilter is a superset; 156 rows are in the box, 120 are inside
-        // the circle, and the cap keeps 100.
+        // the circle, and one row per dial leaves 75 — under the 100 cap, so the
+        // cap keeps all of them.
         let b = bounding_box(lat, lon, NEARBY_RADIUS_KM);
         let in_box: i64 = db
             .conn
@@ -1336,10 +1411,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(in_box, 156);
-        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 120);
+        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 75);
 
         let out = db.nearby(lat, lon, NEARBY_RADIUS_KM, NEARBY_LIMIT).unwrap();
-        assert_eq!(out.len(), NEARBY_LIMIT);
+        assert_eq!(out.len(), 75, "one row per dial, and 75 is under the cap");
+
+        // THE INVARIANT THE DIVERGENCE EXISTS FOR. A dial holds one station, so
+        // the list must never offer two.
+        let mut dials: Vec<i32> = out.iter().map(|r| preset_key(r.row.frequency_mhz)).collect();
+        let shown = dials.len();
+        dials.sort_unstable();
+        dials.dedup();
+        assert_eq!(dials.len(), shown, "no two shown rows share a frequency");
+
+        // THE ORDER IS STILL CarFM'S, unchanged by the dedupe: the eight best are
+        // the eight CarFM produced, because none of them was a duplicate.
         let first: Vec<&str> = out.iter().take(8).map(|r| r.row.callsign.as_str()).collect();
         assert_eq!(
             first,
@@ -1365,11 +1451,16 @@ mod tests {
         assert_eq!(w300.distance_km, 3.214129385164777);
         assert_eq!(w300.score, -16.16186702039549);
 
-        // The weakest row the cap kept.
+        // The weakest row kept. CarFM's was W278DE at 92.65km, score -45.36 —
+        // the hundredth of 120, cut off by the cap. With one row per dial the
+        // list reaches further down its own ordering instead: W269BV, nearer at
+        // 82.4km but scoring LOWER, which is the ranking working as intended
+        // (a translator close by can still be weaker than a big transmitter far
+        // away). Nothing between them was lost; they were both always in range.
         let last = out.last().unwrap();
-        assert_eq!(last.row.callsign, "W278DE");
-        assert_eq!(last.distance_km, 92.65265843896937);
-        assert_eq!(last.score, -45.357757610082494);
+        assert_eq!(last.row.callsign, "W269BV");
+        assert_eq!(last.distance_km, 82.4055415355703);
+        assert_eq!(last.score, -52.52129238850169);
     }
 
     /// The frequency lookup is FULL-POWER ONLY, and that is a rule about RBDS,
@@ -1699,14 +1790,16 @@ mod tests {
 
         assert_eq!(v.state, NearbyState::List);
         assert_eq!(v.snapshot, "2026-07-16");
-        assert_eq!(v.stations.len(), NEARBY_LIMIT);
+        // 75, one per dial — see `rank_nearby`. The head of the list is
+        // untouched by that; the TAIL is where the duplicates were.
+        assert_eq!(v.stations.len(), 75);
         assert_eq!(v.stations[0].freq, "102.5");
         assert_eq!(v.stations[0].call, "WNWC");
         assert_eq!(v.stations[0].meta, "Madison");
         assert_eq!(v.stations[0].distance, "10 km");
         assert_eq!(v.stations[0].signal_pairs, 4);
-        assert_eq!(v.stations.last().unwrap().call, "W278DE");
-        assert_eq!(v.stations.last().unwrap().distance, "93 km");
+        assert_eq!(v.stations.last().unwrap().call, "W269BV");
+        assert_eq!(v.stations.last().unwrap().distance, "82 km");
         assert_eq!(v.stations.last().unwrap().signal_pairs, 0);
 
         // Both presets are on the list and both are starred, and nothing else is.
@@ -1714,12 +1807,19 @@ mod tests {
         assert!(v.stations.iter().any(|s| s.freq == "98.1" && s.saved));
         assert!(v.stations.iter().any(|s| s.freq == "101.5" && s.saved));
 
-        // The meter histogram over the hundred kept rows, as CarFM's produced it.
+        // The meter histogram over the kept rows. It MOVED with the dedupe, and
+        // in the direction that says the old one was measuring the wrong set:
+        // CarFM's 100 rows produced [22, 31, 29, 13, 5], with 22 stations showing
+        // no arcs at all because the co-channel rows nobody can hear dragged the
+        // bottom of the range down. Over one row per dial the same arithmetic
+        // gives [6, 13, 32, 19, 5] — the arcs now rank what can be tuned against
+        // what else can be tuned. `station_strength` documents that any filter
+        // re-normalises; this is that, applied once more.
         let mut hist = [0usize; 5];
         for s in &v.stations {
             hist[s.signal_pairs as usize] += 1;
         }
-        assert_eq!(hist, [22, 31, 29, 13, 5]);
+        assert_eq!(hist, [6, 13, 32, 19, 5]);
 
         // No genres in the shipped data, so the filter is not offered.
         assert!(!v.show_bucket_bar);
@@ -1793,3 +1893,6 @@ mod tests {
         assert_eq!(discrete_lit_pairs(-3), 0);
     }
 }
+
+
+
