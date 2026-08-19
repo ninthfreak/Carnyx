@@ -89,7 +89,7 @@ fn main() {
     let jitter = bench("fix, jittered 3m", 50, || {
         n += 1;
         // ~3 metres, alternating, which is ordinary standing-still GPS noise.
-        let d = if n % 2 == 0 { 0.000027 } else { -0.000027 };
+        let d = if n.is_multiple_of(2) { 0.000027 } else { -0.000027 };
         app.set_position(carnyx::fake::FakeLocation { lat: base.lat + d, ..base });
     });
     let mut m = 0u32;
