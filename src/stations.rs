@@ -335,6 +335,46 @@ pub struct Ranked {
 /// `sort_by` is stable, as JavaScript's `Array#sort` has been required to be
 /// since ES2019, so equal scores keep the order SQLite returned them in and the
 /// two implementations agree row for row.
+/// How far a small transmitter is worth listing, from its own ERP.
+///
+/// ANCHORED ON A PUBLISHED CONTOUR, not on a number someone liked. The FCC's
+/// LP100 class — 100 W at 30m HAAT — is protected to 60 dBuV/m at 5.6 km, and
+/// that is the regulator's own statement of where an LPFM serves. Free-space
+/// field goes as sqrt(ERP)/distance, which is the same law
+/// `receivability_score` uses, so any other small transmitter's equal-field
+/// distance is 5.6km x sqrt(erp / 100W).
+///
+/// THE 3x IS THE ONE JUDGEMENT, and it is a field strength rather than a
+/// preference: three times the distance is 20*log10(3) = 9.5 dB down, so this is
+/// the ~50 dBuV/m contour. That is fringe — well below the 70 dBuV/m the FCC
+/// calls city grade — but it is still usable mono in a moving car, which is the
+/// question this list answers. It is deliberately generous; the data barely
+/// notices. Measured over the shipped table, moving the margin from 3x to 5x
+/// changes the result by ONE row in Madison and by nothing at all in Chicago,
+/// New York or Los Angeles, because the translators this removes sit at a median
+/// of 81-87km where no threshold in this range can save them.
+///
+/// The ERP default matches `receivability_score`'s: an unknown ERP is assumed
+/// small rather than absent, which here means 50 W and a 11.9km reach.
+fn small_station_reach_km(erp_kw: Option<f64>) -> f64 {
+    /// FCC LP100: 100 W at 30m HAAT, 60 dBuV/m protected contour.
+    const LP100_KM: f64 = 5.6;
+    const LP100_KW: f64 = 0.1;
+    /// 20*log10(3) = 9.5 dB below the protected contour — about 50 dBuV/m.
+    const FRINGE: f64 = 3.0;
+    let erp = clamp_min(0.0001, erp_kw.unwrap_or(0.05));
+    LP100_KM * (erp / LP100_KW).sqrt() * FRINGE
+}
+
+/// Is this row close enough to be worth offering?
+///
+/// FULL-POWER FM IS NOT TOUCHED. It keeps the whole `NEARBY_RADIUS_KM`: a
+/// 100 kW class C genuinely does reach 100km, the ranking already orders them,
+/// and narrowing them is a different question from this one.
+fn within_reach(row: &StationRow, distance_km: f64) -> bool {
+    row.service == "FM" || distance_km <= small_station_reach_km(row.erp_kw)
+}
+
 pub fn rank_nearby(
     lat: f64,
     lon: f64,
@@ -346,6 +386,14 @@ pub fn rank_nearby(
     for row in rows {
         let distance_km = haversine_km(lat, lon, row.lat, row.lon);
         if distance_km > radius_km {
+            continue;
+        }
+        // BEFORE THE DEDUPE BELOW, and the order is load-bearing. A translator
+        // 90km away can outscore a full-power station on the same dial (it is
+        // nearer, and the score is only ERP and distance) — so dropping it after
+        // the dedupe would take the frequency with it, when what should happen is
+        // that the real station behind it becomes the row.
+        if !within_reach(&row, distance_km) {
             continue;
         }
         let score = receivability_score(row.erp_kw, row.station_class.as_deref(), distance_km);
@@ -1398,8 +1446,9 @@ mod tests {
         let (lat, lon) = (43.07, -89.40);
 
         // The prefilter is a superset; 156 rows are in the box, 120 are inside
-        // the circle, and one row per dial leaves 75 — under the 100 cap, so the
-        // cap keeps all of them.
+        // the circle, dropping small transmitters past their own reach and then
+        // keeping one row per dial leaves 59 — under the 100 cap, so the cap
+        // keeps all of them.
         let b = bounding_box(lat, lon, NEARBY_RADIUS_KM);
         let in_box: i64 = db
             .conn
@@ -1411,10 +1460,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(in_box, 156);
-        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 75);
+        assert_eq!(db.nearby(lat, lon, NEARBY_RADIUS_KM, 1000).unwrap().len(), 59);
 
         let out = db.nearby(lat, lon, NEARBY_RADIUS_KM, NEARBY_LIMIT).unwrap();
-        assert_eq!(out.len(), 75, "one row per dial, and 75 is under the cap");
+        assert_eq!(out.len(), 59, "one row per dial, and 59 is under the cap");
 
         // THE INVARIANT THE DIVERGENCE EXISTS FOR. A dial holds one station, so
         // the list must never offer two.
@@ -1451,16 +1500,74 @@ mod tests {
         assert_eq!(w300.distance_km, 3.214129385164777);
         assert_eq!(w300.score, -16.16186702039549);
 
-        // The weakest row kept. CarFM's was W278DE at 92.65km, score -45.36 —
-        // the hundredth of 120, cut off by the cap. With one row per dial the
-        // list reaches further down its own ordering instead: W269BV, nearer at
-        // 82.4km but scoring LOWER, which is the ranking working as intended
-        // (a translator close by can still be weaker than a big transmitter far
-        // away). Nothing between them was lost; they were both always in range.
+        // The weakest row kept. CarFM's was W278DE, a translator at 92.65km —
+        // the hundredth of 120, cut off by the cap. It is not here at all now:
+        // a 250 W translator at 93km is far outside its own reach. The tail is a
+        // full-power station instead, which is the point of the whole change.
         let last = out.last().unwrap();
-        assert_eq!(last.row.callsign, "W269BV");
-        assert_eq!(last.distance_km, 82.4055415355703);
-        assert_eq!(last.score, -52.52129238850169);
+        assert_eq!(last.row.callsign, "WSUP");
+        assert_eq!(last.distance_km, 96.0860346268237);
+        assert_eq!(last.score, -35.67380533049158);
+    }
+
+    /// A small transmitter is listed only within its own reach, and a big one is
+    /// not touched.
+    #[test]
+    fn translators_and_lpfm_are_dropped_past_their_reach() {
+        // 100 W LPFM reaches 16.8km; 250 W translator 26.6km.
+        assert!((small_station_reach_km(Some(0.1)) - 16.8).abs() < 0.05);
+        assert!((small_station_reach_km(Some(0.25)) - 26.56).abs() < 0.05);
+
+        let at = |svc: &str, erp: Option<f64>, km: f64| {
+            let mut r = row_on(101.5, "WTEST", 43.0, -89.4, erp, None);
+            r.service = svc.to_string();
+            within_reach(&r, km)
+        };
+        assert!(at("FL", Some(0.1), 5.0), "an LPFM in town is listed");
+        assert!(!at("FL", Some(0.1), 50.0), "an LPFM 50km away is not");
+        assert!(at("FX", Some(0.25), 20.0), "a translator across the city is listed");
+        assert!(!at("FX", Some(0.25), 80.0), "a translator 80km away is not");
+        // A 9 W translator at 94km — central Nevada's entire band — reaches 5km.
+        assert!(!at("FX", Some(0.009), 94.0));
+        // Full-power keeps the whole radius; narrowing it is a different question.
+        assert!(at("FM", Some(100.0), 95.0));
+        assert!(at("FM", Some(0.5), 95.0), "even a weak full-power row is kept");
+    }
+
+    /// THE ORDER OF THE TWO RULES, which is load-bearing.
+    ///
+    /// A translator can outscore a full-power station on the same dial by being
+    /// nearer. If the reach filter ran AFTER the one-row-per-frequency rule, the
+    /// translator would win the dial and then be dropped, taking the frequency
+    /// with it — and the station the driver can actually hear would vanish.
+    #[test]
+    fn an_unreachable_translator_yields_the_dial_rather_than_taking_it() {
+        let mut fx = row_on(101.5, "W999XX", 43.4, -89.4, Some(0.25), None);
+        fx.service = "FX".to_string();
+        let fm = row_on(101.5, "WBIG", 43.9, -89.4, Some(100.0), Some("C"));
+        // The translator is nearer, so it outscores the big station...
+        let near = haversine_km(43.07, -89.40, 43.4, -89.4);
+        let far = haversine_km(43.07, -89.40, 43.9, -89.4);
+        assert!(near < far, "the translator is the nearer of the two");
+        // ...and is well past its own 26.6km reach, so the dial is WBIG's.
+        assert!(near > small_station_reach_km(Some(0.25)));
+        let out = rank_nearby(43.07, -89.40, NEARBY_RADIUS_KM, 50, vec![fx, fm]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].row.callsign, "WBIG", "the dial falls to the station behind it");
+    }
+
+    /// Nothing receivable is an honest answer, not a bug.
+    ///
+    /// Central Nevada's entire band within 100km is three translators: one of
+    /// unknown power at 91km and two of NINE WATTS at 94km. None is receivable
+    /// anywhere, so the picker reports `NoStations` rather than offering them.
+    #[test]
+    fn a_band_of_nothing_but_distant_translators_is_empty() {
+        let db = db();
+        let out = db.nearby(39.5, -117.0, NEARBY_RADIUS_KM, NEARBY_LIMIT).unwrap();
+        assert!(out.is_empty());
+        let p = NearbyPicker::query(&db, 39.5, -117.0).unwrap();
+        assert_eq!(p.view(&[]).state, NearbyState::NoStations);
     }
 
     /// The frequency lookup is FULL-POWER ONLY, and that is a rule about RBDS,
@@ -1790,16 +1897,17 @@ mod tests {
 
         assert_eq!(v.state, NearbyState::List);
         assert_eq!(v.snapshot, "2026-07-16");
-        // 75, one per dial — see `rank_nearby`. The head of the list is
-        // untouched by that; the TAIL is where the duplicates were.
-        assert_eq!(v.stations.len(), 75);
+        // 59: one row per dial, and no small transmitter past its own reach —
+        // see `rank_nearby`. The head of the list is untouched by both; the TAIL
+        // is where the duplicates and the unhearable translators were.
+        assert_eq!(v.stations.len(), 59);
         assert_eq!(v.stations[0].freq, "102.5");
         assert_eq!(v.stations[0].call, "WNWC");
         assert_eq!(v.stations[0].meta, "Madison");
         assert_eq!(v.stations[0].distance, "10 km");
         assert_eq!(v.stations[0].signal_pairs, 4);
-        assert_eq!(v.stations.last().unwrap().call, "W269BV");
-        assert_eq!(v.stations.last().unwrap().distance, "82 km");
+        assert_eq!(v.stations.last().unwrap().call, "WSUP");
+        assert_eq!(v.stations.last().unwrap().distance, "96 km");
         assert_eq!(v.stations.last().unwrap().signal_pairs, 0);
 
         // Both presets are on the list and both are starred, and nothing else is.
@@ -1812,14 +1920,14 @@ mod tests {
         // CarFM's 100 rows produced [22, 31, 29, 13, 5], with 22 stations showing
         // no arcs at all because the co-channel rows nobody can hear dragged the
         // bottom of the range down. Over one row per dial the same arithmetic
-        // gives [6, 13, 32, 19, 5] — the arcs now rank what can be tuned against
+        // gives [6, 25, 19, 5, 4] — the arcs now rank what can be tuned against
         // what else can be tuned. `station_strength` documents that any filter
-        // re-normalises; this is that, applied once more.
+        // re-normalises; this is that, applied twice more.
         let mut hist = [0usize; 5];
         for s in &v.stations {
             hist[s.signal_pairs as usize] += 1;
         }
-        assert_eq!(hist, [6, 13, 32, 19, 5]);
+        assert_eq!(hist, [6, 25, 19, 5, 4]);
 
         // No genres in the shipped data, so the filter is not offered.
         assert!(!v.show_bucket_bar);
@@ -1893,6 +2001,8 @@ mod tests {
         assert_eq!(discrete_lit_pairs(-3), 0);
     }
 }
+
+
 
 
 

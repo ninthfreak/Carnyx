@@ -886,9 +886,7 @@ still pins each row's distance and score to CarFM's own arithmetic. Only the row
 COUNT and the tail moved. The test now also asserts the invariant the divergence
 exists for: no two shown rows share a frequency.
 
-**Still open, deliberately:** service is not filtered. A 100W LPFM at 80km is in
-the list and not on the radio. Flooring the score, or dropping FX/FL past some
-distance, is a separate decision and would be a second divergence.
+**Done in #81:** small transmitters are now dropped past their own reach.
 
 ### 79. Stop re-deriving the nearby list for a car that has not moved
 **DONE.** Every GPS fix re-ran the whole query — bounding box over 20,733 rows,
@@ -922,6 +920,65 @@ halves.
 
 **THE CRASH ITSELF IS NOT DIAGNOSED AND NOT FIXED.** This is instrumentation, not
 a repair. Next step is a drive that reproduces it and a look at the log.
+
+
+### 81. Drop translators and LPFM past their own reach
+**DONE. A SECOND DELIBERATE DIVERGENCE from CarFM**, and the one #78 left open:
+a 100 W LPFM at 80km was in the list and not on the radio.
+
+**THE DISTANCE IS DERIVED, NOT PICKED.** The FCC's LP100 class — 100 W at 30m
+HAAT — is protected to 60 dBuV/m at **5.6 km**, which is the regulator's own
+statement of where an LPFM serves. Free-space field goes as `sqrt(ERP)/distance`,
+the same law `receivability_score` already uses, so every other small
+transmitter's equal-field distance is `5.6km x sqrt(erp / 100W)`. The ERPs are
+effectively constants set by regulation — measured over the shipped table,
+translators are 0.25 kW at the 50th, 90th AND 99th percentile, LPFM 0.1 kW at all
+three — so this resolves to about 17km for an LPFM and 27km for a translator,
+and scales correctly for the outliers either way.
+
+**THE ONE JUDGEMENT IS THE 3x MARGIN**, and it is a field strength rather than a
+preference: three times the distance is `20*log10(3)` = 9.5 dB down, so the cut
+is the ~50 dBuV/m contour — fringe, well below the 70 dBuV/m the FCC calls city
+grade, but still usable mono in a moving car. It is deliberately generous, and
+the data barely notices: moving it from 3x to 5x changes the result by ONE row in
+Madison and by nothing at all in Chicago, New York or Los Angeles, because the
+translators being removed sit at a median of 81-87km where no threshold in this
+range saves them.
+
+**THE ORDER OF THE TWO RULES IS LOAD-BEARING.** The reach filter runs BEFORE #78's
+one-row-per-dial rule. A translator can outscore a full-power station on the same
+frequency by being nearer, so filtering afterwards would let it win the dial and
+then be dropped, taking the frequency with it and hiding the station the driver
+can actually hear. Filtering first hands the dial to the station behind it.
+`an_unreachable_translator_yields_the_dial_rather_than_taking_it` holds that.
+
+**Full-power FM is not touched** and keeps the whole 100km radius. A 100 kW class
+C genuinely reaches that far, the ranking already orders them, and narrowing them
+is a different question.
+
+Effect, measured through the real query (rows, and of those, small transmitters):
+
+| | before #78 | after #78 | after #81 |
+|---|---|---|---|
+| Madison | 100 | 75 (29 small) | **59** (13 small) |
+| Chicago | 100 | 75 (21 small) | **63** (9 small) |
+| New York | 100 | 90 (29 small) | **65** (2 small) |
+| Los Angeles | 100 | 68 (14 small) | **58** (4 small) |
+| central Nevada | 5 | 4 | **0** |
+
+**CENTRAL NEVADA GOING TO ZERO IS THE CORRECT ANSWER, not a regression.** Its
+entire band within 100km is three translators: one of unknown power at 91km and
+two of NINE WATTS at 94km. None is receivable anywhere, in any conditions, so the
+picker reports `NoStations` — "No FM stations within range of this location" —
+which is true. `a_band_of_nothing_but_distant_translators_is_empty` pins it.
+
+The head of the list is still untouched: Madison's best eight are the eight CarFM
+produced, and WMUU-LP — an LPFM 1km away — is still among them, because the rule
+is about reach and not about service.
+
+**Still open:** nothing here narrows full-power FM, and a class A at 95km is
+listed. That is defensible (it can be receivable on flat ground) and is where the
+next question would go if the list still feels long.
 
 
 ---
