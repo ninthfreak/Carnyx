@@ -154,21 +154,91 @@ else
     "$best" "$compile_sdk" "$have"
 fi
 
-# THE NDK, and the same fallback for the same reason. Android Studio installs it
-# under the SDK as ndk/<version> (older setups: ndk-bundle), so a machine with a
-# working NDK and no ANDROID_NDK_ROOT is an ordinary machine, not a broken one.
-# Highest version wins, by VERSION order — `sort -V`, because a lexicographic max
-# puts 26.1.10909125 below 9.0.0.
+# ── THE NDK, AND WHY NEWEST IS THE WRONG ANSWER ─────────────────────────────
+#
+# NOT the highest installed. r27 is the LAST release this project can build
+# with, and the first version of this fallback picked r30 Beta 2 off a machine
+# that also had a working r27 — twelve minutes of Skia compiling, then 1127
+# ninja targets failing on:
+#
+#   sysroot/usr/include/sys/cdefs.h: error: Unversioned target triples are not
+#   supported!
+#
+# skia-bindings appends an unversioned `--target=<triple>` on top of the
+# already-versioned compiler wrapper, unconditionally and with no way to
+# configure it away; bionic started refusing that in r30, and r28/r29 were
+# silently mis-compiling it before that (android/ndk#2206). The README's
+# "Cross-compiling" section has the full account. So the ceiling is real, it is
+# not a preference, and picking above it costs a long build to find out.
+NDK_MAX_MAJOR=27
+
+# The version as the NDK itself states it, not as its directory happens to be
+# named — an env var can point at a directory called anything.
+ndk_major() {
+  local rev=""
+  [[ -f "$1/source.properties" ]] &&
+    rev=$(sed -n 's/^Pkg.Revision *= *\([0-9][0-9]*\).*/\1/p' "$1/source.properties" | head -1)
+  [[ -n "$rev" ]] || rev=$(basename "$1" | sed -n 's/^\([0-9][0-9]*\)\..*/\1/p')
+  printf '%s' "$rev"
+}
+
+too_new() {
+  local ndk="$1" major="$2"
+  die "That NDK is too new for this project: $ndk is r$major, and r$NDK_MAX_MAJOR is the ceiling.
+
+skia-bindings appends an unversioned --target to an already-versioned compiler,
+and bionic refuses that from r30 (r28 and r29 mis-compile it silently). The build
+does not fail fast — it compiles Skia for ten minutes first, then dies with
+'Unversioned target triples are not supported!'. See the README's
+Cross-compiling section.
+
+Install r27 and this script will find it:
+  sdkmanager --install 'ndk;27.3.13750724'
+
+If CarFM is on this machine it already has one — React Native 0.86 pins
+27.1.12297006 — and any r27 patch is equally sound. NDKs sit side by side, so
+installing r27 does not disturb the one you have.
+
+To override anyway (e.g. skia-bindings has since fixed this):
+  CARNYX_ALLOW_ANY_NDK=1 $0"
+}
+
 NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-${ANDROID_NDK:-}}}"
-NDK_FROM="\$ANDROID_NDK_ROOT"
-if [[ -z "$NDK" ]]; then
+NDK_FROM="the environment"
+if [[ -n "$NDK" ]]; then
+  [[ -d "$NDK" ]] || die "The NDK is set to $NDK, which is not a directory.
+
+Fix it or unset it — unset, this script looks under $SDK/ndk."
+else
+  # Highest installed that is WITHIN the ceiling, by VERSION order — sort -V,
+  # because a lexicographic max puts 27.3.13750724 below 9.0.0.
   shopt -s nullglob
   ndks=("$SDK"/ndk/*/)
   shopt -u nullglob
-  if [[ ${#ndks[@]} -gt 0 ]]; then
-    best_ndk=$(for d in "${ndks[@]}"; do basename "${d%/}"; done | sort -V | tail -1)
+  usable=""
+  seen=""
+  for d in "${ndks[@]}"; do
+    v=$(basename "${d%/}")
+    seen="$seen $v"
+    m=$(ndk_major "${d%/}")
+    if [[ -n "$m" && "$m" -le "$NDK_MAX_MAJOR" ]]; then usable="$usable $v"; fi
+  done
+  if [[ -n "$usable" ]]; then
+    best_ndk=$(printf '%s\n' $usable | sort -V | tail -1)
     NDK="$SDK/ndk/$best_ndk"
-    NDK_FROM="the SDK's ndk/ directory"
+    NDK_FROM="the SDK's ndk/ directory, highest within r$NDK_MAX_MAJOR"
+  elif [[ -n "$seen" ]]; then
+    die "No usable NDK: everything installed is newer than r$NDK_MAX_MAJOR.
+
+Installed:$seen
+
+skia-bindings appends an unversioned --target to an already-versioned compiler,
+and bionic refuses that from r30 (r28 and r29 mis-compile it silently). The build
+would compile Skia for ten minutes and then die with 'Unversioned target triples
+are not supported!'. See the README's Cross-compiling section.
+
+Install r27 alongside them — NDKs sit side by side:
+  sdkmanager --install 'ndk;27.3.13750724'"
   elif [[ -d "$SDK/ndk-bundle" ]]; then
     NDK="$SDK/ndk-bundle"
     NDK_FROM="the SDK's ndk-bundle"
@@ -180,16 +250,19 @@ fi
 Looked at \$ANDROID_NDK_ROOT, \$ANDROID_NDK_HOME, \$ANDROID_NDK, then
 $SDK/ndk/<version> and $SDK/ndk-bundle.
 
-Install one — in Android Studio: SDK Manager -> SDK Tools -> NDK (Side by side),
-or:
-  sdkmanager --install 'ndk;27.0.12077973'
+Install one:
+  sdkmanager --install 'ndk;27.3.13750724'
 
-Then either let this script find it under the SDK, or point at it:
-  export ANDROID_NDK_ROOT=/path/to/ndk/<version>"
+r27 rather than the newest — see the README's Cross-compiling section."
 
-[[ -d "$NDK" ]] || die "The NDK is set to $NDK, which is not a directory.
+# The ceiling applies however the NDK was chosen. An env var is the user's
+# choice and this does not second-guess it silently — it refuses it loudly,
+# because the alternative is a ten-minute build that fails in C++.
+ndk_rev=$(ndk_major "$NDK")
+if [[ -z "${CARNYX_ALLOW_ANY_NDK:-}" && -n "$ndk_rev" && "$ndk_rev" -gt "$NDK_MAX_MAJOR" ]]; then
+  too_new "$NDK" "$ndk_rev"
+fi
 
-Fix it or unset it — unset, this script looks under $SDK/ndk."
 printf 'NDK:         %s (from %s)\n' "$NDK" "$NDK_FROM"
 export ANDROID_NDK_HOME="$NDK"
 export ANDROID_NDK="$NDK"

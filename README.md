@@ -234,11 +234,21 @@ service exists to prevent.
 **It needs no environment variables** if your SDK is where Android Studio puts
 it. The script looks at `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
 `~/Android/Sdk` (`~/Library/Android/sdk` on macOS) — the same order the
-`android-build` crate uses, which is how `cargo apk` has always found it — and
-then looks for the NDK under `$ANDROID_SDK/ndk/<version>`, newest first, before
-falling back to `ndk-bundle`. It prints which of them it used. Set the variables
-only if your install is somewhere else; a variable that IS set and points nowhere
-stops the build rather than being quietly ignored.
+`android-build` crate uses, which is how `cargo apk` has always found it. It
+prints which of them it used. Set the variables only if your install is somewhere
+else; a variable that IS set and points nowhere stops the build rather than being
+quietly ignored.
+
+**It picks the NDK by the ceiling, not by the highest number.** r27 is the last
+release this project can build with — see *The unversioned-triple wall* below —
+so the fallback takes the newest installed NDK that is **r27 or older** and
+refuses to run when everything installed is newer, naming what it found. The
+first version of this fallback took the highest and chose r30 Beta 2 off a
+machine that also had r27: twelve minutes of Skia compiling, then 1127 ninja
+targets failing on `Unversioned target triples are not supported!`. The ceiling
+applies to `$ANDROID_NDK_ROOT` too — an NDK you name explicitly is refused just
+as loudly, because the alternative is finding out in C++ ten minutes later.
+`CARNYX_ALLOW_ANY_NDK=1` overrides it, for when skia-bindings fixes this.
 
 **Why a second packager at all.** cargo-apk cannot declare a `<service>` or a
 `<receiver>`: `ndk_build::manifest::Application` has one activity and no field
