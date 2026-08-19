@@ -48,16 +48,27 @@
 //! component and logs that it did. Build with `tools/build-apk-gradle.sh` to get
 //! the service.
 //!
-//! NONE OF THIS HAS RUN, and the caveat is stronger than `net.rs`'s. That file
-//! says "it compiles for `armv7-linux-androideabi`"; this one cannot say even
-//! that, because it was written on a machine with no Android SDK and no NDK.
+//! ## What is confirmed
 //!
-//! WHAT WAS ACTUALLY CHECKED: both Java files compile clean against a real
-//! API-34 framework jar, and `javap` was used to confirm that the descriptors
-//! below — `(Landroid/content/Context;)V` and `(Ljava/lang/String;)Z` — are the
-//! ones the compiled class carries. Every JNI construct here is copied verbatim
-//! from `nwd.rs` or `net.rs` rather than composed, which is the most this can be
-//! held to without a device. Treat the first run on the unit as the first test.
+//! IT BUILDS, INSTALLS AND RUNS ON THE UNIT. The Gradle APK with the service
+//! declared was built and started on the head unit — so this module's `init` and
+//! `start` are on a path that executes, AGP compiles `CarnyxService`, and the
+//! manifest merges.
+//!
+//! WHETHER THE SERVICE ENTERS THE FOREGROUND IS NOT YET CONFIRMED, and an app
+//! that runs does not say. `start` returns whether the platform ACCEPTED the
+//! start, not whether `startForeground` later succeeded on the main thread —
+//! `CarnyxService` logs its own failure there. `android_main` writes the return
+//! value into the settings log as `service: started` or `service: none`, because
+//! the unit has no adb and logcat reaches nobody; the `session:` line's
+//! `app #N in this process` is what says whether the process then survived.
+//!
+//! Written on a machine with no Android SDK and no NDK, so the Rust here was
+//! never compiled for the target before it shipped. What was checked off-device:
+//! both Java files compile clean against a real API-34 framework jar, and `javap`
+//! confirmed that the descriptors below — `(Landroid/content/Context;)V` and
+//! `(Ljava/lang/String;)Z` — are the ones the compiled class carries. Every JNI
+//! construct is copied verbatim from `nwd.rs` or `net.rs` rather than composed.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;

@@ -214,10 +214,24 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // behaves exactly as it did before this existed. That is why `session.rs`
     // stays: this prevents the restarts it can, and the restore covers the rest.
     //
+    // AND THE OUTCOME GOES IN THE APP'S OWN LOG, not just logcat. This unit has
+    // no adb, so a `Log.i` from Java reaches nobody; the settings panel's log is
+    // the only channel a driver can read. It already carries the `session:`
+    // line, which says `app #N in this process` — so the two lines answer the
+    // question together, and neither does alone:
+    //
+    //   `service: started` then later `app #2 in this process`  the service works
+    //   `service: started` but `app #1` on every return          it is not enough
+    //   `service: none`                                          it never ran
+    //
     // SAFETY: same pointers, same lifetime argument as the tuner above.
-    if unsafe { android::service::init(vm, activity) }.is_ok() {
-        android::service::start(ui.get_freq_label().as_str());
-    }
+    let started = unsafe { android::service::init(vm, activity) }.is_ok()
+        && android::service::start(ui.get_freq_label().as_str());
+    _driver.log_platform(if started {
+        "service: started"
+    } else {
+        "service: none — this build has no service class, or the platform refused it"
+    });
 
     // REAL POSITION, if this unit will give one.
     //

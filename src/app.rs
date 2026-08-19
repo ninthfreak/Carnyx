@@ -2869,6 +2869,18 @@ impl App {
     /// still does that, but the reorder gesture writes its own trace through it
     /// too. Anything that has to say something to a person and has nowhere else
     /// to say it comes here.
+    /// Same channel, for the platform wiring that happens in `android_main`
+    /// BEFORE any callback can fire.
+    ///
+    /// PUBLIC BECAUSE THE UNIT HAS NO adb. The foreground service reports itself
+    /// to logcat, which on a head unit reaches nobody — the settings panel's log
+    /// is the one channel a driver can actually read, and whether the service
+    /// started is exactly the kind of thing that has to be readable there when
+    /// the answer turns out to be "it didn't".
+    pub fn log_platform(self: &Rc<App>, line: &str) {
+        self.log_unavailable(line);
+    }
+
     fn log_unavailable(self: &Rc<App>, why: &str) {
         {
             let mut s = self.state.borrow_mut();

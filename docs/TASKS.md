@@ -471,8 +471,26 @@ does not exist at all in the cargo-apk build. The restore covers the rest. That
 file previously said Carnyx "CANNOT HAVE" a service — true of cargo-apk, written
 before the Gradle spike, and corrected.
 
-**WHAT WAS AND WAS NOT VERIFIED — read this before trusting any of it.** There is
-no Android SDK and no NDK on the machine this was written on, so:
+**ON THE UNIT: IT BUILDS, IT INSTALLS, IT RUNS.** The owner built the Gradle APK
+with the service declared and ran it. So AGP compiles `CarnyxService`, the
+manifest merges, the APK installs over the previous one, and the app starts with
+the service's start call on its path — none of which had ever happened before.
+
+**WHAT THAT DOES NOT YET SAY.** An app that runs is not a service that runs. Two
+things are still unconfirmed, and one line of the log now answers each:
+
+- Did the service enter the foreground? `service: started` in the settings log
+  says the platform accepted the start; `service: none` says it refused or the
+  class is absent. Added because the Java side reports to logcat and THIS UNIT
+  HAS NO adb — the settings panel's log is the only channel a driver can read.
+- Did it do its job? The `session:` line already carried the answer and nobody
+  had thought to read it that way: it prints `app #N in this process`. Switch to
+  another app, come back, open Settings. `app #2 in this process` means the
+  process survived and the service earned its keep. `app #1` with a new launch
+  number means it was killed and restarted anyway.
+
+**WHAT WAS AND WAS NOT VERIFIED OFF-DEVICE — read this before trusting the rest.**
+There is no Android SDK and no NDK on the machine this was written on, so:
 
 - Both Java files compile CLEAN against a real Android API-34 framework jar
   (`org.robolectric:android-all:14-robolectric-10818077`, fetched for the check
@@ -488,7 +506,9 @@ no Android SDK and no NDK on the machine this was written on, so:
   armv7-linux-androideabi` cannot run here: skia-bindings needs an NDK. Every JNI
   construct in `service.rs` is copied verbatim from `nwd.rs` or `net.rs` rather
   than composed, which is the most it can be held to without a device.
-- NOTHING HAS RUN. Not the service, not the notification, not the start call.
+- The Rust and the run-time behaviour were unproven until the unit ran it; the
+  build and launch are now confirmed and the two log lines above are what settle
+  the rest.
 
 **Still open — the receiver.** So the app comes back when the unit wakes:
 
