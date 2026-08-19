@@ -1437,9 +1437,11 @@ mod tests {
     /// number here was produced by running CarFM's formulae over the same file —
     /// EXCEPT the row COUNT, which is this project's one deliberate divergence
     /// from CarFM's picker: `rank_nearby` keeps one row per frequency. CarFM
-    /// keeps all 120 and truncates to 100; this keeps 75, one per dial, and the
-    /// cap no longer binds. The ORDER and the per-row arithmetic below are
-    /// untouched by that and are still CarFM's, which is what this test is for.
+    /// keeps all 120 and truncates to 100; this keeps one row per dial — 75 of
+    /// them on the dedupe alone, 59 once the reach filter has also dropped the
+    /// small transmitters that were never receivable — and the cap no longer
+    /// binds. The ORDER and the per-row arithmetic below are untouched by that
+    /// and are still CarFM's, which is what this test is for.
     #[test]
     fn the_madison_query_returns_what_carfm_returned() {
         let db = db();
