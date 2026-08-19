@@ -738,6 +738,60 @@ export component PresetsBand inherits Rectangle {
         ? Math.ceil(root.n / 2) * (Metrics.s(150) + root.gap) - root.gap
         : root.n * (root.strip-w-off + root.gap) - root.gap + root.strip-delta;
     property <bool> overflowing: root.n > 0 && root.content-w > root.width - root.side-chrome;
+
+    // ── Keep the tuned tile on screen ────────────────────────────────────────
+    //
+    // `viewport-x` was written in exactly two places, both nav buttons, and
+    // nothing at all responded to `active-index`. The repo's own
+    // `shots/many-presets.png` is the evidence: 24 presets, the dial parked on a
+    // saved one, and the rail sitting at `viewport-x = 0` showing six unlit tiles
+    // with the lit one entirely off screen. CarFM scrolls to it
+    // (`PresetsBand.tsx:251-256`); the port kept that file's paging buttons and
+    // dropped the effect, which stayed invisible while the seeded six overflowed
+    // by only 48px.
+    //
+    // SCROLLS THE MINIMUM, and only when the tile is actually out of view. A
+    // handler that centred on every change would fight the nav buttons and yank
+    // the rail on a step the driver could already see.
+    //
+    // A `changed` HANDLER, not a binding: `viewport-x` has two other writers and
+    // a binding would take ownership of it and make the paging buttons inert.
+    /// One axis of the rule, so the two tracks cannot drift apart: the offset
+    /// that brings `lo..lo+len` inside a window of `win` over a viewport of
+    /// `total`, starting from `off`.
+    ///
+    /// PURE AND RETURNING, because a Slint function cannot declare a local — the
+    /// first cut wrote `property <length> off: …` inside the body and does not
+    /// parse. Passing the current offset in and handing the new one back keeps
+    /// the rule in one place instead of once per axis.
+    pure function scroll-off(lo: length, len: length, win: length, total: length, off: length) -> length {
+        // Slint's viewport offset is 0 at the start and NEGATIVE as it scrolls,
+        // so the visible span is `-off .. -off + win`. Move the minimum: past the
+        // near edge, pull it to the edge; past the far edge, pull it back; in
+        // view, leave it exactly where the driver put it.
+        return Math.min(0px, Math.max(win - total,
+            lo < -off
+                ? -lo
+                : (lo + len > -off + win ? win - (lo + len) : off)));
+    }
+
+    function scroll-to-active() {
+        if (root.active-index < 0 || rail.width <= 0px) { return; }
+        if (Metrics.tall) {
+            // The grid scrolls vertically; the same rule on the other axis.
+            if (rail.viewport-height <= rail.height) { return; }
+            rail.viewport-y = root.scroll-off(root.slot-y(root.active-index),
+                root.slot-h(root.active-index), rail.height, rail.viewport-height,
+                rail.viewport-y);
+            return;
+        }
+        if (rail.viewport-width <= rail.width) { return; }
+        rail.viewport-x = root.scroll-off(root.slot-x(root.active-index),
+            root.slot-w(root.active-index), rail.width, rail.viewport-width,
+            rail.viewport-x);
+    }
+
+    changed active-index => { root.scroll-to-active(); }
     // Nav buttons plus the nearby disc plus the layout's four gaps, so `overflowing`
     // can be decided before the rail has been given a width.
     property <length> side-chrome:

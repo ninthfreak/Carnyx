@@ -1060,6 +1060,78 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
+### 84. Close the four defects the preset sweep confirmed
+**DONE**, all four, each with the evidence attached.
+
+**The band guard on save.** `toggle_save` was the one writer that did not check
+the band, while `prefs::from_json` drops anything outside 87.5..108.0 on the way
+back in — so a tile saved out of band reached disk and was silently deleted at
+the next launch. Now refused, with a diagnostics line, as a guarded match arm
+rather than an early return so the refusal still publishes. Whether this unit can
+report out of band is UNVERIFIED — it has no band button — but the guard costs one
+comparison and the failure it prevents is silent data loss.
+
+**The single-entry strip.** `(active + dir).rem_euclid(1)` is always `active`, and
+the `moves` test suppressed the morph while the retune went out anyway — dropping
+the level and provoking a report that runs `reset_for_retune`, blanking name,
+RadioText and PTY. The tune is now gated on the same test. Pinned by
+`stepping_a_single_preset_does_not_retune`, which counts `tuned` lines in the
+diagnostics log; sabotage-checked by making the tune unconditional again (8 lines
+against 7). **A REGRESSION CAME OUT OF THIS AND `wheelprobe` CAUGHT IT**: the
+skipped `tune` was also the publish, so the face stayed on the previous station
+while the radio sat on the new one. The branch pushes explicitly now.
+
+**The strip never scrolled to the tuned tile.** `viewport-x` had two writers, both
+nav buttons, and nothing answered `active-index`. A `changed active-index` handler
+now scrolls the minimum needed, on either axis, and leaves the rail alone when the
+tile is already in view so it cannot fight the paging buttons. The rule is one
+pure function returning the new offset — a Slint function cannot declare a local,
+which the first cut did and which does not parse. Before and after are visible in
+`shots/many-presets.png`: 24 presets with the dial on the last of them showed six
+unlit tiles and a scrollbar at rest; it now shows the lit tile.
+
+**Nothing exercised panel-press → drain → step.** Every call to `drain_events`,
+`step_preset`, `step_preset_from` and `apply_panel_action` was above the test
+module; the one occurrence inside it was a doc comment. So `cargo test` never
+stepped a preset, which is why the vendor-dial bug, the nested-drain overwrite and
+the dead release-edge guard all shipped green. Two tests now build a real `App` on
+a headless window and drive the whole path. **SLINT'S PLATFORM IS PER-THREAD**, so
+the harness installs one per thread rather than once — a `Once` left every test
+but the first falling through to winit and dying on a missing `DISPLAY` — and each
+call hands out a fresh window adapter, because sharing one fails on the second
+`AppWindow`. Both tests sabotage-checked.
+
+**Still open from that sweep:** the release-edge double step, which needs one
+observation from the unit — see #83.
+
+### 83. Find out what panel key 14 is
+**OPEN.** Code 14 reached the app EIGHT TIMES in CarFM's drive log of
+2026-08-03 and is in no row of the vendor's decompiled `handlePanelKey` table, so
+nothing knows what button it is. `PanelKey::from_code` returns `None` for it and
+the app does nothing, which is the right behaviour for an unknown code and is not
+the same as understanding it.
+
+**THE SUSPECT LIST IS NOW SHORT**, because the fascia is known (see
+`crate::android::PanelKey`, and #4 below). The owner has, on the wheel: `ch+`,
+`ch-`, volume up, volume down, and `mode`, which switches apps. On the head unit:
+the Android navigation buttons and a volume control. `ch+`/`ch-` are 62/63 and
+are accounted for. So 14 is most likely `mode` or one of the volume keys — the
+three controls that are handled by the MCU and the system, and whose broadcast
+behaviour has never been checked.
+
+**HOW TO SETTLE IT, and it needs the car rather than this tree.** `apply_event`
+logs `panel key {code} ({named}) {action}` for every broadcast that arrives, so
+pressing each button once and reading the diagnostics panel names the whole set
+in one pass. That same pass answers two other open questions: whether the MCU
+re-broadcasts the release edge (count the lines for one push of `ch+` — one or
+two), and whether volume is on this transport at all.
+
+**WHY IT IS WORTH KNOWING rather than leaving as noise.** If 14 is `mode`, it is
+the app being sent to the background, which is the event `session.rs` and the
+foreground service both exist to survive — and an app that could SEE it could
+persist its snapshot on the way out instead of hoping. If it is volume, it is
+nothing and can be ignored forever, which is also worth writing down once.
+
 
 ---
 

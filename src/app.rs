@@ -2598,6 +2598,31 @@ impl App {
                 i if i >= 0 => {
                     s.presets.remove(i as usize);
                 }
+                // OUT OF BAND IS NOT SAVEABLE, and until now this was the one
+                // writer that did not check. `prefs::from_json` drops anything
+                // outside the band on the way back in — "a dial outside the FM
+                // band is not a preset, it is corruption" — so a tile saved out
+                // of band was written to disk and then silently deleted at the
+                // next launch, taking the driver's last save with it.
+                //
+                // `s.dial` really can leave the band: the `Frequency` arm takes
+                // whatever the tuner reports, unguarded, where the 1.5s poll is
+                // guarded. The face already knows — `set_in_band` publishes it —
+                // so refusing agrees with what the driver is being shown.
+                //
+                // WHETHER THIS UNIT CAN REPORT OUT OF BAND IS UNVERIFIED. It has
+                // no band button, so the likely route is a vendor report during a
+                // band change the app never asked for. The guard costs one
+                // comparison and the failure it prevents is silent data loss.
+                //
+                // AN ARM RATHER THAN AN EARLY RETURN, so the refusal still
+                // reaches the diagnostics panel: `push_all` below is what
+                // publishes the log, and `save_prefs` finds the strip unchanged
+                // and writes nothing.
+                _ if !(FM_LO..=FM_HI).contains(&dial) => {
+                    let line = format!("save refused: {dial:.1} is outside the FM band");
+                    s.settings.log.push(&stamp(), &line);
+                }
                 // Unsaved: append it. THE STRIP HAS NO LIMIT — see `toggle_save`'s
                 // own note below.
                 _ => {
@@ -2890,8 +2915,35 @@ impl App {
         // so the cards must already hold the new stations when it starts.
         if moves {
             self.step_morph(dir, discards);
+            self.tune(mhz);
+            return;
         }
-        self.tune(mhz);
+        // AND THE TUNE IS GATED ON THE SAME TEST, which it was not. `moves`
+        // suppressed the morph and the retune went out anyway, so on a
+        // ONE-ENTRY STRIP — where `(active + dir).rem_euclid(1)` is always
+        // `active` — every press re-commanded the front end to the station
+        // already playing. That is not a no-op: `tune` drops `level` and
+        // `dotted`, and the frequency report it provokes runs
+        // `rds.reset_for_retune`, so the name, the RadioText and the PTY all
+        // blank and have to be decoded again. Pressing next on a single preset
+        // wiped the face.
+        //
+        // Reachable from the peek cards, which the hero row draws at n == 1.
+        // From the wheel it was usually masked, because the vendor has moved the
+        // dial by then and `moves` is true — in which case the tune above is the
+        // intended reassertion and still happens.
+        //
+        // THE ANCHOR STILL MOVES. The driver pressed the button and the strip's
+        // position is now this entry, whatever the radio was already doing; only
+        // the command to the tuner is skipped. `tune` would have set this.
+        self.state.borrow_mut().asserted = Some(mhz);
+        // AND IT STILL PUBLISHES, which the first cut of this forgot. `tune` was
+        // doing that too, so skipping it left the face on the PREVIOUS station
+        // while the radio sat on the new one — a display lie, and worse than the
+        // redundant retune this branch exists to avoid. `wheelprobe` caught it
+        // at once: stepping from 88.7 to 105.5 while the vendor had already put
+        // the dial on 105.5 left 88.7 on the hero.
+        self.push_all();
     }
 
     /// Re-resolve every preset's FCC row against the position as it now stands.
@@ -3670,6 +3722,204 @@ pub fn logo_dir(prefs_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real `App` on a real window, for the tests that need the whole path.
+    ///
+    /// WHY THIS DID NOT EXIST, and what it costs. Everything from the panel key
+    /// to the step — `drain_events`' ordering, `apply_panel_action`,
+    /// `step_preset_from`, `tune` — was reachable only through an `AppWindow`,
+    /// and nothing in this module built one. So `cargo test` never once stepped a
+    /// preset or drained the queue, and every defect found in that region this
+    /// week shipped green: the step reading its origin off the vendor's dial, the
+    /// nested-drain overwrite of `asserted`, and a release-edge guard asserted
+    /// against a string the device cannot send.
+    ///
+    /// ONE PLATFORM PER PROCESS, hence the `Once`. Slint's platform is global and
+    /// `set_platform` fails on a second call, while the test harness runs tests on
+    /// several threads. The tests below therefore take a MUTEX and share one
+    /// platform: they are the only tests in this crate that build a window, so
+    /// serialising them costs nothing and keeps every window on one thread.
+    #[cfg(test)]
+    mod harness {
+        use std::rc::Rc;
+        use std::sync::{Mutex, MutexGuard, OnceLock};
+
+        use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+        use slint::platform::{Platform, WindowAdapter};
+        use slint::PlatformError;
+
+        struct Headless;
+
+        impl Platform for Headless {
+            /// A FRESH ADAPTER EVERY TIME, unlike the probes in `examples/`,
+            /// which keep one because they render from it. Handing the same
+            /// `MinimalSoftwareWindow` to a second `AppWindow` in one process
+            /// fails: the tests below passed one at a time and the second one to
+            /// run failed in `AppWindow::new` when both ran together.
+            fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+                Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+            }
+        }
+
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        /// Hold this for the length of a UI test.
+        ///
+        /// SET EVERY TIME, NOT ONCE. Slint's platform is PER-THREAD, and the test
+        /// harness runs tests on several threads — so a `Once` set it for
+        /// whichever thread got there first and every other test fell through to
+        /// the real winit backend and died with "neither WAYLAND_DISPLAY nor
+        /// WAYLAND_SOCKET nor DISPLAY is set". Each thread installs its own; the
+        /// repeat call on a thread that already has one returns an error and is
+        /// ignored.
+        ///
+        /// The mutex is still worth having: it keeps these tests from building
+        /// windows concurrently, which is not a shape this tree has ever run.
+        pub fn ui_lock() -> MutexGuard<'static, ()> {
+            let guard = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let _ = slint::platform::set_platform(Box::new(Headless));
+            guard
+        }
+    }
+
+    /// Build an app on a scratch prefs directory, named per test so two cannot
+    /// collide on disk.
+    fn app_for(tag: &str) -> (AppWindow, Rc<App>) {
+        let dir = std::env::temp_dir().join(format!("carnyx-apptest-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ui = AppWindow::new().expect("window");
+        let driver = App::with_tuner(
+            &ui,
+            &host_db_path(),
+            &dir,
+            Box::new(crate::android::FakeTuner::new()),
+            false,
+            None,
+            fake::FakeLocation::default(),
+        );
+        (ui, driver)
+    }
+
+    /// Pretend the vendor service retuned its own bank and reported it.
+    ///
+    /// `FakeTuner`'s scale is 100, and slot -1 is "not a preset in this bank",
+    /// which is what the tuner sends for an ordinary retune.
+    fn vendor_reports(mhz: f32) {
+        crate::android::ingest_frequency(0, (mhz * 100.0).round() as i32, String::new(), -1);
+    }
+
+    /// THE WHOLE WHEEL PATH, from the broadcast to the dial it lands on.
+    ///
+    /// This is the test that did not exist. `examples/wheelprobe.rs` covers the
+    /// same ground in more detail and with more cases, but it is an example: it
+    /// compiles under `cargo test` and never runs. This runs.
+    #[test]
+    fn a_wheel_press_steps_from_where_the_app_put_the_strip() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("wheel");
+        let strip = fake::SEED_PRESET_MHZ;
+        let label = |ui: &AppWindow| ui.get_freq_label().to_string();
+
+        // ── The ordinary case: a silent tuner, one press, one step.
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+        assert_eq!(label(&ui), format_mhz(strip[2]).to_string(), "next from entry 1");
+
+        // ── THE DEFECT THE DRIVER REPORTED. One wheel press makes the vendor
+        // service step its OWN hardware preset bank and report the frequency it
+        // landed on, and `drain_events` applies the deferred key only once that
+        // queue is empty. Reading the strip position at that point read the
+        // VENDOR'S dial: off-strip it resolved to -1 and every press went to
+        // entry 0, which is "next goes backwards".
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        crate::android::ingest_panel_key(62, "down".into());
+        vendor_reports(99.9);
+        driver.drain_events();
+        assert_eq!(
+            label(&ui),
+            format_mhz(strip[2]).to_string(),
+            "the vendor's own bank walk must not move the strip"
+        );
+
+        // ── And the same fault a drain later, which the key-time anchor cannot
+        // reach and `State::asserted` is what covers.
+        driver.tune_for_test(strip[3]);
+        driver.drain_events();
+        vendor_reports(99.9);
+        driver.drain_events();
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+        assert_eq!(
+            label(&ui),
+            format_mhz(strip[4]).to_string(),
+            "a vendor report between presses must not move the strip either"
+        );
+
+        // ── The release edge, with the string the DEVICE really sends. Both
+        // edges inside one drain collapse, because `panel_action` is one Option.
+        driver.tune_for_test(strip[0]);
+        driver.drain_events();
+        let real = "com.nwd.action.ACTION_KEY_VALUE";
+        crate::android::ingest_panel_key(62, real.into());
+        crate::android::ingest_panel_key(62, real.into());
+        driver.drain_events();
+        assert_eq!(label(&ui), format_mhz(strip[1]).to_string(), "one step, not two");
+    }
+
+    /// A ONE-ENTRY STRIP DOES NOT RE-TUNE THE STATION ALREADY PLAYING.
+    ///
+    /// `(active + dir).rem_euclid(1)` is always `active`, so every press landed
+    /// on the same entry and `tune` went out anyway — dropping the level and
+    /// provoking a frequency report that runs `reset_for_retune`, which blanks
+    /// the name, the RadioText and the PTY. Pressing next wiped the face.
+    #[test]
+    fn stepping_a_single_preset_does_not_retune() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("single");
+
+        // ONE PRESET, built through the shipping path. `save_dial_for_test` is
+        // tune-then-toggle, and `toggle_save` REMOVES a dial that is already
+        // saved — so walking the seeded six empties the strip, and the seventh
+        // call puts a single entry back.
+        for mhz in fake::SEED_PRESET_MHZ {
+            driver.save_dial_for_test(mhz);
+        }
+        driver.save_dial_for_test(98.1);
+        driver.drain_events();
+        assert!(ui.get_saved(), "the dial is saved");
+        assert_eq!(
+            slint::Model::row_count(&ui.get_presets()),
+            1,
+            "and it is the only entry"
+        );
+
+        // COUNTED OFF THE DIAGNOSTICS LOG, which records one `tuned N` line per
+        // frequency report — so a retune that went out is visible and one that
+        // did not is visible too. The alternative was a counter on the fake, and
+        // the log is already the thing a driver reads when the radio misbehaves.
+        let tuned_lines = |ui: &AppWindow| {
+            slint::Model::iter(&ui.get_settings_diag_lines())
+                .filter(|l: &slint::SharedString| l.contains("tuned "))
+                .count()
+        };
+        let before = tuned_lines(&ui);
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+        driver.push_all();
+        assert_eq!(ui.get_freq_label().to_string(), "98.1", "still on the one entry");
+        assert_eq!(
+            tuned_lines(&ui),
+            before,
+            "and the front end was not re-commanded, so the RDS was not blanked"
+        );
+    }
 
     /// `assets/` is packaged into the APK verbatim by cargo-apk, so ANYTHING
     /// written there by a host run ships to every driver. Deriving the prefs
