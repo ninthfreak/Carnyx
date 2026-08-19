@@ -464,6 +464,9 @@ struct State {
     /// run that is happening now. Read from the last run's snapshot; written
     /// back into the next one.
     launches: u32,
+    /// A panel action is being applied right now, so a drain re-entered from
+    /// inside it must not apply another. See `drain_events`.
+    applying_panel: bool,
     /// What a panel key asked for, applied after the drain.
     ///
     /// DEFERRED, because `apply_event` holds a mutable borrow of this struct and
@@ -895,6 +898,7 @@ impl App {
                 last_diag: None,
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
+                applying_panel: false,
                 panel_action: None,
                 callsigns,
                 store,
@@ -1037,9 +1041,46 @@ impl App {
         // kept the `RefMut` alive across the body — and the body retunes, which
         // borrows the same cell. That is a `BorrowMutError` panic on the first
         // press of a steering-wheel button, which is exactly what it did.
-        let pending = self.state.borrow_mut().panel_action.take();
-        if let Some(action) = pending {
+        //
+        // AND THE RECURSION IS NOT ACTUALLY ONE LEVEL DEEP, which the paragraph
+        // above got wrong. Taking the action first stops the NESTED drain from
+        // re-applying THIS action — but nothing stopped it applying a DIFFERENT
+        // one, because the nested drain runs its own queue loop and a key that
+        // arrives while `tune` is working installs a fresh `panel_action`
+        // (`apply_event`'s `PanelKey` arm). The inner step then tunes to its own
+        // target, and the outer `tune` — which drains BEFORE it writes `dial`
+        // and `asserted` — overwrites both with its older one. The radio is left
+        // on the inner station with `asserted` naming the outer, and nothing
+        // heals `asserted`, so every wheel press after that anchors on a preset
+        // the driver is not listening to.
+        //
+        // The guard is a flag rather than a reorder because the drain-then-write
+        // order in `tune` is itself deliberate: it flushes stale frequency
+        // reports so they cannot clobber the dial being asserted. So the nested
+        // drain leaves the new action pending, and the loop here picks it up
+        // once the outer step has finished and its writes have landed. A burst
+        // still collapses to one step — the queue loop above overwrites the same
+        // `Option` — and this loop terminates because each pass needs a key that
+        // really arrived.
+        //
+        // NOT REPRODUCED IN A PROBE, and the reason is structural rather than an
+        // omission: it needs a key to land between the outer queue loop emptying
+        // and the nested drain, which on the device is another thread delivering
+        // a broadcast and here is a window no single-threaded harness can reach
+        // into. Held by reading, not by measurement.
+        loop {
+            let pending = {
+                let mut s = self.state.borrow_mut();
+                if s.applying_panel {
+                    None
+                } else {
+                    s.panel_action.take()
+                }
+            };
+            let Some(action) = pending else { break };
+            self.state.borrow_mut().applying_panel = true;
             self.apply_panel_action(action);
+            self.state.borrow_mut().applying_panel = false;
         }
         // Once, after the whole batch: a position change re-runs the nearby
         // query and re-resolves the hero and the strip, and none of that is
