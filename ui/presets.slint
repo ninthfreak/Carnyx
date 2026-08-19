@@ -291,7 +291,28 @@ export component PeekCard inherits Rectangle {
     border-radius: Metrics.s(24) * root.scale;
     background: Pal.panel;
 
+    /// How much of this card's INNER edge is covered by something drawn on top,
+    /// and therefore must not be tappable.
+    ///
+    /// THE HERO CARD SITS OVER THIS ONE AND DOES NOT STOP THE TAP. Both peeks are
+    /// tucked under the hero by `Metrics.peek-overlap`, `HeroCard` has no
+    /// card-wide `TouchArea`, and adding one does NOT help — measured rather than
+    /// assumed: with a full-size `TouchArea` on the hero, `examples/tapprobe.rs`
+    /// reported the defect completely unchanged, while making these two peeks
+    /// `inert` cleared it at once. The peek wins the hit test over a plain
+    /// sibling declared after it, so this is the only place it can be fixed.
+    ///
+    /// Left at 0 for every other use: the strip's own tiles have nothing over
+    /// them and want their whole face live.
+    in property <length> blocked: 0px;
+
     touch := TouchArea {
+        // Anchored away from the hero: the LEFT peek is covered on its right,
+        // the RIGHT peek on its left.
+        x: root.side == "left" ? 0px : root.blocked;
+        y: 0px;
+        width: Math.max(0px, root.width - root.blocked);
+        height: root.height;
         enabled: !root.inert;
         clicked => { root.selected(); }
     }

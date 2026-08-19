@@ -23,9 +23,21 @@
 //! An accidental tap near the card's edge silently changing station is a defect;
 //! a tap there doing nothing is the design working. This prints which.
 //!
-//! ## The answer, measured
+//! ## The answer, measured — and then FIXED
 //!
-//! CONFIRMED on the wide track, at 1024x614. The hero card's body spans
+//! Now a regression guard: it passes, and the bands it finds are wholly outside
+//! the card (x 74..194 and x 830..950 at 1024x614). The fix is `PeekCard`'s
+//! `blocked` property, which keeps the covered strip out of the peek's own touch
+//! target; `ui/hero.slint` derives how much each peek is covered.
+//!
+//! THE OBVIOUS FIX DOES NOT WORK, and this probe is what proved it. Giving
+//! `HeroCard` a full-size `TouchArea` so it blocks hits where it blocks light
+//! left the output completely unchanged, while making the two peeks `inert`
+//! cleared it at once — so the peek wins the hit test over a plain sibling
+//! declared after it, and the hero cannot defend itself. Worth knowing before
+//! reaching for the same idea again.
+//!
+//! What it found before the fix, at 1024x614. The hero card's body spans
 //! x 200..824. Tapping x 74..254 tunes the PREVIOUS preset and x 770..950 the
 //! NEXT one, so 56px of the hero's own body on each side steps the strip. The
 //! live band is y 128..304 — 180px, which is exactly `peek-w * 0.88`, the

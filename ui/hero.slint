@@ -606,6 +606,21 @@ export component HeroRow inherits Rectangle {
     // driver never asked for. Both cards stand still now, the card in flight is
     // the one that is `inert`, and a tap on a peek during the morph does the
     // ordinary thing.
+    // HOW MUCH OF EACH PEEK THE HERO COVERS, so `PeekCard` can keep that strip
+    // out of its own touch target. The layout tucks the peeks under the card by
+    // `Metrics.peek-overlap` on purpose — that is the look — but the hero does
+    // not stop a tap landing on what is underneath it, so without this the
+    // covered strip is a live "step preset" button sitting on the hero's face.
+    // `examples/tapprobe.rs` measured it at 1024x614: 56px of the card's own
+    // body on each side tuned a different station.
+    //
+    // Derived from the same rest positions the cards are placed at rather than
+    // from `overlap` directly, so a change to `peek-inset` or to the peek's 0.88
+    // cannot leave this stale.
+    property <length> peek-side: root.peek-w * 0.88;
+    property <length> prev-blocked: Math.max(0px, root.prev-rest-x + root.peek-side - root.card-x);
+    property <length> next-blocked: Math.max(0px, root.card-x + root.card-w - root.next-rest-x);
+
     if root.has-prev: PeekCard {
         x: root.prev-rest-x;
         y: root.peek-y;
@@ -613,6 +628,7 @@ export component HeroRow inherits Rectangle {
         side: "left";
         preset: root.prev-preset;
         weight: root.fwd ? root.dst-weight : root.far-weight;
+        blocked: root.prev-blocked;
         selected => { root.step(-1); }
     }
     if root.has-next: PeekCard {
@@ -622,6 +638,7 @@ export component HeroRow inherits Rectangle {
         side: "right";
         preset: root.next-preset;
         weight: root.fwd ? root.far-weight : root.dst-weight;
+        blocked: root.next-blocked;
         selected => { root.step(1); }
     }
 
