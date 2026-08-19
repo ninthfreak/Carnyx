@@ -476,7 +476,14 @@ export component HeroRow inherits Rectangle {
     property <length> peek-mid: root.peek-w * 0.88 / 2;
     property <float> hero-fit: root.peek-w * 0.88 / root.card-w;
     /// 1.0 at rest, `hero-fit` at the far end of the travel.
-    property <float> hero-s: 1.0 - (1.0 - root.hero-fit) * root.m-out;
+    ///
+    /// OFF `m-scale`, NOT `m-out`, and that separation is CarFM's. Its morph
+    /// runs translation on an ease-out CUBIC and scale on an ease-out QUINT, and
+    /// says why in one line: "size settles slightly ahead of position"
+    /// (`CarFmFace.tsx:962`). The card swells to full size while it is still
+    /// travelling the last of the distance, so it arrives as a card rather than
+    /// growing into place. Carnyx drove both off one cubic and lost that.
+    property <float> hero-s: 1.0 - (1.0 - root.hero-fit) * root.m-scale;
     /// The slot the incoming station came from: NEXT on a forward step.
     property <length> src-cx: root.fwd
         ? root.next-rest-x + root.peek-mid
@@ -536,6 +543,9 @@ export component HeroRow inherits Rectangle {
     // landed.
     property <bool> fwd: root.step-dir > 0;
     property <float> m-out: 0;
+    /// Scale, separately from position — see `hero-s`. Same 1 → 0 window, a
+    /// faster curve.
+    property <float> m-scale: 0;
     property <float> m-ghost: 0;
     property <float> m-far: 0;
     property <float> m-settle: 0;
@@ -572,7 +582,7 @@ export component HeroRow inherits Rectangle {
     /// 1.0 where the travel starts, `hero-fit` where it lands — the same fit the
     /// incoming hero uses, so both cards meet the peek slots on their WIDTH.
     /// Fitting on height instead would land a 559px card in a 158px slot.
-    property <float> out-s: root.hero-fit + (1.0 - root.hero-fit) * root.m-out;
+    property <float> out-s: root.hero-fit + (1.0 - root.hero-fit) * root.m-scale;
     property <length> out-cx: root.dst-cx + (root.hero-rest-cx - root.dst-cx) * root.m-out;
     property <length> out-cy: root.dst-cy + (root.hero-rest-cy - root.dst-cy) * root.m-out;
 
@@ -774,6 +784,7 @@ export component HeroRow inherits Rectangle {
             // its scale are both derived from `m-out`, so the hero and the cards
             // beside it cannot drift out of step.
             root.m-out: 1.0;
+            root.m-scale: 1.0;
             root.m-ghost: 1.0;
             root.m-far: 1.0;
             root.m-settle: 1.0;
@@ -790,31 +801,69 @@ export component HeroRow inherits Rectangle {
             // NO `in` BLOCK either. Going in must be instantaneous, or the card
             // visibly slides AWAY to the peek slot before coming back.
             out {
+                // POSITION. CarFM's `easeMove`, `1 - (1-p)^3`.
                 animate root.m-out {
                     duration: 520ms;
                     easing: cubic-bezier(0.33, 1, 0.68, 1);
                 }
-                // The clone leaving: 0.6 → 0, linear, over the full window.
-                animate root.m-ghost {
+                // SCALE, ahead of position — but QUART, not CarFM's quint, and
+                // the difference is forced by geometry rather than taste.
+                //
+                // The incoming card is centred on the peek slot and grows about
+                // that centre, so size running ahead of position means a nearly
+                // full-size card still sitting out at the slot. On the tall
+                // track (360px wide, 295px card, source centre at 329.5) there
+                // is no room for it: the card's right edge peaks at
+                //
+                //     cubic — the old shared curve — 361.2px   (at p=0 only)
+                //     quart                          361.4px
+                //     quint — CarFM's                368.3px   (around p=0.12)
+                //
+                // against a 360px screen. `edgeprobe` fails both tall
+                // directions on quint, at t+206ms and t+220ms, which is that
+                // 8px sitting on the bezel for ~100ms. Quart keeps the whole
+                // character — size still resolves well ahead of position — for
+                // 0.2px more overhang than the shared curve already had.
+                //
+                // THE BASELINE IS ITSELF AT THE LINE, which is worth recording:
+                // 361.2px means the old code hangs 1.2px off the tall track for
+                // one frame at p=0. `edgeprobe` misses it because it sleeps 20ms
+                // before its first sample. Not introduced here and not fixed
+                // here; the tall track's peeks are designed to clip.
+                animate root.m-scale {
                     duration: 520ms;
+                    easing: cubic-bezier(0.25, 1, 0.5, 1);
+                }
+                // THE DISCARDED CARD GOES, AND GOES FAST. CarFM fades this over
+                // the full 520ms and Carnyx copied it; both are wrong for this
+                // face. A card that is leaving the strip should be gone while
+                // the cards that are MOVING still have most of their journey
+                // left, or the row reads as four things dissolving into each
+                // other rather than three things moving. Its partner
+                // `dst-weight` firms up on the same curve, so the slot is fully
+                // handed over by 160ms and simply holds.
+                animate root.m-ghost {
+                    duration: 160ms;
                     easing: linear;
                 }
-                // The station arriving from further out: 0 → 0.6 AFTER a 120ms
-                // delay, so it lags the cards in motion instead of appearing
-                // with them. The delay is the beat itself, not a detail.
+                // The station arriving from further out, held to the HALFWAY
+                // mark. It is the only card that has nothing to do with the
+                // movement, so it waits until the movement is the story and then
+                // arrives into a row that has already resolved.
                 animate root.m-far {
-                    duration: 400ms;
-                    delay: 120ms;
+                    duration: 260ms;
+                    delay: 260ms;
                     easing: linear;
                 }
-                // The card that left, dissolving into the peek it landed on.
-                // The DELAY is the whole of it: `m-out` is eased out, so the
-                // travel is all but over by 320ms, and this holds the departing
-                // card at full strength until then. Starting the fade at t=0
-                // would dissolve it in mid-air over the hero's own rect.
+                // The card that left, handing over to the peek it landed on.
+                // NOT a transition in its own right — by 380ms the travel is
+                // 97% done and the scale is finished, so the two cards are the
+                // same size in the same place and this is a seam, not a fade.
+                // Kept short for exactly that reason: any longer and movement
+                // that has already happened gets re-told as a dissolve.
                 animate root.m-settle {
-                    duration: 200ms;
-                    delay: 320ms;
+                    duration: 140ms;
+                    delay: 380ms;
                     easing: linear;
                 }
             }
