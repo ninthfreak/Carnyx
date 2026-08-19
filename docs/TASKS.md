@@ -423,14 +423,34 @@ activity is in front, because from Android 12 a background
 **THE PART THAT IS NOT OBVIOUS: it takes THREE files because Android has two
 class loaders here.** Everything in `java/` is dexed by `build.rs`, embedded with
 `include_bytes!` and loaded at run time by an `InMemoryDexClassLoader` — that is
-how a pure NativeActivity reaches binder at all. A manifest-declared component
-cannot live there: Android constructs one through the APPLICATION's class loader,
-which has never heard of a loader Rust built after start-up, so a service class
-in the runtime dex is a `ClassNotFoundException` every time the system tries to
-construct it. So `CarnyxService` is in the GRADLE source set (AGP compiles it into
-the APK's own dex) and only the starter is in the runtime dex. The starter names
-the service by STRING through a `ComponentName`, so neither tree has to resolve
-into the other at compile time.
+how a pure NativeActivity reaches binder at all. A class that exists ONLY there
+cannot be a manifest component: Android constructs one through the APPLICATION's
+class loader, which has never heard of a loader Rust built after start-up, and
+gets a `ClassNotFoundException`. So `CarnyxService` is in the GRADLE source set
+(AGP compiles it into the APK's own dex) and only the starter is in the runtime
+dex. The starter names the service by STRING through a `ComponentName`, so
+neither tree has to resolve into the other at compile time.
+
+**A CORRECTION to the paragraph above, found while checking the Gradle config
+rather than by being told.** The first version of it said the service could not
+live in `java/` at all. Not true: `android/app/build.gradle.kts` puts `../../java`
+in the Gradle JAVA source set as well as the aidl one, so AGP compiles that whole
+tree into the APK's dex too, and a service class there WOULD be constructible
+under Gradle. What is actually true is narrower — it would be compiled twice, be
+dead weight in the embedded dex, and still be absent under cargo-apk. The
+placement stands; the reason for it was overstated. (Same check turned up that
+`CarnyxProcess` is itself compiled into both dexes under Gradle, and that
+parent-first class loading means the APK's copy is the one that runs. Same source
+either way, so it changes nothing at run time.)
+
+**And one hazard that came out of it.** `java.srcDirs(...)` in AGP ADDS to the
+source set where the Java plugin's same-named property REPLACES it, and this
+build relied on the difference without saying so: if it replaced, `src/main/java`
+would be dropped and `CarnyxService` would never be compiled — with no build
+failure, only a `ClassNotFoundException` on the unit. The AGP API could not be
+fetched from here to settle which it is (Google's Maven is unreachable and it is
+not mirrored on Central), so the config now names BOTH directories explicitly,
+which is correct under either reading.
 
 **ONLY THE GRADLE BUILD HAS IT.** cargo-apk packages no Java and has no `service`
 field, so under `cargo apk` the class is genuinely absent and the platform refuses

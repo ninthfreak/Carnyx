@@ -26,21 +26,26 @@ import android.util.Log;
  *
  * <h2>Why this file is in android/ and not in java/</h2>
  *
- * Carnyx has two Java trees and they are not interchangeable. {@code java/} is
- * compiled by {@code build.rs}, dexed, embedded with {@code include_bytes!} and
- * loaded at RUN time by an {@code InMemoryDexClassLoader} — that is how a pure
- * NativeActivity gets a tuner binder at all. This file cannot live there: Android
- * instantiates a manifest-declared component through the APPLICATION's own class
- * loader, which knows nothing about a class loader Rust built after start-up, so
- * a service class in the runtime dex would be a {@code ClassNotFoundException}
- * every time the system tried to construct it.
+ * Carnyx has two Java trees. {@code java/} is compiled by {@code build.rs},
+ * dexed, embedded with {@code include_bytes!} and loaded at RUN time by an
+ * {@code InMemoryDexClassLoader} — that is how a pure NativeActivity gets a tuner
+ * binder at all. This file is in the GRADLE source set instead, where AGP
+ * compiles it into the APK's own {@code classes.dex}.
  *
- * <p>So it lives in the Gradle source set, where AGP compiles it into the APK's
- * own {@code classes.dex}. That is the whole reason #67 was blocked on the
- * packager: cargo-apk packages no Java and has no {@code <service>} field, so
- * under cargo-apk this class does not exist and cannot be made to.
- * {@link CarnyxProcess} is written to expect exactly that and to log it rather
- * than throw.
+ * <p>THE CONSTRAINT is that a class existing only in the embedded dex cannot be a
+ * manifest component: Android instantiates one through the APPLICATION's class
+ * loader, which knows nothing about a loader Rust built after start-up, and gets
+ * a {@code ClassNotFoundException}. It is NOT that {@code java/} is off limits —
+ * {@code android/app/build.gradle.kts} also puts that tree in the Gradle java
+ * source set, so AGP compiles it into the APK dex as well, and a service there
+ * would work under Gradle. It would just be compiled twice, be dead weight in the
+ * embedded dex, and still be absent under cargo-apk. Gradle-only code belongs
+ * with the Gradle build.
+ *
+ * <p>Under cargo-apk this class does not exist and cannot be made to — that build
+ * packages no Java and has no {@code <service>} field, which is the whole reason
+ * #67 was blocked on the packager. {@link CarnyxProcess} expects exactly that and
+ * logs it rather than throwing.
  *
  * <h2>The notification is a tax, not a feature</h2>
  *

@@ -66,7 +66,15 @@ android {
         // the aidl set and `.java` from the java set, and `java/com/nwd/radio/`
         // holds both — `Frequency.aidl` declares the parcelable, `Frequency.java`
         // implements it.
-        java.srcDirs("../../java")
+        // BOTH DIRECTORIES NAMED EXPLICITLY. AGP's `srcDirs(...)` adds to the
+        // set where the Java plugin's same-named property would replace it, and
+        // the difference decides whether `src/main/java` — which holds
+        // `CarnyxService`, the one class that MUST be in the APK's own dex — is
+        // compiled at all. Naming both is correct either way, and a
+        // silently-uncompiled service class would not fail the build: it would
+        // fail on the unit, as a ClassNotFoundException the moment the platform
+        // tried to construct it.
+        java.srcDirs("src/main/java", "../../java")
         aidl.srcDirs("../../java")
         // `assets/db/stations.sqlite` → the APK asset path `db/stations.sqlite`,
         // which is where `stations::install` looks for it.

@@ -21,19 +21,32 @@
 //!
 //! ## Why this is three files
 //!
-//! The service class CANNOT live in the dex this module loads. Android constructs
-//! a manifest-declared component through the application's own class loader,
-//! which knows nothing about the `InMemoryDexClassLoader` Rust builds after
-//! start-up — so `CarnyxService` is in the GRADLE source set, compiled by AGP
-//! into the APK's own dex, and only the starter (`CarnyxProcess`) is in the
-//! runtime dex beside `CarnyxNet` and `CarnyxLocation`. The starter names the
-//! service by string through a `ComponentName`, so nothing has to resolve across
-//! the two trees at compile time.
+//! `CarnyxService` is in the GRADLE source set — `android/app/src/main/java/` —
+//! and only the starter (`CarnyxProcess`) is in `java/`, the runtime dex, beside
+//! `CarnyxNet` and `CarnyxLocation`. The starter names the service by string
+//! through a `ComponentName`, so neither tree has to resolve into the other at
+//! compile time.
 //!
-//! That split is the whole of #67's packager problem: cargo-apk packages no Java
-//! and its manifest schema has no `service` field, so under the DEFAULT build
-//! this call finds no such component and logs that it did. Build with
-//! `tools/build-apk-gradle.sh` to get the service.
+//! THE RULE THAT FORCES THIS, stated exactly. A class that exists ONLY in the
+//! embedded dex cannot be a manifest component: Android constructs one through
+//! the application's own class loader, which knows nothing about the
+//! `InMemoryDexClassLoader` this module builds after start-up, and the failure
+//! is a `ClassNotFoundException` when the platform tries to construct it.
+//!
+//! An earlier version of this comment went further and said the service could
+//! not live in `java/` AT ALL. That was wrong, and worth correcting rather than
+//! quietly fixing: `android/app/build.gradle.kts` puts `../../java` in the Gradle
+//! JAVA source set as well as the aidl one, so AGP compiles that whole tree into
+//! the APK's own dex too, and a service class there would in fact be
+//! constructible under Gradle. What is true is narrower — it would be compiled
+//! TWICE, dead weight in the embedded dex, and invisible under cargo-apk, which
+//! packages no Java at all. Keeping Gradle-only code in the Gradle source set is
+//! a choice for clarity; the class-loader rule is the constraint behind it.
+//!
+//! Either way cargo-apk cannot declare the `<service>` — its manifest schema has
+//! no field for one — so under the DEFAULT build this call finds no such
+//! component and logs that it did. Build with `tools/build-apk-gradle.sh` to get
+//! the service.
 //!
 //! NONE OF THIS HAS RUN, and the caveat is stronger than `net.rs`'s. That file
 //! says "it compiles for `armv7-linux-androideabi`"; this one cannot say even

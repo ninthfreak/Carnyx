@@ -16,6 +16,12 @@ import android.util.Log;
  * own dex, because a manifest-declared component has to be constructible by the
  * application's class loader. Two trees, one process.
  *
+ * <p>(Under the Gradle build this file is compiled TWICE — AGP has
+ * {@code ../../java} in its java source set too, so it is in the APK dex as well
+ * as the embedded one, and Android's parent-first loading means the APK copy is
+ * the one that runs. Same source either way. Under cargo-apk only the embedded
+ * copy exists.)
+ *
  * <p>WHICH IS WHY THE INTENT NAMES THE SERVICE AS A STRING. Writing
  * {@code new Intent(ctx, CarnyxService.class)} would make this file depend at
  * COMPILE time on a class that is not on its compile path and at RUN time on the

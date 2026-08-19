@@ -5,12 +5,17 @@
 //! THERE ARE TWO JAVA TREES AND THIS ONE COMPILES ONLY ITS OWN. `java/` is what
 //! is dexed and embedded here: the NWD tuner bridge, HTTPS, location, and the
 //! starter for the foreground service. `android/app/src/main/java/` is compiled
-//! by AGP into the APK's own dex instead, and holds exactly one class —
-//! `CarnyxService` — because Android constructs a manifest-declared component
-//! through the APPLICATION's class loader, which has never heard of the
-//! `InMemoryDexClassLoader` this file's output is loaded into. Adding a service
-//! or a receiver to `JAVA_SOURCES` below would compile and then fail at run time
-//! with a ClassNotFoundException the moment the system tried to construct it.
+//! by AGP into the APK's own dex instead, and holds exactly one class,
+//! `CarnyxService`.
+//!
+//! A manifest-declared component has to be constructible by the APPLICATION's
+//! class loader, which has never heard of the `InMemoryDexClassLoader` this
+//! file's output is loaded into. Under the GRADLE build that alone does not rule
+//! out `java/`, because `android/app/build.gradle.kts` puts that tree in the
+//! Gradle java source set as well and AGP compiles it into the APK dex too — so
+//! a service there would work, at the cost of being compiled twice and of being
+//! invisible under cargo-apk, which packages no Java at all. Gradle-only code
+//! stays with the Gradle build; that is a choice, not an impossibility.
 //!
 //! ## Why a build script compiles Java at all
 //!
