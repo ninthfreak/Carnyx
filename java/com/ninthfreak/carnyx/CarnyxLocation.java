@@ -112,7 +112,22 @@ public final class CarnyxLocation {
     private static native void nativePosition(
         double lat, double lon, boolean fix, float speedMps, boolean hasSpeed);
 
-    private static final LocationListener LISTENER = new LocationListener() {
+    /** One line into the diagnostics panel. The unit has no adb, so `Log.i`
+     *  reaches nobody and a skipped provider looks exactly like a slow one. */
+    private static native void nativeNote(String line);
+
+    /** Every listener currently registered, so `stop` can remove all of them.
+     *
+     *  ONE PER PROVIDER, and not the single shared instance this used to
+     *  register twice. `LocationManager` keys its registrations by the listener
+     *  object, so re-registering the same one is at best ambiguous and at worst
+     *  replaces the first provider with the second. A listener each costs
+     *  nothing and removes the question. */
+    private static final java.util.List<LocationListener> LISTENERS =
+        new java.util.ArrayList<>();
+
+    private static LocationListener newListener() {
+        return new LocationListener() {
         @Override public void onLocationChanged(Location loc) {
             if (loc == null) return;
             // Every judgement about these numbers lives in Rust
@@ -136,7 +151,8 @@ public final class CarnyxLocation {
                 nativePosition(0, 0, false, 0f, false);
             }
         }
-    };
+        };
+    }
 
     public static void attach(Context context) {
         synchronized (LOCK) {
@@ -240,13 +256,37 @@ public final class CarnyxLocation {
         final LocationManager mgr = m;
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override public void run() {
+                StringBuilder live = new StringBuilder();
                 boolean any = false;
                 for (String p : new String[] {
                         LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER }) {
                     try {
-                        if (!mgr.isProviderEnabled(p)) continue;
-                        mgr.requestLocationUpdates(p, MIN_INTERVAL_MS, MIN_DISTANCE_M, LISTENER);
+                        // REGISTERED WHETHER OR NOT IT IS ENABLED RIGHT NOW, and
+                        // this line is the whole bug it replaces.
+                        //
+                        // It used to read `if (!mgr.isProviderEnabled(p))
+                        // continue;`. On a head unit that has just powered up,
+                        // location services come up asynchronously and GPS_PROVIDER
+                        // can still report disabled when the app starts — so GPS
+                        // was skipped, NETWORK was registered, `listening` went
+                        // true, and NOTHING EVER TRIED AGAIN: `start` is called
+                        // exactly once from `android_main`, it returns early while
+                        // `listening`, and `onProviderEnabled` only reaches a
+                        // listener that is already registered. The result is a
+                        // whole drive on the network provider, which on a car
+                        // without connectivity is no fix at all.
+                        //
+                        // Registering a disabled provider is legal and is what the
+                        // reference does (`VibeStreamModule.startGps` calls
+                        // `requestLocationUpdates(GPS_PROVIDER, ...)` with no such
+                        // check). Updates simply do not arrive until it comes up —
+                        // and because we are registered, `onProviderEnabled` does.
+                        LocationListener l = newListener();
+                        mgr.requestLocationUpdates(p, MIN_INTERVAL_MS, MIN_DISTANCE_M, l);
+                        synchronized (LOCK) { LISTENERS.add(l); }
                         any = true;
+                        if (live.length() > 0) live.append(", ");
+                        live.append(p).append(mgr.isProviderEnabled(p) ? "" : " (off for now)");
                         // A last-known fix is worth more than nothing while the
                         // first real one is still being acquired: a cold GPS can
                         // take a minute, and the picker is unusable until then.
@@ -259,14 +299,50 @@ public final class CarnyxLocation {
                         // Permission revoked between the check and here.
                         Log.w(TAG, "location denied for " + p, e);
                     } catch (Throwable t) {
+                        // An IllegalArgumentException here means the unit has no
+                        // such provider, which is ordinary. Keep going.
                         Log.w(TAG, "requestLocationUpdates failed for " + p, t);
                     }
                 }
                 synchronized (LOCK) { listening = any; }
-                if (!any) nativePosition(0, 0, false, 0f, false);
+                try {
+                    nativeNote(any ? "listening on " + live : "no provider would register");
+                } catch (Throwable ignored) {}
+                if (!any) {
+                    nativePosition(0, 0, false, 0f, false);
+                    // AND TRY AGAIN, because `start` is called exactly once from
+                    // `android_main` and there is no other path back here. A unit
+                    // whose location service is not up yet used to lose GPS for the
+                    // whole session on the strength of one early answer.
+                    retry();
+                }
             }
         });
         return true;
+    }
+
+    /**
+     * How long to keep trying when no provider would register at all, and how
+     * often. 12 x 10s is two minutes — past any plausible boot, and bounded so a
+     * unit with location switched off is not polled forever.
+     */
+    private static final int START_RETRIES = 12;
+    private static final long START_RETRY_MS = 10_000L;
+
+    private static int retriesLeft = START_RETRIES;
+
+    /** Re-attempt registration later. Bounded, and stops the moment it works. */
+    private static void retry() {
+        synchronized (LOCK) {
+            if (retriesLeft <= 0) return;
+            retriesLeft--;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override public void run() {
+                synchronized (LOCK) { if (listening) return; }
+                start();
+            }
+        }, START_RETRY_MS);
     }
 
     public static void stop() {
@@ -277,10 +353,17 @@ public final class CarnyxLocation {
             listening = false;
         }
         if (m == null) return;
-        try {
-            m.removeUpdates(LISTENER);
-        } catch (Throwable t) {
-            Log.w(TAG, "removeUpdates failed", t);
+        java.util.List<LocationListener> gone;
+        synchronized (LOCK) {
+            gone = new java.util.ArrayList<>(LISTENERS);
+            LISTENERS.clear();
+        }
+        for (LocationListener l : gone) {
+            try {
+                m.removeUpdates(l);
+            } catch (Throwable t) {
+                Log.w(TAG, "removeUpdates failed", t);
+            }
         }
     }
 }

@@ -29,7 +29,7 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use jni::errors::Error;
-use jni::objects::{JClass, JObject};
+use jni::objects::{JClass, JObject, JString};
 use jni::refs::Global;
 use jni::sys::{jboolean, jdouble, jfloat};
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM, NativeMethod};
@@ -70,6 +70,38 @@ fn guard<'a>(unowned: &mut EnvUnowned<'a>, body: impl FnOnce(&mut Env) -> Result
         .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
 }
 
+/// Java → Rust, the second fact that crosses: WHICH providers actually
+/// registered.
+///
+/// The unit has no adb, so `Log.i` reaches nobody. Time-to-first-fix is the
+/// thing this file gets wrong in ways that are invisible from the outside — a
+/// skipped provider looks exactly like a slow one — so the answer has to land
+/// somewhere the driver can read it, which is the diagnostics panel.
+extern "system" fn native_note<'a>(
+    mut env: EnvUnowned<'a>,
+    _class: JClass<'a>,
+    line: JString<'a>,
+) {
+    // Through `guard`, like every other native here: a panic unwinding across
+    // the JNI boundary is undefined behaviour.
+    //
+    // `try_to_string` and not `get_string`: this crate's `JString` is the
+    // borrowed reference and the conversion hangs off it, which is the shape
+    // `nwd::text` uses and the one that compiles. The first cut of this reached
+    // for the older `Env::get_string(&JString)` API and would not have built for
+    // the target — worth the note, because this file is `cfg(target_os =
+    // "android")` and the HOST BUILD NEVER COMPILES IT.
+    guard(&mut env, |env| {
+        let text = if line.is_null() {
+            String::new()
+        } else {
+            line.try_to_string(env).unwrap_or_default()
+        };
+        super::ingest_note(format!("location: {text}"));
+        Ok(())
+    });
+}
+
 fn natives() -> Vec<NativeMethod<'static>> {
     // SAFETY: the signature matches both the Java declaration
     // (`private static native void nativePosition(double, double, boolean,
@@ -77,11 +109,18 @@ fn natives() -> Vec<NativeMethod<'static>> {
     // written together and must be changed together — a mismatch is not a
     // compile error on either side, it is a crash at the first fix.
     unsafe {
-        vec![NativeMethod::from_raw_parts(
-            jni_str!("nativePosition"),
-            jni_str!("(DDZFZ)V"),
-            native_position as *mut c_void,
-        )]
+        vec![
+            NativeMethod::from_raw_parts(
+                jni_str!("nativePosition"),
+                jni_str!("(DDZFZ)V"),
+                native_position as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeNote"),
+                jni_str!("(Ljava/lang/String;)V"),
+                native_note as *mut c_void,
+            ),
+        ]
     }
 }
 
