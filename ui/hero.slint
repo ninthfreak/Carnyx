@@ -542,13 +542,38 @@ export component HeroRow inherits Rectangle {
     // lag the cards in motion and the departing card dissolve only after it has
     // landed.
     property <bool> fwd: root.step-dir > 0;
-    property <float> m-out: 0;
-    /// Scale, separately from position — see `hero-s`. Same 1 → 0 window, a
-    /// faster curve.
-    property <float> m-scale: 0;
+
+    /// CarFM's `flipProg`, and the reason the two curves below are EXACT.
+    ///
+    /// `Animated.timing(flipProg, { toValue: 1, duration: 520, easing: linear })`
+    /// (CarFmFace.tsx:1061) drives one linear clock, and every geometry channel
+    /// is an `interpolate()` off it with the easing baked into a 13-point sampled
+    /// track (`track()`, :988-993). So the reference's easings are ANALYTIC
+    /// functions — `1 - (1-p)^3` and `1 - (1-p)^5` (:986-987) — approximated by a
+    /// 12-segment polyline.
+    ///
+    /// Slint 1.17 exposes `Math.pow`, so those functions can be written out
+    /// rather than fitted. This clock runs 1 → 0 linearly across the transition
+    /// and `m-out`/`m-scale` are powers of it; since `hero-cx` is
+    /// `rest + (src - rest) * m-out`, `m-out = (1-p)^3` reproduces CarFM's
+    /// `from + (to - from) * (1 - (1-p)^3)` term for term. The previous cut used
+    /// the easings.net Bézier fits, which are within ~1% but are not the same
+    /// function — and are no closer than CarFM's own polyline.
+    property <float> flip: 0;
+    /// POSITION — CarFM's `easeMove`, `1 - (1-p)^3` (CarFmFace.tsx:986).
+    property <float> m-out: Math.pow(root.flip, 3);
+    /// SIZE — CarFM's `easeScale`, `1 - (1-p)^5` (CarFmFace.tsx:987), one power
+    /// faster so that "size settles slightly ahead of position" (:962).
+    ///
+    /// QUINT, NOT THE QUART A PREVIOUS CUT CHOSE. Quart was picked because quint
+    /// puts the arriving card's right edge 8px past the bezel for ~100ms on the
+    /// TALL track. That protected a 360px layout at the cost of the 1024x614 the
+    /// owner actually drives, where quint peaks at 952px of 1024 — and the tall
+    /// track already overhangs by 1.2px under ANY curve. CarFM overhangs there
+    /// too and is clipped by the window.
+    property <float> m-scale: Math.pow(root.flip, 5);
     property <float> m-ghost: 0;
     property <float> m-far: 0;
-    property <float> m-settle: 0;
     /// A morph is on screen. Gates the resting card out and the flying pair in.
     property <bool> morphing: root.m-out > 0.001;
 
@@ -593,8 +618,18 @@ export component HeroRow inherits Rectangle {
     /// worth of weight the whole way across instead of briefly stacking two at
     /// 0.6 and reading as a bright double exposure. A slot that keeps its
     /// occupant simply sits at rest.
-    property <float> dst-weight: root.hand-off
-        ? root.peek-rest * (1.0 - root.m-ghost)
+    /// ONE REPRESENTATION OF THE DEPARTING STATION AT A TIME, which is what
+    /// CarFM gets for free by having only one element.
+    ///
+    /// There, the landing peek IS the departing card: the same node is FLIPped
+    /// from the hero's rect and sits at 0.6 throughout. Here the flying
+    /// `HeroCard` carries it while the morph runs, so the RESTING peek in that
+    /// slot must stay dark until the flying one is gone — otherwise the slot
+    /// holds two cards of the same station and reads at double weight as they
+    /// converge. It was cross-dissolving against the ghost before, which was
+    /// Carnyx compensating for a beat the reference does not have.
+    property <float> dst-weight: (root.hand-off && root.morphing)
+        ? 0.0
         : root.peek-rest;
     /// The station arriving from further out.
     property <float> far-weight: root.peek-rest * (1.0 - root.m-far);
@@ -679,19 +714,25 @@ export component HeroRow inherits Rectangle {
     // a logo hero and a no-logo hero starts this card at the new card's height
     // rather than the old one's. Cloning the departing node is the only way round
     // that, and there is no cloning here; carrying the station across is.
-    if root.hand-off && root.m-settle > 0.001: HeroCard {
+    if root.hand-off && root.morphing: HeroCard {
         scale: root.out-s;
         width: root.card-w * root.out-s;
         height: root.resolved-card-h * root.out-s;
         x: root.out-cx - self.width / 2;
         y: root.out-cy - self.height / 2;
-        // THE ONE OPACITY THIS MORPH GAINED, and it is a landing, not a fade-out.
-        // `m-settle` holds at 1 for the whole travel and only then dissolves over
-        // 140ms from 380ms, so the card leaves as a solid object and hands over
-        // to the peek that has firmed up underneath it. Fading it while it flew made the
-        // station read as a ghost of itself rather than as the card departing —
-        // and this tree already has a ghost, which is a different card.
-        opacity: root.m-settle;
+        // CONSTANT 0.6, WHICH IS CarFM'S, and the `m-settle` beat this replaces
+        // was Carnyx's own invention. In the reference the departing station is
+        // the LANDING PEEK — an ordinary `SidePresetCard` FLIPped from the hero's
+        // rect (CarFmFace.tsx:1529-1545) — and its opacity is the static branch
+        // of `isEntering ? enterOpacity : PEEK_OPACITY` (:1538). It is never
+        // animated: it is at 0.6 on frame 0 and 0.6 on frame 520.
+        //
+        // A previous cut flew this at full strength and dissolved it over 140ms
+        // from 380ms, on the stated grounds that "the card travels at full
+        // strength, because that is what CarFM's does". That was wrong about the
+        // reference — it read `centerTransform`, which is the ARRIVING card, and
+        // the arriving card is indeed at full opacity in both.
+        opacity: root.peek-rest;
         inert: true;
         ident: root.outgoing.ident;
         freq-label: root.outgoing.freq-label;
@@ -804,11 +845,9 @@ export component HeroRow inherits Rectangle {
             // hero and the cards beside it cannot drift out of step. Two curves,
             // one clock — see the `out` block for why scale is the faster of
             // them.
-            root.m-out: 1.0;
-            root.m-scale: 1.0;
+            root.flip: 1.0;
             root.m-ghost: 1.0;
             root.m-far: 1.0;
-            root.m-settle: 1.0;
             // NO OPACITY. The card travels at full strength, because that is
             // what CarFM's does: its `centerTransform` is translate and scale
             // only, and the two opacity animations in that morph belong to the
@@ -822,70 +861,33 @@ export component HeroRow inherits Rectangle {
             // NO `in` BLOCK either. Going in must be instantaneous, or the card
             // visibly slides AWAY to the peek slot before coming back.
             out {
-                // POSITION. CarFM's `easeMove`, `1 - (1-p)^3`.
-                animate root.m-out {
+                // ONE LINEAR CLOCK, exactly CarFM's: `duration: 520,
+                // easing: Easing.linear` (CarFmFace.tsx:1061). Position and size
+                // get their shapes from `Math.pow` on this, not from an easing
+                // here — see `flip`.
+                animate root.flip {
                     duration: 520ms;
-                    easing: cubic-bezier(0.33, 1, 0.68, 1);
+                    easing: linear;
                 }
-                // SCALE, ahead of position — but QUART, not CarFM's quint, and
-                // the difference is forced by geometry rather than taste.
-                //
-                // The incoming card is centred on the peek slot and grows about
-                // that centre, so size running ahead of position means a nearly
-                // full-size card still sitting out at the slot. On the tall
-                // track (360px wide, 295px card, source centre at 329.5) there
-                // is no room for it: the card's right edge peaks at
-                //
-                //     cubic — the old shared curve — 361.2px   (at p=0 only)
-                //     quart                          361.4px
-                //     quint — CarFM's                368.3px   (around p=0.12)
-                //
-                // against a 360px screen. `edgeprobe` fails both tall
-                // directions on quint, at t+206ms and t+220ms, which is that
-                // 8px sitting on the bezel for ~100ms. Quart keeps the whole
-                // character — size still resolves well ahead of position — for
-                // 0.2px more overhang than the shared curve already had.
-                //
-                // THE BASELINE IS ITSELF AT THE LINE, which is worth recording:
-                // 361.2px means the old code hangs 1.2px off the tall track for
-                // one frame at p=0. `edgeprobe` misses it because it sleeps 20ms
-                // before its first sample. Not introduced here and not fixed
-                // here; the tall track's peeks are designed to clip.
-                animate root.m-scale {
-                    duration: 520ms;
-                    easing: cubic-bezier(0.25, 1, 0.5, 1);
-                }
-                // THE DISCARDED CARD GOES, AND GOES FAST. CarFM fades this over
-                // the full 520ms and Carnyx copied it; both are wrong for this
-                // face. A card that is leaving the strip should be gone while
-                // the cards that are MOVING still have most of their journey
-                // left, or the row reads as four things dissolving into each
-                // other rather than three things moving. Its partner
-                // `dst-weight` firms up on the same curve, so the slot is fully
-                // handed over by 160ms and simply holds.
+                // THE DISCARDED CARD — CarFM's `cloneOpacity` (CarFmFace.tsx:1062):
+                // 0.6 to 0 across the FULL window, no delay, on CSS ease
+                // (`Easing.bezier(0.25, 0.1, 0.25, 1)`), which Slint takes as the
+                // same four numbers. A previous cut ran this in 160ms linear on
+                // the argument that a leaving card should snap away; the
+                // reference is the spec now.
                 animate root.m-ghost {
-                    duration: 160ms;
-                    easing: linear;
+                    duration: 520ms;
+                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
                 }
-                // The station arriving from further out, held to the HALFWAY
-                // mark. It is the only card that has nothing to do with the
-                // movement, so it waits until the movement is the story and then
-                // arrives into a row that has already resolved.
+                // THE STATION ARRIVING FROM FURTHER OUT — CarFM's `enterOpacity`
+                // (CarFmFace.tsx:1063): 0 to 0.6 over a FULL 520ms window after a
+                // 120ms delay, same ease. So it finishes 120ms AFTER the travel
+                // does, which is the reference's shape; a previous cut compressed
+                // it to land with everything else.
                 animate root.m-far {
-                    duration: 260ms;
-                    delay: 260ms;
-                    easing: linear;
-                }
-                // The card that left, handing over to the peek it landed on.
-                // NOT a transition in its own right — by 380ms the travel is
-                // 97% done and the scale is finished, so the two cards are the
-                // same size in the same place and this is a seam, not a fade.
-                // Kept short for exactly that reason: any longer and movement
-                // that has already happened gets re-told as a dissolve.
-                animate root.m-settle {
-                    duration: 140ms;
-                    delay: 380ms;
-                    easing: linear;
+                    duration: 520ms;
+                    delay: 120ms;
+                    easing: cubic-bezier(0.25, 0.1, 0.25, 1);
                 }
             }
         }
