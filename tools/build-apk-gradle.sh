@@ -6,7 +6,8 @@
 # because when this fails you want to know which half failed without reading a
 # Gradle stack trace in a car park.
 #
-#   ./tools/build-apk-gradle.sh              # debug APK, both ABIs
+#   ./tools/build-apk-gradle.sh              # both ABIs, Rust built RELEASE
+#   CARNYX_RUST_DEBUG=1 ./tools/build-apk-gradle.sh   # unoptimised Rust
 #   ./tools/build-apk-gradle.sh armeabi-v7a  # just the ABI the unit needs
 #
 # WHY THIS EXISTS: cargo-apk cannot declare a <service> or a <receiver>, so it
@@ -344,7 +345,39 @@ rm -rf "$JNI_DIR"
 mkdir -p "$JNI_DIR"
 targets=()
 for abi in "${ABIS[@]}"; do targets+=(-t "$abi"); done
-cargo ndk "${targets[@]}" --platform "$API" -o "$JNI_DIR" build --lib
+# ── THE PROFILE, AND IT WAS THE ANIMATION BUG ───────────────────────────────
+#
+# This line read `build --lib` with no profile, so every APK ever installed on
+# the unit carried an UNOPTIMISED libcarnyx.so: opt-level 0, debug-assertions on,
+# overflow-checks on. Cargo.toml sets no `[profile.dev]` overrides, so those are
+# the plain defaults.
+#
+# MEASURED, on `examples/morphbench.rs`, drawing flat out for one 520ms preset
+# morph on a machine far faster than the head unit:
+#
+#     debug     9 frames   58.0 ms apart   worst gap 98.4 ms
+#     release 185 frames    2.8 ms apart   worst gap  4.3 ms
+#
+# Nine frames is not an animation, it is a slideshow — and that is the ceiling on
+# a fast desktop, so the unit's is lower again. Every hour spent on easing curves
+# and fade timings was spent on something the driver could not see, because the
+# renderer never got the frames to show it. The owner's words: "it's an actual
+# animation unlike what I've seen in Carnyx."
+#
+# The same profile also explains why a debug APK is more fragile than it should
+# be: overflow-checks turn an arithmetic wrap that release absorbs into a panic,
+# which is the class of fault `src/crashlog.rs` exists to catch.
+#
+# Release is the default now. `CARNYX_RUST_DEBUG=1` opts out, matching the
+# CARNYX_ALLOW_ANY_NDK escape hatch above, for when a panic message and a real
+# backtrace matter more than frame rate.
+if [[ -n "${CARNYX_RUST_DEBUG:-}" ]]; then
+  say "     PROFILE: debug (CARNYX_RUST_DEBUG is set) — expect a stepped morph"
+  profile_args=()
+else
+  profile_args=(--release)
+fi
+cargo ndk "${targets[@]}" --platform "$API" -o "$JNI_DIR" build --lib "${profile_args[@]+"${profile_args[@]}"}"
 
 for abi in "${ABIS[@]}"; do
   [[ -f "$JNI_DIR/$abi/libcarnyx.so" ]] \

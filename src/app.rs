@@ -1590,6 +1590,15 @@ impl App {
     /// group shapes replayed; on the device this loop is the vendor's 90 ms pump
     /// and every group goes to `push()` undeduplicated, because the consensus
     /// gates count the repeats.
+    /// The RDS pump, for `examples/morphbench.rs`.
+    ///
+    /// It runs inside `tune`, which runs after the morph is armed and before any
+    /// frame can be drawn — so its cost is time the animation spends advancing
+    /// off screen. Exposed so that can be measured rather than argued about.
+    pub fn pump_rds_until_settled_for_bench(&self) {
+        self.pump_rds_until_settled();
+    }
+
     fn pump_rds_until_settled(&self) {
         // NEVER against a real radio. The corpus below is SYNTHESISED — the
         // block bit-layouts for WERN were computed, not captured — so replaying
