@@ -777,7 +777,28 @@ export component HeroRow inherits Rectangle {
         // height with it, which is the collapse this card exists to prevent.
         // `inert` alongside, so an invisible card cannot take the taps its star
         // and power button would otherwise still receive.
-        opacity: root.morphing ? 0 : 1;
+        //
+        // `visible`, NOT `opacity: 0`, and the two are not the same instruction.
+        // `opacity` compiles to an Opacity item, and `Opacity::need_layer`
+        // (i-slint-core items.rs:953) returns false only at 1.0 or for a childless
+        // subtree — a HeroCard is neither, so Skia ran `save_layer_alpha`, drew
+        // this entire card into that layer and composited it at alpha zero. Every
+        // frame, for all 520ms of every step. `visible` lowers to a Clip with
+        // `clip: !visible` (i-slint-compiler passes/visible.rs) and an empty clip
+        // returns `ContinueRenderingWithoutChildren` (item_rendering.rs:529), so
+        // nothing under it is drawn at all. The card keeps its geometry either
+        // way, which is what the paragraph above is really asking for — the
+        // collapse it warns about belongs to `if`, not to this.
+        //
+        // NOT MEASURED, AND IT CANNOT BE FROM HERE. The layer is a SKIA
+        // behaviour: `i-slint-renderer-software` has no `visit_opacity` override
+        // at all, so on the host `opacity: 0` merely draws with alpha zero and
+        // there is nothing for this to save. `morphbench` A/B'd it four times and
+        // the difference sat inside the run-to-run spread (144-170 frames either
+        // way). The saving is real on the device's renderer and invisible on the
+        // one every probe in this tree uses. `outprobe` was run before and after
+        // and reports pixel-identical geometry, which is what was checkable here.
+        visible: !root.morphing;
         inert: root.morphing;
         ident: root.ident;
         freq-label: root.freq-label;

@@ -127,7 +127,13 @@ pub const DB_FILE: &str = "stations.sqlite";
 /// read CarFM's changelog for it. Unlike CarFM a bump carries NOTHING forward —
 /// CarFM had to migrate logo rows out of the outgoing copy, and Carnyx keeps
 /// logos outside this database, so the replace is a plain one.
-pub const DB_ASSET_VERSION: &str = "1";
+///
+/// 1 → 2: `idx_service_freq` added, for [`StationDb::at_frequency`]. The rows are
+/// untouched — the only difference is an index and the `ANALYZE` statistics
+/// beside it — but a device still holding the copy extracted under version 1 has
+/// no index in it, and would go on scanning all 20,733 rows while the code that
+/// asked for the index looked correct. A bump is what replaces it.
+pub const DB_ASSET_VERSION: &str = "2";
 
 // ── Geo (CarFM `stationGeo.ts`) ──────────────────────────────────────────────
 
@@ -636,6 +642,19 @@ impl StationDb {
         Ok(rows)
     }
 
+    /// The one statement [`StationDb::at_frequency`] runs, hoisted out so the
+    /// test can EXPLAIN it.
+    ///
+    /// A TEST THAT RETYPES THE SQL PROVES NOTHING, and that is not a hypothetical:
+    /// the first cut of `the_frequency_lookup_uses_its_index` explained a string
+    /// it wrote itself, so reverting this function to the `ABS()` predicate left
+    /// it passing. Sabotage caught it. There is one string now and both read it.
+    const AT_FREQUENCY_SQL: &str =
+        "SELECT callsign, callsign_base, frequency_mhz, service, station_class, erp_kw,
+                lat, lon, city, state, facility_id
+           FROM stations
+          WHERE service = 'FM' AND frequency_mhz > ?1 AND frequency_mhz < ?2";
+
     /// Every FULL-POWER station on one dial frequency, nationwide.
     ///
     /// Small (the FM raster puts on the order of a hundred rows on a channel) and
@@ -646,17 +665,34 @@ impl StationDb {
     /// Translators and LPFM are excluded ON PURPOSE, not for size: the RBDS
     /// call-sign formula does not apply to them (NRSC-G300), so a PI derived from
     /// their call sign is noise, and the only caller matches on a derived PI.
+    /// A BARE RANGE ON THE COLUMN — see [`AT_FREQUENCY_SQL`], which is a constant
+    /// so the test can ask the planner about the query this really runs.
+    ///
+    /// This was `ABS(frequency_mhz - ?1) < ?2`, which reads identically and can
+    /// never use an index: wrapping the column in a function leaves SQLite no
+    /// ordered quantity to seek on, so it scanned all 20,733 rows on every call.
+    /// `resolve_presets` makes six of these and the hero a seventh every time the
+    /// car moves past the refresh threshold, on the UI thread.
+    ///
+    /// TWO CHANGES THAT ONLY WORK TOGETHER, which is worth knowing before anyone
+    /// reverts half of them. `idx_service_freq` on `(service, frequency_mhz)` is
+    /// useless while the predicate is a function call, and this predicate is
+    /// merely equivalent without the index. Together: `SCAN stations` becomes
+    /// `SEARCH stations USING INDEX idx_service_freq`, measured at 15.5ms → 1.9ms
+    /// for those seven lookups. `the_frequency_lookup_uses_its_index` holds both.
+    ///
+    /// EXACTLY THE SAME ROWS. `ABS(f - m) < e` is `m - e < f < m + e`, and both
+    /// bounds stay strict so the boundary behaves as it did. The arithmetic moves
+    /// from SQLite to Rust, which could in principle differ by an ulp for a row
+    /// sitting exactly `FREQ_EPS` from the dial — the FM raster is 0.2 MHz and
+    /// `FREQ_EPS` is 0.05, so no licensed frequency can land there.
     pub fn at_frequency(&self, mhz: f64) -> rusqlite::Result<Vec<StationRow>> {
         if !mhz.is_finite() || mhz <= 0.0 {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT callsign, callsign_base, frequency_mhz, service, station_class, erp_kw,
-                    lat, lon, city, state, facility_id
-               FROM stations WHERE service = 'FM' AND ABS(frequency_mhz - ?1) < ?2",
-        )?;
+        let mut stmt = self.conn.prepare_cached(Self::AT_FREQUENCY_SQL)?;
         let rows = stmt
-            .query_map((mhz, FREQ_EPS), map_row)?
+            .query_map((mhz - FREQ_EPS, mhz + FREQ_EPS), map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1705,6 +1741,62 @@ mod tests {
         assert!(db.at_frequency(f64::NAN).unwrap().is_empty());
     }
 
+    /// THE FREQUENCY LOOKUP MUST SEEK, NOT SCAN — and both halves of that are
+    /// held here because either one alone is silently useless.
+    ///
+    /// `at_frequency` ran `ABS(frequency_mhz - ?1) < ?2` against a table with no
+    /// index on frequency, and read all 20,733 rows every time. Adding the index
+    /// without rewriting the predicate changes nothing, because a column inside a
+    /// function call cannot be sought. Rewriting the predicate without shipping
+    /// the index changes nothing either. So this asserts the OUTCOME — that the
+    /// planner really seeks — rather than the SQL text or the schema, and fails
+    /// if either half is reverted.
+    ///
+    /// The plan comes from the shipped asset, so a rebuild of the database that
+    /// forgot the index fails here too, which is the case a code-only test would
+    /// let through.
+    #[test]
+    fn the_frequency_lookup_uses_its_index() {
+        let db = db();
+        // THE STATEMENT THE FUNCTION REALLY RUNS, read from the same constant it
+        // reads. Retyping the SQL here is what made the first cut of this test
+        // pass while `at_frequency` had been reverted to `ABS()`.
+        let plan: String = db
+            .conn
+            .query_row(
+                &format!("EXPLAIN QUERY PLAN {}", StationDb::AT_FREQUENCY_SQL),
+                (101.5 - FREQ_EPS, 101.5 + FREQ_EPS),
+                |r| r.get(3),
+            )
+            .unwrap();
+        assert!(
+            plan.contains("USING INDEX idx_service_freq"),
+            "the shipped database must let this seek, got {plan:?}"
+        );
+        assert!(!plan.contains("SCAN"), "and it must not fall back to a scan, got {plan:?}");
+
+        // AND THE SAME ROWS AS THE PREDICATE IT REPLACED. The rewrite is only
+        // safe because `ABS(f - m) < e` and `m - e < f < m + e` are the same set;
+        // asked of the real table rather than argued about.
+        let mut old = db
+            .conn
+            .prepare(
+                "SELECT callsign FROM stations
+                  WHERE service = 'FM' AND ABS(frequency_mhz - ?1) < ?2",
+            )
+            .unwrap()
+            .query_map((101.5, FREQ_EPS), |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let mut now: Vec<String> =
+            db.at_frequency(101.5).unwrap().into_iter().map(|r| r.callsign).collect();
+        old.sort();
+        now.sort();
+        assert!(!now.is_empty(), "101.5 has full-power licensees");
+        assert_eq!(old, now);
+    }
+
     #[test]
     fn the_callsign_lookup_uppercases_its_argument() {
         let db = db();
@@ -1717,13 +1809,20 @@ mod tests {
 
     // ── Installing the asset ─────────────────────────────────────────────────
 
+    /// The shipped asset's size, asserted three times below because each of the
+    /// three recovery paths has to land the WHOLE file and not a truncated one.
+    ///
+    /// 2_584_576 until `idx_service_freq` and its `ANALYZE` statistics were added
+    /// for `at_frequency`. Not one row changed; see `DB_ASSET_VERSION`.
+    const DB_BYTES: u64 = 3_006_464;
+
     #[test]
     fn install_extracts_once_and_replaces_on_a_version_bump() {
         let dir = std::env::temp_dir().join(format!("carnyx-db-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
 
         // Counts calls of the ASSET CLOSURE, not of `install` — the point of the
-        // closure is that a launch with a current copy never touches the 2.5 MB
+        // closure is that a launch with a current copy never touches the 3 MB
         // asset at all.
         let reads = std::cell::Cell::new(0u32);
         let extract = |dir: &Path| {
@@ -1736,7 +1835,7 @@ mod tests {
 
         let path = extract(&dir);
         assert!(path.exists());
-        assert_eq!(fs::metadata(&path).unwrap().len(), 2_584_576);
+        assert_eq!(fs::metadata(&path).unwrap().len(), DB_BYTES);
         assert_eq!(reads.get(), 1);
         // The copy is openable and complete, not merely present.
         assert_eq!(
@@ -1755,7 +1854,7 @@ mod tests {
         fs::write(&stamp, "0").unwrap();
         fs::write(&path, b"not a database").unwrap();
         extract(&dir);
-        assert_eq!(fs::metadata(&path).unwrap().len(), 2_584_576);
+        assert_eq!(fs::metadata(&path).unwrap().len(), DB_BYTES);
         assert_eq!(reads.get(), 2);
 
         // No stamp at all is the same as a stale one — the case a crash between
@@ -1763,7 +1862,7 @@ mod tests {
         fs::remove_file(&stamp).unwrap();
         fs::write(&path, b"not a database").unwrap();
         extract(&dir);
-        assert_eq!(fs::metadata(&path).unwrap().len(), 2_584_576);
+        assert_eq!(fs::metadata(&path).unwrap().len(), DB_BYTES);
         assert_eq!(reads.get(), 3);
         assert!(!dir.join(format!("{DB_FILE}.tmp")).exists(), "no half-written copy is left");
 
