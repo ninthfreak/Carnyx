@@ -25,6 +25,22 @@
 //! Before the fix: 0/6 wrong with a silent tuner, 5/6 wrong in every case where
 //! the vendor also spoke. After: 0/6 in all four.
 //!
+//! ## AND WHAT ALL FOUR OF THEM MISSED
+//!
+//! > "A few times when using the steering wheel controls, it did end up jumping
+//! > to a wrong station."
+//!
+//! Cases A–E read `freq-label` and move the vendor with `vendor_reports`, which
+//! is a bare notification. It leaves the fake's own frequency where this app
+//! last put it, so the simulated radio is obediently on our station however
+//! loudly the report disagrees — the LABEL is the only thing those cases can
+//! ever find wrong. The vendor's bank walk is a real retune, and when its
+//! command lands after ours the RADIO is the thing left elsewhere. Case F is
+//! that, and it is the only case here that asks the tuner rather than the face.
+//!
+//! Case F before its fix: 6/6, the radio on the vendor's 99.9 every time, while
+//! the label read the target for two seconds and then admitted it. After: 0/6.
+//!
 //! ## Reading this probe
 //!
 //! THE STARTING POSITION IS SET BY TUNING, never by `vendor_reports`. That is
@@ -227,9 +243,50 @@ fn main() {
     println!("   both edges in ONE drain  : {} -> {same_drain}  (want {})", STRIP[0], STRIP[1]);
     println!("   edges in SEPARATE drains : {} -> {split_drain}  (want {})", STRIP[0], STRIP[1]);
 
+    // ── AND WHERE THE RADIO ACTUALLY IS, which A–E never once asked.
+    //
+    // Every case above reads `freq-label`, and every one of them moves the
+    // vendor with `vendor_reports` — a bare notification. That leaves the fake's
+    // own frequency wherever this app last put it, so the simulated radio is
+    // obediently correct no matter how loudly the report disagrees, and the
+    // label is the only thing that can ever be wrong. Six cases of vendor
+    // traffic and not one of them could have caught a wrong LANDING.
+    //
+    // The vendor's bank walk is a RETUNE. `vendor_tunes_for_test` commands the
+    // front end and then reports, which is what the service does, and the last
+    // command wins. Here it lands AFTER ours — the arrival order D covers for
+    // the label, applied to the hardware.
+    println!("\nF. vendor RETUNES after our step — where does the radio end up?");
+    let mut wrong_radio = 0;
+    for (i, from) in STRIP.iter().enumerate() {
+        driver.tune_for_test(*from);
+        driver.drain_events();
+        // Asynchronous reporting, as on the device: `NwdBridge.tune` commands
+        // and returns. With the synchronous echo our own tune confirms itself
+        // and releases the hold before the vendor has said a word.
+        driver.set_echo_for_test(false);
+        carnyx::android::ingest_panel_key(PRESET_NEXT, "down".into());
+        driver.drain_events();
+        driver.vendor_tunes_for_test(99.9);
+        driver.drain_events();
+        driver.set_echo_for_test(true);
+        render();
+        let want = STRIP[(i + 1) % STRIP.len()];
+        let got = driver.tuned_mhz_for_test().unwrap_or(f32::NAN);
+        let ok = (got - want).abs() < 0.05;
+        if !ok {
+            wrong_radio += 1;
+        }
+        println!(
+            "   from {from:>5} (#{i})  want {want:>5}  radio on {got:>5}  {}",
+            if ok { "ok" } else { "WRONG" }
+        );
+    }
+
     println!(
         "\nwrong steps — quiet tuner: {wrong_quiet}/6, vendor off-strip: {wrong_loud}/6, \
-         vendor on-strip: {wrong_collide}/6, vendor late: {wrong_late}/6"
+         vendor on-strip: {wrong_collide}/6, vendor late: {wrong_late}/6, \
+         radio left elsewhere: {wrong_radio}/6"
     );
     ui.hide().expect("hide");
 }

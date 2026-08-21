@@ -1086,6 +1086,63 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
+### 85. Stop the vendor's bank walk keeping the radio
+**DONE.**
+
+> "A few times when using the steering wheel controls, it did end up jumping to a
+> wrong station."
+
+`State::hold` fixed what the driver SEES while the vendor's RadioService walks its
+own hardware preset bank. It has no opinion about where the RADIO is, and that
+walk is a real retune: when the vendor's command reached the front end after ours,
+the station playing was the vendor's, the face rendered the target for two seconds
+and then the hold expired and admitted it. `NwdBridge.java:511-514` had asserted
+this was handled — "the app reasserts its own preset immediately after, which is
+what makes the app's order win" — which described an intention, not the code.
+
+Now `State::reassert`: a frequency report that contradicts a live hold records the
+target, and `drain_events` re-commands it. Budgeted at `REASSERT_TRIES` = 2, so a
+vendor that keeps retuning is not fought forever — past the budget the hold expires
+and the face shows where the radio really is. A hold is dropped by any tune to a
+different frequency and by both seek paths, so a re-assert cannot cancel a sweep or
+render an abandoned station over a new one.
+
+**FOUR PROBE CASES OF VENDOR TRAFFIC COULD NEVER HAVE CAUGHT THIS.** Cases A–E of
+`wheelprobe` all read `freq-label` and move the vendor with `ingest_frequency` — a
+bare notification that leaves the fake's own frequency where the app put it, so the
+simulated radio was obediently correct however loudly the report disagreed. Case F
+uses `FakeTuner::vendor_tunes`, which COMMANDS the front end and then reports, and
+asks the tuner rather than the face: 6/6 wrong before, 0/6 after.
+
+Pinned by `a_vendor_retune_after_ours_does_not_keep_the_radio`,
+`the_reassert_budget_runs_out` and `a_stale_reassert_cannot_undo_a_newer_step`, all
+three sabotage-checked. The budget test asserts every attempt INSIDE the budget as
+well as the one past it — a first cut asserted only the final frequency and passed
+with the whole feature switched off. The staleness sabotage reproduced the original
+complaint exactly: 105.5 instead of 98.1, a step backwards.
+
+**Still open:** the release-edge double step — see #86, now instrumented.
+
+### 86. Settle whether one wheel press sends one broadcast or two
+**OPEN — needs one drive, no further code.**
+
+`panel_action` refuses a release edge with `action.eq_ignore_ascii_case("up")`, but
+`NwdBridge.java:540` passes the INTENT ACTION into that argument
+("com.nwd.action.ACTION_KEY_VALUE"), so on the unit the test compares against a
+string it never receives and cannot fire. `wheelprobe` case E shows the cost if the
+MCU does send both edges: with them in separate drains one press steps two stations
+— 102.1 to 105.5 where 88.7 was wanted. That is a wrong landing, and it is NOT the
+one #85 fixes.
+
+The intent carries a key byte and nothing else — no press/release flag — so the
+answer exists only in the timing, and only on the unit. The diagnostics line now
+prints the gap since the last identical key: `panel key 62 (preset next) ... +14ms`.
+One line per press means the dead guard has nothing to guard; two lines a few
+milliseconds apart means every press is stepping twice.
+
+NOT DEBOUNCED ON A GUESS. A window picked without the measurement would swallow a
+genuine quick double-press to defend against a second broadcast that may not exist.
+
 ### 84. Close the four defects the preset sweep confirmed
 **DONE**, all four, each with the evidence attached.
 
@@ -1128,7 +1185,7 @@ call hands out a fresh window adapter, because sharing one fails on the second
 `AppWindow`. Both tests sabotage-checked.
 
 **Still open from that sweep:** the release-edge double step, which needs one
-observation from the unit — see #83.
+observation from the unit — see #86.
 
 ### 83. Find out what panel key 14 is
 **OPEN.** Code 14 reached the app EIGHT TIMES in CarFM's drive log of

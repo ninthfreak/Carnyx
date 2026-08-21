@@ -512,6 +512,14 @@ public final class NwdBridge {
     // normal broadcast cannot be cancelled, so the service still acts; the app
     // reasserts its own preset immediately after, which is what makes the app's
     // order win.
+    //
+    // THAT LAST CLAUSE DESCRIBED AN INTENTION, NOT THE CODE, for as long as it
+    // has been here. The app tuned once and stopped, so whichever of the two
+    // commands reached the front end last was the station that played — and when
+    // it was the vendor's, nothing put the driver back: "a few times when using
+    // the steering wheel controls, it did end up jumping to a wrong station."
+    // It is true now. State::reassert in src/app.rs is what makes it so, and
+    // examples/wheelprobe.rs case F is what measures it.
     private static BroadcastReceiver panelReceiver;
 
     private static synchronized void startPanelKeyWatch() {

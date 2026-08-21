@@ -403,6 +403,50 @@ struct State {
     /// the TARGET and ignores the live tuner. Purely cosmetic and time-boxed"
     /// (`CarFmFace.tsx:756-760`).
     hold: Option<Hold>,
+    /// A target the FRONT END still owes, because a report has just said it is
+    /// somewhere else while a hold was live.
+    ///
+    /// THE HOLD ALONE ONLY FIXES THE FACE. It renders the target and rides out
+    /// the vendor's transit frequencies, and for two seconds that is the whole
+    /// story — but the hold has no opinion about where the RADIO is. One press
+    /// makes the vendor's RadioService walk its own hardware bank, and that walk
+    /// COMMANDS the tuner; whichever command lands last is the station coming
+    /// out of the speakers. When the vendor's lands after ours, nothing put the
+    /// driver back, so the face showed the right station for two seconds and
+    /// then quietly admitted the radio was elsewhere: "a few times when using
+    /// the steering wheel controls, it did end up jumping to a wrong station."
+    ///
+    /// `NwdBridge.java:511-514` already asserted this was handled — "the app
+    /// reasserts its own preset immediately after, which is what makes the app's
+    /// order win". It was a description of an intention, not of the code. This
+    /// is the code.
+    ///
+    /// Taken and re-commanded by `drain_events`, never from inside `apply_event`
+    /// — that runs with `State` borrowed and `tune` re-enters the same cell.
+    reassert: Option<f32>,
+    /// How many re-commands the LIVE hold has left. Re-armed when a step takes a
+    /// hold, so a budget one press spent is not inherited by the next.
+    reasserts_left: u8,
+    /// The last panel key and when it arrived, for the diagnostics line only.
+    ///
+    /// INSTRUMENTATION, NOT A GUARD, and the distinction is the point.
+    /// `panel_action` refuses a release edge by testing `action` for "up", but
+    /// `NwdBridge.java:540` passes the INTENT ACTION there —
+    /// "com.nwd.action.ACTION_KEY_VALUE" — so on the unit that test compares
+    /// against a string it never receives. Whether that costs anything depends
+    /// on a fact this side cannot see: does one physical press produce ONE
+    /// broadcast or two? The intent carries a key byte and nothing else, with no
+    /// press/release flag, so the answer exists only in the timing and the
+    /// timing can only be observed on the unit.
+    ///
+    /// `examples/wheelprobe.rs` case E shows the cost if the answer is two: a
+    /// step of two stations when the edges land in separate drains. That is a
+    /// wrong landing, and it is NOT the one [`State::reassert`] fixes.
+    ///
+    /// So this logs the gap rather than acting on it. Debouncing on a guessed
+    /// window would swallow a genuine quick double-press to defend against a
+    /// second broadcast that may not exist; one drive with this line settles it.
+    last_panel: Option<(i32, std::time::Instant)>,
     /// The last trustworthy level reading, or `None` for no reading at all.
     level: Option<i32>,
     /// The hysteresis' one piece of state, settled once per poll and fed back.
@@ -629,6 +673,12 @@ impl State {
     fn expire_hold(&mut self) {
         if self.hold.is_some_and(|h| h.at.elapsed() >= HOLD_CAP) {
             self.hold = None;
+            // AND THE RE-COMMAND GOES WITH IT. Past the cap this app has stopped
+            // claiming the front end is on the target, so it must stop trying to
+            // put it there too — a re-assert fired after the face has told the
+            // truth would move the radio out from under a station the driver can
+            // now see is playing.
+            self.reassert = None;
         }
     }
 
@@ -666,6 +716,21 @@ struct Hold {
 /// every transit frequency the vendor emits, which is the churn the cap exists
 /// to bound.
 const HOLD_CAP: std::time::Duration = std::time::Duration::from_millis(2000);
+
+/// How many times one step will re-command its target when the front end is
+/// reported somewhere else. See [`State::reassert`].
+///
+/// SMALL ON PURPOSE, and the reason is that this is a race with another process
+/// rather than a retry against a flaky call. Two commands cover the case the
+/// hardware actually produces — the vendor's bank walk is one retune per press,
+/// so one re-assert after it is enough and the second is slack for a report that
+/// arrives out of order. An unbounded version would be an app and a vendor
+/// service taking turns retuning the radio for as long as the driver held still,
+/// which is worse than either landing.
+///
+/// When the budget is spent the hold simply expires and the face shows where the
+/// radio really is. Losing honestly beats fighting forever.
+const REASSERT_TRIES: u8 = 2;
 
 /// What a press on the head unit's own panel means to this app.
 ///
@@ -982,6 +1047,9 @@ impl App {
                 launches,
                 freq_seq: 0,
                 hold: None,
+                reassert: None,
+                reasserts_left: 0,
+                last_panel: None,
                 busy: false,
                 panel_action: None,
                 callsigns,
@@ -1165,6 +1233,40 @@ impl App {
             self.state.borrow_mut().busy = true;
             self.apply_panel_action(action);
             self.state.borrow_mut().busy = false;
+        }
+        // AND THE TARGET RE-COMMANDED, if a report said the front end left it.
+        // See [`State::reassert`]: the hold fixes what the driver SEES, and this
+        // is what puts the radio back under it.
+        //
+        // AFTER THE PANEL LOOP, because a key that has already arrived outranks
+        // a target the driver has stopped asking for — and the guard below is
+        // what stops the older one landing on top of the newer step anyway.
+        //
+        // NOT WRAPPED IN `busy`: `tune` sets and clears it itself across its own
+        // nested drain, which is the same protection and already correct. The
+        // check here is for a re-assert reached from INSIDE that nested drain.
+        //
+        // Terminates on the budget — `REASSERT_TRIES` re-commands per hold, and
+        // only a fresh step re-arms it.
+        loop {
+            let owed = {
+                let mut s = self.state.borrow_mut();
+                if s.busy {
+                    None
+                } else {
+                    // THE HOLD THAT ASKED FOR THIS MUST STILL BE THE LIVE ONE.
+                    // A newer press installs a newer target and a newer hold, and
+                    // re-commanding the older one on top of it would step the
+                    // driver backwards — the exact complaint this whole path
+                    // exists to answer. Dropped either way: a target whose hold
+                    // has gone is a target nothing is claiming any more.
+                    let owed = s.reassert.take();
+                    owed.filter(|mhz| s.hold.is_some_and(|h| h.mhz == *mhz))
+                }
+            };
+            let Some(mhz) = owed else { break };
+            self.state.borrow_mut().settings.log.push(&stamp(), &format!("reasserting {mhz:.1}"));
+            self.tune(mhz);
         }
         // Once, after the whole batch: a position change re-runs the nearby
         // query and re-resolves the hero and the strip, and none of that is
@@ -1463,12 +1565,29 @@ impl App {
                             && (mhz - h.mhz).abs() < crate::stations::FREQ_EPS as f32
                         {
                             s.hold = None;
+                            // Nothing left to owe: the front end is there.
+                            s.reassert = None;
                             let line = format!("settled on {:.1}", h.mhz);
                             s.settings.log.push(&stamp(), &line);
                         } else if s.freq_seq > h.since_seq {
                             let line =
                                 format!("holding {:.1}, dial went to {mhz:.1}", h.mhz);
                             s.settings.log.push(&stamp(), &line);
+                            // AND THE RADIO IS TAKEN BACK, not just the face.
+                            // This branch is the vendor's own bank walk having
+                            // commanded the front end AFTER we did, so the
+                            // station playing is not the one the driver asked
+                            // for and no later event will heal it. See
+                            // [`State::reassert`] for why the hold alone was not
+                            // enough and why this is budgeted.
+                            //
+                            // RECORDED, NOT DONE, because `apply_event` holds
+                            // `State` borrowed for the whole match and `tune`
+                            // borrows the same cell. `drain_events` takes it.
+                            if s.reasserts_left > 0 {
+                                s.reasserts_left -= 1;
+                                s.reassert = Some(h.mhz);
+                            }
                         }
                     }
                 }
@@ -1663,9 +1782,21 @@ impl App {
             }
             TunerEvent::PanelKey { code, key, action } => {
                 let named = key.map_or("unknown", crate::android::PanelKey::label);
-                s.settings
-                    .log
-                    .push(&stamp(), &format!("panel key {code} ({named}) {action}"));
+                // THE GAP SINCE THE LAST IDENTICAL KEY, which is the one fact
+                // that decides whether this unit sends a release edge at all.
+                // See [`State::last_panel`]: two lines a few milliseconds apart
+                // is a press and a release, and means every press is stepping
+                // twice; one line per press means the guard that cannot fire has
+                // nothing to guard against.
+                let gap = s
+                    .last_panel
+                    .and_then(|(c, at)| (c == code).then(|| at.elapsed().as_millis()));
+                s.last_panel = Some((code, std::time::Instant::now()));
+                let line = match gap {
+                    Some(ms) => format!("panel key {code} ({named}) {action} +{ms}ms"),
+                    None => format!("panel key {code} ({named}) {action}"),
+                };
+                s.settings.log.push(&stamp(), &line);
                 // THE ANCHOR IS READ HERE, NOT WHERE THE ACTION RUNS, and that
                 // is the whole fix. `drain_events` applies the action only after
                 // this queue is EMPTY — and one wheel press puts two things in
@@ -2300,7 +2431,24 @@ impl App {
         // after, because the drain exists to flush stale frequency reports
         // before this function asserts the dial it just commanded.
         self.state.borrow_mut().busy = true;
-        self.state.borrow_mut().asserted = Some(mhz);
+        {
+            let mut s = self.state.borrow_mut();
+            s.asserted = Some(mhz);
+            // A HOLD BELONGS TO THE STEP THAT TOOK IT, and this is where one
+            // that has been overtaken is dropped. `step_preset_from` commits the
+            // face and then calls this with the SAME frequency, so its own hold
+            // survives; every other tune — a preset tile, the nearby list, the
+            // numpad, a re-assert for a target that has since changed — is the
+            // driver going somewhere else, and leaving the old hold standing
+            // would render the abandoned station over the new one and then
+            // re-command the radio back to it.
+            if s.hold.is_some_and(|h| {
+                f64::from((h.mhz - mhz).abs()) >= crate::stations::FREQ_EPS
+            }) {
+                s.hold = None;
+                s.reassert = None;
+            }
+        }
         self.drain_events();
         {
             let mut s = self.state.borrow_mut();
@@ -2522,6 +2670,11 @@ impl App {
                 // where reading `dial` used to give -1 and land on entry 0. A
                 // regression introduced with the anchor itself.
                 s.asserted = None;
+                // And the committed face, for the reason `PanelAction::Seek`
+                // gives: a live hold's re-assert would retune mid-sweep and
+                // cancel it.
+                s.hold = None;
+                s.reassert = None;
             }
             // Handed over and let go — see `PanelAction::Seek`. Re-tuning after a
             // hardware seek cancels it.
@@ -2701,6 +2854,19 @@ impl App {
     /// between commanding a tune and hearing about it. No-op on a real tuner.
     pub fn set_echo_for_test(self: &Rc<App>, on: bool) {
         self.state.borrow().tuner.set_echo_for_test(on);
+    }
+
+    /// The VENDOR SERVICE retuning the front end on its own, for tests about who
+    /// gets the last word. See `Tuner::vendor_tune_for_test` — this moves the
+    /// simulated hardware, which a bare frequency report does not.
+    pub fn vendor_tunes_for_test(self: &Rc<App>, mhz: f32) {
+        self.state.borrow().tuner.vendor_tune_for_test(mhz);
+    }
+
+    /// Where the FRONT END is, not where the face says it is. `None` on a real
+    /// tuner. See `Tuner::tuned_mhz_for_test`.
+    pub fn tuned_mhz_for_test(self: &Rc<App>) -> Option<f32> {
+        self.state.borrow().tuner.tuned_mhz_for_test()
     }
 
     /// Take the meter to where a settled poll would leave it, for the screenshot
@@ -2978,6 +3144,12 @@ impl App {
                     // always did: the landed dial is off-strip, so the next
                     // press lands on entry 0.
                     s.asserted = None;
+                    // AND ANY COMMITTED FACE GOES WITH IT. A seek within two
+                    // seconds of a step would otherwise be fought by that step's
+                    // re-assert, which would cancel the sweep — the one thing
+                    // `NwdBridge.seek`'s note says never to do.
+                    s.hold = None;
+                    s.reassert = None;
                     s.tuner.seek(up);
                 }
                 // NO RE-TUNE AFTER, and there used to be one.
@@ -3078,6 +3250,11 @@ impl App {
                 let mut s = self.state.borrow_mut();
                 let since_seq = s.freq_seq;
                 s.hold = Some(Hold { mhz, since_seq, at: std::time::Instant::now() });
+                // A FRESH BUDGET PER PRESS. See [`State::reassert`]. Re-armed
+                // here rather than topped up so a press that spent both attempts
+                // fighting the vendor cannot leave the next one with none.
+                s.reasserts_left = REASSERT_TRIES;
+                s.reassert = None;
             }
             self.step_morph(dir, discards);
             self.tune(mhz);
@@ -4110,6 +4287,140 @@ mod tests {
             ui.get_freq_label().to_string(),
             "93.1",
             "with nothing in flight the face is honest again"
+        );
+    }
+
+    /// THE VENDOR'S BANK WALK DOES NOT GET THE LAST WORD ON THE RADIO.
+    ///
+    /// > "A few times when using the steering wheel controls, it did end up
+    /// > jumping to a wrong station."
+    ///
+    /// The hold fixed what the driver SEES while the vendor walks its own bank.
+    /// It says nothing about where the radio ends up, and the walk is a real
+    /// retune: when the vendor's command lands after ours, the front end is on
+    /// the vendor's station, the face renders the target for two seconds, and
+    /// then the hold expires and admits it. See [`State::reassert`].
+    ///
+    /// ASSERTS ABOUT THE TUNER, NOT THE LABEL, and that is the whole reason this
+    /// test needs `vendor_tunes_for_test` rather than the `vendor_reports` every
+    /// other case here uses. A bare report leaves the fake's own frequency where
+    /// this app put it, so the simulated radio is obediently correct however
+    /// loudly the report disagrees — which is why six wheel-probe cases full of
+    /// vendor traffic never caught this.
+    #[test]
+    fn a_vendor_retune_after_ours_does_not_keep_the_radio() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("reassert");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        // Asynchronous reporting, as on the device — see the hold test above.
+        driver.set_echo_for_test(false);
+
+        // The press. Our step commands strip[2] and the front end takes it.
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+        assert_eq!(
+            driver.tuned_mhz_for_test().map(format_mhz),
+            Some(format_mhz(strip[2])),
+            "our own step reached the front end"
+        );
+
+        // AND THEN the vendor's bank walk retunes on top of it. This is the
+        // ordering the fix is about: before it, the run ended here.
+        driver.vendor_tunes_for_test(99.9);
+        driver.drain_events();
+
+        assert_eq!(
+            driver.tuned_mhz_for_test().map(format_mhz),
+            Some(format_mhz(strip[2])),
+            "the app re-commands its own target, so the driver is left on it"
+        );
+    }
+
+    /// AND IT GIVES UP RATHER THAN FIGHTING FOREVER.
+    ///
+    /// A budget that never ran out would be an app and a vendor service taking
+    /// turns retuning the radio for as long as the driver held still. Past
+    /// [`REASSERT_TRIES`] the app stops, the hold expires on its own clock, and
+    /// the face shows where the radio really is — see [`State::reassert`].
+    #[test]
+    fn the_reassert_budget_runs_out() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("reassert-cap");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        driver.set_echo_for_test(false);
+
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+
+        // A vendor that retunes after every one of ours, one more time than the
+        // budget allows.
+        //
+        // EVERY ATTEMPT INSIDE THE BUDGET IS CHECKED, and that is not padding.
+        // Asserting only the final 99.9 is satisfied by the re-assert never
+        // happening at all — the test passed with the whole feature switched
+        // off, which is a test of nothing. The budget is only a budget if the
+        // spends before it are visible.
+        for attempt in 1..=REASSERT_TRIES {
+            driver.vendor_tunes_for_test(99.9);
+            driver.drain_events();
+            assert_eq!(
+                driver.tuned_mhz_for_test().map(format_mhz),
+                Some(format_mhz(strip[2])),
+                "attempt {attempt} of {REASSERT_TRIES} is inside the budget and takes the radio back"
+            );
+        }
+
+        driver.vendor_tunes_for_test(99.9);
+        driver.drain_events();
+        assert_eq!(
+            driver.tuned_mhz_for_test().map(format_mhz),
+            Some(format_mhz(99.9)),
+            "and the one past the budget is not answered"
+        );
+    }
+
+    /// A NEWER PRESS OUTRANKS AN OLDER TARGET.
+    ///
+    /// The re-assert is recorded when a report contradicts a hold and acted on
+    /// later, so a second press can land in between. Re-commanding the first
+    /// press's target on top of the second one would step the driver BACKWARDS —
+    /// which is the complaint the whole wheel path exists to answer, and would
+    /// be a fine way to reintroduce it. `drain_events` drops a target whose hold
+    /// is no longer the live one.
+    #[test]
+    fn a_stale_reassert_cannot_undo_a_newer_step() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("reassert-stale");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        driver.set_echo_for_test(false);
+
+        // First press: target strip[2], which the front end takes.
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+
+        // THE VENDOR'S RETUNE AND THE SECOND PRESS IN ONE BATCH, which is the
+        // only interleaving where a stale target is still pending when a newer
+        // step runs. `drain_events` empties the tuner queue first — recording
+        // the re-assert — then applies the key, and only then re-commands.
+        // Separate drains would have spent the re-assert before the second press
+        // arrived and the test would pass without exercising anything.
+        driver.vendor_tunes_for_test(99.9);
+        crate::android::ingest_panel_key(62, "down".into());
+        driver.drain_events();
+
+        assert_eq!(
+            driver.tuned_mhz_for_test().map(format_mhz),
+            Some(format_mhz(strip[3])),
+            "the newer step stands; the older target is dropped, not replayed"
         );
     }
 

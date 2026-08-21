@@ -790,6 +790,26 @@ pub trait Tuner: Send + Sync {
     /// tuner has no such switch and needs none.
     fn set_echo_for_test(&self, _on: bool) {}
 
+    /// TEST HOOK. The VENDOR SERVICE moving the front end, as distinct from
+    /// merely reporting that it did.
+    ///
+    /// The difference is the whole content of the wrong-landing bug.
+    /// `ingest_frequency` — which is what every probe here used — pushes a
+    /// report and leaves the simulated hardware exactly where this app put it,
+    /// so the radio can never end up anywhere the app did not ask for and the
+    /// race cannot be reproduced. Keys 62/63 make the vendor's RadioService
+    /// walk its OWN preset bank, and that walk COMMANDS the tuner. Whichever
+    /// command lands last is where the driver ends up.
+    fn vendor_tune_for_test(&self, _mhz: f32) {}
+
+    /// TEST HOOK. Where the front end actually is, which on the device only the
+    /// hardware knows. `None` from a real tuner: this exists so a test can
+    /// assert about the RADIO rather than about the label, and those are the
+    /// two different things `State::hold` deliberately lets diverge.
+    fn tuned_mhz_for_test(&self) -> Option<f32> {
+        None
+    }
+
     /// Does this unit have the vendor radio service at all?
     fn is_available(&self) -> bool;
 
@@ -943,6 +963,29 @@ impl FakeTuner {
         self.lock().echo = on;
     }
 
+    /// The vendor service walking its OWN hardware preset bank: it moves the
+    /// front end and then says so.
+    ///
+    /// NOT `ingest_frequency`, and that distinction is the point. A bare report
+    /// leaves `raw` where this app last put it, so the simulated radio is always
+    /// obediently on the app's station no matter what the report claims — which
+    /// is why six wheel-probe cases full of vendor traffic never once caught a
+    /// wrong LANDING. This is the vendor issuing a command, so the last command
+    /// wins here exactly as it does on the unit.
+    ///
+    /// Reports unconditionally, whatever `echo` says: `echo` models whether OUR
+    /// tune answers synchronously, and the vendor's notification is not ours.
+    pub fn vendor_tunes(&self, mhz: f32) {
+        let (band, raw) = {
+            let mut s = self.lock();
+            let raw = (f64::from(mhz) * f64::from(s.multiplier)).round() as i32;
+            s.raw = raw;
+            s.ps = String::new();
+            (s.band, raw)
+        };
+        ingest_frequency(band as i32, raw, String::new(), -1);
+    }
+
     /// Pretend the wheel was pressed.
     pub fn push_panel_key(&self, code: i32) {
         ingest_panel_key(code, "com.nwd.action.ACTION_KEY_VALUE".into());
@@ -1014,6 +1057,15 @@ impl Tuner for FakeTuner {
 
     fn set_echo_for_test(&self, on: bool) {
         self.set_echo(on);
+    }
+
+    fn vendor_tune_for_test(&self, mhz: f32) {
+        self.vendor_tunes(mhz);
+    }
+
+    fn tuned_mhz_for_test(&self) -> Option<f32> {
+        let s = self.lock();
+        Some(s.raw as f32 / s.multiplier as f32)
     }
 
     fn seek(&self, up: bool) {
