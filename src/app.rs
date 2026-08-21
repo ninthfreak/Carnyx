@@ -2856,6 +2856,12 @@ impl App {
         self.state.borrow().tuner.set_echo_for_test(on);
     }
 
+    /// Point the fake tuner's log export at a directory a test can read. No-op on
+    /// a real tuner, where the destination is Downloads and not ours to choose.
+    pub fn set_log_dir_for_test(self: &Rc<App>, dir: std::path::PathBuf) {
+        self.state.borrow().tuner.set_log_dir_for_test(dir);
+    }
+
     /// The VENDOR SERVICE retuning the front end on its own, for tests about who
     /// gets the last word. See `Tuner::vendor_tune_for_test` — this moves the
     /// simulated hardware, which a bare frequency report does not.
@@ -3442,10 +3448,12 @@ impl App {
         self.save_prefs();
     }
 
-    /// Every DIAGNOSTICS row but "Clear log" crosses the framework edge, and
-    /// none of it exists here. Each one says so, by name, in the log it would
-    /// have written to — which is more useful than a silent no-op and is
-    /// honest about what has never run.
+    /// The DIAGNOSTICS rows.
+    ///
+    /// "Clear log" and "Save to file" are implemented. The rest still cross the
+    /// framework edge with nothing behind them, and each says so by name in the
+    /// log it would have written to — more useful than a silent no-op, and honest
+    /// about what has never run. See docs/TASKS.md #87 for what each still needs.
     fn run_diag_action(self: &Rc<App>, index: i32) {
         let (action, label) = {
             let s = self.state.borrow();
@@ -3461,6 +3469,33 @@ impl App {
             let mut s = self.state.borrow_mut();
             match action {
                 settings::Action::ClearLog => s.settings.log.clear(),
+                settings::Action::SaveLog => {
+                    let at = stamp();
+                    if s.settings.log.is_empty() {
+                        // CarFM's "Nothing to save" alert (`SettingsPanel.tsx:125`).
+                        // There is no alert here; the log IS the channel, and a
+                        // line saying why is what a tap has to leave behind.
+                        s.settings.log.push(&at, "save to file: the log is empty");
+                    } else {
+                        // `lines().join("\n")` is CarFM's `diagText()` exactly —
+                        // "lines.join('\\n')" (`services/diag.ts:105`), same order,
+                        // oldest first. THE WHOLE RING, not the handful on screen:
+                        // that is the entire reason this exists.
+                        let text = s.settings.log.lines().join("\n");
+                        // ON THE UI THREAD, which CarFM's was not — a `@ReactMethod`
+                        // runs on the native-modules thread. A MediaStore insert
+                        // plus a write of at most 200 short lines is a few
+                        // milliseconds of binder, taken on an explicit tap in a
+                        // settings panel, so the hitch lands where nobody is
+                        // driving by it. Worth knowing if this ever grows.
+                        let outcome = s.tuner.write_log(&text);
+                        let line = match outcome {
+                            Ok(path) => format!("log saved to {path}"),
+                            Err(e) => format!("save to file failed: {e}"),
+                        };
+                        s.settings.log.push(&at, &line);
+                    }
+                }
                 _ => {
                     let at = stamp();
                     s.settings
@@ -4288,6 +4323,100 @@ mod tests {
             "93.1",
             "with nothing in flight the face is honest again"
         );
+    }
+
+    /// "SAVE TO FILE" WRITES THE WHOLE RING, NOT THE HANDFUL ON SCREEN.
+    ///
+    /// The row existed and did nothing: every action but "Clear log" fell into a
+    /// `_` arm that wrote "not available without the head unit" into the very log
+    /// it had been asked to export. This unit has no adb, so the only way a log
+    /// left it was a screenshot of the last few lines while the ring held 200 —
+    /// which is why the panel-key gap line that #86 turns on could not have been
+    /// read.
+    ///
+    /// DRIVEN THROUGH THE UI CALLBACK, not by calling `run_diag_action` directly:
+    /// the row's index comes from `settings::diag_actions`, and a test that
+    /// picked the index itself would still pass if the row moved.
+    #[test]
+    fn saving_the_log_writes_every_line_the_ring_holds() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("savelog");
+
+        let out = std::env::temp_dir().join("carnyx-savelog-out");
+        let _ = std::fs::remove_dir_all(&out);
+        driver.set_log_dir_for_test(out.clone());
+
+        // MORE LINES THAN THE RING HOLDS, so what is asserted is "everything the
+        // app still has", not "everything that ever happened" — the ring drops
+        // the oldest and the file must contain exactly what survived.
+        let over = settings::DiagLog::CAP + 10;
+        {
+            let mut s = driver.state.borrow_mut();
+            for i in 0..over {
+                s.settings.log.push("00:00:00", &format!("line {i}"));
+            }
+        }
+
+        let index = row_index(&driver, "Save to file");
+        ui.invoke_settings_pick_diag_action(index);
+
+        let written = std::fs::read_to_string(out.join("carnyx-tuner-log-1.txt"))
+            .expect("the save wrote a file");
+        let lines: Vec<&str> = written.lines().collect();
+        assert_eq!(lines.len(), settings::DiagLog::CAP, "the whole ring, and no more");
+        assert_eq!(
+            lines.first().map(|l| l.trim()),
+            Some(format!("00:00:00  line {}", over - settings::DiagLog::CAP).trim()),
+            "starting at the oldest line the ring still holds"
+        );
+        assert_eq!(
+            lines.last().map(|l| l.trim()),
+            Some(format!("00:00:00  line {}", over - 1).trim()),
+            "and ending at the newest"
+        );
+
+        // The confirmation goes where the driver is already looking, and names
+        // the path — there is no alert dialog here, so the log is the channel.
+        let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
+        assert!(
+            last.contains("log saved to") && last.contains("carnyx-tuner-log-1.txt"),
+            "the panel says where it went, got {last:?}"
+        );
+    }
+
+    /// AND AN EMPTY LOG WRITES NOTHING.
+    ///
+    /// CarFM's "Nothing to save" alert (`SettingsPanel.tsx:125`). A file of zero
+    /// bytes in Downloads is worse than a refusal: it reads as a log that was
+    /// captured and found nothing.
+    #[test]
+    fn saving_an_empty_log_writes_no_file() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("savelog-empty");
+
+        let out = std::env::temp_dir().join("carnyx-savelog-empty-out");
+        let _ = std::fs::remove_dir_all(&out);
+        driver.set_log_dir_for_test(out.clone());
+        driver.state.borrow_mut().settings.log.clear();
+
+        let index = row_index(&driver, "Save to file");
+        ui.invoke_settings_pick_diag_action(index);
+
+        assert!(!out.join("carnyx-tuner-log-1.txt").exists(), "no file was written");
+        let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
+        assert!(last.contains("the log is empty"), "and it says why, got {last:?}");
+    }
+
+    /// Where a labelled diagnostics row currently sits, so a test names the row
+    /// rather than an index that a reorder would silently change.
+    fn row_index(driver: &Rc<App>, label: &str) -> i32 {
+        let s = driver.state.borrow();
+        let nwd_active = s.tuner.is_available() && s.settings.selected == settings::Source::Nwd;
+        s.settings
+            .actions(nwd_active)
+            .iter()
+            .position(|a| a.label == label)
+            .unwrap_or_else(|| panic!("no {label:?} row")) as i32
     }
 
     /// THE VENDOR'S BANK WALK DOES NOT GET THE LAST WORD ON THE RADIO.

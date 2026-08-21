@@ -790,6 +790,12 @@ pub trait Tuner: Send + Sync {
     /// tuner has no such switch and needs none.
     fn set_echo_for_test(&self, _on: bool) {}
 
+    /// TEST HOOK, defaulted to nothing. Where `write_log` puts the file when
+    /// there is no Downloads folder to put it in. A real tuner ignores it: on the
+    /// device the destination is not ours to choose, which is the point of using
+    /// Downloads at all.
+    fn set_log_dir_for_test(&self, _dir: std::path::PathBuf) {}
+
     /// TEST HOOK. The VENDOR SERVICE moving the front end, as distinct from
     /// merely reporting that it did.
     ///
@@ -855,6 +861,25 @@ pub trait Tuner: Send + Sync {
     /// this inside connect alone, so a session that never bound the built-in
     /// tuner never registered the receiver and stayed light all night. Idempotent.
     fn start_illumination_watch(&self);
+
+    /// Write the diagnostics log to the head unit's public Downloads folder and
+    /// return the human-readable path.
+    ///
+    /// NOT A TUNER CONCERN, and it is here anyway for the reason
+    /// `start_illumination_watch` above is: this trait is the app's only seam
+    /// onto the Java bridge, and the bridge is where the Context lives. CarFM
+    /// kept its `writeLog` in `VibeStreamModule` rather than the radio module,
+    /// which is the tidier split — worth one more trait member here, not worth a
+    /// second JNI class and a second dex load.
+    ///
+    /// CALLABLE WITHOUT A CONNECTED RADIO. The seam only needs `android::init`
+    /// to have run, which is what makes the log exportable on a unit where the
+    /// vendor service never bound — the session most worth reading.
+    ///
+    /// The default is the honest answer for a build with no Java behind it.
+    fn write_log(&self, _text: &str) -> Result<String, TunerError> {
+        Err(TunerError::Unavailable("no Android bridge in this build".into()))
+    }
 }
 
 // ── The fake ─────────────────────────────────────────────────────────────────
@@ -907,6 +932,12 @@ struct FakeState {
     /// happens between commanding a tune and hearing about it — which is exactly
     /// the window `State::hold` exists for.
     echo: bool,
+    /// Where `write_log` writes when there is no Downloads folder to write to.
+    /// `None` means a directory under the system temp dir.
+    log_dir: Option<std::path::PathBuf>,
+    /// How many logs this fake has written, which is what names the file. See
+    /// `FakeTuner::write_log` for why it counts rather than stamps.
+    logs_written: u32,
 }
 
 impl FakeTuner {
@@ -923,6 +954,8 @@ impl FakeTuner {
                 audio: false,
                 ill_watching: false,
                 echo: true,
+                log_dir: None,
+                logs_written: 0,
             }),
             available: true,
         }
@@ -1137,6 +1170,39 @@ impl Tuner for FakeTuner {
         // There are no headlights in a container. `push_illumination` is how a
         // test or a mock-up drives the day/night path.
         self.lock().ill_watching = true;
+    }
+
+    /// The same file, somewhere a host can reach.
+    ///
+    /// A REAL WRITE, not a stub that returns a plausible path. There is no
+    /// Downloads folder off the device, but there is a filesystem, and the whole
+    /// value of this seam is that "Save to file" can be exercised — the version
+    /// this replaces was a menu row that wrote "not available without the head
+    /// unit" into the very log it was asked to export.
+    fn write_log(&self, text: &str) -> Result<String, TunerError> {
+        let dir = self
+            .lock()
+            .log_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("carnyx-logs"));
+        std::fs::create_dir_all(&dir).map_err(|e| TunerError::Java(e.to_string()))?;
+        // COUNTED, NOT CLOCK-STAMPED, and that is the difference from the device
+        // path. `NwdBridge.writeLog` names the file for the second it was written
+        // because a driver reads them in order; a test that did the same could
+        // collide with itself twice in one second and could not name the file it
+        // expects. The device's own naming is not what is under test here.
+        let n = {
+            let mut s = self.lock();
+            s.logs_written += 1;
+            s.logs_written
+        };
+        let path = dir.join(format!("carnyx-tuner-log-{n}.txt"));
+        std::fs::write(&path, text).map_err(|e| TunerError::Java(e.to_string()))?;
+        Ok(path.display().to_string())
+    }
+
+    fn set_log_dir_for_test(&self, dir: std::path::PathBuf) {
+        self.lock().log_dir = Some(dir);
     }
 }
 

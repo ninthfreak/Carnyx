@@ -32,6 +32,23 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <!--
+      SAVING THE DIAGNOSTICS LOG TO Downloads, and CAPPED because the cap is the
+      whole reason it is safe to ask for.
+
+      `NwdBridge.writeLog` goes through MediaStore on API 29 and up, which needs
+      no permission at all. Only the pre-29 branch writes the public Downloads
+      directory directly, and minSdk here is 26 — so the permission exists for
+      exactly the API range that uses it and is dropped above it.
+      `maxSdkVersion="32"` rather than 28 is CarFM's own value, carried across
+      with the code (its AndroidManifest.xml:19).
+
+      This is the only way anything leaves this unit: it has no adb, the log ring
+      holds 200 lines, and a screenshot catches the handful on screen.
+    -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!--
       THE FOREGROUND SERVICE'S THREE PERMISSIONS, and they are not alike.
 
       FOREGROUND_SERVICE is normal and granted at install. From API 34 it is not

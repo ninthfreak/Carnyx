@@ -44,11 +44,17 @@ import com.nwd.radio.service.data.RadioPoint;
  * device taught are carried across with the code — they are the evidence for
  * every non-obvious choice below, and they cost more to re-learn than to keep.
  *
- * NOT PORTED, deliberately: the raw-RDS capture-to-file and its Downloads
- * export, and the two long diagnostic dumps (probeNwdFmManager and the full
- * getter walk). They are diagnostics, they add MediaStore and reflection surface
- * that nothing in Carnyx reads yet, and the questions they were built to answer
- * are answered in CarFM's docs/BUILTIN-TUNER-FINDINGS.md.
+ * STILL NOT PORTED: the raw-RDS capture-to-file and its Downloads export, and
+ * the two long diagnostic dumps (probeNwdFmManager and the full getter walk).
+ *
+ * THAT LIST USED TO SAY "deliberately", AND THAT WAS THE WRONG CALL. The
+ * standing instruction for this port is that everything CarFM had which did not
+ * come from VibeSDR gets ported; judging these to be diagnostics worth skipping
+ * was not a judgement to make here. `writeLog` below is the first of them back,
+ * and it is the one that mattered most — without it the diagnostics log could
+ * only leave this unit as a screenshot of its last few lines, on a unit with no
+ * adb, while the log ring holds 200. The rest are owed, and docs/TASKS.md #87
+ * carries them with what each one needs.
  *
  * THREADING. Vendor callbacks arrive on binder threads; the RDS pump and level
  * watch each own a daemon thread. All four can call into Rust concurrently, so
@@ -567,6 +573,75 @@ public final class NwdBridge {
             ctx.sendBroadcast(new Intent("com.nwd.action.ACTION_KEY_VALUE")
                     .putExtra("extra_key_value", (byte) key));
         } catch (Throwable ignored) {}
+    }
+
+    // ── The diagnostics log, out to Downloads ─────────────────────────────────
+    //
+    // PORTED FROM CarFM's VibeStreamModule.writeLog
+    // (android/app/src/main/java/com/ninthfreak/carfm/VibeStreamModule.kt:715-745),
+    // where it is device-proven, and its comments are carried across because they
+    // are the evidence for the two non-obvious choices.
+    //
+    // NO SAF AND NO PICKER ACTIVITY. CarFM's note: the SAF picker crashed on units
+    // with no DocumentsUI, and this head unit is one of them. Downloads is a
+    // standard location a file manager can see and copy to a USB stick, which is
+    // the only way anything leaves this unit — it has no adb.
+    //
+    // API 29+ goes through MediaStore and needs no permission at all. Below that
+    // the public Downloads directory is written directly, which needs
+    // WRITE_EXTERNAL_STORAGE; the manifest declares it with maxSdkVersion="32",
+    // exactly as CarFM's does, so it is requested only where it is used.
+
+    /**
+     * Write {@code text} to the PUBLIC Downloads folder and return a human path.
+     *
+     * <p>THE RETURN VALUE CARRIES THE FAILURE, prefixed with "!". A thrown
+     * exception would reach Rust as a bare {@code Error::JavaException} with the
+     * message left pending on the JVM, and the message is the whole point: this
+     * unit has no adb and no logcat a driver can read, so the only place a reason
+     * can be shown is the diagnostics panel that asked for the save.
+     */
+    public static String writeLog(String text) {
+        try {
+            if (ctx == null) return "!no context";
+            String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            String fileName = "carnyx-tuner-log-" + stamp + ".txt";
+            byte[] bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                android.content.ContentResolver resolver = ctx.getContentResolver();
+                android.content.ContentValues values = new android.content.ContentValues();
+                values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName);
+                values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain");
+                values.put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS);
+                android.net.Uri uri = resolver.insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri == null) throw new java.io.IOException("MediaStore insert returned null");
+                java.io.OutputStream out = resolver.openOutputStream(uri);
+                if (out == null) throw new java.io.IOException("openOutputStream returned null");
+                try {
+                    out.write(bytes);
+                } finally {
+                    out.close();
+                }
+                return "Downloads/" + fileName;
+            }
+            java.io.File dir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS);
+            dir.mkdirs();
+            java.io.File f = new java.io.File(dir, fileName);
+            java.io.FileOutputStream out = new java.io.FileOutputStream(f);
+            try {
+                out.write(bytes);
+            } finally {
+                out.close();
+            }
+            return f.getAbsolutePath();
+        } catch (Throwable e) {
+            String why = e.getMessage();
+            return "!" + (why == null || why.isEmpty() ? e.toString() : why);
+        }
     }
 
     // ── Illumination (headlights) -> day/night ────────────────────────────────

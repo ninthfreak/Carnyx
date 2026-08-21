@@ -362,6 +362,36 @@ impl Tuner for NwdTuner {
             Ok(())
         });
     }
+
+    /// See `Tuner::write_log`. The only call out of here that passes a string IN.
+    ///
+    /// THE FAILURE COMES BACK AS A VALUE, not as a Java exception, and the "!"
+    /// prefix is that convention — `NwdBridge.writeLog` documents why. A thrown
+    /// exception reaches jni-rs as a bare `Error::JavaException` with the message
+    /// still pending on the JVM, and the message is the entire value of the call
+    /// on a unit whose only readable channel is the panel that asked for the save.
+    fn write_log(&self, text: &str) -> Result<String, TunerError> {
+        let out = with_bridge(|env, class| {
+            let arg = env.new_string(text)?;
+            let out = env
+                .call_static_method(
+                    class,
+                    jni_str!("writeLog"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
+                    &[JValue::Object(&arg)],
+                )?
+                .l()?;
+            let out = JString::cast_local(env, out)?;
+            Ok(text(env, &out))
+        })?;
+        match out.strip_prefix('!') {
+            Some(why) => Err(TunerError::Java(why.to_string())),
+            // `text` turns a null into an empty string, so this is the one shape
+            // the sentinel cannot describe: the method returned nothing at all.
+            None if out.is_empty() => Err(TunerError::Java("writeLog returned nothing".into())),
+            None => Ok(out),
+        }
+    }
 }
 
 /// A Java string as a Rust one. A null or unreadable string is empty rather than

@@ -1086,6 +1086,66 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
+### 87. Port the diagnostics rows that were skipped
+**"Save to file" DONE. The other five OPEN.**
+
+THE SKIP WAS THE WRONG CALL AND IT WAS MINE. `NwdBridge.java:47-51` recorded it
+as deliberate — "they are diagnostics, they add MediaStore and reflection surface
+that nothing in Carnyx reads yet" — against a standing instruction that everything
+CarFM had which did not come from VibeSDR gets ported. Judging a feature not worth
+carrying was not a judgement to make here. The note now says so.
+
+`settings::diag_actions` has always drawn all seven rows; six of them fell into
+`run_diag_action`'s `_` arm, which wrote "not available without the head unit" into
+the log. That reads as a build limitation. It was an unwritten function.
+
+**Save to file — DONE.** `NwdBridge.writeLog`, ported from CarFM's
+`VibeStreamModule.kt:715-745`: MediaStore on API 29+, the public Downloads
+directory below that, no SAF and no picker Activity because CarFM's note records
+the picker crashing on units with no DocumentsUI. Filename
+`carnyx-tuner-log-yyyyMMdd-HHmmss.txt`. `WRITE_EXTERNAL_STORAGE` is declared with
+`maxSdkVersion="32"`, CarFM's own value, for the pre-29 branch only. The failure
+comes back as a return value prefixed `!` rather than a thrown exception: a Java
+exception reaches jni-rs as a bare `Error::JavaException` with the message left
+pending, and the message is the whole point on a unit with no adb. `FakeTuner`
+writes a real file too, so the host build exercises the same path.
+
+Pinned by `saving_the_log_writes_every_line_the_ring_holds` — which pushes
+`DiagLog::CAP + 10` lines and asserts the file holds exactly the 200 that survived,
+oldest first — and `saving_an_empty_log_writes_no_file`. Both go through
+`invoke_settings_pick_diag_action` with the row found by LABEL, so a reorder cannot
+quietly pass them, and both sabotage-checked by returning the `SaveLog` arm to the
+`_` stub.
+
+**Export raw RDS capture — OPEN, and it is two ports, not one.** Carnyx has the
+`rdsCaptureOn` preference and persists it, and nothing writes a capture file, so
+there is nothing to export. Needs `setRdsCapture` + the append/close writer
+(`NwdRadioModule.kt:561-575`) before `exportRdsCapture`
+(`NwdRadioModule.kt:576-630`) means anything. CarFM's reasoning for the two-step —
+the capture lives in `filesDir` and is copied to Downloads once on demand, because
+a MediaStore round trip ~11 times a second in a moving car is not an option — is
+worth carrying with it.
+
+**Dump head unit settings — OPEN.** `dumpSettings` in CarFM's `VibeStreamModule`.
+
+**Probe vendor-app replacement — OPEN.** `probeTrampoline` in the same module;
+shells out and may prompt for root, which is the one row here with a real blast
+radius and wants reading before porting.
+
+**Run RDS probe — OPEN.** The full getter walk, ~100 lines of reflection.
+
+**Probe NwdFmManager — OPEN.** `NwdRadioModule.kt:904-1005`, ~100 lines. Carnyx
+already has `fmManagerGet(String)` reflection in `NwdBridge`, so this is the
+closest of the four to being cheap.
+
+VERIFICATION LIMIT, STATED: there is no NDK and no real `android.jar` in the
+container this was written in — the only one present is a 0-class stub — so the
+Java was checked by `javac` for parse errors only (none; every diagnostic is an
+unresolved `android.*` symbol) and the JNI call shape was type-checked in a
+throwaway crate against `jni` 0.22.4. Neither the Rust for `armv7-linux-androideabi`
+nor the dex has been built. That is the same claim `src/android/nwd.rs:19-21`
+already makes about the whole module.
+
 ### 85. Stop the vendor's bank walk keeping the radio
 **DONE.**
 
