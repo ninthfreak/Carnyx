@@ -84,6 +84,8 @@ export component Face inherits Rectangle {
     callback drag-note(string);
     /// The same, for the hero's step morph. See `HeroRow`.
     callback morph-note(string);
+    /// One tick per morph frame — see HeroRow's `morph-frame`.
+    callback morph-frame();
 
     property <bool> dead: !root.audio-active;
 
@@ -194,6 +196,7 @@ export component Face inherits Rectangle {
                 step-nonce: root.step-nonce;
                 step-dir: root.step-dir;
                 morph-note(m) => { root.morph-note(m); }
+                morph-frame() => { root.morph-frame(); }
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;
@@ -244,6 +247,7 @@ export component Face inherits Rectangle {
                 step-nonce: root.step-nonce;
                 step-dir: root.step-dir;
                 morph-note(m) => { root.morph-note(m); }
+                morph-frame() => { root.morph-frame(); }
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;

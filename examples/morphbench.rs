@@ -142,6 +142,20 @@ fn main() {
     println!(
         "  {frames} frames, {per:.1} ms apart on average, worst gap {worst_gap:.1} ms"
     );
+
+    // ── AND WHETHER THE APP'S OWN COUNTER AGREES ──
+    //
+    // `State::morph_frames` exists to report this from the head unit, where no
+    // second opinion is available and every number in this file is a desktop
+    // number from the wrong renderer. It counts `changed flip` ticks, and the
+    // claim that a tick IS a frame can only be checked somewhere that can count
+    // frames independently. This is that place.
+    let ticks = app.morph_frames_for_bench();
+    let drift = (f64::from(ticks) - f64::from(frames)) / f64::from(frames) * 100.0;
+    println!(
+        "  the app's own tally said {ticks} over the same window ({drift:+.0}%){}",
+        if drift.abs() <= 10.0 { " — tracks" } else { "  ← DOES NOT TRACK" }
+    );
     println!(
         "  → on a unit where one frame costs N ms, the morph gets 520/N frames:\n             at  30 ms/frame that is 17 frames (smooth)\n             at  90 ms/frame that is  6 frames (visibly stepped)\n             at 170 ms/frame that is  3 frames (reads as a cut, not motion)"
     );

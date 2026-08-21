@@ -90,6 +90,8 @@ export component AppWindow inherits Window {
     callback drag-note(string);
     /// One diagnostics line about the hero's step morph. See `HeroRow`.
     callback morph-note(string);
+    /// One tick per morph frame — see HeroRow's `morph-frame`.
+    callback morph-frame();
 
     /// One second, forever, for anything that has to notice the passage of time
     /// rather than an event.
@@ -298,6 +300,7 @@ export component AppWindow inherits Window {
         reorder-preset(from, to) => { root.reorder-preset(from, to); }
         drag-note(m) => { root.drag-note(m); }
         morph-note(m) => { root.morph-note(m); }
+        morph-frame() => { root.morph-frame(); }
     }
 
     // ── The modal layer ─────────────────────────────────────────────────────

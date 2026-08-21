@@ -1,16 +1,31 @@
 //! How long a full software-rendered frame takes, at head-unit size.
 //!
-//! This exists because the renderer choice for Android turns on one number. The
-//! Skia path does not build for this device's 32-bit ARM, and the alternative is
-//! Slint's own software renderer on the CPU — which is only a real option if a
-//! frame fits comfortably in a frame budget on a head unit's processor.
+//! ## THIS IS NOT THE RENDERER THE DEVICE USES, and the header used to say it was
+//!
+//! It opened by claiming the Skia path does not build for this unit's 32-bit ARM,
+//! so the software renderer was the alternative under test. That is wrong twice
+//! over. Slint's Android backend depends on `i-slint-renderer-skia`
+//! NON-OPTIONALLY and its window adapter holds a `SkiaRenderer` unconditionally
+//! (`androidwindowadapter.rs:36`); `skia-bindings` merely has no armv7 prebuilt,
+//! so Skia is compiled from source — which `Cargo.toml` records at length, a few
+//! lines from the claim it contradicts. The APK renders with Skia on the GPU.
+//! `renderer-software` is a DEV-dependency in this crate, for probes and
+//! screenshots, and nothing else.
+//!
+//! So take this number for what it is: a fair proxy for item count, layout and
+//! tree traversal — 58 rows are 58 rows on any renderer — and NOT a proxy for
+//! what a pixel costs on the dashboard. Every millisecond in the performance
+//! review came from here and carries the same caveat.
+//!
+//! THE DEVICE'S OWN FIGURE HAS TO COME FROM THE DEVICE. That is what the `frames`
+//! line in the diagnostics log is for: it reports the real per-frame cost from
+//! the unit, and the log now saves to Downloads.
 //!
 //!     cargo run --release --example bench
 //!
 //! `--release` is not optional: a debug build measures the wrong thing by an
 //! order of magnitude. `RepaintBufferType::NewBuffer` forces a FULL repaint every
-//! frame, so this is the pessimistic number — on the device, a swapchain allows
-//! partial repaint and most frames here only touch the marquee and the meter.
+//! frame, so this is the pessimistic number.
 use std::rc::Rc;
 use std::time::Instant;
 

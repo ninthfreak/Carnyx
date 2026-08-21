@@ -176,6 +176,46 @@ fn correct_level_current() {
     app.push_meter();
 }
 
+/// How long after a step the frame tally is written.
+///
+/// The morph is 520ms; the slack lets the last frames land before the count is
+/// read, and a press that arrives inside the window simply restarts it.
+const MORPH_REPORT_AFTER: std::time::Duration = std::time::Duration::from_millis(640);
+
+/// Write what the last morph actually managed, in the driver's own log.
+///
+/// THE ONE MEASUREMENT THIS PROJECT CANNOT TAKE ANY OTHER WAY. Every figure in
+/// the performance review came from a desktop running the software renderer, and
+/// the APK renders with Skia on a 32-bit ARM GPU. `morphbench`'s own table is the
+/// scale to read this against: at 30ms a frame the morph gets 17 frames and reads
+/// as motion, at 90ms it gets 6 and is visibly stepped, at 170ms it gets 3 and is
+/// a cut with a tail. Now it says which.
+///
+/// STRICTLY THIS COUNTS ANIMATION ADVANCES, one per turn of the event loop, and
+/// a turn is a frame only on a loop that draws every turn. The device's does.
+/// A harness that pumps timers without drawing counts turns and not frames, which
+/// is exactly what `a_step_reports_the_frames_it_got` demonstrates, and
+/// `morphbench` is where the two are shown to agree when drawing really happens.
+fn report_morph_frames() {
+    let Some(app) = current() else { return };
+    let (frames, elapsed) = {
+        let mut s = app.state.borrow_mut();
+        let Some(since) = s.morph_since.take() else { return };
+        (std::mem::take(&mut s.morph_frames), since.elapsed())
+    };
+    let ms = elapsed.as_secs_f64() * 1000.0;
+    // A morph that drew NOTHING is the most important case this can report, and
+    // dividing by it would panic, so it is spelt out rather than computed.
+    let per = if frames == 0 {
+        "no frames at all".to_string()
+    } else {
+        format!("{:.1} ms/frame", ms / f64::from(frames))
+    };
+    let line = format!("frames: {frames} in {ms:.0} ms — {per}");
+    app.state.borrow_mut().settings.log.push(&stamp(), &line);
+    app.push_settings();
+}
+
 /// Put the settled pilot on the pill. What [`STEREO_SETTLE`] waits for.
 fn settle_stereo_current() {
     let Some(app) = current() else { return };
@@ -527,6 +567,21 @@ struct State {
     /// publish is the whole truth about both, so they are published once and then
     /// never touched again rather than re-derived per wake.
     statics_published: bool,
+    /// FRAMES THE DRIVER ACTUALLY GOT during the morph now running, and when it
+    /// started. See `ui/hero.slint`'s `morph-frame`.
+    ///
+    /// The whole performance review was measured on a desktop running the
+    /// SOFTWARE renderer; the APK renders with Skia on a 32-bit ARM GPU. So the
+    /// number that decides whether the card animation reads as motion or as a cut
+    /// — how many frames fit in 520ms — has never been observed where it matters,
+    /// and cannot be from here. This counts them on the unit and puts the answer
+    /// in the log, which now saves to Downloads.
+    morph_frames: u32,
+    morph_since: Option<std::time::Instant>,
+    /// Fires once after a morph should have finished, to write the tally. A timer
+    /// rather than a check on the next step, so one press on its own still
+    /// reports.
+    morph_report: slint::Timer,
     /// The dial the RDS on screen was RESTORED from, when it came off disk
     /// rather than off the air. See [`crate::session`].
     ///
@@ -1060,6 +1115,9 @@ impl App {
                 last_sources: None,
                 last_diag_actions: None,
                 statics_published: false,
+                morph_frames: 0,
+                morph_since: None,
+                morph_report: slint::Timer::default(),
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
                 freq_seq: 0,
@@ -1837,6 +1895,16 @@ impl App {
     /// group shapes replayed; on the device this loop is the vendor's 90 ms pump
     /// and every group goes to `push()` undeduplicated, because the consensus
     /// gates count the repeats.
+    /// The running morph's frame tally, for `examples/morphbench.rs`.
+    ///
+    /// Exposed so the probe can hold the tally against its OWN count of frames.
+    /// The device has no second opinion available — that is the whole reason this
+    /// counter exists — so the mechanism has to be shown to track real frames
+    /// somewhere, and here is the only place it can be.
+    pub fn morph_frames_for_bench(&self) -> u32 {
+        self.state.borrow().morph_frames
+    }
+
     /// The RDS pump, for `examples/morphbench.rs`.
     ///
     /// It runs inside `tune`, which runs after the morph is armed and before any
@@ -2587,6 +2655,12 @@ impl App {
         on!(on_morph_note, |app, m| {
             app.log_unavailable(&format!("step morph: {m}"));
         });
+        // COUNTING ONLY, and nothing else is safe here: this runs while Slint is
+        // evaluating the animation, so touching a UI property or republishing
+        // from inside it would re-enter the very evaluation that called it.
+        on!(on_morph_frame, |app| {
+            app.state.borrow_mut().morph_frames += 1;
+        });
         on!(on_drag_note, |app, m| {
             // Straight to the log the driver can read, because this gesture
             // cannot be observed any other way on the unit.
@@ -3321,6 +3395,19 @@ impl App {
                 // fighting the vendor cannot leave the next one with none.
                 s.reasserts_left = REASSERT_TRIES;
                 s.reassert = None;
+            }
+            // START THE TALLY BEFORE THE MORPH IS ARMED, so the clock covers the
+            // whole window including whatever `tune` below spends before the
+            // first frame can be drawn. See `State::morph_frames`.
+            {
+                let mut s = self.state.borrow_mut();
+                s.morph_frames = 0;
+                s.morph_since = Some(std::time::Instant::now());
+                s.morph_report.start(
+                    slint::TimerMode::SingleShot,
+                    MORPH_REPORT_AFTER,
+                    report_morph_frames,
+                );
             }
             self.step_morph(dir, discards);
             self.tune(mhz);
@@ -4383,6 +4470,84 @@ mod tests {
             "93.1",
             "with nothing in flight the face is honest again"
         );
+    }
+
+    /// A STEP REPORTS WHAT IT MANAGED, in the log the driver can export.
+    ///
+    /// This is the only way the head unit's real frame rate can ever be known:
+    /// every figure this repository has came from a desktop running the software
+    /// renderer, and the APK renders with Skia on a 32-bit ARM GPU.
+    /// `examples/morphbench.rs` holds the counter against an independent frame
+    /// count and reports the drift; this holds the other half — that a step arms
+    /// the report, that the timer fires it, and that the line reaches the log.
+    ///
+    /// WHAT IT COUNTS IS ANIMATION ADVANCES, one per turn of the event loop, and
+    /// this harness is what proves the distinction: it pumps timers and never
+    /// draws, and still tallies — so the count is turns, and a turn is a frame
+    /// only where the loop draws every turn, as the device's does. `morphbench`
+    /// is where the two are checked against each other with drawing switched on.
+    ///
+    /// The zero case is exercised separately below, because it is the reading the
+    /// driver most needs to be able to get — a morph that drew nothing at all —
+    /// and it is an average over zero, which must report rather than panic.
+    #[test]
+    fn a_step_reports_the_frames_it_got() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("frames");
+        driver.push_all();
+
+        let log_has = |driver: &Rc<App>, needle: &str| -> Option<String> {
+            driver.state.borrow().settings.log.lines().into_iter().find(|l| l.contains(needle))
+        };
+        assert!(log_has(&driver, "frames:").is_none(), "nothing reported before a step");
+
+        ui.invoke_step_preset(1);
+
+        // Drive the timer the way the event loop would. The report is armed for
+        // `MORPH_REPORT_AFTER`, so this waits a little past it and no longer.
+        let deadline = std::time::Instant::now() + MORPH_REPORT_AFTER * 3;
+        while std::time::Instant::now() < deadline && log_has(&driver, "frames:").is_none() {
+            slint::platform::update_timers_and_animations();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let line = log_has(&driver, "frames:").expect("the step reported its frame count");
+        assert!(
+            line.contains(" ms/frame"),
+            "the tally is reported as a per-frame cost, got {line:?}"
+        );
+        let counted: u32 = line
+            .split_whitespace()
+            .nth(2)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("a number where the count belongs, got {line:?}"));
+        assert!(counted > 0, "the loop above turned the clock, so something advanced");
+
+        // AND THE TALLY IS CONSUMED, not left to be added to the next step's.
+        assert_eq!(driver.morph_frames_for_bench(), 0);
+        assert!(driver.state.borrow().morph_since.is_none(), "the window is closed");
+
+        // THE ZERO CASE, which is an average over nothing. A morph that drew no
+        // frames at all is the single most useful thing this line can say, so it
+        // must not be the one that divides by zero — and no step can be made to
+        // produce it on demand, hence driving the reporter directly.
+        {
+            let mut s = driver.state.borrow_mut();
+            s.morph_frames = 0;
+            s.morph_since = Some(std::time::Instant::now());
+        }
+        report_morph_frames();
+        let line = driver
+            .state
+            .borrow()
+            .settings
+            .log
+            .lines()
+            .into_iter()
+            .rev()
+            .find(|l| l.contains("frames:"))
+            .expect("the zero report reached the log");
+        assert!(line.contains("no frames at all"), "got {line:?}");
     }
 
     /// A GUARDED MODEL STILL UPDATES — which is the failure a guard invites.

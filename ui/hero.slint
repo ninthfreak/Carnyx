@@ -440,6 +440,26 @@ export component HeroRow inherits Rectangle {
     /// One line into the diagnostics log, for a morph that cannot be watched.
     callback morph-note(string);
 
+    /// ONE TICK PER FRAME OF THE MORPH, so the unit can report its own frame rate.
+    ///
+    /// Every millisecond in the performance review came from a desktop running
+    /// the SOFTWARE renderer, while the APK renders with Skia on a 32-bit ARM
+    /// GPU — so the one number that decides whether this animation reads as
+    /// motion or as a cut has never been measured where it matters. It cannot be
+    /// measured from outside either: Slint exposes no per-frame hook.
+    ///
+    /// `flip` is the morph's own clock, one linear run per step, and a `changed`
+    /// handler on it fires each time the animation ADVANCES — which is once per
+    /// turn of the event loop, and on a loop that draws every turn (the device's
+    /// does) that is once per frame. `examples/morphbench.rs` holds the tally
+    /// against an independently counted 163 frames and gets 157, and says so in
+    /// its output so the claim is checked rather than asserted. It costs nothing
+    /// at rest, because `flip` only moves during a step.
+    callback morph-frame();
+    changed flip => {
+        root.morph-frame();
+    }
+
     changed step-nonce => {
         // §4.7/§8: instant swaps with audio released. A dead face does not
         // animate, and CarFM skips the flip for exactly this case.
