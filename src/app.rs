@@ -385,6 +385,24 @@ struct State {
     /// `push_settings` runs on far more than settings changes.
     saved: crate::prefs::Prefs,
     dial: f32,
+    /// How many frequency reports the tuner has made. The HOLD's release rule
+    /// needs "a report arrived AFTER the commit", and a frequency alone cannot
+    /// say that — see [`Hold`].
+    freq_seq: u64,
+    /// THE FACE IS COMMITTED TO A STATION THE TUNER HAS NOT REACHED YET.
+    ///
+    /// One wheel press makes the vendor service walk its OWN hardware preset
+    /// bank, so the dial visits frequencies this app never asked for and every
+    /// one of them is reported. `asserted` already stops those reports moving
+    /// where the next STEP starts from; this stops them being DISPLAYED, which
+    /// is the half the driver sees: "you can see it jump to the wrong station
+    /// for a moment before going to the correct one."
+    ///
+    /// CarFM's, and its own comment states the shape exactly: "from the moment a
+    /// preset change is committed until the dial settles on it, the FACE renders
+    /// the TARGET and ignores the live tuner. Purely cosmetic and time-boxed"
+    /// (`CarFmFace.tsx:756-760`).
+    hold: Option<Hold>,
     /// The last trustworthy level reading, or `None` for no reading at all.
     level: Option<i32>,
     /// The hysteresis' one piece of state, settled once per poll and fed back.
@@ -562,7 +580,13 @@ impl State {
     /// Matched through `preset_key`, not by comparing floats: 105.5 does not
     /// round-trip through an f32 and `==` on two of them is a coin toss.
     fn active(&self) -> i32 {
-        active_index(self.dial, &self.presets)
+        // OFF THE SHOWN DIAL, so the star and the lit tile agree with the
+        // frequency beside them. During a hold the face is committed to the
+        // target, and a star that flickered against the vendor's transit
+        // frequencies would contradict the very number it sits next to. CarFM:
+        // "activeIndex already reflects the committed target (it derives from
+        // the effective dial)" (`CarFmFace.tsx:1087-1089`).
+        active_index(self.shown(), &self.presets)
     }
 
     /// Where the STRIP is, which is not always where the radio is.
@@ -588,10 +612,60 @@ impl State {
     /// and that argument is right and applies here too. Storing the dial the app
     /// last asserted keeps the property: a drag re-resolves it to the entry's
     /// new position, and deleting that entry drops cleanly to -1.
+    /// What the FACE should show: the committed target while a change is in
+    /// flight, the real dial otherwise.
+    ///
+    /// CarFM's `const mhz = pending ? pending.mhz : rawMhz` (`CarFmFace.tsx:824`)
+    /// — "everything below derives from the EFFECTIVE dial". Every user-visible
+    /// reader goes through this; the tuner-facing ones keep reading `dial`,
+    /// because a hold is a rendering decision and never a claim about where the
+    /// radio is.
+    fn shown(&self) -> f32 {
+        self.hold.map_or(self.dial, |h| h.mhz)
+    }
+
+    /// Drop a hold the tuner never honoured, so a refused tune cannot freeze the
+    /// face. Cheap enough to call on every publish.
+    fn expire_hold(&mut self) {
+        if self.hold.is_some_and(|h| h.at.elapsed() >= HOLD_CAP) {
+            self.hold = None;
+        }
+    }
+
     fn anchor(&self) -> i32 {
         step_anchor(self.asserted, self.dial, &self.presets)
     }
 }
+
+/// A station the face is showing before the tuner has got there.
+///
+/// See [`State::hold`]. Three fields and every one of them is load-bearing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hold {
+    /// What to render instead of the live dial.
+    mhz: f32,
+    /// The report counter AS OF THE COMMIT. Only a LATER report can release the
+    /// hold, and that is not a detail — it is the bug CarFM shipped and then
+    /// fixed. `tune` writes `s.dial` synchronously, so a release rule that
+    /// compares the target against `dial` is true the instant the hold is taken
+    /// and releases it in the same breath. CarFM's note: "the old comparison
+    /// released the hold in the same commit that opened it, always. The 30 July
+    /// drive log shows it exactly: six steps, six instant 'settled' lines, not
+    /// one 'holding' line, and the vendor's transit frequencies painting the
+    /// hero for ~1 s after each" (`CarFmFace.tsx:770-775`).
+    since_seq: u64,
+    /// When it was taken, for the cap. A tune the front end ignores must not
+    /// freeze the face forever.
+    at: std::time::Instant,
+}
+
+/// How long the face will render a station the tuner has not confirmed.
+///
+/// CarFM's two seconds (`CarFmFace.tsx:1809`), and timed from the COMMIT rather
+/// than from the last report — keying it on the dial would restart the clock on
+/// every transit frequency the vendor emits, which is the churn the cap exists
+/// to bound.
+const HOLD_CAP: std::time::Duration = std::time::Duration::from_millis(2000);
 
 /// What a press on the head unit's own panel means to this app.
 ///
@@ -906,6 +980,8 @@ impl App {
                 last_diag: None,
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
+                freq_seq: 0,
+                hold: None,
                 busy: false,
                 panel_action: None,
                 callsigns,
@@ -1366,12 +1442,35 @@ impl App {
                 settle_dotted(&mut s);
             }
             TunerEvent::Frequency(f) => {
+                // EVERY report counts, including the ones this app did not ask
+                // for — the counter's whole job is to distinguish "a report has
+                // arrived since the commit" from "the dial happens to equal the
+                // target", and `tune` makes the second true immediately.
+                s.freq_seq = s.freq_seq.wrapping_add(1);
                 // However this report came about — a seek landing, a retune, the
                 // vendor walking its own presets — the front end is now ON a
                 // frequency, so no sweep is in flight any more.
                 s.scanning = false;
                 if let Some(mhz) = f.mhz {
                     s.dial = mhz;
+                    // THE HOLD RELEASES ON THE TUNER'S WORD, or not at all. A
+                    // report that arrived after the commit and names the target
+                    // means the front end really is there, so the face can go
+                    // back to telling the truth. Anything else is the vendor
+                    // walking its own bank, and is ridden out.
+                    if let Some(h) = s.hold {
+                        if s.freq_seq > h.since_seq
+                            && (mhz - h.mhz).abs() < crate::stations::FREQ_EPS as f32
+                        {
+                            s.hold = None;
+                            let line = format!("settled on {:.1}", h.mhz);
+                            s.settings.log.push(&stamp(), &line);
+                        } else if s.freq_seq > h.since_seq {
+                            let line =
+                                format!("holding {:.1}, dial went to {mhz:.1}", h.mhz);
+                            s.settings.log.push(&stamp(), &line);
+                        }
+                    }
                 }
                 // A WARM RESTORE THIS EVENT CONFIRMS IS NOT A RETUNE. On the
                 // first frequency report of a run the radio is telling us where
@@ -1660,6 +1759,10 @@ impl App {
     }
 
     pub fn push_all(&self) {
+        // THE CAP, CHECKED WHERE EVERYTHING IS REPUBLISHED ANYWAY. A tune the
+        // front end never honours would otherwise leave the face committed to a
+        // station it never reached. See `HOLD_CAP`.
+        self.state.borrow_mut().expire_hold();
         self.push_hero();
         self.push_presets();
         self.push_meter();
@@ -1687,7 +1790,7 @@ impl App {
     fn hero_row(&self) -> Option<StationRow> {
         let (key, loc) = {
             let s = self.state.borrow();
-            (crate::stations::preset_key(f64::from(s.dial)), s.location)
+            (crate::stations::preset_key(f64::from(s.shown())), s.location)
         };
         let hit = self.state.borrow().resolved.clone();
         if let Some((k, l, row)) = hit {
@@ -1704,7 +1807,7 @@ impl App {
         }
         let row = {
             let s = self.state.borrow();
-            resolve(s.db.as_ref(), s.dial, s.location.position())
+            resolve(s.db.as_ref(), s.shown(), s.location.position())
         };
         self.state.borrow_mut().resolved = Some((key, loc, row.clone()));
         row
@@ -1733,7 +1836,7 @@ impl App {
         // cost is that a car driven to another market before its next fix can
         // show a stale call sign, which CarFM accepts for the same reason — a
         // fresh lock overwrites, so it heals itself.
-        let learned = s.callsigns.get(s.dial).map(str::to_string);
+        let learned = s.callsigns.get(s.shown()).map(str::to_string);
         let ident = match (&row, &learned, st.ps_scrolling, st.ps.as_str()) {
             (Some(r), _, _, _) => clean_call(&r.callsign),
             (None, Some(c), _, _) => clean_call(c),
@@ -1741,8 +1844,11 @@ impl App {
             _ => String::new(),
         };
         ui.set_ident(ident.clone().into());
-        ui.set_freq_label(format_mhz(s.dial).into());
-        ui.set_in_band((FM_LO..=FM_HI).contains(&s.dial));
+        // THE COMMITTED TARGET WHILE ONE IS IN FLIGHT. See `State::hold`: the
+        // vendor walks its own bank on the same press, and without this the
+        // driver watches the hero flick through stations they never chose.
+        ui.set_freq_label(format_mhz(s.shown()).into());
+        ui.set_in_band((FM_LO..=FM_HI).contains(&s.shown()));
         let active = s.active();
         ui.set_saved(active >= 0);
         ui.set_active_index(active);
@@ -1755,7 +1861,7 @@ impl App {
             .map(|r| r.callsign_base.clone())
             .or_else(|| learned.clone());
         ui.set_radio_text(
-            rds::strip_station_from_rt(&st.rt, Some(s.dial), call.as_deref()).into(),
+            rds::strip_station_from_rt(&st.rt, Some(s.shown()), call.as_deref()).into(),
         );
         ui.set_pty(rds::pty_label(st.pty).into());
         ui.set_rds(rds::rds_ok(st));
@@ -2071,7 +2177,7 @@ impl App {
         ui.set_freq_display(if typed {
             s.numpad.as_str().into()
         } else {
-            SharedString::from(format_mhz(s.dial))
+            SharedString::from(format_mhz(s.shown()))
         });
         // DIM ONLY WHEN THERE IS NOTHING TO SAY. A sweep runs behind this tab and
         // the readout follows it, so a scan is as much a reason to be legible as
@@ -2591,6 +2697,12 @@ impl App {
         self.tune(mhz);
     }
 
+    /// Switch the fake tuner's synchronous echo off, for tests about the window
+    /// between commanding a tune and hearing about it. No-op on a real tuner.
+    pub fn set_echo_for_test(self: &Rc<App>, on: bool) {
+        self.state.borrow().tuner.set_echo_for_test(on);
+    }
+
     /// Take the meter to where a settled poll would leave it, for the screenshot
     /// harness only.
     ///
@@ -2633,7 +2745,10 @@ impl App {
     fn toggle_save(self: &Rc<App>) {
         {
             let mut s = self.state.borrow_mut();
-            let dial = s.dial;
+            // WHAT THE DRIVER IS LOOKING AT. Mid-hold the face shows the target,
+            // so a star pressed then means that station and not whichever one
+            // the vendor's bank walk is passing through.
+            let dial = s.shown();
             match s.active() {
                 // Saved: drop it out of the strip.
                 i if i >= 0 => {
@@ -2955,6 +3070,15 @@ impl App {
         // where the incoming station came from and travels to where it belongs,
         // so the cards must already hold the new stations when it starts.
         if moves {
+            // COMMIT THE FACE TO THE TARGET FIRST. CarFM's `commitTo`, called on
+            // the same line as the tune (`CarFmFace.tsx:1098-1099`), and taken
+            // BEFORE `tune` so the counter it records is the one from before any
+            // report this tune provokes. See `State::hold`.
+            {
+                let mut s = self.state.borrow_mut();
+                let since_seq = s.freq_seq;
+                s.hold = Some(Hold { mhz, since_seq, at: std::time::Instant::now() });
+            }
             self.step_morph(dir, discards);
             self.tune(mhz);
             return;
@@ -3921,6 +4045,72 @@ mod tests {
         crate::android::ingest_panel_key(62, real.into());
         driver.drain_events();
         assert_eq!(label(&ui), format_mhz(strip[1]).to_string(), "one step, not two");
+    }
+
+    /// THE FACE DOES NOT FLICK THROUGH THE VENDOR'S OWN BANK.
+    ///
+    /// > "initial selection is a bit erratic, you can see it jump to the wrong
+    /// > station for a moment before going to the correct one"
+    ///
+    /// One wheel press makes the vendor service walk its OWN hardware preset
+    /// bank, and every frequency it passes through is reported. `asserted`
+    /// stopped those reports moving where the next STEP starts from; this is the
+    /// other half — they must not be DISPLAYED either.
+    #[test]
+    fn a_vendor_bank_walk_is_not_shown_on_the_hero() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("hold");
+        let strip = fake::SEED_PRESET_MHZ;
+
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        assert_eq!(ui.get_freq_label().to_string(), format_mhz(strip[1]).to_string());
+
+        // THE DEVICE REPORTS ASYNCHRONOUSLY, and the fake must too for this
+        // test to mean anything. `NwdBridge.tune` calls `setCurrentFrequency`
+        // and returns; the frequency comes back later as
+        // `notifyCurrentFrequency`. With the fake's default synchronous echo the
+        // hold is released by our OWN tune before the vendor has said a word,
+        // which is the fake collapsing the very window under test.
+        driver.set_echo_for_test(false);
+
+        // The press, and the vendor's transit frequency arriving with it.
+        crate::android::ingest_panel_key(62, "down".into());
+        vendor_reports(99.9);
+        driver.drain_events();
+        driver.push_all();
+        assert_eq!(
+            ui.get_freq_label().to_string(),
+            format_mhz(strip[2]).to_string(),
+            "the hero shows the target, never the frequency the vendor passed through"
+        );
+
+        // A SECOND transit report, still not the target: the face holds.
+        vendor_reports(93.1);
+        driver.drain_events();
+        driver.push_all();
+        assert_eq!(
+            ui.get_freq_label().to_string(),
+            format_mhz(strip[2]).to_string(),
+            "and it keeps holding while the vendor walks"
+        );
+
+        // The tuner confirms the target, and the hold lifts.
+        vendor_reports(strip[2]);
+        driver.drain_events();
+        driver.push_all();
+        assert_eq!(ui.get_freq_label().to_string(), format_mhz(strip[2]).to_string());
+
+        // Released — so an ordinary retune elsewhere is shown again at once,
+        // which is what makes this a bounded exception and not a lie.
+        vendor_reports(93.1);
+        driver.drain_events();
+        driver.push_all();
+        assert_eq!(
+            ui.get_freq_label().to_string(),
+            "93.1",
+            "with nothing in flight the face is honest again"
+        );
     }
 
     /// THE SEEK THIS UNIT ACTUALLY HAS LEAVES THE STRIP.

@@ -784,6 +784,12 @@ impl TunerSnapshot {
 /// Commands go through here; results come back as [`TunerEvent`]s on the sink,
 /// because almost nothing this hardware does is synchronous.
 pub trait Tuner: Send + Sync {
+    /// TEST HOOK, defaulted to nothing. `FakeTuner` overrides it to stop
+    /// echoing a tune back synchronously, which is how the device behaves and
+    /// what any test about the commit-to-confirmation window needs. A real
+    /// tuner has no such switch and needs none.
+    fn set_echo_for_test(&self, _on: bool) {}
+
     /// Does this unit have the vendor radio service at all?
     fn is_available(&self) -> bool;
 
@@ -872,6 +878,15 @@ struct FakeState {
     level: i32,
     audio: bool,
     ill_watching: bool,
+    /// Does `tune` report the new frequency back straight away?
+    ///
+    /// TRUE BY DEFAULT AND FALSE ON THE DEVICE. `NwdBridge.tune` calls
+    /// `setCurrentFrequency` and returns; the frequency comes back later as
+    /// `notifyCurrentFrequency`. The fake collapsing that into one synchronous
+    /// call is convenient for most tests and WRONG for any test about what
+    /// happens between commanding a tune and hearing about it — which is exactly
+    /// the window `State::hold` exists for.
+    echo: bool,
 }
 
 impl FakeTuner {
@@ -887,6 +902,7 @@ impl FakeTuner {
                 level: 62,
                 audio: false,
                 ill_watching: false,
+                echo: true,
             }),
             available: true,
         }
@@ -918,6 +934,13 @@ impl FakeTuner {
     /// Pretend the MCU pushed a group. The string is the vendor's 16 hex chars.
     pub fn push_rds_hex(&self, hex: &str) {
         ingest_rds_group(hex);
+    }
+
+    /// Model the device's ASYNCHRONOUS frequency reporting: `tune` commands and
+    /// says nothing, and the caller injects the report when it chooses. See
+    /// `FakeState::echo`.
+    pub fn set_echo(&self, on: bool) {
+        self.lock().echo = on;
     }
 
     /// Pretend the wheel was pressed.
@@ -983,8 +1006,14 @@ impl Tuner for FakeTuner {
             s.ps = String::new();
             s.band
         };
-        ingest_frequency(band as i32, raw, String::new(), -1);
+        if self.lock().echo {
+            ingest_frequency(band as i32, raw, String::new(), -1);
+        }
         Ok(())
+    }
+
+    fn set_echo_for_test(&self, on: bool) {
+        self.set_echo(on);
     }
 
     fn seek(&self, up: bool) {
