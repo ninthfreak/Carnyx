@@ -513,6 +513,20 @@ struct State {
     last_nearby: Option<crate::stations::NearbyView>,
     last_presets: Option<Vec<Preset>>,
     last_diag: Option<Vec<String>>,
+    /// The settings panel's own two models, under the same rule. They were the
+    /// only lists in `push_settings` without one — the diagnostics lines beside
+    /// them had been guarded and these had not — so every wake from the tuner
+    /// queue rebuilt the source list and the diagnostics buttons whether or not a
+    /// character of them differed, roughly eleven times a second on a station
+    /// with RDS.
+    last_sources: Option<Vec<TunerSource>>,
+    last_diag_actions: Option<Vec<DiagAction>>,
+    /// The two models in `push_settings` that CANNOT change: the theme chips are
+    /// a fixed list and the tuner-details list is always empty (the panel
+    /// describes an RTL-SDR, which the provenance rule bars from this tree). One
+    /// publish is the whole truth about both, so they are published once and then
+    /// never touched again rather than re-derived per wake.
+    statics_published: bool,
     /// The dial the RDS on screen was RESTORED from, when it came off disk
     /// rather than off the air. See [`crate::session`].
     ///
@@ -1043,6 +1057,9 @@ impl App {
                 last_nearby: None,
                 last_presets: None,
                 last_diag: None,
+                last_sources: None,
+                last_diag_actions: None,
+                statics_published: false,
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
                 freq_seq: 0,
@@ -2120,6 +2137,16 @@ impl App {
         // rows torn down and constructed again, per wake, whether or not one
         // character of them differs. The published state is identical either way;
         // this only stops the churn. See `State::last_nearby`.
+        //
+        // THE VIEW IS STILL BUILT BEFORE THE GUARD, and that is a deliberate
+        // decision rather than an oversight. Building it is what makes the
+        // comparison possible — 58 rows formatted into strings, the bucket chips
+        // and the genre columns — and it is thrown away on most wakes. Skipping
+        // that would mean versioning the picker: a counter bumped by a rebuild, a
+        // filter tap and a preset edit, compared instead of the view. `pushbench`
+        // prices the waste at 0.051ms of `push_all`'s 0.079ms, which is 0.5% of a
+        // core at the RDS pump's cadence, and the failure mode of a missed bump is
+        // a nearby list that silently stops updating. Not worth that trade.
         if self.state.borrow().last_nearby.as_ref() == Some(&view) {
             return;
         }
@@ -2197,26 +2224,41 @@ impl App {
         // which is VibeSDR's hardware path and is barred from this tree by the
         // provenance rule, so the list is empty and the panel draws its own
         // emptiness rather than inventing a device.
-        ui.set_settings_tuner_details(ModelRc::from(Rc::new(VecModel::from(
-            Vec::<TunerDetail>::new(),
-        ))));
+        //
+        // PUBLISHED ONCE, with the theme chips below it. Neither list has an
+        // input: this one is always empty and `theme_chips()` takes no argument
+        // and returns the same three labels forever. Handing Slint a fresh model
+        // of unchanging content on every wake from the tuner queue is a repeater
+        // rebuilt for nothing. See `State::statics_published`.
+        if !s.statics_published {
+            ui.set_settings_tuner_details(ModelRc::from(Rc::new(VecModel::from(
+                Vec::<TunerDetail>::new(),
+            ))));
+            ui.set_settings_theme_chips(strings(&settings::theme_chips()));
+        }
 
-        ui.set_settings_sources(ModelRc::from(Rc::new(VecModel::from(
-            cfg.sources(available)
-                .iter()
-                .map(|r| TunerSource {
-                    name: r.name.as_str().into(),
-                    kind: r.kind.as_str().into(),
-                    badge: r.badge.as_str().into(),
-                    badge_lit: r.badge_lit,
-                    available: r.available,
-                    selected: r.selected,
-                })
-                .collect::<Vec<_>>(),
-        ))));
+        // THE SOURCE LIST, under `last_presets`' rule. Its inputs are whether a
+        // tuner is available and which one is selected, so it changes on a bind,
+        // a loss and a tap in this panel — never on a frequency report, which is
+        // what almost every call here is.
+        let sources: Vec<TunerSource> = cfg
+            .sources(available)
+            .iter()
+            .map(|r| TunerSource {
+                name: r.name.as_str().into(),
+                kind: r.kind.as_str().into(),
+                badge: r.badge.as_str().into(),
+                badge_lit: r.badge_lit,
+                available: r.available,
+                selected: r.selected,
+            })
+            .collect();
+        let sources_changed = s.last_sources.as_ref() != Some(&sources);
+        if sources_changed {
+            ui.set_settings_sources(ModelRc::from(Rc::new(VecModel::from(sources.clone()))));
+        }
 
         ui.set_settings_autostart(cfg.autostart);
-        ui.set_settings_theme_chips(strings(&settings::theme_chips()));
         ui.set_settings_theme(cfg.theme.label().into());
         ui.set_settings_battery(match cfg.battery {
             settings::Battery::Checking => BatteryState::Checking,
@@ -2244,15 +2286,23 @@ impl App {
         if diag_changed {
             ui.set_settings_diag_lines(strings(&lines));
         }
-        ui.set_settings_diag_actions(ModelRc::from(Rc::new(VecModel::from(
-            cfg.actions(nwd_active)
-                .iter()
-                .map(|a| DiagAction {
-                    label: a.label.as_str().into(),
-                    divider_above: a.divider_above,
-                })
-                .collect::<Vec<_>>(),
-        ))));
+        // THE DIAGNOSTICS BUTTONS, same rule. The rows appear and disappear with
+        // the raw-capture switch and with whether the built-in tuner is live, so
+        // this list does change — just never at the rate it was being rebuilt at.
+        let diag_actions: Vec<DiagAction> = cfg
+            .actions(nwd_active)
+            .iter()
+            .map(|a| DiagAction {
+                label: a.label.as_str().into(),
+                divider_above: a.divider_above,
+            })
+            .collect();
+        let actions_changed = s.last_diag_actions.as_ref() != Some(&diag_actions);
+        if actions_changed {
+            ui.set_settings_diag_actions(ModelRc::from(Rc::new(VecModel::from(
+                diag_actions.clone(),
+            ))));
+        }
 
         ui.set_settings_about(
             settings::about_line(
@@ -2265,8 +2315,18 @@ impl App {
         // The borrow above must be released before `save_prefs` takes its own —
         // and before the diagnostics cache is written back.
         drop(s);
-        if diag_changed {
-            self.state.borrow_mut().last_diag = Some(lines);
+        {
+            let mut s = self.state.borrow_mut();
+            if diag_changed {
+                s.last_diag = Some(lines);
+            }
+            if sources_changed {
+                s.last_sources = Some(sources);
+            }
+            if actions_changed {
+                s.last_diag_actions = Some(diag_actions);
+            }
+            s.statics_published = true;
         }
         self.save_prefs();
     }
@@ -4323,6 +4383,55 @@ mod tests {
             "93.1",
             "with nothing in flight the face is honest again"
         );
+    }
+
+    /// A GUARDED MODEL STILL UPDATES — which is the failure a guard invites.
+    ///
+    /// `push_settings` used to hand Slint a fresh diagnostics-button list on
+    /// every wake from the tuner queue, about eleven times a second, whether or
+    /// not a character differed; that is a repeater torn down and rebuilt for
+    /// nothing, and with the panel open it measured 10.2ms per wake-plus-frame
+    /// against 4.3ms for the face alone. It is compared now and skipped when
+    /// equal, which took that to 6.9-7.6ms.
+    ///
+    /// The cost of getting a guard wrong is not slowness, it is a panel that
+    /// stops telling the truth. This drives the one input that really changes the
+    /// list — the raw-capture switch adds and removes a row — and holds that the
+    /// model follows it in BOTH directions, so a guard that never invalidates
+    /// fails here rather than on the dashboard.
+    #[test]
+    fn a_guarded_settings_model_still_updates() {
+        use slint::Model as _;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("settings-guard");
+        driver.push_all();
+
+        let labels = |ui: &AppWindow| -> Vec<String> {
+            ui.get_settings_diag_actions().iter().map(|a| a.label.to_string()).collect()
+        };
+
+        let before = labels(&ui);
+        assert!(
+            !before.iter().any(|l| l.contains("Export raw RDS capture")),
+            "the export row is absent while capture is off, got {before:?}"
+        );
+
+        ui.invoke_settings_set_rds_capture(true);
+        let on = labels(&ui);
+        assert_eq!(on.len(), before.len() + 1, "capture adds exactly one row");
+        assert!(
+            on.iter().any(|l| l.contains("Export raw RDS capture")),
+            "and the published model shows it, got {on:?}"
+        );
+
+        // A REPUBLISH THAT CHANGES NOTHING MUST NOT UNDO IT. This is the half a
+        // guard gets wrong in the other direction — skipping a publish is only
+        // correct while the cache and the model still agree.
+        driver.push_all();
+        assert_eq!(labels(&ui), on, "an idle wake leaves the list where it was");
+
+        ui.invoke_settings_set_rds_capture(false);
+        assert_eq!(labels(&ui), before, "and turning it back off removes the row");
     }
 
     /// "SAVE TO FILE" WRITES THE WHOLE RING, NOT THE HANDFUL ON SCREEN.

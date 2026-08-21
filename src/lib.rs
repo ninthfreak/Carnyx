@@ -73,6 +73,34 @@ pub fn run() -> Result<(), slint::PlatformError> {
 fn android_main(android_app: slint::android::AndroidApp) {
     use std::io::Read;
 
+    // ── PARTIAL RENDERING, WHICH IS OFF UNLESS THIS LINE RUNS ────────────────
+    //
+    // Without it every frame repaints all 1024x614 pixels, however little
+    // changed. The switch is not exposed as an API: Slint's Android backend
+    // builds `SkiaRenderer::default`, whose partial-rendering state comes from
+    // `create_partial_renderer_state(None)`, and with no surface to consult that
+    // function falls through to exactly this variable
+    // (i-slint-renderer-skia-1.17.1/lib.rs:142-147). The OpenGL surface the head
+    // unit uses never gets asked; it inherits the trait default, which is false
+    // (lib.rs:1102), and only the software surface overrides it to true.
+    //
+    // THERE IS NO TEARING FAILURE MODE, which is worth stating because the
+    // obvious worry is that a swapchain does not preserve the frame behind it.
+    // Slint keeps a history of dirty regions indexed by back-buffer age and
+    // unions however many the driver says are stale; when the driver cannot
+    // report an age at all it returns the WHOLE window instead (lib.rs:716-727).
+    // So on hardware without EGL_EXT_buffer_age this is a full repaint — today's
+    // behaviour exactly — and on hardware with it, it is correct.
+    //
+    // BEFORE `init`, because the renderer reads the variable while it is being
+    // constructed and never looks again.
+    //
+    // SAFETY-ADJACENT NOTE for the next edition bump: `set_var` becomes unsafe in
+    // Rust 2024 because it races other threads reading the environment. Here it
+    // is the first statement of the process's entry point, before Slint, the JVM
+    // bridge or any worker exists.
+    std::env::set_var("SLINT_SKIA_PARTIAL_RENDERING", "1");
+
     // All four must be taken BEFORE `init`, which consumes the `AndroidApp`.
     let files_dir = android_app.internal_data_path();
     let assets = android_app.asset_manager();
@@ -238,6 +266,16 @@ fn android_main(android_app: slint::android::AndroidApp) {
         "service: started"
     } else {
         "service: none — this build has no service class, or the platform refused it"
+    });
+
+    // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
+    // variable is set at the top of this function; this line is the only evidence
+    // a driver can get that the renderer saw it, since the alternative — Slint
+    // quietly repainting the whole screen every frame — looks exactly the same on
+    // a display. See the note beside the `set_var`.
+    _driver.log_platform(match std::env::var("SLINT_SKIA_PARTIAL_RENDERING") {
+        Ok(_) => "partial rendering: requested",
+        Err(_) => "partial rendering: OFF — every frame repaints the whole screen",
     });
 
     // WHAT KILLED THE LAST RUN, if anything did and it went through Rust's panic
