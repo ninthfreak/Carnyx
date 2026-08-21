@@ -54,6 +54,19 @@ component VPath inherits Path {
 // the half-step ring as drawn — reception loss, spreading inward from the leading
 // arc. Everything always renders; unlit elements take `off`, so the zero state is
 // the full glyph gone dim rather than a vanishing icon.
+//
+// EACH ARC IS BUILT IN ONE FORM, NOT BOTH. Every pair below has a solid shape and
+// a dotted one and only ever shows a single one of them; they were both
+// instantiated with `visible` choosing between them, so a meter was nine Path
+// elements to draw five. That is cheap on the face, which has one, and not cheap
+// on the nearby list, which builds one per row for 58 rows and never takes them
+// down — 522 Paths, each holding a long SVG command string.
+//
+// `if` rather than `visible` because the two are different instructions: `visible`
+// lowers to a Clip around an element that still exists, while `if` decides whether
+// it exists at all. The condition is the identical boolean either way, and
+// `shots/weak-and-lossy.png` — the dotted-arc case — regenerates byte-identical,
+// which is what says the swap is invisible.
 export component SignalWaves {
     in property <length> size: 54.6px;
     in property <int> full-pairs: 0;
@@ -89,61 +102,53 @@ export component SignalWaves {
     // Pair 0 (innermost) → 3 (outermost). Each has a solid form and a dotted one;
     // the dots are round caps of the full 2.2 stroke diameter, so a lossy arc keeps
     // its weight instead of thinning to an outline.
-    VPath {
+    if !root.dots(0): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
-        visible: !root.dots(0);
         opacity: root.fade(0);
         commands: "M23.8 11.6 A 6.5 5.5 0 0 0 23.8 20.4 M34.2 11.6 A 6.5 5.5 0 0 1 34.2 20.4";
         stroke: root.ink(0); stroke-line-cap: round;
     }
-    VPath {
+    if root.dots(0): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
-        visible: root.dots(0);
         opacity: root.fade(0);
         commands: "M22.70 11.60 A1.1 1.1 0 1 0 24.90 11.60 A1.1 1.1 0 1 0 22.70 11.60 Z M20.13 15.47 A1.1 1.1 0 1 0 22.33 15.47 A1.1 1.1 0 1 0 20.13 15.47 Z M21.85 19.75 A1.1 1.1 0 1 0 24.05 19.75 A1.1 1.1 0 1 0 21.85 19.75 Z M33.10 11.60 A1.1 1.1 0 1 0 35.30 11.60 A1.1 1.1 0 1 0 33.10 11.60 Z M35.67 15.47 A1.1 1.1 0 1 0 37.87 15.47 A1.1 1.1 0 1 0 35.67 15.47 Z M33.95 19.75 A1.1 1.1 0 1 0 36.15 19.75 A1.1 1.1 0 1 0 33.95 19.75 Z";
         fill: root.ink(0);
     }
 
-    VPath {
+    if !root.dots(1): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
-        visible: !root.dots(1);
         opacity: root.fade(1);
         commands: "M19.25 8.3 A 11.31 9.57 0 0 0 19.25 23.7 M38.75 8.3 A 11.31 9.57 0 0 1 38.75 23.7";
         stroke: root.ink(1); stroke-line-cap: round;
     }
-    VPath {
+    if root.dots(1): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
-        visible: root.dots(1);
         opacity: root.fade(1);
         commands: "M18.15 8.30 A1.1 1.1 0 1 0 20.35 8.30 A1.1 1.1 0 1 0 18.15 8.30 Z M14.79 11.66 A1.1 1.1 0 1 0 16.99 11.66 A1.1 1.1 0 1 0 14.79 11.66 Z M13.56 16.23 A1.1 1.1 0 1 0 15.76 16.23 A1.1 1.1 0 1 0 13.56 16.23 Z M15.04 20.73 A1.1 1.1 0 1 0 17.24 20.73 A1.1 1.1 0 1 0 15.04 20.73 Z M37.65 8.30 A1.1 1.1 0 1 0 39.85 8.30 A1.1 1.1 0 1 0 37.65 8.30 Z M41.01 11.66 A1.1 1.1 0 1 0 43.21 11.66 A1.1 1.1 0 1 0 41.01 11.66 Z M42.24 16.23 A1.1 1.1 0 1 0 44.44 16.23 A1.1 1.1 0 1 0 42.24 16.23 Z M40.76 20.73 A1.1 1.1 0 1 0 42.96 20.73 A1.1 1.1 0 1 0 40.76 20.73 Z";
         fill: root.ink(1);
     }
 
-    VPath {
+    if !root.dots(2): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
-        visible: !root.dots(2);
         opacity: root.fade(2);
         commands: "M14.7 5 A 16.25 13.75 0 0 0 14.7 27 M43.3 5 A 16.25 13.75 0 0 1 43.3 27";
         stroke: root.ink(2); stroke-line-cap: round;
     }
-    VPath {
+    if root.dots(2): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
-        visible: root.dots(2);
         opacity: root.fade(2);
         commands: "M13.60 5.00 A1.1 1.1 0 1 0 15.80 5.00 A1.1 1.1 0 1 0 13.60 5.00 Z M10.01 8.15 A1.1 1.1 0 1 0 12.21 8.15 A1.1 1.1 0 1 0 10.01 8.15 Z M7.69 12.33 A1.1 1.1 0 1 0 9.89 12.33 A1.1 1.1 0 1 0 7.69 12.33 Z M7.15 17.06 A1.1 1.1 0 1 0 9.35 17.06 A1.1 1.1 0 1 0 7.15 17.06 Z M8.52 21.63 A1.1 1.1 0 1 0 10.72 21.63 A1.1 1.1 0 1 0 8.52 21.63 Z M11.47 25.38 A1.1 1.1 0 1 0 13.67 25.38 A1.1 1.1 0 1 0 11.47 25.38 Z M42.20 5.00 A1.1 1.1 0 1 0 44.40 5.00 A1.1 1.1 0 1 0 42.20 5.00 Z M45.79 8.15 A1.1 1.1 0 1 0 47.99 8.15 A1.1 1.1 0 1 0 45.79 8.15 Z M48.11 12.33 A1.1 1.1 0 1 0 50.31 12.33 A1.1 1.1 0 1 0 48.11 12.33 Z M48.65 17.06 A1.1 1.1 0 1 0 50.85 17.06 A1.1 1.1 0 1 0 48.65 17.06 Z M47.28 21.63 A1.1 1.1 0 1 0 49.48 21.63 A1.1 1.1 0 1 0 47.28 21.63 Z M44.33 25.38 A1.1 1.1 0 1 0 46.53 25.38 A1.1 1.1 0 1 0 44.33 25.38 Z";
         fill: root.ink(2);
     }
 
-    VPath {
+    if !root.dots(3): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32; raw-stroke: 2.2;
-        visible: !root.dots(3);
         opacity: root.fade(3);
         commands: "M10.15 1.7 A 21.19 17.93 0 0 0 10.15 30.3 M47.85 1.7 A 21.19 17.93 0 0 1 47.85 30.3";
         stroke: root.ink(3); stroke-line-cap: round;
     }
-    VPath {
+    if root.dots(3): VPath {
         box-w: root.width; box-h: root.height; vbw: 58; vbh: 32;
-        visible: root.dots(3);
         opacity: root.fade(3);
         commands: "M9.05 1.70 A1.1 1.1 0 1 0 11.25 1.70 A1.1 1.1 0 1 0 9.05 1.70 Z M5.35 4.74 A1.1 1.1 0 1 0 7.55 4.74 A1.1 1.1 0 1 0 5.35 4.74 Z M2.53 8.60 A1.1 1.1 0 1 0 4.73 8.60 A1.1 1.1 0 1 0 2.53 8.60 Z M0.92 13.11 A1.1 1.1 0 1 0 3.12 13.11 A1.1 1.1 0 1 0 0.92 13.11 Z M0.76 17.88 A1.1 1.1 0 1 0 2.96 17.88 A1.1 1.1 0 1 0 0.76 17.88 Z M2.08 22.48 A1.1 1.1 0 1 0 4.28 22.48 A1.1 1.1 0 1 0 2.08 22.48 Z M4.66 26.51 A1.1 1.1 0 1 0 6.86 26.51 A1.1 1.1 0 1 0 4.66 26.51 Z M8.20 29.73 A1.1 1.1 0 1 0 10.40 29.73 A1.1 1.1 0 1 0 8.20 29.73 Z M46.75 1.70 A1.1 1.1 0 1 0 48.95 1.70 A1.1 1.1 0 1 0 46.75 1.70 Z M50.45 4.74 A1.1 1.1 0 1 0 52.65 4.74 A1.1 1.1 0 1 0 50.45 4.74 Z M53.27 8.60 A1.1 1.1 0 1 0 55.47 8.60 A1.1 1.1 0 1 0 53.27 8.60 Z M54.88 13.11 A1.1 1.1 0 1 0 57.08 13.11 A1.1 1.1 0 1 0 54.88 13.11 Z M55.04 17.88 A1.1 1.1 0 1 0 57.24 17.88 A1.1 1.1 0 1 0 55.04 17.88 Z M53.72 22.48 A1.1 1.1 0 1 0 55.92 22.48 A1.1 1.1 0 1 0 53.72 22.48 Z M51.14 26.51 A1.1 1.1 0 1 0 53.34 26.51 A1.1 1.1 0 1 0 51.14 26.51 Z M47.60 29.73 A1.1 1.1 0 1 0 49.80 29.73 A1.1 1.1 0 1 0 47.60 29.73 Z";
         fill: root.ink(3);
