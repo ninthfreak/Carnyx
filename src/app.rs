@@ -1639,8 +1639,27 @@ impl App {
                         if s.freq_seq > h.since_seq
                             && (mhz - h.mhz).abs() < crate::stations::FREQ_EPS as f32
                         {
-                            s.hold = None;
-                            // Nothing left to owe: the front end is there.
+                            // ARRIVING IS NOT THE END OF IT, and releasing here was
+                            // a real defect the unit showed. The vendor's bank walk
+                            // is a retune of its own and it can land AFTER the
+                            // report that confirms ours — a drive log caught
+                            // exactly that: "settled on 94.9" and then, with the
+                            // hold already gone, "tuned 104.1". Nothing corrected
+                            // it, because releasing had disarmed the defence at the
+                            // moment the attack arrived.
+                            //
+                            // So the hold now runs its full `HOLD_CAP` whatever
+                            // happens, and only `expire_hold` ends it. Nothing is
+                            // hidden by that: the face shows the station the driver
+                            // asked for, we are actively keeping the radio there,
+                            // and any tune the DRIVER makes meanwhile drops the
+                            // hold in `tune` before it can lie about one.
+                            //
+                            // Only the pending re-command is dropped — at this
+                            // instant the front end really is where it belongs and
+                            // nothing is owed. The budget is deliberately NOT
+                            // re-armed; a vendor that keeps moving still has to
+                            // spend from the same two.
                             s.reassert = None;
                             let line = format!("settled on {:.1}", h.mhz);
                             s.settings.log.push(&stamp(), &line);
@@ -1880,7 +1899,39 @@ impl App {
                 // time the action ran, `dial` was the vendor's dial and the step
                 // was computed from a position the driver was never in.
                 let anchor = s.anchor();
-                s.panel_action = panel_action(key, &action, anchor).or(s.panel_action);
+                // PRESSES ADD UP; THEY DO NOT OVERWRITE EACH OTHER.
+                //
+                // This was `.or(s.panel_action)`, which keeps whichever action is
+                // newest and silently loses the ones before it. A step takes about
+                // 680ms on the unit — the retune, the drain, the RDS pump and the
+                // republish are all synchronous, and `busy` holds any queued key
+                // until they finish — so anything pressed inside that window was
+                // simply dropped: "it's impossible to quickly press prev or next 3
+                // or more times and have it move that many positions". A drive log
+                // measured 20 presses producing 18 steps, with gaps as short as
+                // 203ms.
+                //
+                // Summing the direction instead makes a burst ONE step of several
+                // positions, which is both correct and far quicker than three
+                // steps would have been: one tune, one morph, one settle.
+                // `step_preset_from` already handles any magnitude —
+                // `(active + dir).rem_euclid(n)` never cared — `step_morph` takes
+                // `dir.signum()` for the direction the cards fly, and
+                // `step_discards` only asks the sign.
+                //
+                // THE ANCHOR IS THE FIRST PRESS'S, not the last. Every key in a
+                // burst reads the same `anchor()` anyway, because nothing has
+                // moved `asserted` yet, but keeping the earliest is what stays
+                // right if that ever stops being true.
+                let fresh = panel_action(key, &action, anchor);
+                s.panel_action = match (fresh, s.panel_action) {
+                    (
+                        Some(PanelAction::Step { dir, .. }),
+                        Some(PanelAction::Step { dir: queued, from }),
+                    ) => Some(PanelAction::Step { dir: queued + dir, from }),
+                    (Some(now), _) => Some(now),
+                    (None, queued) => queued,
+                };
             }
             TunerEvent::Illumination { ui_mode, .. } => {
                 s.settings.log.push(&stamp(), &format!("illumination {ui_mode}"));
@@ -3440,6 +3491,20 @@ impl App {
             // the tune and the flag stays set, so the hero keeps the sweeping
             // face for the rest of the session.
             s.scanning = false;
+            // AND IT RETIRES THE PREVIOUS STEP'S HOLD, which nothing else on this
+            // branch would. `tune` is what normally drops a hold that has been
+            // overtaken, and this branch deliberately does not call it — so a hold
+            // from the press before, which since `settled` no longer ends on
+            // arrival, stayed live here with a re-command still owed against it.
+            // The driver pressed a key and landed where they already were; the
+            // older press is finished either way, and letting its re-assert fire
+            // afterwards drags the radio back to a station they have left.
+            //
+            // `wheelprobe` case C caught it the moment the hold stopped being
+            // released on settle: one row of six went to 88.7 where 105.5 was
+            // asked for, because the row before it had left a hold behind.
+            s.hold = None;
+            s.reassert = None;
         }
         // AND IT STILL PUBLISHES, which the first cut of this forgot. `tune` was
         // doing that too, so skipping it left the face on the PREVIOUS station
@@ -4395,15 +4460,61 @@ mod tests {
             "a vendor report between presses must not move the strip either"
         );
 
-        // ── The release edge, with the string the DEVICE really sends. Both
-        // edges inside one drain collapse, because `panel_action` is one Option.
+        // ── TWO KEYS IN ONE DRAIN ARE TWO STEPS, and this assertion used to say
+        // the opposite: "one step, not two", because `panel_action` was one
+        // Option and the newer key overwrote the older.
+        //
+        // That was written against an open question — whether the MCU sends a
+        // release broadcast as well as a press, in which case collapsing them was
+        // the only thing standing between one push and a double step. A drive log
+        // has now answered it. The panel line records the gap since the last
+        // identical key, and across twenty presses the SHORTEST was 203ms, with
+        // the rest spread from 417ms to 2969ms. A press and its own release are
+        // tens of milliseconds apart; 203ms is a person pressing twice. Twenty
+        // presses also produced eighteen steps, not forty. This fascia sends ONE
+        // broadcast per press, so there is no release edge to swallow — and
+        // swallowing was costing the driver every press made inside the ~680ms a
+        // step takes on the unit.
         driver.tune_for_test(strip[0]);
         driver.drain_events();
         let real = "com.nwd.action.ACTION_KEY_VALUE";
         crate::android::ingest_panel_key(62, real.into());
         crate::android::ingest_panel_key(62, real.into());
         driver.drain_events();
-        assert_eq!(label(&ui), format_mhz(strip[1]).to_string(), "one step, not two");
+        assert_eq!(
+            label(&ui),
+            format_mhz(strip[2]).to_string(),
+            "two presses in one drain move two positions"
+        );
+
+        // AND A LONGER BURST, because the arithmetic is what changed and one
+        // extra press only proves addition once. Five keys from entry 0 land on
+        // entry 5 of a six-entry strip, in a single step rather than five.
+        driver.tune_for_test(strip[0]);
+        driver.drain_events();
+        for _ in 0..5 {
+            crate::android::ingest_panel_key(62, real.into());
+        }
+        driver.drain_events();
+        assert_eq!(
+            label(&ui),
+            format_mhz(strip[5]).to_string(),
+            "five presses move five positions"
+        );
+
+        // AND THEY CANCEL. A next and a prev in the same drain is a driver who
+        // changed their mind; summing the directions is what makes that land
+        // where they started instead of somewhere neither key asked for.
+        driver.tune_for_test(strip[2]);
+        driver.drain_events();
+        crate::android::ingest_panel_key(62, real.into());
+        crate::android::ingest_panel_key(63, real.into());
+        driver.drain_events();
+        assert_eq!(
+            label(&ui),
+            format_mhz(strip[2]).to_string(),
+            "a next and a prev together go nowhere"
+        );
     }
 
     /// THE FACE DOES NOT FLICK THROUGH THE VENDOR'S OWN BANK.
@@ -4460,15 +4571,33 @@ mod tests {
         driver.push_all();
         assert_eq!(ui.get_freq_label().to_string(), format_mhz(strip[2]).to_string());
 
-        // Released — so an ordinary retune elsewhere is shown again at once,
-        // which is what makes this a bounded exception and not a lie.
+        // ── AND ARRIVING DOES NOT END THE HOLD, which this used to assert the
+        // opposite of: it expected a vendor report after the settle to be shown
+        // at once, "with nothing in flight the face is honest again".
+        //
+        // A drive log showed what that cost. The vendor's bank walk is a retune
+        // of its own and it can land AFTER the report confirming ours — the log
+        // has "settled on 94.9" and then, with the hold already released, "tuned
+        // 104.1", uncorrected, because releasing had disarmed the defence at the
+        // moment the attack arrived. That is the "strange move" the driver saw.
+        //
+        // So a settled hold keeps standing until `HOLD_CAP` and keeps defending.
+        // Nothing is concealed by that: the face shows the station the driver
+        // asked for, the radio is being held there, and a tune the DRIVER makes
+        // drops the hold in `tune` before it could misrepresent one.
+        driver.set_echo_for_test(true);
         vendor_reports(93.1);
         driver.drain_events();
         driver.push_all();
         assert_eq!(
             ui.get_freq_label().to_string(),
-            "93.1",
-            "with nothing in flight the face is honest again"
+            format_mhz(strip[2]).to_string(),
+            "a late vendor move is ridden out, not displayed"
+        );
+        assert_eq!(
+            driver.tuned_mhz_for_test().map(format_mhz),
+            Some(format_mhz(strip[2])),
+            "and the radio is taken back to the target"
         );
     }
 

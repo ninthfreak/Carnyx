@@ -89,8 +89,19 @@ fn main() {
     }
 
     // Leaning on the button: a burst with no drain between presses, which is
-    // what a held wheel control produces. The queue is emptied to nothing and
-    // the LAST request wins, so this must end one station along and not six.
+    // what a held wheel control produces.
+    //
+    // THE LAST REQUEST NO LONGER WINS, and this note used to say it did — "the
+    // queue is emptied to nothing and the LAST request wins, so this must end one
+    // station along and not six". Presses accumulate now, because a drive log
+    // showed twenty producing eighteen steps and the driver reporting that three
+    // quick presses would not move three positions. Six "down" keys therefore ask
+    // for six positions, and on the seeded six-entry strip that is a full lap back
+    // to where it started — which is the arithmetic being right, not a collapse.
+    //
+    // The six "up" keys interleaved below are still refused outright, by
+    // `panel_action`'s release-edge test, and are here to prove that guard still
+    // holds now that the two edges are no longer merged into one action.
     let before = ui.get_freq_label().to_string();
     for _ in 0..6 {
         carnyx::android::ingest_panel_key(62, "down".into());
@@ -100,7 +111,7 @@ fn main() {
     driver.push_all();
     render();
     println!(
-        "burst of 6 with no drain between: {before} -> {} (one step, not six)",
+        "burst of 6 with no drain between: {before} -> {} (six positions on a six-entry strip is a full lap)",
         ui.get_freq_label()
     );
 
