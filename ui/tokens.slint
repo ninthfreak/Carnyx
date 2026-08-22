@@ -66,7 +66,35 @@ export global Pal {
         return Pal.flat(c).with-alpha(a);
     }
 
+    // ── WHAT A BAND THEME RESTATES ON THE PALETTE ITSELF ──
+    //
+    // TWO TOKENS, AND ONLY TWO. The reference folds a theme's accent pair into
+    // the palette — `pal = { ...basePal, blue, blueFill }` (CarFmFace.tsx:572) —
+    // and threads the page background down as its own prop; every other themed
+    // colour it has reaches exactly one element. So the ground and the accent
+    // live here, because they are the two that a dozen components read: the
+    // pill, the preset selection, the nav chevrons, the tells and the scroll
+    // thumb all take `Pal.blue`, and overriding it once is what turns them
+    // together rather than one by one. The hero card's and the RadioText plate's
+    // own colours travel in `EggTheme` and are applied where they are drawn — so
+    // the settings panel, the numpad and the nearby list keep the ordinary dark
+    // palette, exactly as they do in the reference.
+    //
+    // SET BY RUST, from `eggs.rs`, PER COLOUR SCHEME — "Back in Black" is AC/DC's
+    // dark cut, and its light cut restates neither of these. ALPHA ZERO MEANS
+    // UNTHEMED, so nothing here can move a face with no theme showing.
+    in-out property <color> egg-page-bg: transparent;
+    in-out property <color> egg-accent: transparent;
+
     out property <color> bg:          Pal.flat(Pal.dark ? #161E29 : #EEF1F5);
+    // THE PAGE'S OWN GROUND, which is `bg` UNLESS a theme repaints it — and the
+    // two are separate because the reference keeps them separate. `pageBg` is
+    // threaded to the stage and the face (CarFmFace.tsx:1284, :1289) and to the
+    // signal digits' ring (`egg?.pageBg || pal.bg`, :1186); the three overlay
+    // cards ask for plain `pal.bg` (SettingsPanel:319, NearbyPicker:180,
+    // LogoSearchOverlay:150) and so keep the ordinary ground on a black page.
+    // One token for both would have quietly repainted those three as well.
+    out property <color> page:        Pal.egg-page-bg.alpha > 0 ? Pal.egg-page-bg : Pal.bg;
     out property <color> panel:       Pal.flat(Pal.dark ? #212B38 : #FFFFFF);
     out property <color> raised:      Pal.flat(Pal.dark ? #2A3644 : #F5F7FA);
     out property <color> text:        Pal.flat(Pal.dark ? #E9EEF4 : #1B222C);
@@ -74,9 +102,15 @@ export global Pal {
     // Frequency amber is a FIXED safety colour (ANDROID §3) — never themed, never
     // part of the accent system. It differs by theme only for contrast.
     out property <color> amber:       Pal.flat(Pal.dark ? #FFB833 : #C9760A);
-    out property <color> blue:        Pal.flat(Pal.dark ? #4A9EFF : #2E86FF);
+    // THE SILVER. `uiAccent: '#C9C9C9'` — every blue graphic on the face reads
+    // this one token, so this line is what turns all of them at once.
+    out property <color> blue:        Pal.egg-accent.alpha > 0 ? Pal.egg-accent : Pal.flat(Pal.dark ? #4A9EFF : #2E86FF);
     out property <color> border:      Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.13);
-    out property <color> blue-fill:   Pal.flat-a(Pal.dark ? #4A9EFF : #2E86FF, Pal.dark ? 0.18 : 0.12);
+    // `uiAccentFill: 'rgba(201,201,201,0.15)'` — the theme states its own alpha,
+    // which is why the themed arm does not reuse the 0.18/0.12 beside it.
+    out property <color> blue-fill:   Pal.egg-accent.alpha > 0
+        ? Pal.egg-accent.with-alpha(0.15)
+        : Pal.flat-a(Pal.dark ? #4A9EFF : #2E86FF, Pal.dark ? 0.18 : 0.12);
     out property <color> amber-fill:  Pal.flat-a(Pal.dark ? #FFB833 : #C9760A, Pal.dark ? 0.10 : 0.08);
     out property <color> backdrop:    Pal.flat(Pal.dark ? #0C1218 : #DCE0E6);
     out property <color> meter-empty: Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.10);

@@ -22,7 +22,9 @@
 /// framework types — so the whole thing is comparable and testable without a
 /// window. CarFM's `Egg` carries fifty-odd optional fields across five themes;
 /// this carries what AC/DC actually uses and nothing speculative.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// NO `Eq`: the skins carry outline widths in logical pixels, which are floats.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Egg {
     /// What the theme is called, and the key the face switches its motif on.
     pub id: &'static str,
@@ -33,19 +35,93 @@ pub struct Egg {
     /// The colour it pulses to. CarFM: `genrePulse` `#E8A400` → `#FFE24A`,
     /// `genrePulseOn: true`.
     pub genre_pulse: u32,
-    /// The theme's accent, restated over every interactive element.
+    /// The sleeve accent — CarFM's `accent`, distinct from the `uiAccent` a cut
+    /// may restate. NOTHING ON THIS FACE READS IT YET: the reference spends it on
+    /// the settings gear's band motif and the theme glow, neither of which is
+    /// ported. Kept because it is registry data with a transcribed value, and the
+    /// first motif that lands will want the digits already right.
     pub accent: u32,
     /// A lightning bolt splits the call sign at its midpoint — WI⚡BA.
     pub call_sign_bolt: bool,
-    /// The bolt's ink, which is the genre gold rather than the red accent.
-    pub bolt_ink: u32,
     /// Horns overhang the hero card's top corners (EASTER-EGGS §2.1).
     pub horns: bool,
     /// The station's logo is hidden so the lettering can carry the card. CarFM's
     /// `suppressLogos`, and it is what makes the call-sign bolt visible at all —
     /// a hero with art shows no call sign to split.
     pub suppress_logos: bool,
+    /// What the theme restates for a DARK face, or `None` to keep the ordinary
+    /// palette. AC/DC's is "Back in Black".
+    pub dark: Option<Skin>,
+    /// The same for a LIGHT face.
+    pub light: Option<Skin>,
 }
+
+/// What a theme restates for one colour scheme.
+///
+/// `None` MEANS "LEAVE THE ORDINARY TOKEN ALONE", which is what lets one struct
+/// describe both a full restatement and a cut that changes one thing.
+///
+/// AN `Option`, NOT A ZERO SENTINEL, and that cost a render to learn: these are
+/// `0xRRGGBB` values, so the "unset" sentinel was the same bit pattern as the one
+/// colour "Back in Black" is named after. `pageBg: '#000000'` read as unset, the
+/// page stayed navy, and every other field applied — a theme that was 90% right
+/// and silently wrong on the one value in its own title.
+///
+/// TWO REACH `Pal`; THE REST REACH ONE ELEMENT EACH, and that split is the
+/// reference's, not a convenience. `CarFmFace.tsx:572-577` folds only the accent
+/// pair into the palette — `pal = { ...basePal, blue, blueFill }` — and threads
+/// the page background and the card colours down as their own props. So the two
+/// that recolour a dozen components at once (`Pal.bg`, `Pal.blue`) go on the
+/// global, and the surfaces stay where only their own element can see them. The
+/// settings panel, the numpad and the nearby list keep the ordinary dark
+/// palette; the hero card and the RadioText plate are the only surfaces that go
+/// near-black.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Skin {
+    /// `pageBg` — the whole face's ground. Global (`Pal.bg`).
+    pub page_bg: Option<u32>,
+    /// `uiAccent` — every blue graphic at once. Global (`Pal.blue`, and
+    /// `Pal.blue-fill` at the reference's 0.15 alpha).
+    pub accent: Option<u32>,
+    /// `card.bg` / `card.border` / `card.text` — the HERO CARD alone.
+    pub card_bg: Option<u32>,
+    pub card_border: Option<u32>,
+    pub card_text: Option<u32>,
+    /// The call-sign bolt's ink. NOT a registry field: the face states it
+    /// outright as `dark ? '#C9C9C9' : heroCardText` (`CarFmFace.tsx:1485`), so
+    /// `None` here means "take the card's text colour". The registry's
+    /// `settingsBoltColor` is a different bolt — the settings gear's, on a motif
+    /// this port does not carry.
+    pub bolt_ink: Option<u32>,
+    /// `nameOutline` — stroke and width on the hero lettering. Its third field,
+    /// `fill`, is declared in the registry and read by nothing.
+    pub outline_ink: Option<u32>,
+    pub outline_w: f32,
+    /// `rtPlate` — the RadioText strip alone.
+    pub rt_bg: Option<u32>,
+    pub rt_border: Option<u32>,
+    pub rt_text: Option<u32>,
+    /// `genreOutline` — an edge on the genre line.
+    pub genre_outline_ink: Option<u32>,
+    pub genre_outline_w: f32,
+}
+
+/// Nothing restated.
+pub const NO_SKIN: Skin = Skin {
+    page_bg: None,
+    accent: None,
+    card_bg: None,
+    card_border: None,
+    card_text: None,
+    bolt_ink: None,
+    outline_ink: None,
+    outline_w: 0.0,
+    rt_bg: None,
+    rt_border: None,
+    rt_text: None,
+    genre_outline_ink: None,
+    genre_outline_w: 0.0,
+};
 
 /// AC/DC. CarFM's first registry entry, with its own colours verbatim.
 ///
@@ -59,9 +135,41 @@ pub const ACDC: Egg = Egg {
     genre_pulse: 0xFFE24A,
     accent: 0xE31E24,
     call_sign_bolt: true,
-    bolt_ink: 0xE8A400,
     horns: true,
     suppress_logos: true,
+    // "BACK IN BLACK": the page goes to true black, the hero card and the
+    // RadioText plate sit a few points off it, and the interactive accent stops
+    // being blue. Verbatim from `bandThemes.ts`'s `modes.dark` for this entry —
+    // `pageBg`, `card`, `nameOutline`, `uiAccent`, `rtPlate` — with two of that
+    // block's values deliberately absent:
+    //
+    //   `card.sub: '#7E7E7E'`   declared in the registry, read by no component.
+    //   `uiAccentOn: '#0B0B0B'` `eggTokens`' own note: "has no home in the app
+    //                           palette, so it's carried on the Egg for the art
+    //                           pass but not applied here."
+    //
+    // Carrying either would be inventing a rule the reference does not have.
+    dark: Some(Skin {
+        page_bg: Some(0x000000),
+        accent: Some(0xC9C9C9),
+        card_bg: Some(0x0B0B0B),
+        card_border: Some(0xA2A2A2),
+        card_text: Some(0xE8E8E8),
+        bolt_ink: Some(0xC9C9C9),
+        outline_ink: Some(0xC9C9C9),
+        outline_w: 1.1,
+        rt_bg: Some(0x070707),
+        rt_border: Some(0x171717),
+        rt_text: Some(0xE8E8E8),
+        ..NO_SKIN
+    }),
+    // The light cut restates one thing: an outline on the genre line, so the gold
+    // has an edge against a pale ground.
+    light: Some(Skin {
+        genre_outline_ink: Some(0x241B0E),
+        genre_outline_w: 1.0,
+        ..NO_SKIN
+    }),
 };
 
 /// Every theme that exists here, in match order.
@@ -123,6 +231,15 @@ pub fn resolve(rt: &str, dead: bool) -> Option<&'static Egg> {
     match_egg_id(rt)
 }
 
+/// The cut of `egg` that applies to the face as it currently stands.
+///
+/// A theme states its palette PER SCHEME, because "Back in Black" means nothing
+/// on a white page. CarFM merges `modes.light`/`modes.dark` over the entry for
+/// the active scheme; this is the same choice made explicitly.
+pub fn skin(egg: &Egg, dark: bool) -> Skin {
+    if dark { egg.dark } else { egg.light }.unwrap_or(NO_SKIN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +292,68 @@ mod tests {
     fn a_dead_face_is_never_themed() {
         assert_eq!(resolve("AC/DC - Back in Black", false).map(|e| e.id), Some("AC/DC"));
         assert_eq!(resolve("AC/DC - Back in Black", true), None);
+    }
+
+    /// "BACK IN BLACK", FIELD BY FIELD, against `bandThemes.ts`'s `modes.dark`.
+    ///
+    /// Written out rather than compared to the constant, because a test that
+    /// reads the value it is checking passes whatever the value becomes. These
+    /// digits are transcribed from the reference; if one of them moves, the
+    /// theme is no longer the one the sleeve is.
+    #[test]
+    fn the_dark_cut_is_back_in_black() {
+        let d = skin(&ACDC, true);
+        // TRUE BLACK, AND SPELLED OUT AS PRESENT. `Some(0x000000)` is the exact
+        // pair a zero sentinel could not tell apart, and this line is what would
+        // have caught it: the page ONLY reads black if the field says so.
+        assert_eq!(d.page_bg, Some(0x000000), "pageBg");
+        assert_eq!(d.card_bg, Some(0x0B0B0B), "card.bg");
+        assert_eq!(d.card_border, Some(0xA2A2A2), "card.border");
+        assert_eq!(d.card_text, Some(0xE8E8E8), "card.text");
+        assert_eq!(d.outline_ink, Some(0xC9C9C9), "nameOutline.stroke");
+        assert_eq!(d.outline_w, 1.1, "nameOutline.width");
+        assert_eq!(d.accent, Some(0xC9C9C9), "uiAccent");
+        assert_eq!(d.rt_bg, Some(0x070707), "rtPlate.bg");
+        assert_eq!(d.rt_border, Some(0x171717), "rtPlate.border");
+        assert_eq!(d.rt_text, Some(0xE8E8E8), "rtPlate.text");
+        // Stated by the face, not the registry: `dark ? '#C9C9C9' : heroCardText`.
+        assert_eq!(d.bolt_ink, Some(0xC9C9C9), "call-sign bolt, dark");
+    }
+
+    /// EVERY BLUE GRAPHIC GOES SILVER, and exactly one field is what does it.
+    ///
+    /// `Pal.blue` is read by the pill, the preset selection, the nav chevrons,
+    /// the tells and the scroll thumb; `skin.accent` is what Rust pushes into it.
+    /// The light cut leaving it unstated is what keeps a pale face blue.
+    #[test]
+    fn the_accent_turns_only_on_the_dark_cut() {
+        assert_eq!(skin(&ACDC, true).accent, Some(0xC9C9C9));
+        assert_eq!(skin(&ACDC, false).accent, None);
+    }
+
+    /// The light cut restates ONE thing. Every other field is `None` — "leave
+    /// the ordinary token alone" — which is how a themed light face stays
+    /// ordinary apart from the gold genre line's edge.
+    #[test]
+    fn the_light_cut_restates_only_the_genre_outline() {
+        let l = skin(&ACDC, false);
+        assert_eq!(l.genre_outline_ink, Some(0x241B0E));
+        assert_eq!(l.genre_outline_w, 1.0);
+        assert_eq!(
+            Skin { genre_outline_ink: None, genre_outline_w: 0.0, ..l },
+            NO_SKIN,
+            "the light cut may not restate anything but the genre outline"
+        );
+    }
+
+    /// A THEME WITH NO CUT FOR A SCHEME CHANGES NOTHING, rather than falling back
+    /// to the other scheme's. Sanity on `skin`'s own `unwrap_or`, since three of
+    /// the four other CarFM themes state one mode and not the other.
+    #[test]
+    fn a_scheme_a_theme_says_nothing_about_is_left_alone() {
+        const BARE: Egg = Egg { dark: None, light: None, ..ACDC };
+        assert_eq!(skin(&BARE, true), NO_SKIN);
+        assert_eq!(skin(&BARE, false), NO_SKIN);
     }
 
     /// Punctuation becomes a separator, never nothing — the difference between

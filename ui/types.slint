@@ -80,14 +80,42 @@ export struct EggTheme {
     /// That line's ink, and the colour it pulses to.
     genre-ink: color,
     genre-pulse: color,
-    /// Restated over the interactive accent.
-    accent: color,
     /// A lightning bolt splits the call sign at its midpoint — WI⚡BA.
     call-bolt: bool,
-    bolt-ink: color,
     /// Horns overhanging the hero card's top corners (EASTER-EGGS §2.1).
     horns: bool,
     /// Hide the station's logo so the lettering carries the card. Without this
     /// there is no call sign on screen for the bolt to split.
     suppress-logo: bool,
+
+    // ── The per-scheme cut ("Back in Black" is AC/DC's dark one) ──
+    //
+    // EVERY FIELD BELOW IS SCOPED TO ONE ELEMENT, and a fully transparent colour
+    // (or a zero width) means "leave the ordinary token alone" — which is what
+    // the light cut hands down for all but the genre outline. The two a theme
+    // restates FACE-WIDE, the ground and the accent, go through `Pal` instead,
+    // because a dozen components read those and have to turn together.
+
+    /// The HERO CARD's surface — `card.bg` / `card.border` / `card.text`. The
+    /// dark cut states `#0B0B0B` behind a `#A2A2A2` border, which no ordinary
+    /// token pair would give: a near-black card with a light rule around it.
+    card-bg: color,
+    card-border: color,
+    card-text: color,
+    /// The call sign's bolt. Silver on the dark cut; transparent means it takes
+    /// the card's own text colour, which is what the light cut does.
+    bolt-ink: color,
+    /// The hero lettering's outline — `nameOutline`, stroke `#C9C9C9` at 1.1.
+    /// Zero width means no outline, which is the light cut.
+    outline-ink: color,
+    outline-w: length,
+    /// The RADIOTEXT PLATE — `rtPlate.bg` / `.border` / `.text`. Its own surface,
+    /// darker than the card it sits below.
+    rt-bg: color,
+    rt-border: color,
+    rt-text: color,
+    /// The genre line's outline. The LIGHT cut is the one that has this
+    /// (`genreOutline: #241B0E` at 1), so the gold reads against a pale ground.
+    genre-outline-ink: color,
+    genre-outline-w: length,
 }

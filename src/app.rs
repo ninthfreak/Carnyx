@@ -2144,20 +2144,44 @@ impl App {
         // suppresses every theme, as CarFM's `resolveEgg({ off })` does. A red
         // accent on a grey face reads as a rendering fault, not as a joke.
         let themed = crate::eggs::resolve(&shown_rt, !s.audio);
+        // THE PER-SCHEME CUT. "Back in Black" means nothing on a white page, so a
+        // theme states its palette for light and dark separately and the face's
+        // own scheme picks. `Pal.dark` is the authority on that — it is what
+        // every other token here already reads.
+        let pal = ui.global::<crate::Pal>();
+        let skin = themed.map_or(crate::eggs::NO_SKIN, |e| crate::eggs::skin(e, pal.get_dark()));
         ui.set_egg(match themed {
             Some(e) => EggTheme {
                 on: true,
                 genre: e.genre.into(),
                 genre_ink: rgb(e.genre_ink),
                 genre_pulse: rgb(e.genre_pulse),
-                accent: rgb(e.accent),
                 call_bolt: e.call_sign_bolt,
-                bolt_ink: rgb(e.bolt_ink),
                 horns: e.horns,
                 suppress_logo: e.suppress_logos,
+                card_bg: opt_rgb(skin.card_bg),
+                card_border: opt_rgb(skin.card_border),
+                card_text: opt_rgb(skin.card_text),
+                bolt_ink: opt_rgb(skin.bolt_ink),
+                outline_ink: opt_rgb(skin.outline_ink),
+                outline_w: skin.outline_w,
+                rt_bg: opt_rgb(skin.rt_bg),
+                rt_border: opt_rgb(skin.rt_border),
+                rt_text: opt_rgb(skin.rt_text),
+                genre_outline_ink: opt_rgb(skin.genre_outline_ink),
+                genre_outline_w: skin.genre_outline_w,
             },
             None => EggTheme::default(),
         });
+        // AND THE TWO THE WHOLE FACE READS. Every blue graphic takes `Pal.blue` —
+        // the pill, the preset selection, the nav chevrons, the tells, the scroll
+        // thumb — so the accent turns silver on this one line rather than in a
+        // dozen components, and the ground turns with it. The card and plate
+        // colours above stay off the palette on purpose: the reference restates
+        // only these two globally, leaving the settings panel, the numpad and the
+        // nearby list on the ordinary dark tokens.
+        pal.set_egg_page_bg(opt_rgb(skin.page_bg));
+        pal.set_egg_accent(opt_rgb(skin.accent));
         // THE CALL SIGN CUT IN TWO, for the bolt to stand between. Slint has no
         // substring and this is a decision anyway. The midpoint rounds UP so an
         // odd count leaves the longer half first; `char_indices` rather than a
@@ -2982,6 +3006,12 @@ impl App {
             if let Some(theme) = settings::Theme::parse(t.as_str()) {
                 app.state.borrow_mut().settings.theme = theme;
                 app.apply_theme(theme);
+                // A BAND THEME STATES ITS PALETTE PER SCHEME, so the cut has to
+                // be re-resolved when the scheme moves under it: switch to dark
+                // with AC/DC playing and "Back in Black" only arrives here.
+                // Nothing else republishes on a theme change — every other token
+                // is derived inside `Pal` and turns on its own.
+                app.push_hero();
             }
             app.push_settings();
         });
@@ -4087,6 +4117,35 @@ fn numpad_press(buf: &str, key: &str) -> String {
     format!("{buf}{key}")
 }
 
+/// A packed `0xRRGGBB` as a Slint colour.
+///
+/// The band-theme palette is written as hex in `eggs.rs` because that is how the
+/// design states it and how CarFM stores it; a theme that is nearly the right red
+/// is a bug wearing a costume, so the digits are carried across unchanged and
+/// converted in exactly one place.
+fn rgb(packed: u32) -> slint::Color {
+    slint::Color::from_rgb_u8(
+        ((packed >> 16) & 0xFF) as u8,
+        ((packed >> 8) & 0xFF) as u8,
+        (packed & 0xFF) as u8,
+    )
+}
+
+/// The same for a colour a theme may or may not have stated.
+///
+/// A `Skin` describes both a full restatement and a cut that changes one thing,
+/// so most of its fields are `None` most of the time. `None` becomes a FULLY
+/// TRANSPARENT colour, and every element that reads one tests its alpha to
+/// decide whether the theme said anything at all — which is why this cannot go
+/// back to a zero sentinel: `#000000` is a colour "Back in Black" actually
+/// states, and as a `u32` it is indistinguishable from "nothing stated".
+fn opt_rgb(packed: Option<u32>) -> slint::Color {
+    match packed {
+        Some(c) => rgb(c),
+        None => slint::Color::from_argb_u8(0, 0, 0, 0),
+    }
+}
+
 /// Does a step actually DISCARD the card in the slot the outgoing hero lands in?
 ///
 /// The ghost stands for a card that is about to stop existing, so drawing one
@@ -4098,20 +4157,6 @@ fn numpad_press(buf: &str, key: &str) -> String {
 /// entry on the left and the first on the right. That rule is what makes the
 /// answer interesting: stepping forward off an unsaved dial lands on entry 0,
 /// whose prev is the last entry — exactly what was already there.
-/// A packed `0xRRGGBB` as a Slint colour.
-///
-/// The band-theme palette is written as hex in `eggs.rs` because that is how the
-/// design states it and how CarFM stores it; a theme that is nearly the right red
-/// is a bug wearing a costume, so the digits are carried across unchanged and
-/// converted in exactly one place.
-fn rgb(packed: u32) -> slint::Color {
-slint::Color::from_rgb_u8(
-    ((packed >> 16) & 0xFF) as u8,
-    ((packed >> 8) & 0xFF) as u8,
-    (packed & 0xFF) as u8,
-)
-}
-
 fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
     if n <= 0 {
         return false;
@@ -4703,6 +4748,65 @@ mod tests {
         driver.push_all();
         assert!(!ui.get_egg().on, "a different track takes the theme away");
         assert_eq!(ui.get_ident_a().to_string(), "", "and the split is put back");
+    }
+
+    /// "BACK IN BLACK" — the dark cut, and the fact that it FOLLOWS THE SCHEME.
+    ///
+    /// A theme states its palette per colour scheme, so which cut applies is
+    /// decided at publish time from `Pal.dark`. Nothing else republishes on a
+    /// theme change — every ordinary token is derived inside `Pal` and turns on
+    /// its own — so switching to dark with AC/DC already playing would have left
+    /// the light cut standing until the next track. The scheme flip in the middle
+    /// of this is the whole point of it.
+    #[test]
+    fn back_in_black_arrives_with_the_dark_scheme_and_leaves_with_it() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("egg-back-in-black");
+        let pal = ui.global::<crate::Pal>();
+
+        // The ordinary ground and accent, remembered before anything is themed.
+        ui.invoke_settings_set_theme("LIGHT".into());
+        let plain_page = pal.get_page();
+        let plain_blue = pal.get_blue();
+
+        // ── The LIGHT cut restates neither. ──
+        driver.set_radio_text_for_test("AC/DC - Back in Black");
+        driver.push_all();
+        assert!(ui.get_egg().on, "the theme is showing");
+        assert_eq!(pal.get_page(), plain_page, "a pale face keeps its ground");
+        assert_eq!(pal.get_blue(), plain_blue, "and its blue");
+        assert_eq!(ui.get_egg().card_bg.alpha(), 0, "the light cut states no card colour");
+
+        // ── THE SCHEME MOVES UNDER A THEME THAT IS ALREADY SHOWING. ──
+        ui.invoke_settings_set_theme("DARK".into());
+        let egg = ui.get_egg();
+        assert_eq!(
+            pal.get_page(),
+            slint::Color::from_rgb_u8(0x00, 0x00, 0x00),
+            "the page goes to TRUE BLACK — the value a zero sentinel could not carry"
+        );
+        assert_eq!(
+            pal.get_blue(),
+            slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9),
+            "every blue graphic goes silver: they all read this one token"
+        );
+        assert_eq!(egg.card_bg, slint::Color::from_rgb_u8(0x0B, 0x0B, 0x0B), "the hero card");
+        assert_eq!(egg.rt_bg, slint::Color::from_rgb_u8(0x07, 0x07, 0x07), "the RadioText plate");
+        assert_eq!(egg.bolt_ink, slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9), "the call-sign bolt");
+
+        // ── AND BACK, so the cut is chosen every time rather than latched. ──
+        ui.invoke_settings_set_theme("LIGHT".into());
+        assert_eq!(pal.get_page(), plain_page, "the ground comes back");
+        assert_eq!(pal.get_blue(), plain_blue, "and the blue with it");
+
+        // ── A TRACK CHANGE TAKES THE PALETTE BACK TOO, not just the ornament. ──
+        ui.invoke_settings_set_theme("DARK".into());
+        let dark_page = slint::Color::from_rgb_u8(0x00, 0x00, 0x00);
+        assert_eq!(pal.get_page(), dark_page, "still black while the track plays");
+        driver.set_radio_text_for_test("Nicolet Law - Injured? Get Nicolet!");
+        driver.push_all();
+        assert_ne!(pal.get_page(), dark_page, "the ground reverts with the theme");
+        assert_eq!(ui.get_egg().card_bg.alpha(), 0, "and so does the card");
     }
 
     /// A STEP REPORTS WHAT IT MANAGED, in the log the driver can export.

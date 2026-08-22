@@ -1345,12 +1345,23 @@ The horns are BAKED to PNG by `tools/bake-acdc-horns.py`, which reads CarFM's ow
 `bandArt.tsx` so the two cannot drift. Drawn as Slint paths they would be 120
 `Path` elements across the pair, on a unit measured at 131ms per frame.
 
-**Still not ported, and visible in the shots:** AC/DC's dark "Back in Black"
-palette (`modes.dark` — near-black page and card, the grey `uiAccent`, the
-outlined lettering), and the fan art flanking the STEREO pill (`stereoArtL/R`).
-Both are palette-override machinery rather than theme data, which is a larger
-piece than the theme itself. `shots/acdc-dark.png` shows the ordinary dark card
-where the reference has the near-black one.
+**"Back in Black" is ported** (`modes.dark`), and so is the fan art
+(`stereoArtL/R`). The dark cut states the true-black page, the `#0B0B0B` hero
+card inside its `#A2A2A2` rule, the `#070707` RadioText plate, the silver
+`uiAccent` that every blue graphic on the face reads, the outlined lettering and
+the silver call-sign bolt. `shots/acdc-dark.png` is the evidence; a scan of it
+finds ZERO accent-blue pixels where the untouched dark face has 1,616.
+
+The bolts stand IN PLACE OF the STEREO pill's cones rather than flanking it, and
+are tinted live through `Image.colorize` rather than filtered — the supplied art
+is flat `#2E86FF`, which is the accent itself, so the masters are alpha-only and
+the ink comes from the palette. That is what makes them follow the accent to
+silver; the reference's `stereoArtFilter` (`grayscale(1) brightness(2.3)
+contrast(0.85)`) resolves to pure white on this art, not silver.
+
+Two values in `modes.dark` are deliberately NOT carried: `card.sub` is declared
+in the registry and read by no component, and `uiAccentOn` has, in `eggTokens`'
+own words, "no home in the app palette".
 
 The six-tap force picker is still absent and still deliberately so: it revealed a
 control that moved a radio button and changed nothing.

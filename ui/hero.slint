@@ -36,6 +36,14 @@ export component RadioTextStrip inherits Rectangle {
     property <string> shown: root.has-text ? root.text : "Waiting for RadioText…";
     property <bool> marquee: root.shown.character-count > 46;
 
+    // THE PLATE, which a theme may restate on its own (`rtPlate`) — separately
+    // from the hero card above it, and darker: AC/DC's dark cut puts the card at
+    // `#0B0B0B` and this at `#070707`. A transparent field means the theme is
+    // silent about that colour, so the ordinary token stands.
+    property <color> plate-bg: root.egg.rt-bg.alpha > 0 ? root.egg.rt-bg : Pal.raised;
+    property <color> plate-edge: root.egg.rt-border.alpha > 0 ? root.egg.rt-border : Pal.border;
+    property <color> ink: root.egg.rt-text.alpha > 0 ? root.egg.rt-text : Pal.text;
+
     // One linear pass per loop; x is derived so a text change re-derives the
     // travel instead of stranding the ticker at a stale offset.
     //
@@ -54,8 +62,8 @@ export component RadioTextStrip inherits Rectangle {
     height: Metrics.rt-height;
     border-width: 1px;
     border-radius: 16px;
-    border-color: Pal.border;
-    background: Pal.raised;
+    border-color: root.plate-edge;
+    background: root.plate-bg;
     clip: true;
 
     if !root.marquee: Text {
@@ -75,7 +83,9 @@ export component RadioTextStrip inherits Rectangle {
         // the app talking, not the broadcaster, and a theme that has resolved off
         // a track cannot be showing while there is no track to have resolved off.
         font-italic: !root.has-text;
-        color: root.has-text ? Pal.text : Pal.dim;
+        // The placeholder's grey stays `Pal.dim` on purpose: `rtPlate` carries a
+        // `text` and no `sub`, so the reference leaves this one alone too.
+        color: root.has-text ? root.ink : Pal.dim;
     }
 
     // Two copies with a fixed gap, translating left by half the track so the
@@ -94,7 +104,7 @@ export component RadioTextStrip inherits Rectangle {
             font-family: root.face;
             letter-spacing: root.track;
             font-size: Metrics.rt-font;
-            color: Pal.text;
+            color: root.ink;
         }
         Text {
             x: copy-a.preferred-width + 100px;
@@ -105,7 +115,7 @@ export component RadioTextStrip inherits Rectangle {
             font-family: root.face;
             letter-spacing: root.track;
             font-size: Metrics.rt-font;
-            color: Pal.text;
+            color: root.ink;
         }
     }
 }
@@ -196,6 +206,20 @@ export component HeroCard inherits Rectangle {
     /// otherwise.
     property <string> call-face: root.egg.on ? Font.egg-acdc : Font.face;
 
+    /// THE CARD'S OWN SURFACE, which a theme restates for this element and no
+    /// other (`card.bg` / `.border` / `.text`). AC/DC's dark cut is a `#0B0B0B`
+    /// card inside a `#A2A2A2` rule — a near-black panel with a LIGHT edge, which
+    /// is nothing the ordinary token pair can express. A transparent field means
+    /// the theme is silent, so the ordinary token stands and an unthemed card is
+    /// exactly what it was.
+    property <color> surface: root.egg.card-bg.alpha > 0 ? root.egg.card-bg : Pal.panel;
+    property <color> edge: root.egg.card-border.alpha > 0 ? root.egg.card-border : Pal.border;
+    property <color> ink: root.egg.card-text.alpha > 0 ? root.egg.card-text : Pal.text;
+    /// The bolt takes the lettering's colour unless the theme names one — the
+    /// reference states it as `dark ? '#C9C9C9' : heroCardText`, so the light cut
+    /// leaves it transparent and falls through to exactly that.
+    property <color> bolt: root.egg.bolt-ink.alpha > 0 ? root.egg.bolt-ink : root.ink;
+
     /// The call sign already cut in two for the AC/DC bolt to stand between.
     ///
     /// SPLIT IN RUST, because Slint has no substring: a string here can be
@@ -277,8 +301,8 @@ export component HeroCard inherits Rectangle {
 
     border-width: 1px * root.scale;
     border-radius: 28px * root.scale;
-    border-color: Pal.border;
-    background: Pal.panel;
+    border-color: root.edge;
+    background: root.surface;
     drop-shadow-blur: root.dead ? 0px : 22px * root.scale;
     drop-shadow-offset-y: root.dead ? 0px : 14px * root.scale;
     drop-shadow-color: #0000002E;
@@ -339,7 +363,12 @@ export component HeroCard inherits Rectangle {
             font-family: root.call-face; font-weight: Font.bold;
             font-size: root.call-size;
             letter-spacing: -1px * root.scale;
-            color: Pal.text;
+            color: root.ink;
+            // `nameOutline` — drawn OUTSIDE the glyph so the letterform keeps its
+            // own weight. A zero width is no outline, which is the light cut.
+            stroke: root.egg.outline-ink;
+            stroke-width: root.egg.outline-w * root.scale;
+            stroke-style: outside;
         }
 
         // WI⚡BA — the bolt splits the call sign at its midpoint.
@@ -357,14 +386,17 @@ export component HeroCard inherits Rectangle {
                 font-family: root.call-face; font-weight: Font.bold;
                 font-size: root.call-size;
                 letter-spacing: -1px * root.scale;
-                color: Pal.text;
+                color: root.ink;
+                stroke: root.egg.outline-ink;
+                stroke-width: root.egg.outline-w * root.scale;
+                stroke-style: outside;
             }
             Rectangle {
                 width: root.call-size * 0.74;
                 height: root.call-size * 1.05;
                 BoltIcon {
                     size: root.call-size * 0.74;
-                    color: root.egg.bolt-ink;
+                    color: root.bolt;
                 }
             }
             Text {
@@ -373,7 +405,10 @@ export component HeroCard inherits Rectangle {
                 font-family: root.call-face; font-weight: Font.bold;
                 font-size: root.call-size;
                 letter-spacing: -1px * root.scale;
-                color: Pal.text;
+                color: root.ink;
+                stroke: root.egg.outline-ink;
+                stroke-width: root.egg.outline-w * root.scale;
+                stroke-style: outside;
             }
         }
 

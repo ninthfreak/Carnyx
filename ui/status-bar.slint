@@ -95,8 +95,8 @@ export component SignalCluster inherits Rectangle {
         font-size: Metrics.signal-num;
         color: Pal.dim;
         // A background-coloured ring separating the digits from any arc ink
-        // behind them.
-        stroke: Pal.bg;
+        // behind them. The PAGE's ground, themed and all — `egg?.pageBg || pal.bg`.
+        stroke: Pal.page;
         stroke-width: 2px;
         stroke-style: outside;
     }
@@ -180,12 +180,13 @@ export component StereoCluster inherits VerticalLayout {
                 // way, carried across as the PNGs they already are rather than
                 // re-traced.
                 //
-                // A DEVIATION FROM THE REFERENCE, DELIBERATELY. CarFM FLANKS the
-                // pill with these and keeps both cones inside it; here they stand
-                // IN PLACE OF the cones, which is what the owner asked for. The
-                // slot keeps the cones' exact width and height either way, so the
-                // label beside it cannot shift when a theme arrives or leaves —
-                // the whole reason these slots are stated in the first place.
+                // They stand IN PLACE OF the cones. The reference renders them
+                // OUTSIDE the pill, but only because the pill still held waves
+                // there; that arrangement was never a stated requirement, and the
+                // cones are what the bolts are the themed form of. The slot keeps
+                // the cones' exact width and height either way, so the label
+                // beside it cannot shift when a theme arrives or leaves — the
+                // whole reason these slots are stated in the first place.
                 //
                 // Blank still wins: nothing has reported, so there is nothing to
                 // say about the pilot, and a themed pill must not assert one.
@@ -197,6 +198,14 @@ export component StereoCluster inherits VerticalLayout {
                         image-fit: contain;
                         width: parent.width;
                         height: parent.height;
+                        // TINTED LIVE, not baked. The supplied art is flat
+                        // `#2E86FF` — the accent itself — so the colour in the
+                        // file carries nothing the palette does not already have,
+                        // and the masters are alpha-only. Taking the same colours
+                        // the cones took means these track the pill's state AND
+                        // follow the accent to silver under "Back in Black",
+                        // which is what `stereoArtFilter` was doing by hand.
+                        colorize: root.locked ? Pal.blue : Pal.border;
                     }
                     if !root.blank && !root.egg.on: StereoCone {
                         flip: true;
@@ -246,6 +255,7 @@ export component StereoCluster inherits VerticalLayout {
                         image-fit: contain;
                         width: parent.width;
                         height: parent.height;
+                        colorize: root.locked ? Pal.blue : Pal.dim;
                     }
                     if !root.blank && !root.egg.on: StereoCone {
                         color: root.locked ? Pal.blue : Pal.dim;
@@ -336,6 +346,11 @@ component GenreText inherits Rectangle {
         font-size: Metrics.pty-font;
         letter-spacing: 0.5px;
         color: root.ink;
+        // `genreOutline` — the LIGHT cut of AC/DC states one, so the gold has an
+        // edge against a pale ground. Zero width is no outline.
+        stroke: root.egg.genre-outline-ink;
+        stroke-width: root.egg.genre-outline-w;
+        stroke-style: outside;
     }
 }
 
