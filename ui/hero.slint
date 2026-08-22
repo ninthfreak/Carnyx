@@ -8,9 +8,9 @@
 // preset tiles and peek cards).
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme } from "types.slint";
 import { PeekCard } from "presets.slint";
-import { StarIcon, PowerIcon } from "icons.slint";
+import { StarIcon, PowerIcon, BoltIcon } from "icons.slint";
 
 // RadioText: static and centred when short, a continuous 16s left ticker beyond
 // ~46 characters. Empty shows a dim italic placeholder.
@@ -161,6 +161,28 @@ component HeroLogo inherits Rectangle {
 }
 
 export component HeroCard inherits Rectangle {
+    /// The band theme now showing, or one with `on: false`. See `EggTheme`.
+    in property <EggTheme> egg;
+    /// Is the card carrying LETTERING rather than art? True with no logo, and
+    /// true with one the theme suppresses. Declared here on `root` rather than
+    /// beside its use: a property belongs to the element that owns it, and
+    /// putting it inside a child left `root.lettering` naming nothing.
+    property <bool> lettering: !root.scanning
+        && (!root.has-logo || root.egg.suppress-logo)
+        && root.ident != "";
+    property <length> call-size: Metrics.call-size * root.scale;
+    /// The theme's display face while one is showing, the ordinary face
+    /// otherwise.
+    property <string> call-face: root.egg.on ? Font.egg-acdc : Font.face;
+
+    /// The call sign already cut in two for the AC/DC bolt to stand between.
+    ///
+    /// SPLIT IN RUST, because Slint has no substring: a string here can be
+    /// measured and drawn but not sliced. That suits the house rule anyway —
+    /// where to cut "WIBA" is a decision, and decisions are made on the other
+    /// side of this boundary. Both are empty unless the bolt is showing.
+    in property <string> ident-a;
+    in property <string> ident-b;
     in property <string> ident;
     in property <string> freq-label;
     in property <image> logo;
@@ -260,7 +282,10 @@ export component HeroCard inherits Rectangle {
 
         // Real logo REPLACES the big call sign; the call sign becomes a small
         // label beneath it.
-        if !root.scanning && root.has-logo: VerticalLayout {
+        // THE THEME CAN HIDE A REAL LOGO, and must be able to: AC/DC's whole
+        // card is the lettering, and a station that has art would otherwise never
+        // show a call sign for the bolt to split. CarFM's `suppressLogos`.
+        if !root.scanning && root.has-logo && !root.egg.suppress-logo: VerticalLayout {
             spacing: 8px * root.scale;
             alignment: center;
             HorizontalLayout {
@@ -286,14 +311,49 @@ export component HeroCard inherits Rectangle {
         // No real logo: the big call sign, no monogram tile. When nothing has
         // resolved (built-in tuner with no GPS lock yet) this is empty and the
         // frequency below stands as the identity — never an inaccurate "Tuning…".
-        if !root.scanning && !root.has-logo && root.ident != "": Text {
+        if root.lettering && !root.egg.call-bolt: Text {
             text: root.ident;
             horizontal-alignment: center;
             overflow: elide;
-            font-family: Font.face; font-weight: Font.bold;
-            font-size: Metrics.call-size * root.scale;
+            font-family: root.call-face; font-weight: Font.bold;
+            font-size: root.call-size;
             letter-spacing: -1px * root.scale;
             color: Pal.text;
+        }
+
+        // WI⚡BA — the bolt splits the call sign at its midpoint.
+        //
+        // A ROW OF THREE, not a glyph inside the string. The bolt is traced art
+        // and there is no character for it; drawing it as an element between two
+        // halves is also what keeps it scaling with the card during a morph,
+        // since everything here multiplies by `root.scale`.
+        if root.lettering && root.egg.call-bolt: HorizontalLayout {
+            alignment: center;
+            spacing: 0px;
+            Text {
+                text: root.ident-a;
+                vertical-alignment: center;
+                font-family: root.call-face; font-weight: Font.bold;
+                font-size: root.call-size;
+                letter-spacing: -1px * root.scale;
+                color: Pal.text;
+            }
+            Rectangle {
+                width: root.call-size * 0.74;
+                height: root.call-size * 1.05;
+                BoltIcon {
+                    size: root.call-size * 0.74;
+                    color: root.egg.bolt-ink;
+                }
+            }
+            Text {
+                text: root.ident-b;
+                vertical-alignment: center;
+                font-family: root.call-face; font-weight: Font.bold;
+                font-size: root.call-size;
+                letter-spacing: -1px * root.scale;
+                color: Pal.text;
+            }
         }
 
         // Always show the frequency when there is no name, even if the user turned
@@ -349,6 +409,41 @@ export component HeroCard inherits Rectangle {
         background: Pal.hero-veil;
     }
 
+        // ── HORNS (Design EASTER-EGGS §2.1) ──
+    //
+    // They OVERHANG the card's top corners, which is why they are placed with
+    // negative offsets rather than laid out: the reference has them breaking
+    // the card's outline, and a horn tucked politely inside it reads as a
+    // sticker instead of the card having grown them.
+    //
+    // BAKED TO PNG, not drawn. Each horn is sixty tapered round-capped strokes
+    // under a Gaussian drop-shadow in the source SVG — a hundred and twenty
+    // `Path` elements across the pair, on a unit that draws a whole frame every
+    // 131ms. `tools/bake-acdc-horns.py` renders them from that same SVG at 4x
+    // and the result is two images.
+    //
+    // Scaled by `root.scale` like everything else on the card, so they shrink
+    // with it through a morph instead of staying full size on a peek-sized card.
+    if root.egg.horns: Image {
+        source: @image-url("art/acdc-horn-left.png");
+        image-fit: contain;
+        width: Metrics.s(70) * root.scale;
+        height: Metrics.s(96) * root.scale;
+        // CarFM: `top: L.s(-44), left: L.s(-16)`, through the same design ramp.
+        x: -Metrics.s(16) * root.scale;
+        y: -Metrics.s(44) * root.scale;
+    }
+    if root.egg.horns: Image {
+        source: @image-url("art/acdc-horn-right.png");
+        image-fit: contain;
+        width: Metrics.s(70) * root.scale;
+        height: Metrics.s(96) * root.scale;
+        // CarFM: `top: L.s(-44), right: L.s(-16)` — anchored to the card's RIGHT
+        // edge, so the offset is measured from there.
+        x: parent.width - self.width + Metrics.s(16) * root.scale;
+        y: -Metrics.s(44) * root.scale;
+    }
+
     if !root.scanning: PowerButton {
         x: root.corner;
         y: root.corner;
@@ -363,6 +458,10 @@ export component HeroCard inherits Rectangle {
 // that tuck UNDER it. They flank it on BOTH tracks whenever a previous/next
 // preset exists — tucked in tighter on tall than on wide.
 export component HeroRow inherits Rectangle {
+    /// The band theme, handed to every card this row can build.
+    in property <EggTheme> egg;
+    in property <string> ident-a;
+    in property <string> ident-b;
     in property <Preset> prev-preset;
     in property <Preset> next-preset;
     /// The station the discarded peek held BEFORE the step, captured by Rust in
@@ -820,6 +919,9 @@ export component HeroRow inherits Rectangle {
         // and reports pixel-identical geometry, which is what was checkable here.
         visible: !root.morphing;
         inert: root.morphing;
+        egg: root.egg;
+        ident-a: root.ident-a;
+        ident-b: root.ident-b;
         ident: root.ident;
         freq-label: root.freq-label;
         logo: root.logo;
@@ -848,6 +950,9 @@ export component HeroRow inherits Rectangle {
         x: root.hero-cx - self.width / 2;
         y: root.hero-cy - self.height / 2;
         inert: true;
+        egg: root.egg;
+        ident-a: root.ident-a;
+        ident-b: root.ident-b;
         ident: root.ident;
         freq-label: root.freq-label;
         logo: root.logo;

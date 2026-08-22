@@ -4,6 +4,7 @@
 // it is truly centred regardless of the side widths.
 
 import { Pal, Metrics, Font } from "tokens.slint";
+import { EggTheme } from "types.slint";
 import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar } from "icons.slint";
 
 // One of the little status letters. Lit = full weight with a soft dark drop; off
@@ -252,6 +253,24 @@ export component StereoCluster inherits VerticalLayout {
 component GenreText inherits Rectangle {
     in property <string> text;
     in property <bool> centered: false;
+    /// The band theme, which recolours this line and makes it pulse.
+    in property <EggTheme> egg;
+
+    // THE PULSE (CarFM `genrePulse`, `genrePulseOn: true` for AC/DC): the gold
+    // breathes toward a brighter gold and back. Same shape as the TA tell above —
+    // an always-running animation whose value is only READ while a theme is
+    // showing, so a face with no theme never depends on it and never redraws for
+    // it. On this unit that distinction is the difference between an idle face
+    // and one repainting every frame forever.
+    property <float> beat: 0.0;
+    init => { self.beat = 1.0; }
+    animate beat {
+        duration: 900ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+    property <color> ink: root.egg.on
+        ? root.egg.genre-ink.mix(root.egg.genre-pulse, 1.0 - root.beat)
+        : Pal.dim;
     /// Vertical band to centre within. The wide track sits the genre on the
     /// STEREO pill's own band; the tall track lets it be its own line.
     in property <length> band-h: 0px;
@@ -286,7 +305,7 @@ component GenreText inherits Rectangle {
         font-family: Font.face; font-weight: Font.bold;
         font-size: Metrics.pty-font;
         letter-spacing: 0.5px;
-        color: Pal.dim;
+        color: root.ink;
     }
 }
 
@@ -364,6 +383,9 @@ export component StatusBar inherits Rectangle {
     in property <bool> ta: false;
     in property <bool> af: false;
     in property <string> pty: "";
+    /// The band theme. When one is showing it REPLACES the genre line — the PTY
+    /// this station broadcasts is not what the driver is being told about.
+    in property <EggTheme> egg;
     in property <bool> in-band: true;
     /// No compatible tuner session. This pill REPLACES the whole OK cluster —
     /// with no tuner there is no signal, RDS, stereo or genre to read, so the
@@ -441,8 +463,9 @@ export component StatusBar inherits Rectangle {
                 }
                 // PTY: plain dim ellipsized text, no border or fill, on the
                 // pill's own band.
-                if root.pty != "" && !root.dead: GenreText {
-                    text: root.pty;
+                if (root.egg.on || root.pty != "") && !root.dead: GenreText {
+                    text: root.egg.on ? root.egg.genre : root.pty;
+                    egg: root.egg;
                     band-h: Metrics.stereo-h;
                 }
                 if !root.in-band: VerticalLayout {
@@ -481,7 +504,11 @@ export component StatusBar inherits Rectangle {
                 rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
                 dead: root.dead;
             }
-            if root.pty != "" && !root.dead: GenreText { text: root.pty; centered: true; }
+            if (root.egg.on || root.pty != "") && !root.dead: GenreText {
+                text: root.egg.on ? root.egg.genre : root.pty;
+                egg: root.egg;
+                centered: true;
+            }
         }
 
         // ── Right / controls ──

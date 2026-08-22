@@ -1,5 +1,5 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset, HeroSnapshot, Overlay } from "types.slint";
+import { Preset, HeroSnapshot, Overlay, EggTheme } from "types.slint";
 import { Face } from "face.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn, NearbyTab } from "nearby.slint";
 import {
@@ -43,6 +43,10 @@ export component AppWindow inherits Window {
     in property <bool> ta: false;
     in property <bool> af: false;
     in property <string> pty;
+    /// The band theme, and the call sign pre-split for its bolt.
+    in property <EggTheme> egg;
+    in property <string> ident-a;
+    in property <string> ident-b;
     in property <bool> tuner-error: false;
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
@@ -267,6 +271,9 @@ export component AppWindow inherits Window {
         ta: root.ta;
         af: root.af;
         pty: root.pty;
+        egg: root.egg;
+        ident-a: root.ident-a;
+        ident-b: root.ident-b;
         tuner-error: root.tuner-error;
         gps-fix: root.gps-fix;
         in-motion: root.in-motion;

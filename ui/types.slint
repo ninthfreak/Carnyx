@@ -61,3 +61,33 @@ export enum Overlay {
     /// §6.4 preset logo-search window.
     logo-search,
 }
+
+/// A band theme, resolved in Rust from what is playing (Design EASTER-EGGS §12).
+///
+/// PURELY PRESENTATIONAL, which is §12's own "scale-up rule": a theme may change
+/// no layout, no control and no behaviour. Everything below is a colour, a
+/// string, or a flag saying whether to draw one extra decoration — nothing here
+/// can move a card or take a tap.
+///
+/// The VALUES live in `src/eggs.rs` and arrive here finished, like every other
+/// decision in this file. Slint does not know what AC/DC is; it knows it has
+/// been handed a gold genre line, a red accent and an instruction to draw horns.
+export struct EggTheme {
+    /// A theme is showing. Everything else is meaningless when this is false.
+    on: bool,
+    /// Replaces the PTY genre line.
+    genre: string,
+    /// That line's ink, and the colour it pulses to.
+    genre-ink: color,
+    genre-pulse: color,
+    /// Restated over the interactive accent.
+    accent: color,
+    /// A lightning bolt splits the call sign at its midpoint — WI⚡BA.
+    call-bolt: bool,
+    bolt-ink: color,
+    /// Horns overhanging the hero card's top corners (EASTER-EGGS §2.1).
+    horns: bool,
+    /// Hide the station's logo so the lettering carries the card. Without this
+    /// there is no call sign on screen for the bolt to split.
+    suppress-logo: bool,
+}

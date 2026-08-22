@@ -6,7 +6,7 @@
 // the spec's dp for the space actually available.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme } from "types.slint";
 import { StatusBar } from "status-bar.slint";
 import { HeroRow, RadioTextStrip } from "hero.slint";
 import { PresetsBand } from "presets.slint";
@@ -36,6 +36,10 @@ export component Face inherits Rectangle {
     in property <bool> ta: false;
     in property <bool> af: false;
     in property <string> pty;
+    /// The band theme, and the call sign pre-split for its bolt.
+    in property <EggTheme> egg;
+    in property <string> ident-a;
+    in property <string> ident-b;
     in property <bool> tuner-error: false;
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
@@ -139,6 +143,7 @@ export component Face inherits Rectangle {
             ta: root.ta;
             af: root.af;
             pty: root.pty;
+            egg: root.egg;
             in-band: root.in-band;
             tuner-error: root.tuner-error;
             dead: root.dead;
@@ -197,6 +202,9 @@ export component Face inherits Rectangle {
                 step-dir: root.step-dir;
                 morph-note(m) => { root.morph-note(m); }
                 morph-frame() => { root.morph-frame(); }
+                egg: root.egg;
+                ident-a: root.ident-a;
+                ident-b: root.ident-b;
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;
@@ -248,6 +256,9 @@ export component Face inherits Rectangle {
                 step-dir: root.step-dir;
                 morph-note(m) => { root.morph-note(m); }
                 morph-frame() => { root.morph-frame(); }
+                egg: root.egg;
+                ident-a: root.ident-a;
+                ident-b: root.ident-b;
                 ident: root.ident;
                 freq-label: root.freq-label;
                 logo: root.logo;

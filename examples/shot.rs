@@ -9,6 +9,23 @@
 //!
 //! Output lands in `shots/`.
 
+//! ## COMPARING SHOTS: NOT WITH GIT, AND NOT ALL OF THEM
+//!
+//! `/shots` is in `.gitignore` — these are output, not source — so
+//! `git status shots/` reports nothing whatever changes, and a check built on it
+//! is vacuous. It has been used as one; it proves nothing.
+//!
+//! Compare a copy instead, and compare PIXELS rather than checksums: identical
+//! images have come out with different PNG bytes here.
+//!
+//! FOUR SHOTS ARE NOT DETERMINISTIC and will differ between two runs of an
+//! unchanged tree — they capture a moment in something that moves:
+//! `hero-step-morph` (a frame mid-travel), `logo-search-loading` (the spinner),
+//! and `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
+//! `long-radiotext` drifts too when the marquee is mid-scroll. Everything else
+//! reproduces exactly, which is what makes the set usable as a regression check
+//! at all.
+
 use std::rc::Rc;
 
 use slint::platform::software_renderer::{
@@ -49,6 +66,14 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("no-callsign", 1024, 614, false, State::NoCallsign),
     ("stereo-unknown", 1024, 614, false, State::StereoUnknown),
     ("long-genre", 1024, 614, false, State::LongGenre),
+    // THE ONE BAND THEME THAT EXISTS (Design EASTER-EGGS §12). Covered by a shot
+    // because everything it changes is visual — the horns, the bolt splitting the
+    // call sign, the gold genre line, the Squealer lettering — and none of it is
+    // reachable from a property assertion. It is also the only place a bundled
+    // typeface other than Atkinson is exercised, so a font that stopped loading
+    // would show up here as boxes rather than as silence.
+    ("acdc", 1024, 614, false, State::Acdc),
+    ("acdc-dark", 1024, 614, true, State::Acdc),
     // The satellite icon has two states and only one of them was ever shot. Both
     // go through `App::set_position`, which is the seam a real LocationManager
     // callback lands on — not a property override.
@@ -155,6 +180,7 @@ enum State {
     /// A genre string past the 200dp cap, which must elide rather than push the
     /// controls or collapse the line.
     LongGenre,
+    Acdc,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
     /// EIGHTEEN PRESETS. The strip is not limited, and this is the shot that
@@ -415,6 +441,18 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         State::NoCallsign => ui.set_ident("".into()),
         State::StereoUnknown => ui.set_stereo_known(false),
         State::LongGenre => ui.set_pty("Adult Album Alternative and Classic Rock".into()),
+        // Straight into the decoded RadioText, which is what the theme resolves
+        // off, AND THEN A REPUBLISH — this arm runs before the window's first
+        // publish, so unlike the arms above it that set a face property directly,
+        // a value written into `State` here would never reach the window at all.
+        // The first cut of this shot rendered an untouched face for exactly that
+        // reason. The station keeps its own logo in the seed, so this also proves
+        // `suppress-logo`: without it the card shows art and there is no call
+        // sign for the bolt to split.
+        State::Acdc => {
+            driver.set_radio_text_for_test("AC/DC - Back in Black");
+            driver.push_all();
+        }
         // The press below arms the drag with no hold, which is the rule once the
         // mode is already open.
         State::Reordering | State::Dragging => ui.set_reordering(true),

@@ -61,7 +61,8 @@ use crate::station::{brand_color, clean_call, format_mhz, plate_label};
 use crate::stations::{NearbyPicker, NearbyState, StationDb, StationRow};
 use crate::{fake, settings};
 use crate::{
-    AppWindow, BatteryState, DiagAction, GenreColumn, HeroSnapshot, NearbyStation, NearbyTab,
+    AppWindow, BatteryState, DiagAction, EggTheme, GenreColumn, HeroSnapshot, NearbyStation,
+    NearbyTab,
     Overlay, Preset, TunerAction, TunerDetail, TunerGlyph, TunerSource,
 };
 
@@ -2127,10 +2128,50 @@ impl App {
             .as_ref()
             .map(|r| r.callsign_base.clone())
             .or_else(|| learned.clone());
-        ui.set_radio_text(
-            rds::strip_station_from_rt(&st.rt, Some(s.shown()), call.as_deref()).into(),
-        );
+        let shown_rt = rds::strip_station_from_rt(&st.rt, Some(s.shown()), call.as_deref());
+        ui.set_radio_text(shown_rt.as_str().into());
         ui.set_pty(rds::pty_label(st.pty).into());
+
+        // ── THE BAND THEME (Design EASTER-EGGS §12) ──
+        //
+        // Resolved from the RadioText THE DRIVER IS SHOWN, after
+        // `strip_station_from_rt` has taken the station's own name out of it. A
+        // station whose name contained a band's would otherwise wear that theme
+        // for as long as it was tuned, which is a skin stuck on rather than an
+        // Easter egg.
+        //
+        // `!s.audio` is the flattened face — audio priority released — and it
+        // suppresses every theme, as CarFM's `resolveEgg({ off })` does. A red
+        // accent on a grey face reads as a rendering fault, not as a joke.
+        let themed = crate::eggs::resolve(&shown_rt, !s.audio);
+        ui.set_egg(match themed {
+            Some(e) => EggTheme {
+                on: true,
+                genre: e.genre.into(),
+                genre_ink: rgb(e.genre_ink),
+                genre_pulse: rgb(e.genre_pulse),
+                accent: rgb(e.accent),
+                call_bolt: e.call_sign_bolt,
+                bolt_ink: rgb(e.bolt_ink),
+                horns: e.horns,
+                suppress_logo: e.suppress_logos,
+            },
+            None => EggTheme::default(),
+        });
+        // THE CALL SIGN CUT IN TWO, for the bolt to stand between. Slint has no
+        // substring and this is a decision anyway. The midpoint rounds UP so an
+        // odd count leaves the longer half first; `char_indices` rather than a
+        // byte split, because a call sign is only ASCII until the day it is not.
+        let (ident_a, ident_b) = match themed {
+            Some(e) if e.call_sign_bolt => {
+                let mid = ident.chars().count().div_ceil(2);
+                let cut = ident.char_indices().nth(mid).map_or(ident.len(), |(i, _)| i);
+                (ident[..cut].to_string(), ident[cut..].to_string())
+            }
+            _ => (String::new(), String::new()),
+        };
+        ui.set_ident_a(ident_a.as_str().into());
+        ui.set_ident_b(ident_b.as_str().into());
         ui.set_rds(rds::rds_ok(st));
         ui.set_tp(st.tp);
         ui.set_ta(st.ta);
@@ -3033,6 +3074,16 @@ impl App {
     /// one to set up a test would prove nothing about a driver who tuned.
     pub fn tune_for_test(self: &Rc<App>, mhz: f32) {
         self.tune(mhz);
+    }
+
+    /// Put a track in the RadioText, for tests and shots of the band themes.
+    ///
+    /// Straight into the decoded state rather than through the RDS pump: a theme
+    /// resolves off the string the face is SHOWN, and synthesising group 2A
+    /// blocks to spell out a band name would be testing the decoder rather than
+    /// the matcher. `examples/shot.rs` and the egg tests both want the string.
+    pub fn set_radio_text_for_test(self: &Rc<App>, rt: &str) {
+        self.state.borrow_mut().rds_state.rt = rt.to_string();
     }
 
     /// Switch the fake tuner's synchronous echo off, for tests about the window
@@ -4047,6 +4098,20 @@ fn numpad_press(buf: &str, key: &str) -> String {
 /// entry on the left and the first on the right. That rule is what makes the
 /// answer interesting: stepping forward off an unsaved dial lands on entry 0,
 /// whose prev is the last entry — exactly what was already there.
+/// A packed `0xRRGGBB` as a Slint colour.
+///
+/// The band-theme palette is written as hex in `eggs.rs` because that is how the
+/// design states it and how CarFM stores it; a theme that is nearly the right red
+/// is a bug wearing a costume, so the digits are carried across unchanged and
+/// converted in exactly one place.
+fn rgb(packed: u32) -> slint::Color {
+slint::Color::from_rgb_u8(
+    ((packed >> 16) & 0xFF) as u8,
+    ((packed >> 8) & 0xFF) as u8,
+    (packed & 0xFF) as u8,
+)
+}
+
 fn step_discards(n: i32, active: i32, next: i32, dir: i32) -> bool {
     if n <= 0 {
         return false;
@@ -4599,6 +4664,45 @@ mod tests {
             Some(format_mhz(strip[2])),
             "and the radio is taken back to the target"
         );
+    }
+
+    /// THE AC/DC THEME REACHES THE FACE, and leaves again.
+    ///
+    /// `eggs::tests` covers the matcher as a leaf — which strings match and which
+    /// adverts must not. This is the other half: that a match actually dresses the
+    /// window, that the call sign is cut where the bolt goes, and that a track
+    /// change takes all of it away again. A theme that arrives and will not leave
+    /// is worse than one that never arrives.
+    #[test]
+    fn the_acdc_theme_dresses_the_face_and_reverts() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("egg-acdc");
+        driver.push_all();
+        assert!(!ui.get_egg().on, "no theme with nothing playing");
+
+        driver.set_radio_text_for_test("AC/DC - Back in Black");
+        driver.push_all();
+        let egg = ui.get_egg();
+        assert!(egg.on, "AC/DC in the RadioText dresses the face");
+        assert_eq!(egg.genre.to_string(), "High Voltage Rock 'n' Roll");
+        assert!(egg.horns && egg.call_bolt && egg.suppress_logo);
+
+        // THE CALL SIGN IS CUT WHERE THE BOLT STANDS. The halves must rejoin to
+        // exactly what the hero shows — a split that loses or duplicates a letter
+        // is a misspelt station, which is worse than no Easter egg.
+        let ident = ui.get_ident().to_string();
+        assert!(!ident.is_empty(), "the seeded dial resolves to a call sign");
+        let (a, b) = (ui.get_ident_a().to_string(), ui.get_ident_b().to_string());
+        assert_eq!(format!("{a}{b}"), ident, "the halves rejoin to the whole");
+        assert!(!a.is_empty() && !b.is_empty(), "the bolt stands between two halves");
+        assert!(a.chars().count() >= b.chars().count(), "an odd count leaves the longer half first");
+
+        // AND IT LEAVES THE INSTANT THE TRACK DOES. §12: a skin that outlives its
+        // track is a skin stuck on.
+        driver.set_radio_text_for_test("Nicolet Law - Injured? Get Nicolet!");
+        driver.push_all();
+        assert!(!ui.get_egg().on, "a different track takes the theme away");
+        assert_eq!(ui.get_ident_a().to_string(), "", "and the split is put back");
     }
 
     /// A STEP REPORTS WHAT IT MANAGED, in the log the driver can export.

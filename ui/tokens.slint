@@ -15,8 +15,20 @@
 import "fonts/AtkinsonHyperlegible-Regular.ttf";
 import "fonts/AtkinsonHyperlegible-Bold.ttf";
 
+// Squealer — AC/DC's display face, the REAL supplied typeface rather than a
+// system stand-in (Design EASTER-EGGS §12 is explicit that a stand-in is a failed
+// build). Registered here so the family name below resolves; it is only ever
+// asked for while that theme is showing, and the rest of the face never sees it.
+//
+// CFF OUTLINES, not TrueType — the file is `OTTO`-flavoured where the two
+// Atkinson cuts are `glyf`. Worth knowing if it ever renders as blank boxes: the
+// cause would be the outline format, not a missing file.
+import "fonts/Squealer.otf";
+
 export global Font {
     out property <string> face: "Atkinson Hyperlegible";
+    /// The AC/DC theme's lettering. See the import above.
+    out property <string> egg-acdc: "Squealer";
     out property <int> regular: 400;
     out property <int> bold: 700;
 }

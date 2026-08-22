@@ -10,6 +10,7 @@ pub mod android;
 pub mod app;
 pub mod callsigns;
 pub mod crashlog;
+pub mod eggs;
 pub mod fake;
 pub mod logos;
 pub mod prefs;

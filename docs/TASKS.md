@@ -1331,13 +1331,29 @@ The Beatles, Led Zeppelin, Nirvana, Nine Inch Nails. Real supplied typefaces
 bundled as `res/font` (a system font standing in is a failed build), per-motif
 vector art, and a hidden force panel revealed by six taps on the about line.
 
-**Carnyx:** NOT PORTED, and the picker that was ported has been removed by the
-owner's decision (this session). Six taps revealed a control that moved a radio
-button and changed nothing — `settings::egg_id` named five bands and no code read
-it. Porting it properly is 434 lines across `bandThemes.ts` and `bandArt.tsx`,
-with traced motif art needing to be baked through `tools/gen-icon-paths.py` and
-real typefaces bundled. Reopen as a Carnyx item if it is ever wanted; do not
-treat its absence as a parity gap.
+**Carnyx: AC/DC IS PORTED. The other four are not.** Asked for by name, so the
+registry in `src/eggs.rs` is a table with one row rather than a framework for
+five — adding the next is a row and a motif arm.
+
+What AC/DC does here: the matcher, the gold "High Voltage Rock 'n' Roll" genre
+line with its pulse, the Squealer lettering, the bolt splitting the call sign
+(WI⚡BA), the horns overhanging the card's top corners, and `suppress-logo` so a
+station with art still shows a call sign for the bolt to split. The real supplied
+typeface is bundled — §12 is explicit that a stand-in is a failed build.
+
+The horns are BAKED to PNG by `tools/bake-acdc-horns.py`, which reads CarFM's own
+`bandArt.tsx` so the two cannot drift. Drawn as Slint paths they would be 120
+`Path` elements across the pair, on a unit measured at 131ms per frame.
+
+**Still not ported, and visible in the shots:** AC/DC's dark "Back in Black"
+palette (`modes.dark` — near-black page and card, the grey `uiAccent`, the
+outlined lettering), and the fan art flanking the STEREO pill (`stereoArtL/R`).
+Both are palette-override machinery rather than theme data, which is a larger
+piece than the theme itself. `shots/acdc-dark.png` shows the ordinary dark card
+where the reference has the near-black one.
+
+The six-tap force picker is still absent and still deliberately so: it revealed a
+control that moved a radio button and changed nothing.
 
 ### 27. Verify animations on device
 **[STRIP §A]** — Hero swap FLIP (520 ms), preset-reorder FLIP (300 ms), seek-digit

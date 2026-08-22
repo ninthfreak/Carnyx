@@ -39,6 +39,28 @@ component VPath inherits Path {
     height: root.box-h + self.stroke-width;
 }
 
+// ── AC/DC's bolt (Design EASTER-EGGS §2.1) ──────────────────────────────────
+//
+// The supplied `BOLT` from CarFM's `bandArt.tsx`, path data verbatim on its own
+// 24x24 viewbox. One filled path — unlike the horns beside it, which are sixty
+// tapered strokes under a blur and are baked to PNG rather than drawn here.
+//
+// It appears twice: splitting the hero call sign (WI⚡BA) and, on the reference,
+// replacing the settings gear. Only the first is wired up.
+export component BoltIcon {
+    in property <length> size;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size * 26 / 24;
+
+    VPath {
+        box-w: root.width; box-h: root.height; vbw: 24; vbh: 24;
+        commands: "M10.8 1.6 L18.2 1.6 L12.4 10.4 L16.8 10.4 L5.6 22.4 L10.4 13.2 L5.9 13.2 Z";
+        fill: root.color;
+    }
+}
+
 // ── Signal strength (SIGNAL-METER.md v1.14) ─────────────────────────────────
 //
 // A centre dot with four elliptical arc pairs radiating left and right. NOT a
