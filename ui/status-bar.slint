@@ -114,6 +114,8 @@ export component StereoCluster inherits VerticalLayout {
     in property <bool> ta: false;
     in property <bool> af: false;
     in property <bool> dead: false;
+    /// The band theme. AC/DC puts its bolts where the cones go.
+    in property <EggTheme> egg;
 
     property <bool> locked: root.stereo && root.known && !root.dead;
     property <bool> blank: root.dead || !root.known;
@@ -171,10 +173,32 @@ export component StereoCluster inherits VerticalLayout {
                 // label colour and the left in the pill's own border colour, so
                 // it reads as a ghost. Blue is reserved for a stereo lock. The
                 // blank state keeps the slot so nothing reflows.
+                // ── THE CONES, OR AC/DC'S BOLTS IN THEIR PLACE ──
+                //
+                // The supplied art from the reference's own `stereoArtL`/`R`
+                // (`assets/fan-l2.png`, `fan-r2.png`) — a fan of three bolts each
+                // way, carried across as the PNGs they already are rather than
+                // re-traced.
+                //
+                // A DEVIATION FROM THE REFERENCE, DELIBERATELY. CarFM FLANKS the
+                // pill with these and keeps both cones inside it; here they stand
+                // IN PLACE OF the cones, which is what the owner asked for. The
+                // slot keeps the cones' exact width and height either way, so the
+                // label beside it cannot shift when a theme arrives or leaves —
+                // the whole reason these slots are stated in the first place.
+                //
+                // Blank still wins: nothing has reported, so there is nothing to
+                // say about the pilot, and a themed pill must not assert one.
                 Rectangle {
                     width: Metrics.stereo-wave-w;
                     height: Metrics.stereo-wave-h;
-                    if !root.blank: StereoCone {
+                    if !root.blank && root.egg.on: Image {
+                        source: @image-url("art/acdc-bolts-left.png");
+                        image-fit: contain;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                    if !root.blank && !root.egg.on: StereoCone {
                         flip: true;
                         color: root.locked ? Pal.blue : Pal.border;
                         stroke-w: root.locked ? 1.8 : 1.1;
@@ -217,7 +241,13 @@ export component StereoCluster inherits VerticalLayout {
                 Rectangle {
                     width: Metrics.stereo-wave-w;
                     height: Metrics.stereo-wave-h;
-                    if !root.blank: StereoCone {
+                    if !root.blank && root.egg.on: Image {
+                        source: @image-url("art/acdc-bolts-right.png");
+                        image-fit: contain;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                    if !root.blank && !root.egg.on: StereoCone {
                         color: root.locked ? Pal.blue : Pal.dim;
                         stroke-w: root.locked ? 1.8 : 1.1;
                         w: Metrics.stereo-wave-w;
@@ -458,7 +488,7 @@ export component StatusBar inherits Rectangle {
                     StereoCluster {
                         known: root.stereo-known; stereo: root.stereo;
                         rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
-                        dead: root.dead;
+                        dead: root.dead; egg: root.egg;
                     }
                 }
                 // PTY: plain dim ellipsized text, no border or fill, on the
@@ -502,7 +532,7 @@ export component StatusBar inherits Rectangle {
             StereoCluster {
                 known: root.stereo-known; stereo: root.stereo;
                 rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
-                dead: root.dead;
+                dead: root.dead; egg: root.egg;
             }
             if (root.egg.on || root.pty != "") && !root.dead: GenreText {
                 text: root.egg.on ? root.egg.genre : root.pty;

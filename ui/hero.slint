@@ -16,6 +16,21 @@ import { StarIcon, PowerIcon, BoltIcon } from "icons.slint";
 // ~46 characters. Empty shows a dim italic placeholder.
 export component RadioTextStrip inherits Rectangle {
     in property <string> text;
+    /// The band theme. Its display face carries here as well as onto the hero.
+    ///
+    /// THE REFERENCE PUTS IT EVERYWHERE, not just on these two. CarFM's `Egg`
+    /// has a `fontScope` field whose one value, `'hero'`, LIMITS a theme's face
+    /// to the hero card and RadioText — and AC/DC does not set it, so there the
+    /// face also lands on the preset tiles and the peek cards. Only the hero and
+    /// this strip are themed here, which is what was asked for; the tiles keep
+    /// Atkinson.
+    in property <EggTheme> egg;
+
+    /// `rtSpacing: 2` from the AC/DC entry, which travels with the face rather
+    /// than being a separate decision: Squealer is a blackletter and sets far
+    /// too tight for a line meant to be read at a glance without it.
+    property <length> track: root.egg.on ? 2px : 0px;
+    property <string> face: root.egg.on ? Font.egg-acdc : Font.face;
 
     property <bool> has-text: root.text != "";
     property <string> shown: root.has-text ? root.text : "Waiting for RadioText…";
@@ -53,8 +68,12 @@ export component RadioTextStrip inherits Rectangle {
         // Clip at the strip edges like the design's overflow:hidden — never an
         // ellipsis; the references show edge-clipped text, not "…".
         overflow: clip;
-        font-family: Font.face;
+        font-family: root.face;
+        letter-spacing: root.track;
         font-size: Metrics.rt-font;
+        // THE PLACEHOLDER KEEPS THE ORDINARY FACE. "Waiting for RadioText…" is
+        // the app talking, not the broadcaster, and a theme that has resolved off
+        // a track cannot be showing while there is no track to have resolved off.
         font-italic: !root.has-text;
         color: root.has-text ? Pal.text : Pal.dim;
     }
@@ -72,7 +91,8 @@ export component RadioTextStrip inherits Rectangle {
             height: parent.height;
             vertical-alignment: center;
             text: root.shown;
-            font-family: Font.face;
+            font-family: root.face;
+            letter-spacing: root.track;
             font-size: Metrics.rt-font;
             color: Pal.text;
         }
@@ -82,7 +102,8 @@ export component RadioTextStrip inherits Rectangle {
             height: parent.height;
             vertical-alignment: center;
             text: root.shown;
-            font-family: Font.face;
+            font-family: root.face;
+            letter-spacing: root.track;
             font-size: Metrics.rt-font;
             color: Pal.text;
         }

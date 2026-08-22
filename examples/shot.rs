@@ -66,14 +66,6 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("no-callsign", 1024, 614, false, State::NoCallsign),
     ("stereo-unknown", 1024, 614, false, State::StereoUnknown),
     ("long-genre", 1024, 614, false, State::LongGenre),
-    // THE ONE BAND THEME THAT EXISTS (Design EASTER-EGGS §12). Covered by a shot
-    // because everything it changes is visual — the horns, the bolt splitting the
-    // call sign, the gold genre line, the Squealer lettering — and none of it is
-    // reachable from a property assertion. It is also the only place a bundled
-    // typeface other than Atkinson is exercised, so a font that stopped loading
-    // would show up here as boxes rather than as silence.
-    ("acdc", 1024, 614, false, State::Acdc),
-    ("acdc-dark", 1024, 614, true, State::Acdc),
     // The satellite icon has two states and only one of them was ever shot. Both
     // go through `App::set_position`, which is the seam a real LocationManager
     // callback lands on — not a property override.
@@ -151,6 +143,21 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // peek slot and is most of the way to the centre. Driven by the real
     // `step-preset` callback — see the STEP block below.
     ("hero-step-morph", 1024, 614, false, State::Stepping, 0.0),
+    // THE ONE BAND THEME THAT EXISTS (Design EASTER-EGGS §12). Covered by shots
+    // because everything it changes is visual — the horns, the bolt splitting the
+    // call sign, the bolts in the pill, the gold genre line, the Squealer
+    // lettering on the card and the RadioText — and none of it is reachable from
+    // a property assertion. It is also the only place a bundled typeface other
+    // than Atkinson is exercised, so a face that stopped loading would show here
+    // as boxes rather than as silence.
+    //
+    // LAST IN THE RUN, ON PURPOSE. Slint's animations run on a wall clock shared
+    // by the whole process, so a shot's phase depends on how much work preceded
+    // it: adding these in the middle shifted `nearby-loading`'s pulsing dots by
+    // enough to fail a pixel comparison, with nothing about that shot changed.
+    // New shots go on the end, where they cannot move the ones already here.
+    ("acdc", 1024, 614, false, State::Acdc, 0.0),
+    ("acdc-dark", 1024, 614, true, State::Acdc, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
