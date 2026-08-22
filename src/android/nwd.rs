@@ -17,8 +17,21 @@
 //! conclusion for the same reason.
 //!
 //! NONE OF THIS HAS RUN. There is no head unit, no NWD service and no Android
-//! device in the container this was written in. It compiles for
-//! `armv7-linux-androideabi`, and that is the entire claim.
+//! device in the container this was written in.
+//!
+//! AND IT IS NOT EVEN COMPILED THERE, which this note used to claim it was: "it
+//! compiles for `armv7-linux-androideabi`, and that is the entire claim". That
+//! was false and a Gradle build proved it — `write_log` shipped with a parameter
+//! that shadowed the `text` helper below, a plain type error, and nothing in the
+//! container caught it. `cargo check --target armv7-linux-androideabi` cannot run
+//! without an NDK, because Slint's Android backend pulls in `skia-bindings` whose
+//! build script demands one, so EVERY line in this file is unchecked until
+//! someone builds the APK.
+//!
+//! What that means for anyone editing here: the host test suite proves nothing
+//! about this file. Either build the APK, or type-check the changed function in a
+//! throwaway crate against `jni` alone with local stubs for `TunerError`,
+//! `with_bridge` and `text` — that reproduces this class of error exactly.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -370,9 +383,15 @@ impl Tuner for NwdTuner {
     /// exception reaches jni-rs as a bare `Error::JavaException` with the message
     /// still pending on the JVM, and the message is the entire value of the call
     /// on a unit whose only readable channel is the panel that asked for the save.
-    fn write_log(&self, text: &str) -> Result<String, TunerError> {
+    /// `body` RATHER THAN `text`, and the name is not cosmetic: this module has a
+    /// free function called `text` that turns a `JString` into a `String`, and a
+    /// parameter of that name shadows it — `text(env, &out)` below then reads as a
+    /// call on a `&str` and does not compile. It got here because this file is
+    /// `#[cfg(target_os = "android")]` and the container it was written in has no
+    /// NDK, so `cargo check` never reaches this line. The Gradle build did.
+    fn write_log(&self, body: &str) -> Result<String, TunerError> {
         let out = with_bridge(|env, class| {
-            let arg = env.new_string(text)?;
+            let arg = env.new_string(body)?;
             let out = env
                 .call_static_method(
                     class,
