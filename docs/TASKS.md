@@ -79,7 +79,44 @@ first time). 15→26 wide, 19→33 tall; a band theme's line 33 inline / 47 cent
 at weight 800. The inline row was a fixed 36dp that clipped the larger text and
 is now a 36dp MINIMUM.
 
-**The 200dp width cap is UNCHANGED, and one real PTY no longer fits it.** The
+**The 200dp width cap is RAISED TO 240, and the line now shrinks before it
+elides.** Both by request, after the measurement below.
+
+`Metrics.genre-cap` is 240: it clears the widest label the RBDS table can emit
+(`Foreign Language`, 227dp) by 13dp, which is the margin a system font scale has
+to eat before anything elides again. Raised rather than removed — the cap is what
+stops a genre line growing into the right cluster.
+
+Under it, `GenreText` gives up POINTS before it gives up WORDS. A hidden twin
+measures the string at full size; if that exceeds the width the layout handed
+over, the size scales down to fit, floored at `Metrics.pty-font-min` — which is
+exactly the size this line was before v1.16.0 grew it. Eliding is what happens
+past the floor, not instead of shrinking.
+
+Four things were needed to make that hold, each found by measurement:
+
+- **A hidden gauge, not the live line.** A Text's `preferred-width` depends on its
+  `font-size`, so sizing the visible line from its own measurement is circular.
+  `visible: false` still lays out and still reports a preferred size.
+- **`min-width: 0px` on the component root.** A Rectangle derives its minimum
+  width from its children, a Text's minimum is its own string, and a minimum beats
+  a maximum — so the element sized itself to 513dp inside a layout told the limit
+  was 226. `max-width` alone looked ignored.
+- **Two measurements.** A glyph's advance is not proportional to point size: 475dp
+  at 35px against 246 at 17.6, where proportion predicts 239. One pass shrank a
+  line to fit and it elided anyway.
+- **The allocation, not a prediction of it.** Deriving the gap from `Metrics` was
+  49dp out on the tall track — the right-hand zone carries the nearby disc as well
+  as the gear, and there is layout spacing on top. The shrink measures `root.width`
+  and the gauges are excluded from the layout fold with explicit geometry, which
+  is what keeps that out of a binding loop.
+
+`shots/acdc-portrait.png` is the proof and covers a gap the AC/DC shots left —
+both were 1024×614, so no shot had put a themed genre on the centred track.
+"High Voltage Rock 'n' Roll" at 47dp is more than twice a 360dp phone and now
+renders complete.
+
+**The measurement the raise was based on.** The
 genre line does not print free text: `rds::pty_label` indexes a fixed table of 31
 RBDS strings, none longer than two words. Measured at the new size with the cap
 lifted, on the wide track:
@@ -93,11 +130,8 @@ lifted, on the wide track:
 | `Religious Talk` (20) | 180dp | fits |
 | `Spanish Talk` (24) | 163dp | fits |
 
-So the exposure is one label of 31, with two more sitting on the boundary. Left
-at 200 because 200 is what the design says and growing the type without growing
-the cap is the design's own arithmetic — but it is worth putting back to them,
-since the two at exactly 200dp will elide on any metric that rounds the other
-way.
+One label of 31 over, two on the boundary. Worth putting back to the design:
+they grew the type 175% and left the cap alone.
 
 `shots/long-genre.png` USED TO TEST A STRING THE APP CANNOT PRODUCE — "Adult
 Album Alternative and Classic Rock", which is in no RBDS table. It now carries

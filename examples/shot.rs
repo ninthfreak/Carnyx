@@ -181,6 +181,15 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // shrink-wraps and would stand 48dp taller than the card holding it.
     ("logo-plates", 1024, 614, false, State::LogoPlates, 0.0),
     ("logo-plates-dark", 1024, 614, true, State::LogoPlates, 0.0),
+    // THE GENRE SHRINK, ON REAL INPUT. A band theme's genre line is 47dp on the
+    // tall track, and "High Voltage Rock 'n' Roll" at 47dp is more than twice a
+    // 360dp phone. Nothing invented reaches this shot: it is the one theme this
+    // app carries, its own string, on a surface the app supports. The line must
+    // come down in size until it fits rather than elide to "High Voltage Ro…".
+    //
+    // It also covers a gap the earlier AC/DC shots left — both were 1024×614, so
+    // no shot had ever put a themed genre on the centred track at all.
+    ("acdc-portrait", 360, 800, false, State::Acdc, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]

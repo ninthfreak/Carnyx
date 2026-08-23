@@ -326,8 +326,119 @@ component GenreText inherits Rectangle {
     // for the engine to find and it resolves to the nearest, which is the bold
     // already in use. Written as the spec states it rather than silently reduced
     // to 700: the day an ExtraBold cut is bundled, this line is already right.
-    property <length> size: root.egg.on ? Metrics.pty-egg-font : Metrics.pty-font;
+    property <length> full-size: root.egg.on ? Metrics.pty-egg-font : Metrics.pty-font;
     property <int> weight: root.egg.on ? Font.heavy : Font.bold;
+
+    // ── SHRINK TO FIT BEFORE ELIDING ──
+    //
+    // An over-long genre gives up POINTS before it gives up WORDS. Eliding is
+    // the last resort, not the first: "Foreign Lang…" tells a driver less at a
+    // glance than the whole phrase a size smaller, and this line exists to be
+    // read at a glance.
+    //
+    // MEASURED BY A HIDDEN TWIN, and that is the only way to do it without a
+    // cycle. A `Text`'s `preferred-width` depends on its `font-size`, so sizing
+    // the visible line from its own measurement would be circular. `gauge` is
+    // pinned at `full-size` — a value that depends on nothing here — so its
+    // measurement is a fixed input. It is `visible: false` rather than
+    // `opacity: 0`: an invisible element still lays out and still reports a
+    // preferred size (verified against Slint 1.17.1 — both report the same
+    // width), and unlike a zero-opacity one it costs no layer and no draw.
+    //
+    // THE BUDGET IS THE CAP WHERE THERE IS ONE. The design gives the inline
+    // wide-track line 200dp (240 here — see `Metrics.genre-cap`) and gives the
+    // centred line and a themed line no cap at all. "No cap" cannot mean "may
+    // run off the display", so those two are bounded by what is physically
+    // there instead. Reaching that bound is what "exceptionally long" means.
+    //
+    // AND WHAT IS THERE IS NOT THE WHOLE PAGE. The tall track builds the status
+    // bar as three zones — signal, this column, controls — with the two sides
+    // flexed and this one at its own preferred width, so the room for a centred
+    // genre is the page LESS BOTH SIDES. Budgeting the whole page instead put a
+    // 336dp line on a 360dp phone and pushed it off the right edge: it fitted
+    // the page and not the gap. The signal glyph is the wider of the two sides
+    // on every tall metric (`signal-icon` is s(74.75) against the gear's 44), and
+    // the sides are symmetric, so it stands for both.
+    //
+    // All three terms are `Metrics` globals, which is what keeps this out of a
+    // cycle: a budget read from the parent's actual width would be a width that
+    // depends on the child that depends on it.
+    ///
+    /// WHAT TO ASK THE LAYOUT FOR. The cap where the design states one, and where
+    /// it states none — the centred line, a themed line — the page less both side
+    /// zones, floored at the pill's own width so the subtraction cannot go
+    /// negative before a `Face` has measured itself.
+    property <length> ask: (root.centered || root.egg.on)
+        ? Math.max(Metrics.stereo-min-w,
+                   Metrics.avail-w - Metrics.pad-h * 2 - Metrics.signal-icon * 2)
+        : Metrics.genre-cap;
+
+    /// AND WHAT THE LAYOUT ACTUALLY GAVE, which is what the shrink measures
+    /// against. Predicting the gap from `Metrics` was wrong by 49dp on the tall
+    /// track — the right-hand zone carries the nearby disc as well as the gear
+    /// and is the wider of the two sides, and there is layout spacing on top —
+    /// so a line shrunk to fit a gap it had guessed still elided in the gap it
+    /// got. The allocation is not a guess.
+    ///
+    /// NOT A CYCLE, and the split above is what keeps it out of one: `ask` is
+    /// what feeds `preferred-width`, and it depends on globals alone. `width`
+    /// comes back from the layout afterwards and feeds only the font size, whose
+    /// only onward effect is on `height`.
+    property <length> budget: root.width;
+    property <length> natural: gauge.preferred-width;
+    // Guarded on the numerator, not just the ratio: an empty string measures 0
+    // and must not divide.
+    ///
+    /// MEASURED TWICE, because a glyph's advance is NOT proportional to its point
+    /// size. Scaling by `budget / natural` and trusting the arithmetic leaves the
+    /// line 3–4% over the target it was scaled to hit — measured on this string
+    /// and this face, 475dp at 35px against 246 at 17.6 where proportion predicts
+    /// 239 — so the first pass shrank a line to fit and it elided anyway, which is
+    /// the worst of both. The second gauge measures what the first pass actually
+    /// produced and corrects from that, which converges to within a pixel; the
+    /// last 1% is margin, because a pixel is what the ellipsis costs.
+    property <float> first: (root.natural > root.budget && root.natural > 0px)
+        ? root.budget / root.natural
+        : 1.0;
+    property <length> second: gauge2.preferred-width;
+    property <float> fit: (root.second > root.budget && root.second > 0px)
+        ? root.first * root.budget * 0.99 / root.second
+        : root.first;
+    // The floor is a SIZE, not a ratio, so a small track cannot shrink through
+    // it: `Metrics.pty-font-min` is already scaled and already floored at 12dp.
+    // Past it the line elides, which is the old behaviour and the right one —
+    // there is a point below which a smaller word is not a legible word.
+    property <length> size: Math.max(Metrics.pty-font-min, root.full-size * root.fit);
+
+    gauge := Text {
+        // EXPLICIT GEOMETRY KEEPS A GAUGE OUT OF THE FOLD. A plain element sums
+        // its children into its own layout info, so a gauge whose font size is
+        // derived from the element's width closes a loop through it — Slint says
+        // so outright: "layoutinfo-h -> layout-cache -> width -> root.budget ->
+        // gauge2.font-size -> root.layoutinfo-h". Stating x and y takes the
+        // child out of that sum, which is the same rule the STEREO pill's
+        // invisible reserve relies on, and `preferred-width` is unaffected by an
+        // assigned size.
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.text;
+        font-family: Font.face;
+        font-weight: root.weight;
+        font-size: root.full-size;
+        letter-spacing: 0.5px;
+    }
+    /// The second measurement: the same string at the size the FIRST pass chose.
+    /// Its font-size depends on `first`, which depends on `gauge` alone, so this
+    /// is still a straight line and not a cycle.
+    gauge2 := Text {
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.text;
+        font-family: Font.face;
+        font-weight: root.weight;
+        font-size: root.full-size * root.first;
+        letter-spacing: 0.5px;
+    }
 
     // Both Texts bind their width to root.width, so this Rectangle has no
     // intrinsic width of its own — it has to be told one, or a HorizontalLayout
@@ -341,8 +452,33 @@ component GenreText inherits Rectangle {
     // allowed to run past the PTY's budget rather than elide to "High Voltage
     // Rock 'n…". The overflow rule goes with it: `overflow: eggGenre ? 'visible'
     // : 'hidden'`.
-    preferred-width: live.preferred-width;
-    max-width: (root.centered || root.egg.on) ? 100000px : 200px;
+    // ASKED FOR AT MOST THE BUDGET, not at the natural width. The centre column
+    // on the tall track states `horizontal-stretch: 0`, so it sizes to what its
+    // children ask for, and a child asking for the full width of an over-long
+    // genre made the column wider than the screen.
+    //
+    // `max-width` IS NOT ENOUGH ON ITS OWN, and that cost a build to learn:
+    // Slint honours it when a LAYOUT is doing the sizing and ignores it when the
+    // parent is a plain element, so the same component obeyed the cap in one
+    // place and drew 360dp wide in another. Measured in isolation — budget 226,
+    // `max-width: 226`, element width 360. So the TEXT BOX is bound below rather
+    // than the element, and the cap holds wherever this is placed.
+    // ASKED FOR OFF THE GAUGE, NOT OFF THE LIVE LINE, because the live line's
+    // width depends on the size the shrink chose and the shrink depends on the
+    // allocation — reading it here would close the loop.
+    preferred-width: Math.min(root.natural, root.ask);
+    max-width: root.ask;
+    // AND A MIN-WIDTH, WHICH IS WHAT ACTUALLY MAKES THE CAP HOLD. A Rectangle
+    // derives its minimum width from its children, a Text's minimum is the width
+    // of its own string, and a minimum beats a maximum — so this element sized
+    // itself to 513dp inside a layout that had been told 226dp was the limit,
+    // and `max-width` looked like it was being ignored. Saying the minimum
+    // outright is what releases it. Measured: 513dp before this line, 226 after,
+    // with nothing else changed.
+    min-width: 0px;
+    /// The Texts fill the element, which the layout has already sized to the
+    /// allocation the shrink was computed against.
+    property <length> text-w: root.width;
 
     // A MINIMUM, NOT A FIXED HEIGHT, and this is the v1.16.0 fix that had to come
     // with the larger type: the inline row was `height: 36` outright, so a line
@@ -352,10 +488,10 @@ component GenreText inherits Rectangle {
     height: Math.max(root.band-h, live.preferred-height);
 
     Text {
-        x: 0; width: root.width;
+        x: 0; width: root.text-w;
         y: (root.height - self.preferred-height) / 2 + 1px;
         text: root.text;
-        overflow: root.egg.on ? clip : elide;
+        overflow: elide;
         horizontal-alignment: root.centered ? center : left;
         font-family: Font.face; font-weight: root.weight;
         font-size: root.size;
@@ -363,10 +499,10 @@ component GenreText inherits Rectangle {
         color: Pal.dark ? #000000.with-alpha(0.5) : #FFFFFF.with-alpha(0.95);
     }
     live := Text {
-        x: 0; width: root.width;
+        x: 0; width: root.text-w;
         y: (root.height - self.preferred-height) / 2;
         text: root.text;
-        overflow: root.egg.on ? clip : elide;
+        overflow: elide;
         horizontal-alignment: root.centered ? center : left;
         font-family: Font.face; font-weight: root.weight;
         font-size: root.size;

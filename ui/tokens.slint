@@ -261,6 +261,26 @@ export global Metrics {
     // day a theme states one.
     out property <length> pty-font: Math.max(12px, Metrics.s(Metrics.tall ? 33 : 26));
     out property <length> pty-egg-font: Math.max(12px, Metrics.s(Metrics.tall ? 47 : 33));
+    /// HOW FAR THE GENRE LINE MAY SHRINK, and it is exactly the size this line
+    /// was BEFORE v1.16.0 grew it — this token's own previous body. A size that
+    /// has been legible in this car for the whole project is a floor that needs
+    /// no separate justification, and it keeps ANDROID §10's 12dp legibility
+    /// floor underneath it. See `GenreText`.
+    out property <length> pty-font-min: Math.max(12px, Metrics.s(Metrics.tall ? 19 : 15));
+
+    /// The genre line's width budget on the wide track.
+    ///
+    /// 240, NOT THE DESIGN'S 200. §4.1 grew the type 175% and left this number
+    /// alone, and at 26sp the widest label the RBDS table can emit stopped
+    /// fitting. Measured through Slint's own layout at k = 1, widest first:
+    /// `Foreign Language` 227, `Religious Music` 203, `Emergency Test` 202, and
+    /// then 26 others at 185 or less. 200 clipped the top three of twenty-nine.
+    ///
+    /// 240 clears the widest by 13dp, which is the margin a system font scale or
+    /// a metrics change has to eat before anything elides again. RAISED RATHER
+    /// THAN REMOVED: the cap is what stops a genre line growing into the right
+    /// cluster, and that job has not changed.
+    out property <length> genre-cap: 240px;
     out property <length> tell-font: Math.max(10px, Metrics.s(Metrics.tall ? 14 : 11));
 
     out property <length> band-height: Metrics.s(Metrics.two-rows ? 250 : Metrics.landscape ? 104 : 140);
