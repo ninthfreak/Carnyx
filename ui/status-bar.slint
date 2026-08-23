@@ -4,8 +4,9 @@
 // it is truly centred regardless of the side widths.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { EggTheme } from "types.slint";
-import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar } from "icons.slint";
+import { EggTheme, BandGear } from "types.slint";
+import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar,
+         ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon } from "icons.slint";
 
 // One of the little status letters. Lit = full weight with a soft dark drop; off
 // = 32% with a faint 1px light emboss (an engraved look). §4.7 removes all of it
@@ -303,7 +304,7 @@ component GenreText inherits Rectangle {
     // it. On this unit that distinction is the difference between an idle face
     // and one repainting every frame forever.
     property <float> beat: 0.0;
-    init => { self.beat = 1.0; }
+    init => { self.beat = 1.0; self.turn = 1.0; }
     animate beat {
         duration: 900ms; easing: ease-in-out;
         iteration-count: -1; direction: alternate;
@@ -328,6 +329,32 @@ component GenreText inherits Rectangle {
     // to 700: the day an ExtraBold cut is bundled, this line is already right.
     property <length> full-size: root.egg.on ? Metrics.pty-egg-font : Metrics.pty-font;
     property <int> weight: root.egg.on ? Font.heavy : Font.bold;
+    /// The genre line's own face. NO FALLBACK to the theme's body face —
+    /// `eggGenreFont` reads `genreFont` alone — which is why AC/DC's gold line is
+    /// Atkinson while its hero is Squealer, and why The Beatles sets Madie Roger
+    /// here and YellowSubmarine everywhere else.
+    property <string> face: root.egg.genre-face != "" ? root.egg.genre-face : Font.face;
+
+    // ── `genreCycle` — TWO STRINGS ON A LONG LOOP ──
+    //
+    // Nine Inch Nails alone: "Broken Machines" and "Things Falling Apart", each
+    // held ~20s and cross-faded on a 40s cycle. One animated float drives both
+    // the swap and the fade, so there is no timer and no second state — and it
+    // is only READ while a cycling theme is showing, so an ordinary face never
+    // depends on it and never redraws for it.
+    property <bool> cycling: root.egg.genre-cycle != "";
+    property <float> turn: 0.0;
+    animate turn {
+        duration: 40s; easing: linear; iteration-count: -1;
+    }
+    /// The second half of the loop shows the other string.
+    property <bool> on-second-half: root.cycling && root.turn > 0.5;
+    property <string> shown: root.on-second-half ? root.egg.genre-cycle : root.text;
+    /// A short dip to black at each hand-over, so the swap reads as a cross-fade
+    /// rather than as a jump. 1.5s of the 40, at each end of each half.
+    property <float> fade: !root.cycling ? 1.0
+        : (root.turn < 0.02 || (root.turn > 0.48 && root.turn < 0.52) || root.turn > 0.98)
+            ? 0.15 : 1.0;
 
     // ── SHRINK TO FIT BEFORE ELIDING ──
     //
@@ -410,6 +437,18 @@ component GenreText inherits Rectangle {
     // there is a point below which a smaller word is not a legible word.
     property <length> size: Math.max(Metrics.pty-font-min, root.full-size * root.fit);
 
+    // ── THE FOUR MARKS, IN PLACE OF THE LINE (Led Zeppelin) ──
+    //
+    // Not beside it and not behind it: the marks ARE the genre for that theme,
+    // which is why the text below is suppressed rather than overdrawn. Sized at
+    // 1.45x the line they replace, as `bandArt.tsx` sizes them.
+    if root.egg.genre-runes: ZeppelinRunes {
+        x: root.centered ? (root.width - self.width) / 2 : 0px;
+        y: (root.height - self.height) / 2;
+        size: root.full-size * 1.45;
+        ink: Pal.dim;
+    }
+
     gauge := Text {
         // EXPLICIT GEOMETRY KEEPS A GAUGE OUT OF THE FOLD. A plain element sums
         // its children into its own layout info, so a gauge whose font size is
@@ -421,8 +460,8 @@ component GenreText inherits Rectangle {
         // assigned size.
         x: 0px; y: 0px; width: 0px; height: 0px;
         visible: false;
-        text: root.text;
-        font-family: Font.face;
+        text: root.shown;
+        font-family: root.face;
         font-weight: root.weight;
         font-size: root.full-size;
         letter-spacing: 0.5px;
@@ -433,8 +472,8 @@ component GenreText inherits Rectangle {
     gauge2 := Text {
         x: 0px; y: 0px; width: 0px; height: 0px;
         visible: false;
-        text: root.text;
-        font-family: Font.face;
+        text: root.shown;
+        font-family: root.face;
         font-weight: root.weight;
         font-size: root.full-size * root.first;
         letter-spacing: 0.5px;
@@ -490,10 +529,10 @@ component GenreText inherits Rectangle {
     Text {
         x: 0; width: root.text-w;
         y: (root.height - self.preferred-height) / 2 + 1px;
-        text: root.text;
+        text: root.egg.genre-runes ? "" : root.shown;
         overflow: elide;
         horizontal-alignment: root.centered ? center : left;
-        font-family: Font.face; font-weight: root.weight;
+        font-family: root.face; font-weight: root.weight;
         font-size: root.size;
         letter-spacing: 0.5px;
         color: Pal.dark ? #000000.with-alpha(0.5) : #FFFFFF.with-alpha(0.95);
@@ -501,13 +540,14 @@ component GenreText inherits Rectangle {
     live := Text {
         x: 0; width: root.text-w;
         y: (root.height - self.preferred-height) / 2;
-        text: root.text;
+        text: root.egg.genre-runes ? "" : root.shown;
         overflow: elide;
         horizontal-alignment: root.centered ? center : left;
-        font-family: Font.face; font-weight: root.weight;
+        font-family: root.face; font-weight: root.weight;
         font-size: root.size;
         letter-spacing: 0.5px;
         color: root.ink;
+        opacity: root.fade;
         // `genreOutline` — the LIGHT cut of AC/DC states one, so the gold has an
         // edge against a pale ground. Zero width is no outline.
         //
@@ -542,6 +582,8 @@ component OutOfBandPill inherits Rectangle {
 export component DrivingStatus inherits HorizontalLayout {
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
+    /// The band theme, for the airship alone.
+    in property <EggTheme> egg;
 
     // A slow ~2.6s breathe — gentler than TA's 1.1s.
     property <float> breathe: 1.0;
@@ -563,9 +605,19 @@ export component DrivingStatus inherits HorizontalLayout {
 
     // The car shows ONLY while moving — absent, not dimmed, when stopped. Amber:
     // the fixed safety-colour family, like TA, never the blue accent.
-    if root.in-motion: MotionCar {
+    //
+    // LED ZEPPELIN FLIES AN AIRSHIP IN THIS SLOT (§2.3) and leaves the settings
+    // gear alone — the mirror image of the other three, which take the gear and
+    // leave this alone. Same colour, same breathe, same "only while moving": a
+    // theme may change what the mark IS and never what it MEANS.
+    if root.in-motion && !root.egg.airship: MotionCar {
         size: 34px;
         color: Pal.amber;
+        opacity: root.breathe;
+    }
+    if root.in-motion && root.egg.airship: AirshipIcon {
+        size: 34px;
+        ink: Pal.amber;
         opacity: root.breathe;
     }
     // Always present: it communicates lock state. With no fix it is not greyed
@@ -733,7 +785,7 @@ export component StatusBar inherits Rectangle {
                 alignment: end;
                 if !Metrics.tall: VerticalLayout {
                     alignment: center;
-                    DrivingStatus { gps-fix: root.gps-fix; in-motion: root.in-motion; }
+                    DrivingStatus { gps-fix: root.gps-fix; in-motion: root.in-motion; egg: root.egg; }
                 }
                 Rectangle {
                     width: 44px; height: 44px;
@@ -745,7 +797,28 @@ export component StatusBar inherits Rectangle {
                     gear-touch := TouchArea {
                         clicked => { root.open-settings(); }
                     }
-                    GearIcon { size: 24px; color: Pal.dim; }
+                    // ── THE BAND MARK IN THE GEAR'S PLACE (EASTER-EGGS §12) ──
+                    //
+                    // Four of the five themes replace it; Led Zeppelin is the
+                    // one that does not, and flies an airship in the motion slot
+                    // instead. `BandGear::plain` covers both that theme and every
+                    // unthemed face, so there is no empty slot to guard against.
+                    //
+                    // THE SPIRAL IS A PICTURE, the other three are paths. Nine
+                    // Inch Nails' mark is seventy-two tapering round-capped
+                    // strokes — the same shape as AC/DC's horns and baked for the
+                    // same reason — so it ships as an alpha mask and takes the
+                    // gear's own colour through `colorize`.
+                    if root.egg.gear == BandGear.plain: GearIcon { size: 24px; color: Pal.dim; }
+                    if root.egg.gear == BandGear.bolt: BoltIcon { size: 24px; color: Pal.dim; }
+                    if root.egg.gear == BandGear.drum: DrumIcon { size: 24px; ink: Pal.dim; }
+                    if root.egg.gear == BandGear.smiley: SmileyIcon { size: 24px; ink: Pal.dim; }
+                    if root.egg.gear == BandGear.spiral: Image {
+                        source: @image-url("art/nin-spiral.png");
+                        image-fit: contain;
+                        width: 24px; height: 24px;
+                        colorize: Pal.dim;
+                    }
                 }
             }
 

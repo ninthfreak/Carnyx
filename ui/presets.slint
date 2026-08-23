@@ -7,7 +7,7 @@
 // identical space. The peek cards use the exact same treatment as the tiles.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, LogoPlate } from "types.slint";
+import { Preset, LogoPlate, EggTheme } from "types.slint";
 import { MagnifierTower, LogoSearchIcon } from "icons.slint";
 
 // The colored call-letter box that stands in for a logo. The letters are fitted
@@ -17,6 +17,11 @@ component CallSignBox inherits Rectangle {
     in property <string> label;
     in property <color> brand;
     in property <length> radius: 12px;
+    /// The band theme's BODY face, when it has one that reaches this far. Empty
+    /// is the ordinary face — which is what Led Zeppelin gives these, because it
+    /// scopes Kashmir to the hero: a display cut at tile size is unreadable and
+    /// the theme reads from the hero anyway (`fontScope: 'hero'`).
+    in property <string> face;
 
     border-radius: root.radius;
     clip: true;
@@ -25,7 +30,7 @@ component CallSignBox inherits Rectangle {
     Text {
         text: root.label == "" ? "·" : root.label;
         color: #FFFFFF;
-        font-family: Font.face;
+        font-family: root.face != "" ? root.face : Font.face;
         font-weight: Font.bold;
         letter-spacing: 0.5px;
         font-size: Math.max(11px, Math.round(Math.min(
@@ -39,6 +44,7 @@ component CallSignBox inherits Rectangle {
 // binding its own height (which is a loop).
 component PlateBox inherits Rectangle {
     in property <Preset> preset;
+    in property <EggTheme> egg;
     in property <length> radius: 12px;
     /// Preset chips (`fill`) pad a plate by a FLAT 8dp; peek cards pad by a
     /// fraction of their own box. Both are the reference's numbers — see `pad`.
@@ -99,6 +105,7 @@ component PlateBox inherits Rectangle {
         label: root.preset.call;
         brand: root.preset.brand;
         radius: root.radius;
+        face: root.egg.body-face;
     }
 }
 
@@ -107,6 +114,10 @@ component PlateBox inherits Rectangle {
 /// call sign for a logo, the frequency for the box.
 export component PresetPlate inherits VerticalLayout {
     in property <Preset> preset;
+    /// The band theme, for its body face. THE COLOURS DO NOT REACH HERE: a
+    /// theme's card and accent are the hero's and the palette's, and a preset
+    /// tile keeps its station's own brand fill.
+    in property <EggTheme> egg;
     in property <length> plate-w;
     in property <length> plate-h;
     in property <length> radius: 12px;
@@ -123,6 +134,7 @@ export component PresetPlate inherits VerticalLayout {
     if root.fill: PlateBox {
         vertical-stretch: 1;
         preset: root.preset;
+        egg: root.egg;
         radius: root.radius;
         fill: true;
     }
@@ -131,6 +143,7 @@ export component PresetPlate inherits VerticalLayout {
         height: root.plate-h;
         vertical-stretch: 0;
         preset: root.preset;
+        egg: root.egg;
         radius: root.radius;
     }
 
@@ -138,7 +151,7 @@ export component PresetPlate inherits VerticalLayout {
         text: root.preset.has-logo ? root.preset.call : root.preset.freq-label;
         horizontal-alignment: center;
         color: Pal.text;
-        font-family: Font.face;
+        font-family: root.egg.body-face != "" ? root.egg.body-face : Font.face;
         font-weight: Font.bold;
         font-size: root.freq-size;
         letter-spacing: 0.3px;
@@ -148,6 +161,8 @@ export component PresetPlate inherits VerticalLayout {
 /// One preset chip in the band.
 export component PresetTile inherits Rectangle {
     in property <Preset> preset;
+    /// The band theme, for its body face only.
+    in property <EggTheme> egg;
     in property <bool> active: false;
     in property <length> pad-top;
     in property <length> pad-bottom;
@@ -221,6 +236,7 @@ export component PresetTile inherits Rectangle {
         padding-left: root.pad-h;
         padding-right: root.pad-h;
         PresetPlate {
+            egg: root.egg;
             preset: root.preset;
             fill: true;
             radius: root.logo-radius;
@@ -268,6 +284,8 @@ export component PresetTile inherits Rectangle {
 /// instead of resampling a scaled layer.
 export component PeekCard inherits Rectangle {
     in property <Preset> preset;
+    /// The band theme, for its body face only.
+    in property <EggTheme> egg;
     /// Unscaled card width — the 20%-of-surface figure from LOGO-SIZING §4.
     in property <length> card-w;
     in property <string> side: "left";
@@ -353,6 +371,7 @@ export component PeekCard inherits Rectangle {
         padding: root.pad * root.scale;
         alignment: center;
         PresetPlate {
+            egg: root.egg;
             preset: root.preset;
             plate-w: root.plate-w * root.scale;
             plate-h: root.plate-h * root.scale;
@@ -417,6 +436,10 @@ component NavButton inherits Rectangle {
 
 export component PresetsBand inherits Rectangle {
     in property <[Preset]> presets;
+    /// The band theme, for its body face. Three of the five put their display
+    /// cut on the tiles; Led Zeppelin scopes its to the hero and AC/DC's reaches
+    /// here too.
+    in property <EggTheme> egg;
     in property <int> active-index: -1;
     in property <bool> reordering: false;
     in property <length> band-height;
@@ -915,6 +938,7 @@ export component PresetsBand inherits Rectangle {
                         animate x, y { duration: root.dragging ? 160ms : 0ms; easing: ease-out; }
                         hidden: root.dragging && i == root.drag-index;
                         preset: p;
+                        egg: root.egg;
                         active: i == root.active-index;
                         pad-top: Metrics.s(self.big ? 12 : 8);
                         pad-bottom: Metrics.s(self.big ? 16 : 12);
@@ -976,6 +1000,7 @@ export component PresetsBand inherits Rectangle {
                         animate x, y { duration: root.dragging ? 160ms : 0ms; easing: ease-out; }
                         hidden: root.dragging && i == root.drag-index;
                         preset: p;
+                        egg: root.egg;
                         active: i == root.active-index;
                         pad-top: Metrics.s(8);
                         pad-bottom: Metrics.s(12);
@@ -1036,6 +1061,7 @@ export component PresetsBand inherits Rectangle {
                         animate x, y { duration: root.dragging ? 160ms : 0ms; easing: ease-out; }
                         hidden: root.dragging && i == root.drag-index;
                         preset: p;
+                        egg: root.egg;
                         active: i == root.active-index;
                         pad-top: Metrics.s(8);
                         pad-bottom: Metrics.s(12);

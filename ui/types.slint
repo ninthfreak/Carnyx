@@ -5,6 +5,13 @@
 // is computed in Rust and arrives here as a finished value. Slint draws; it does
 // not decide.
 
+/// Which band mark stands in for the settings gear.
+///
+/// PARTIAL ON PURPOSE, as `bandArt.tsx`'s own `GEAR_BY_MOTIF` is: Led Zeppelin
+/// replaces the vehicle-in-motion tell instead and leaves the gear alone, so it
+/// takes `plain` and the ordinary gear is drawn.
+export enum BandGear { plain, bolt, drum, smiley, spiral }
+
 /// What a surface draws BEHIND a logo, decided in Rust by `logos::assign`.
 ///
 /// A DARK-ADAPTED LOGO IS NOT ONE PICTURE, it is four, and only three of them
@@ -118,6 +125,43 @@ export struct EggTheme {
     /// there is no call sign on screen for the bolt to split.
     suppress-logo: bool,
 
+    // ── TYPE ──
+    //
+    // Family names as the bundled files declare them; an EMPTY string is "the
+    // ordinary face". Resolved in Rust, because the reference's fallbacks are
+    // not uniform — the RadioText face falls back to the body face, the genre
+    // face falls back to nothing at all, and the hero face falls back and is
+    // then vetoed for one theme.
+    body-face: string,
+    hero-face: string,
+    genre-face: string,
+    rt-face: string,
+    freq-face: string,
+    /// Multipliers and tracking. 1.0 and 0 leave the ordinary metrics.
+    hero-scale: float,
+    hero-track: length,
+    freq-scale: float,
+    rt-track: length,
+    /// `heroCase: 'lower'` — the call sign is lower-cased. Applied in Rust,
+    /// where the string is.
+    hero-lower: bool,
+
+    // ── ORNAMENT ──
+    /// The second genre string, cross-faded with the first. Empty = no cycle.
+    genre-cycle: string,
+    /// The four marks stand IN PLACE OF the genre line (Led Zeppelin).
+    genre-runes: bool,
+    /// `nameGhost` — a hard offset shadow under the hero lettering. A fully
+    /// transparent ink is no ghost.
+    ghost-ink: color,
+    ghost-dx: length,
+    ghost-dy: length,
+    /// Which band mark replaces the settings gear. `plain` is the ordinary one,
+    /// which is also what Led Zeppelin keeps.
+    gear: BandGear,
+    /// The vehicle-in-motion tell flies an airship instead of a car.
+    airship: bool,
+
     // ── The per-scheme cut ("Back in Black" is AC/DC's dark one) ──
     //
     // EVERY FIELD BELOW IS SCOPED TO ONE ELEMENT, and a fully transparent colour
@@ -153,4 +197,12 @@ export struct EggTheme {
     /// (`genreOutline: #241B0E` at 1), so the gold reads against a pale ground.
     genre-outline-ink: color,
     genre-outline-w: length,
+    /// `cardFrame` — up to four concentric rules inset into the hero card's
+    /// edge. A zero-alpha colour is an unused slot; The Beatles uses all four.
+    ring-1: color, ring-1-inset: length,
+    ring-2: color, ring-2-inset: length,
+    ring-3: color, ring-3-inset: length,
+    ring-4: color, ring-4-inset: length,
+    /// `rtPlate.serial` — a catalogue stamp in the RadioText plate's corner.
+    rt-serial: string,
 }

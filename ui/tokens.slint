@@ -23,20 +23,60 @@
 import "fonts/AtkinsonHyperlegible-Regular.ttf";
 import "fonts/AtkinsonHyperlegible-Bold.ttf";
 
-// Squealer — AC/DC's display face, the REAL supplied typeface rather than a
-// system stand-in (Design EASTER-EGGS §12 is explicit that a stand-in is a failed
-// build). Registered here so the family name below resolves; it is only ever
-// asked for while that theme is showing, and the rest of the face never sees it.
+// ── THE BAND THEMES' DISPLAY FACES (Design EASTER-EGGS §12) ──
 //
-// CFF OUTLINES, not TrueType — the file is `OTTO`-flavoured where the two
-// Atkinson cuts are `glyf`. Worth knowing if it ever renders as blank boxes: the
+// The REAL supplied typefaces, not system stand-ins — §12 is explicit that a
+// stand-in is a failed build. Each is imported here so its family name resolves;
+// none is ever asked for except while its own theme is showing, and the rest of
+// the face never sees any of them.
+//
+// THE NAMES BELOW ARE THE FONTS' OWN, READ OUT OF THEIR `name` TABLES, and that
+// is not a detail. CarFM registers these under the keys it passes to RN's
+// `useFonts` — `BeatlesYellowSub`, `Gridnik`, `PermanentMarker` — which are file
+// labels and not family names. Slint resolves `font-family` against the family
+// the file DECLARES, so copying CarFM's keys would have missed every one of them
+// and fallen back to Atkinson without a word. Checked file by file:
+//
+//   BeatlesYellowSub.ttf  -> "YellowSubmarine"
+//   Gridnik.otf           -> "FoundryGridnik"
+//   PermanentMarker.ttf   -> "Permanent Marker"
+//   MadieRoger.ttf        -> "Madie Roger"
+//   Kashmir.ttf / Onyx.ttf / Singothic.ttf / Squealer.otf -> their own names
+//
+// SGTPEPPERS IS NOT BUNDLED. The registry names it for the Beatles hero, and the
+// reference then refuses to apply it — `eggHeroFont` is gated on
+// `motif !== 'submarine'` — because §4 records that cut as outline-only and
+// unfinished. A 177 KB file that nothing can ask for is not a port.
+//
+// CFF OUTLINES in two of them: Squealer and Gridnik are `OTTO`-flavoured where
+// the rest are `glyf`. Worth knowing if either renders as blank boxes — the
 // cause would be the outline format, not a missing file.
 import "fonts/Squealer.otf";
+import "fonts/BeatlesYellowSub.ttf";
+import "fonts/MadieRoger.ttf";
+import "fonts/Kashmir.ttf";
+import "fonts/PermanentMarker.ttf";
+import "fonts/Onyx.ttf";
+import "fonts/Gridnik.otf";
+import "fonts/Singothic.ttf";
 
 export global Font {
     out property <string> face: "Atkinson Hyperlegible";
-    /// The AC/DC theme's lettering. See the import above.
+    /// AC/DC.
     out property <string> egg-acdc: "Squealer";
+    /// The Beatles: the body face and the RadioText; the genre line droops in
+    /// Madie Roger beside it.
+    out property <string> egg-beatles: "YellowSubmarine";
+    out property <string> egg-beatles-genre: "Madie Roger";
+    /// Led Zeppelin: hero and RadioText only (`fontScope: 'hero'`).
+    out property <string> egg-zeppelin: "Kashmir";
+    /// Nirvana: the body face and the genre line; Onyx at 1.5x on the hero.
+    out property <string> egg-nirvana: "Permanent Marker";
+    out property <string> egg-nirvana-hero: "Onyx";
+    /// Nine Inch Nails: Gridnik on the hero, Singothic on the genre line, the
+    /// RadioText and every frequency readout.
+    out property <string> egg-nin: "FoundryGridnik";
+    out property <string> egg-nin-display: "Singothic";
     out property <int> regular: 400;
     out property <int> bold: 700;
     /// A band theme's genre line asks for ExtraBold. No 800 cut is bundled, so

@@ -61,7 +61,8 @@ use crate::station::{brand_color, clean_call, format_mhz, plate_label};
 use crate::stations::{NearbyPicker, NearbyState, StationDb, StationRow};
 use crate::{fake, settings};
 use crate::{
-    AppWindow, BatteryState, DiagAction, EggTheme, GenreColumn, HeroSnapshot, LogoPlate,
+    AppWindow, BandGear, BatteryState, DiagAction, EggTheme, GenreColumn, HeroSnapshot,
+    LogoPlate,
     NearbyStation, NearbyTab,
     Overlay, Preset, TunerAction, TunerDetail, TunerGlyph, TunerSource,
 };
@@ -2149,16 +2150,6 @@ impl App {
             (None, None, false, ps) if !ps.is_empty() => ps.to_string(),
             _ => String::new(),
         };
-        ui.set_ident(ident.clone().into());
-        // THE COMMITTED TARGET WHILE ONE IS IN FLIGHT. See `State::hold`: the
-        // vendor walks its own bank on the same press, and without this the
-        // driver watches the hero flick through stations they never chose.
-        ui.set_freq_label(format_mhz(s.shown()).into());
-        ui.set_in_band((FM_LO..=FM_HI).contains(&s.shown()));
-        let active = s.active();
-        ui.set_saved(active >= 0);
-        ui.set_active_index(active);
-
         // The station's own name must not be stripped out of its own RadioText,
         // so the RESOLVED call sign goes in, never the PS: WIBA scrolls song
         // titles through PS, and a PS of "Walk" would strip "Walk This Way".
@@ -2167,8 +2158,6 @@ impl App {
             .map(|r| r.callsign_base.clone())
             .or_else(|| learned.clone());
         let shown_rt = rds::strip_station_from_rt(&st.rt, Some(s.shown()), call.as_deref());
-        ui.set_radio_text(shown_rt.as_str().into());
-        ui.set_pty(rds::pty_label(st.pty).into());
 
         // ── THE BAND THEME (Design EASTER-EGGS §12) ──
         //
@@ -2181,7 +2170,32 @@ impl App {
         // `!s.audio` is the flattened face — audio priority released — and it
         // suppresses every theme, as CarFM's `resolveEgg({ off })` does. A red
         // accent on a grey face reads as a rendering fault, not as a joke.
+        //
+        // RESOLVED BEFORE THE IDENTITY IS PUBLISHED, and that ordering is load
+        // bearing for exactly one theme: The Beatles states `heroCase: 'lower'`,
+        // which changes the STRING rather than how it is drawn, and a case rule
+        // has to be applied where the string is. Everything else a theme does is
+        // a colour, a face or a mark, and none of those needs to happen here.
         let themed = crate::eggs::resolve(&shown_rt, !s.audio);
+        let ident = if themed.is_some_and(|e| e.hero_lower) {
+            ident.to_lowercase()
+        } else {
+            ident
+        };
+
+        ui.set_ident(ident.clone().into());
+        // THE COMMITTED TARGET WHILE ONE IS IN FLIGHT. See `State::hold`: the
+        // vendor walks its own bank on the same press, and without this the
+        // driver watches the hero flick through stations they never chose.
+        ui.set_freq_label(format_mhz(s.shown()).into());
+        ui.set_in_band((FM_LO..=FM_HI).contains(&s.shown()));
+        let active = s.active();
+        ui.set_saved(active >= 0);
+        ui.set_active_index(active);
+
+        ui.set_radio_text(shown_rt.as_str().into());
+        ui.set_pty(rds::pty_label(st.pty).into());
+
         // THE PER-SCHEME CUT. "Back in Black" means nothing on a white page, so a
         // theme states its palette for light and dark separately and the face's
         // own scheme picks. `Pal.dark` is the authority on that — it is what
@@ -2192,11 +2206,48 @@ impl App {
             Some(e) => EggTheme {
                 on: true,
                 genre: e.genre.into(),
-                genre_ink: rgb(e.genre_ink),
-                genre_pulse: rgb(e.genre_pulse),
+                // ZERO IS "THE ORDINARY TOKEN", not black. Three of the five
+                // themes state their genre colour as `pal.dim` — the live token
+                // restated — so a zero here has to fall through to `Pal.dim` and
+                // not paint the line black. `opt_rgb` is the same rule the skins
+                // use, and `GenreText` tests the alpha.
+                genre_ink: opt_rgb(nonzero(e.genre_ink)),
+                genre_pulse: opt_rgb(nonzero(e.genre_pulse)),
                 call_bolt: e.call_sign_bolt,
                 horns: e.horns,
                 suppress_logo: e.suppress_logos,
+                body_face: e.body_face.into(),
+                hero_face: e.hero_face.into(),
+                genre_face: e.genre_face.into(),
+                rt_face: e.rt_face.into(),
+                freq_face: e.freq_face.into(),
+                hero_scale: e.hero_scale,
+                hero_track: e.hero_track,
+                freq_scale: e.freq_scale,
+                rt_track: e.rt_track,
+                hero_lower: e.hero_lower,
+                genre_cycle: e.genre_cycle.into(),
+                genre_runes: e.genre_runes,
+                ghost_ink: ghost(e),
+                ghost_dx: e.ghost_dx,
+                ghost_dy: e.ghost_dy,
+                gear: match e.gear {
+                    crate::eggs::Gear::Plain => BandGear::Plain,
+                    crate::eggs::Gear::Bolt => BandGear::Bolt,
+                    crate::eggs::Gear::Drum => BandGear::Drum,
+                    crate::eggs::Gear::Smiley => BandGear::Smiley,
+                    crate::eggs::Gear::Spiral => BandGear::Spiral,
+                },
+                airship: e.airship,
+                ring_1: opt_rgb(ring(skin, 0).map(|r| r.0)),
+                ring_1_inset: ring(skin, 0).map_or(0.0, |r| r.1),
+                ring_2: opt_rgb(ring(skin, 1).map(|r| r.0)),
+                ring_2_inset: ring(skin, 1).map_or(0.0, |r| r.1),
+                ring_3: opt_rgb(ring(skin, 2).map(|r| r.0)),
+                ring_3_inset: ring(skin, 2).map_or(0.0, |r| r.1),
+                ring_4: opt_rgb(ring(skin, 3).map(|r| r.0)),
+                ring_4_inset: ring(skin, 3).map_or(0.0, |r| r.1),
+                rt_serial: skin.rt_serial.into(),
                 card_bg: opt_rgb(skin.card_bg),
                 card_border: opt_rgb(skin.card_border),
                 card_text: opt_rgb(skin.card_text),
@@ -4496,6 +4547,42 @@ fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
         plate: logo.as_ref().map_or(LogoPlate::Light, |(_, p)| *p),
         logo: logo.map(|(i, _)| i).unwrap_or_default(),
     }
+}
+
+/// A registry colour that may be "unstated".
+///
+/// Three of the five themes give their genre line the live `pal.dim` rather than
+/// a colour of their own, and the registry writes that as the token itself. Here
+/// it is a zero, and a zero has to reach the face as TRANSPARENT so `GenreText`
+/// falls through — painting it black would be reading "leave it alone" as an
+/// instruction.
+fn nonzero(packed: u32) -> Option<u32> {
+    (packed != 0).then_some(packed)
+}
+
+/// `nameGhost` as one colour: the registry states these as `rgba()`, so the ink
+/// and the alpha arrive separately and are put back together here.
+fn ghost(e: &crate::eggs::Egg) -> slint::Color {
+    if e.ghost_alpha <= 0.0 {
+        return slint::Color::from_argb_u8(0, 0, 0, 0);
+    }
+    let c = rgb(e.ghost_ink);
+    slint::Color::from_argb_u8(
+        (e.ghost_alpha * 255.0).round().clamp(0.0, 255.0) as u8,
+        c.red(),
+        c.green(),
+        c.blue(),
+    )
+}
+
+/// One ring of a `cardFrame`, or `None` for an unused slot.
+///
+/// FOUR FIXED SLOTS rather than a model, because a Slint struct cannot carry a
+/// list and the frame is an ornament on one card — the reference's own frame has
+/// exactly four rules and no theme has ever had a different count. A model would
+/// be a repeater and a second component for four numbers.
+fn ring(skin: crate::eggs::Skin, i: usize) -> Option<(u32, f32)> {
+    skin.card_rings.get(i).copied()
 }
 
 /// A read's answer as the face's own vocabulary.

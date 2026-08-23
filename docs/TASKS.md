@@ -1494,9 +1494,50 @@ The Beatles, Led Zeppelin, Nirvana, Nine Inch Nails. Real supplied typefaces
 bundled as `res/font` (a system font standing in is a failed build), per-motif
 vector art, and a hidden force panel revealed by six taps on the about line.
 
-**Carnyx: AC/DC IS PORTED. The other four are not.** Asked for by name, so the
-registry in `src/eggs.rs` is a table with one row rather than a framework for
-five — adding the next is a row and a motif arm.
+**Carnyx: ALL FIVE ARE PORTED.** The registry in `src/eggs.rs` was a slice with
+one row for exactly this reason, and the other four were four rows and a motif
+arm rather than a refactor.
+
+Three of the five change NO COLOUR AT ALL — Led Zeppelin, Nirvana and Nine Inch
+Nails state `accent`/`glow`/`chromeInk` as the LIVE TOKENS, which is the
+registry's way of writing "leave the palette alone" — so the only palettes here
+are AC/DC's "Back in Black" and The Beatles' cream drum card. What makes the
+other three themes is type and marks.
+
+Eight display faces are bundled beside Squealer, imported under THE FAMILY NAMES
+THE FILES DECLARE rather than the keys `bandThemes.ts` registers them under:
+`BeatlesYellowSub.ttf` is "YellowSubmarine", `Gridnik.otf` is "FoundryGridnik",
+`PermanentMarker.ttf` is "Permanent Marker". Copying the keys would have missed
+every one and fallen back to Atkinson without a word. SgtPeppers is NOT bundled:
+the registry names it for the Beatles hero and the reference then vetoes it
+(`motif !== 'submarine'`, §4 records that cut as unfinished), so it is 177 KB
+nothing can ask for.
+
+Per theme, what landed: The Beatles' cream card inside its four-rule drum hoop,
+the white RadioText plate with `No. 0101538` stamped in the corner, Madie Roger
+on the genre line and a lower-cased hero. Led Zeppelin's Kashmir scoped to the
+hero and RadioText, the four marks from the fourth record standing in for the
+genre line, and an airship in the vehicle-in-motion slot — the one theme that
+leaves the settings gear alone. Nirvana's Onyx at 1.5x with a 3/3 ghost at 20%
+black. Nine Inch Nails' Gridnik tracked to 9dp, Singothic on the genre line, the
+RadioText and the frequency, and a genre that cross-fades "Broken Machines" and
+"Things Falling Apart" on a 40s loop.
+
+The three simple marks are `VPath`s in `ui/icons.slint`; the spiral is baked to
+an alpha mask by `tools/bake-band-art.py` for the reason the horns are — it is
+72 tapering round-capped strokes.
+
+**AC/DC gained two things from the same work**: its body face now reaches the
+preset tiles and peek cards (`fontScope` is absent, so `eggBodyFont` applies —
+this was the open item "apply Squealer to preset tiles"), and its bolt now
+replaces the settings gear.
+
+NOT CARRIED, and each for a stated reason. `stripes` and `chromeInk` are declared
+in the registry and read by no component in the reference, like `card.sub` and
+`uiAccentOn`. `heroGlitch` and `genreDroop` ARE consumed there and are transforms
+on text, which Slint 1.17.1 offers for nothing but `Image` and `Path`; CarFM's
+own droop is already an approximation, since §2.2 asks for a per-character
+baseline and RN tilts the whole line instead.
 
 What AC/DC does here: the matcher, the gold "High Voltage Rock 'n' Roll" genre
 line with its pulse, the Squealer lettering, the bolt splitting the call sign

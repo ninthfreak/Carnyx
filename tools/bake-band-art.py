@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
-"""Render AC/DC's horns from CarFM's SVG into the PNGs `ui/hero.slint` draws.
+"""Render the band marks that are too many strokes to draw, from CarFM's SVG.
 
-WHY BAKE RATHER THAN DRAW. Each horn is sixty round-capped strokes of steadily
-tapering width under a Gaussian drop-shadow. Slint can draw all of that — the
-signal meter next door is `Path` elements with the same SVG command strings —
-but it would be a hundred and twenty `Path` items across the pair, on a unit
-measured at 131 ms per frame. Nothing about the art changes at run time, so it
-is a picture.
+WHY BAKE RATHER THAN DRAW. Two of the five band marks are long runs of
+round-capped strokes of steadily tapering width: AC/DC's horns are sixty
+segments each, and Nine Inch Nails' spiral is seventy-two. Slint can draw all of
+that — the signal meter next door is `Path` elements with the same SVG command
+strings — but it would be nearly two hundred `Path` items, on a unit measured at
+131 ms per frame. Nothing about the art changes at run time, so it is a picture.
+
+THE OTHER THREE ARE NOT BAKED. The Beatles' drum is four elements, Nirvana's
+smiley five and Led Zeppelin's runes one path each; those are drawn as `VPath`s
+in `ui/icons.slint`, where they stay vector-sharp and take their colour from the
+face rather than from a file.
 
 THE SOURCE IS CarFM's `bandArt.tsx`, read directly rather than copied, so the
 two cannot drift. Re-run this if that file's HORN_LEFT/HORN_RIGHT ever change:
 
-    python3 tools/bake-acdc-horns.py [path/to/bandArt.tsx]
+    python3 tools/bake-band-art.py [path/to/bandArt.tsx]
 
-Output: ui/art/acdc-horn-{left,right}.png at 4x the SVG's 70x96, which is enough
-for the largest the card ever draws them.
+Output: ui/art/acdc-horn-{left,right}.png at 4x the SVG's 70x96, and
+ui/art/nin-spiral.png at 8x its 24x24 — each enough for the largest its own
+surface ever draws it.
+
+THE SPIRAL IS BAKED ALPHA-ONLY, unlike the horns. The horns are fixed red with a
+fixed glow and are drawn as they are; the spiral replaces the settings gear and
+has to take that gear's colour, so it is rendered as a white mask and tinted at
+run time through `Image.colorize` — the same arrangement the STEREO bolts use.
 """
 import math
 import re
@@ -72,6 +83,31 @@ def bake(svg: str, out: Path, scale: int = 4) -> int:
     return len(segs)
 
 
+def bake_mask(svg: str, out: Path, vb: int = 24, scale: int = 8) -> int:
+    """A tapering stroke run as a WHITE ALPHA MASK, for a caller that tints it.
+
+    Same geometry as `bake`, none of its colour: the spiral stands in for the
+    settings gear and has to be whatever colour that gear is, so the file carries
+    shape alone.
+    """
+    w = h = vb * scale
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    segs = SEG.findall(svg)
+    for x1, y1, x2, y2, sw in segs:
+        a1 = (float(x1) * scale, float(y1) * scale)
+        a2 = (float(x2) * scale, float(y2) * scale)
+        lw = max(1, round(float(sw) * scale))
+        d.line([a1, a2], fill=(255, 255, 255, 255), width=lw)
+        # stroke-linecap="round", as on the horns: without the caps the joins
+        # between seventy-two tapering segments read as a row of notches.
+        r = lw / 2
+        for p in (a1, a2):
+            d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=(255, 255, 255, 255))
+    img.save(out)
+    return len(segs)
+
+
 def main() -> None:
     src = Path(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC)
     if not src.exists():
@@ -84,6 +120,11 @@ def main() -> None:
             sys.exit(f"{name} not found in {src}")
         n = bake(m.group(1), OUT / fn)
         print(f"{fn}: {n} segments")
+    m = re.search(r"export const GEAR_NIN = `(.*?)`;", text, re.S)
+    if not m:
+        sys.exit(f"GEAR_NIN not found in {src}")
+    n = bake_mask(m.group(1), OUT / "nin-spiral.png")
+    print(f"nin-spiral.png: {n} segments (alpha mask)")
 
 
 if __name__ == "__main__":

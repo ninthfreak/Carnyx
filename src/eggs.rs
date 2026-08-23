@@ -5,11 +5,28 @@
 //! "scale-up rule" says a theme may change no layout, no control and no
 //! behaviour, and nothing here returns anything but colours, strings and flags.
 //!
-//! ONE THEME, NOT FIVE. CarFM ships AC/DC, The Beatles, Led Zeppelin, Nirvana
-//! and Nine Inch Nails; this is AC/DC alone, because that is what was asked for.
-//! The registry is a slice rather than a single entry so adding the next one is
-//! a table row and a motif arm, not a refactor — but nothing here pretends the
-//! other four exist.
+//! ALL FIVE: AC/DC, The Beatles, Led Zeppelin, Nirvana and Nine Inch Nails. The
+//! registry was a slice with one row for exactly this reason, and adding the
+//! other four was four rows and a motif arm rather than a refactor.
+//!
+//! THREE OF THE FIVE CHANGE NO COLOUR AT ALL. Led Zeppelin, Nirvana and Nine
+//! Inch Nails state `accent`/`glow`/`chromeInk` as the LIVE TOKENS, which is the
+//! registry's way of writing "leave the palette alone"; what makes them themes is
+//! type and marks. So `Skin` is `None` for all three and the only palettes here
+//! are AC/DC's "Back in Black" and The Beatles' cream drum card.
+//!
+//! ── WHAT IS DELIBERATELY NOT CARRIED ─────────────────────────────────────────
+//! `stripes` (The Beatles) and `chromeInk` (three themes) are declared in the
+//! registry and read by NO component in the reference, alongside `card.sub` and
+//! `uiAccentOn`. Carrying a field nothing consumes would be inventing a rule.
+//!
+//! `heroGlitch` (Nine Inch Nails) and `genreDroop` (The Beatles) ARE consumed
+//! there and are not portable here. Both are transforms on text —
+//! `GlitchWrap` twitches the identity, and droop rotates the genre line -4° —
+//! and Slint 1.17.1 offers no rotation for anything but `Image` and `Path`.
+//! CarFM's own droop is already an approximation: §2.2 asks for a drooping
+//! PER-CHARACTER baseline and RN cannot do that either, so it tilts the whole
+//! line. Recorded rather than faked.
 //!
 //! PORTED FROM `src/components/carfm/bandThemes.ts`. The matcher is the part
 //! that earns its own module: it runs against whatever the broadcaster puts in
@@ -45,6 +62,56 @@ pub struct Egg {
     pub call_sign_bolt: bool,
     /// Horns overhang the hero card's top corners (EASTER-EGGS §2.1).
     pub horns: bool,
+
+    // ── TYPE ─────────────────────────────────────────────────────────────────
+    //
+    // A face is a FAMILY NAME as the file declares it, and `""` means "the
+    // ordinary face". They are separate fields rather than one with fallbacks
+    // because the reference's fallbacks are not uniform: `eggRtFont` falls back
+    // to the body face, `eggGenreFont` does NOT fall back at all, and
+    // `eggHeroFont` falls back but is then vetoed for one motif. Resolving each
+    // one here is what keeps that asymmetry out of the face.
+    /// The body face — preset tiles and peek cards. Empty when a theme scopes
+    /// itself to the hero (`fontScope: 'hero'`, Led Zeppelin).
+    pub body_face: &'static str,
+    /// The hero lettering. Empty leaves it on the ordinary face, which is what
+    /// The Beatles gets: §4 records its SgtPeppers cut as unfinished and the
+    /// reference vetoes it outright.
+    pub hero_face: &'static str,
+    /// `heroScale` — a multiplier on the call sign's size.
+    pub hero_scale: f32,
+    /// `heroTrack` — letter-spacing in dp. 0 keeps the ordinary -1.
+    pub hero_track: f32,
+    /// `heroCase: 'lower'` — the call sign is lower-cased.
+    pub hero_lower: bool,
+    /// The genre line's own face. NO FALLBACK: `eggGenreFont` reads `genreFont`
+    /// alone, which is why AC/DC's gold line is Atkinson and not Squealer.
+    pub genre_face: &'static str,
+    /// The RadioText face and its tracking (`rtFont` / `rtSpacing`).
+    pub rt_face: &'static str,
+    pub rt_track: f32,
+    /// The frequency readout's face and scale (`freqFont` / `freqScale`).
+    pub freq_face: &'static str,
+    pub freq_scale: f32,
+
+    // ── ORNAMENT ─────────────────────────────────────────────────────────────
+    /// `genreCycle` — a second genre string, cross-faded with the first on a
+    /// long loop. Empty when the line does not cycle.
+    pub genre_cycle: &'static str,
+    /// `genreArt` — the four marks from Led Zeppelin's fourth record stand IN
+    /// PLACE OF the genre line. Debossed, never printed, never a font glyph.
+    pub genre_runes: bool,
+    /// `nameGhost` — a hard offset drop-shadow under the hero lettering. Alpha
+    /// is carried separately because the reference states these as `rgba()`.
+    pub ghost_ink: u32,
+    pub ghost_alpha: f32,
+    pub ghost_dx: f32,
+    pub ghost_dy: f32,
+    /// Which mark replaces the settings gear. See [`Gear`].
+    pub gear: Gear,
+    /// `motif: 'runes'` — the vehicle-in-motion tell flies an airship instead of
+    /// a car, and this theme leaves the gear alone.
+    pub airship: bool,
     /// The station's logo is hidden so the lettering can carry the card. CarFM's
     /// `suppressLogos`, and it is what makes the call-sign bolt visible at all —
     /// a hero with art shows no call sign to split.
@@ -54,6 +121,25 @@ pub struct Egg {
     pub dark: Option<Skin>,
     /// The same for a LIGHT face.
     pub light: Option<Skin>,
+}
+
+/// Which band mark stands in for the settings gear.
+///
+/// PARTIAL ON PURPOSE, exactly as `bandArt.tsx`'s `GEAR_BY_MOTIF` is: Led
+/// Zeppelin replaces the vehicle-in-motion tell instead and leaves the gear
+/// alone, so it has no entry and the caller draws the ordinary gear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gear {
+    /// The ordinary gear. Every unthemed face, and Led Zeppelin.
+    Plain,
+    /// AC/DC — the bolt.
+    Bolt,
+    /// The Beatles — a drum hoop.
+    Drum,
+    /// Nirvana — the smiley.
+    Smiley,
+    /// Nine Inch Nails — the spiral.
+    Spiral,
 }
 
 /// What a theme restates for one colour scheme.
@@ -118,6 +204,11 @@ pub struct Skin {
     /// `genreOutline` — an edge on the genre line.
     pub genre_outline_ink: Option<u32>,
     pub genre_outline_w: f32,
+    /// `cardFrame` — concentric rules inset into the hero card's edge, each a
+    /// colour and an inset in dp. The Beatles' drum hoop. Empty is no frame.
+    pub card_rings: &'static [(u32, f32)],
+    /// `rtPlate.serial` — a catalogue stamp in the RadioText plate's corner.
+    pub rt_serial: &'static str,
 }
 
 /// Nothing restated.
@@ -136,6 +227,47 @@ pub const NO_SKIN: Skin = Skin {
     rt_text: None,
     genre_outline_ink: None,
     genre_outline_w: 0.0,
+    card_rings: &[],
+    rt_serial: "",
+};
+
+/// A theme that changes nothing, for the four rows below to state a diff
+/// against.
+///
+/// EVERY ROW IS A DIFF because that is how the registry reads: three of the five
+/// themes state NO PALETTE AT ALL — their `accent`/`glow`/`chromeInk` restate the
+/// live tokens, which is the registry's way of writing "leave it alone" — and
+/// what distinguishes them is type and marks. Spelling out fourteen defaults per
+/// row would bury the four or five fields that are the theme.
+pub const PLAIN: Egg = Egg {
+    id: "",
+    genre: "",
+    genre_ink: 0,
+    genre_pulse: 0,
+    accent: 0,
+    call_sign_bolt: false,
+    horns: false,
+    suppress_logos: false,
+    body_face: "",
+    hero_face: "",
+    hero_scale: 1.0,
+    hero_track: 0.0,
+    hero_lower: false,
+    genre_face: "",
+    rt_face: "",
+    rt_track: 0.0,
+    freq_face: "",
+    freq_scale: 1.0,
+    genre_cycle: "",
+    genre_runes: false,
+    ghost_ink: 0,
+    ghost_alpha: 0.0,
+    ghost_dx: 0.0,
+    ghost_dy: 0.0,
+    gear: Gear::Plain,
+    airship: false,
+    dark: None,
+    light: None,
 };
 
 /// AC/DC. CarFM's first registry entry, with its own colours verbatim.
@@ -152,6 +284,15 @@ pub const ACDC: Egg = Egg {
     call_sign_bolt: true,
     horns: true,
     suppress_logos: true,
+    // Squealer on the hero and the RadioText. The genre line is NOT Squealer —
+    // `eggGenreFont` reads `genreFont` alone and this entry names none — which
+    // `screenshots/egg-acdc-dark.png` shows: the gold line is Atkinson.
+    body_face: FACE_SQUEALER,
+    hero_face: FACE_SQUEALER,
+    rt_face: FACE_SQUEALER,
+    rt_track: 2.0,
+    freq_face: FACE_SQUEALER,
+    gear: Gear::Bolt,
     // "BACK IN BLACK": a near-black hero card and RadioText plate, hollow silver
     // lettering, and an interactive accent that stops being blue. Verbatim from
     // `modes.dark` (EASTER-EGGS-BUILD §2.1, handoff v1.16.1).
@@ -194,10 +335,144 @@ pub const ACDC: Egg = Egg {
         genre_outline_w: 1.0,
         ..NO_SKIN
     }),
+    ..PLAIN
 };
 
-/// Every theme that exists here, in match order.
-const REGISTRY: &[(&Egg, &[&str])] = &[(&ACDC, &["ac dc", "acdc"])];
+// The family names the bundled files declare. See `ui/tokens.slint` — these are
+// NOT the keys `bandThemes.ts` uses, which are file labels.
+const FACE_SQUEALER: &str = "Squealer";
+const FACE_BEATLES: &str = "YellowSubmarine";
+const FACE_BEATLES_GENRE: &str = "Madie Roger";
+const FACE_KASHMIR: &str = "Kashmir";
+const FACE_MARKER: &str = "Permanent Marker";
+const FACE_ONYX: &str = "Onyx";
+const FACE_GRIDNIK: &str = "FoundryGridnik";
+const FACE_SINGOTHIC: &str = "Singothic";
+
+/// THE BEATLES — `motif: submarine`.
+///
+/// The one theme that restates a SURFACE rather than an accent: a cream card
+/// inside a drum hoop of four concentric rules, and a white RadioText plate with
+/// a catalogue serial stamped in its corner. The same in both schemes, because
+/// the registry states `card` and `rtPlate` on the ENTRY and not inside `modes`.
+///
+/// THE HERO STAYS ON THE ORDINARY FACE. The entry names SgtPeppers for it and
+/// §4 records that cut as outline-only and unfinished; the reference then vetoes
+/// it in code — `eggHeroFont` is gated on `motif !== 'submarine'`. So the body
+/// face reaches the tiles and the RadioText and stops there. Not a gap: the
+/// reference draws it this way on purpose, and the veto is the port.
+pub const BEATLES: Egg = Egg {
+    id: "The Beatles",
+    genre: "Rock",
+    genre_ink: 0x4A2C15,
+    hero_lower: true,
+    body_face: FACE_BEATLES,
+    rt_face: FACE_BEATLES,
+    genre_face: FACE_BEATLES_GENRE,
+    suppress_logos: true,
+    gear: Gear::Drum,
+    dark: Some(BEATLES_SKIN),
+    light: Some(BEATLES_SKIN),
+    ..PLAIN
+};
+
+const BEATLES_SKIN: Skin = Skin {
+    card_bg: Some(0xF3E8D2),
+    card_border: Some(0xA81F28),
+    card_text: Some(0x241608),
+    rt_bg: Some(0xFFFFFF),
+    rt_border: Some(0xDED6C6),
+    rt_text: Some(0x1A1A1A),
+    rt_serial: "No. 0101538",
+    // The drum hoop: cream, blue, cream, red, each inset further from the edge.
+    card_rings: &[(0xF3E8D2, 5.0), (0x2E4EA0, 6.5), (0xF3E8D2, 17.0), (0xA81F28, 18.5)],
+    ..NO_SKIN
+};
+
+/// LED ZEPPELIN — `motif: runes`.
+///
+/// NO PALETTE CHANGE AT ALL. The entry's `accent`/`glow`/`chromeInk` are the live
+/// tokens restated, which is the registry's way of writing "leave it alone", so
+/// there is no `Skin` here and nothing on this face changes colour.
+///
+/// Type and marks only: Kashmir SCOPED TO THE HERO and the RadioText — a display
+/// cut is unreadable at tile size and the theme reads from the hero anyway — the
+/// four marks from the untitled fourth record standing in for the genre line, and
+/// an airship in the vehicle-in-motion slot instead of the car. It is the one
+/// theme that leaves the settings gear alone.
+pub const ZEPPELIN: Egg = Egg {
+    id: "Led Zeppelin",
+    hero_face: FACE_KASHMIR,
+    hero_scale: 1.3,
+    rt_face: FACE_KASHMIR,
+    rt_track: 2.0,
+    genre_runes: true,
+    suppress_logos: true,
+    airship: true,
+    ..PLAIN
+};
+
+/// NIRVANA — `motif: xerox`.
+///
+/// Default palette throughout, like Led Zeppelin. Permanent Marker on the body
+/// and the genre line, Onyx at 1.5x on the hero, and a hard 3/3 drop-shadow under
+/// the lettering at 20% black — a photocopied look, which is what `xerox` names.
+pub const NIRVANA: Egg = Egg {
+    id: "Nirvana",
+    genre: "Verse Chorus Verse",
+    body_face: FACE_MARKER,
+    hero_face: FACE_ONYX,
+    hero_scale: 1.5,
+    genre_face: FACE_MARKER,
+    rt_face: FACE_MARKER,
+    rt_track: 1.0,
+    ghost_ink: 0x000000,
+    ghost_alpha: 0.20,
+    ghost_dx: 3.0,
+    ghost_dy: 3.0,
+    suppress_logos: true,
+    gear: Gear::Smiley,
+    ..PLAIN
+};
+
+/// NINE INCH NAILS — `motif: spiral`.
+///
+/// Default palette again. Gridnik on the hero at 1.3x tracked out to 9dp,
+/// Singothic on the genre line, the RadioText AND every frequency readout, and a
+/// genre that cross-fades between two strings on a long loop.
+///
+/// `heroGlitch` IS NOT CARRIED — see this module's header.
+pub const NIN: Egg = Egg {
+    id: "Nine Inch Nails",
+    genre: "Broken Machines",
+    genre_cycle: "Things Falling Apart",
+    body_face: FACE_GRIDNIK,
+    hero_face: FACE_GRIDNIK,
+    hero_scale: 1.3,
+    hero_track: 9.0,
+    genre_face: FACE_SINGOTHIC,
+    rt_face: FACE_SINGOTHIC,
+    rt_track: 5.0,
+    freq_face: FACE_SINGOTHIC,
+    freq_scale: 0.95,
+    ghost_ink: 0x000000,
+    ghost_alpha: 0.16,
+    ghost_dx: 2.0,
+    ghost_dy: 0.0,
+    suppress_logos: true,
+    gear: Gear::Spiral,
+    ..PLAIN
+};
+
+/// Every theme that exists here, in match order — the registry's own order, so
+/// a RadioText naming two bands resolves the same way it does in the reference.
+const REGISTRY: &[(&Egg, &[&str])] = &[
+    (&ACDC, &["ac dc", "acdc"]),
+    (&BEATLES, &["beatles"]),
+    (&ZEPPELIN, &["led zeppelin", "zeppelin"]),
+    (&NIRVANA, &["nirvana"]),
+    (&NIN, &["nine inch nails"]),
+];
 
 /// RadioText reduced to lower-case words separated by single spaces.
 ///
@@ -384,6 +659,115 @@ mod tests {
         const BARE: Egg = Egg { dark: None, light: None, ..ACDC };
         assert_eq!(skin(&BARE, true), NO_SKIN);
         assert_eq!(skin(&BARE, false), NO_SKIN);
+    }
+
+    /// ALL FIVE MATCH, AND ON THE SAME BOUNDARY RULE.
+    ///
+    /// The names are the registry's own. "zeppelin" without "led" is one of
+    /// them, which is why the alias list is per entry rather than derived from
+    /// the id — and it is also why the boundary rule has to hold for every row
+    /// and not just the one that broke in the field.
+    #[test]
+    fn every_theme_matches_its_own_names() {
+        for (rt, want) in [
+            ("AC/DC - Back in Black", "AC/DC"),
+            ("The Beatles - Here Comes the Sun", "The Beatles"),
+            ("Led Zeppelin - Kashmir", "Led Zeppelin"),
+            ("Zeppelin - Immigrant Song", "Led Zeppelin"),
+            ("Nirvana - Smells Like Teen Spirit", "Nirvana"),
+            ("Nine Inch Nails - The Hand That Feeds", "Nine Inch Nails"),
+        ] {
+            assert_eq!(match_egg_id(rt).map(|e| e.id), Some(want), "should have matched {rt:?}");
+        }
+    }
+
+    /// AND NONE OF THEM MATCHES A SUBSTRING INSIDE ANOTHER WORD, which is the
+    /// rule the AC/DC advert taught. Every row inherits it, so every row is
+    /// asked.
+    #[test]
+    fn no_theme_matches_inside_another_word() {
+        for rt in [
+            "the beatlesque new single",
+            "zeppelinesque",
+            "nirvanas",
+            "sunirvana",
+            "ninety nine inch nailsmith",
+        ] {
+            assert_eq!(match_egg_id(rt), None, "should NOT have matched {rt:?}");
+        }
+    }
+
+    /// THREE OF THE FIVE CHANGE NO COLOUR AT ALL, and that is data rather than
+    /// an oversight: their `accent`/`glow`/`chromeInk` restate the live tokens,
+    /// which is the registry's way of writing "leave the palette alone". A skin
+    /// appearing on one of them would repaint a face the design leaves untouched.
+    #[test]
+    fn only_two_themes_restate_a_palette() {
+        for e in [&ZEPPELIN, &NIRVANA, &NIN] {
+            assert_eq!(skin(e, true), NO_SKIN, "{} must not repaint a dark face", e.id);
+            assert_eq!(skin(e, false), NO_SKIN, "{} must not repaint a light face", e.id);
+        }
+        assert_ne!(skin(&ACDC, true), NO_SKIN, "AC/DC restates a dark palette");
+        assert_ne!(skin(&BEATLES, true), NO_SKIN, "The Beatles restates a card");
+    }
+
+    /// THE BEATLES' CARD IS THE SAME IN BOTH SCHEMES. The registry states `card`
+    /// and `rtPlate` on the ENTRY rather than inside `modes`, so a cream drum on
+    /// a dark face is the design and not a bug.
+    #[test]
+    fn the_beatles_card_survives_both_schemes() {
+        assert_eq!(skin(&BEATLES, true), skin(&BEATLES, false));
+        let k = skin(&BEATLES, true);
+        assert_eq!(k.card_bg, Some(0xF3E8D2));
+        assert_eq!(k.card_border, Some(0xA81F28));
+        assert_eq!(k.rt_serial, "No. 0101538");
+        assert_eq!(k.card_rings.len(), 4, "the drum hoop is four rules");
+        assert_eq!(k.card_rings[0], (0xF3E8D2, 5.0));
+        assert_eq!(k.card_rings[3], (0xA81F28, 18.5));
+    }
+
+    /// A FACE IS A FAMILY NAME THE FILE DECLARES, not the key the reference
+    /// registers it under. Copying `bandThemes.ts`'s keys would have missed every
+    /// one of them silently — the engine falls back rather than failing — so the
+    /// names are pinned here against what `ui/tokens.slint` imports.
+    #[test]
+    fn the_faces_are_the_names_the_files_declare() {
+        assert_eq!(BEATLES.body_face, "YellowSubmarine", "not 'BeatlesYellowSub'");
+        assert_eq!(BEATLES.genre_face, "Madie Roger", "not 'MadieRoger'");
+        assert_eq!(NIN.body_face, "FoundryGridnik", "not 'Gridnik'");
+        assert_eq!(NIRVANA.body_face, "Permanent Marker", "not 'PermanentMarker'");
+        assert_eq!(NIRVANA.hero_face, "Onyx");
+        assert_eq!(ZEPPELIN.hero_face, "Kashmir");
+        assert_eq!(NIN.genre_face, "Singothic");
+        // AND THE BEATLES' HERO HAS NONE. The entry names SgtPeppers and the
+        // reference vetoes it (`motif !== 'submarine'`), so the hero stays on the
+        // ordinary face while the tiles carry the theme's.
+        assert_eq!(BEATLES.hero_face, "", "§4: the SgtPeppers cut is unfinished");
+        // LED ZEPPELIN SCOPES ITSELF TO THE HERO. `fontScope: 'hero'` — a display
+        // cut at tile size is unreadable, and the theme reads from the hero.
+        assert_eq!(ZEPPELIN.body_face, "", "fontScope: 'hero'");
+    }
+
+    /// ONE GEAR EACH, AND LED ZEPPELIN KEEPS THE ORDINARY ONE — it replaces the
+    /// vehicle-in-motion tell instead, which is `bandArt.tsx`'s own arrangement
+    /// (`GEAR_BY_MOTIF` has no `runes` entry). The two must not both fire.
+    #[test]
+    fn the_gear_and_the_airship_are_alternatives() {
+        for (e, gear, airship) in [
+            (&ACDC, Gear::Bolt, false),
+            (&BEATLES, Gear::Drum, false),
+            (&ZEPPELIN, Gear::Plain, true),
+            (&NIRVANA, Gear::Smiley, false),
+            (&NIN, Gear::Spiral, false),
+        ] {
+            assert_eq!(e.gear, gear, "{}", e.id);
+            assert_eq!(e.airship, airship, "{}", e.id);
+            assert!(
+                !(e.gear != Gear::Plain && e.airship),
+                "{} must take the gear or the motion slot, not both",
+                e.id
+            );
+        }
     }
 
     /// Punctuation becomes a separator, never nothing — the difference between

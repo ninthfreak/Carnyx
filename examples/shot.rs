@@ -190,6 +190,16 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // It also covers a gap the earlier AC/DC shots left — both were 1024×614, so
     // no shot had ever put a themed genre on the centred track at all.
     ("acdc-portrait", 360, 800, false, State::Acdc, 0.0),
+    // THE OTHER FOUR BAND THEMES. Each is a display face, a genre line and a
+    // mark or two, and none of it is reachable from a property assertion — the
+    // whole point of a theme is what it looks like. Dark as well as light for
+    // The Beatles, whose cream card and drum hoop are stated on the ENTRY rather
+    // than inside `modes`, so they have to survive both schemes unchanged.
+    ("beatles", 1024, 614, false, State::Beatles, 0.0),
+    ("beatles-dark", 1024, 614, true, State::Beatles, 0.0),
+    ("zeppelin", 1024, 614, false, State::Zeppelin, 0.0),
+    ("nirvana", 1024, 614, false, State::Nirvana, 0.0),
+    ("nin", 1024, 614, false, State::Nin, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -230,6 +240,10 @@ enum State {
     Acdc,
     /// The four logo backings on one band, plus one on the hero.
     LogoPlates,
+    Beatles,
+    Zeppelin,
+    Nirvana,
+    Nin,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
     /// EIGHTEEN PRESETS. The strip is not limited, and this is the shot that
@@ -500,6 +514,26 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         // sign for the bolt to split.
         State::Acdc => {
             driver.set_radio_text_for_test("AC/DC - Back in Black");
+            driver.push_all();
+        }
+        // The same seam as AC/DC: straight into the decoded RadioText, which is
+        // what a theme resolves off, and then a republish — this arm runs before
+        // the window's first publish, so a value written into `State` alone would
+        // never reach the face.
+        State::Beatles => {
+            driver.set_radio_text_for_test("The Beatles - Here Comes the Sun");
+            driver.push_all();
+        }
+        State::Zeppelin => {
+            driver.set_radio_text_for_test("Led Zeppelin - Kashmir");
+            driver.push_all();
+        }
+        State::Nirvana => {
+            driver.set_radio_text_for_test("Nirvana - Smells Like Teen Spirit");
+            driver.push_all();
+        }
+        State::Nin => {
+            driver.set_radio_text_for_test("Nine Inch Nails - The Hand That Feeds");
             driver.push_all();
         }
         // PROPERTIES, NOT THE STORE, and that is a limit of the host rather than
