@@ -1325,6 +1325,44 @@ key → route → remap/halo/plate/gate), sRGB-guaranteed decode/encode via Skia
 cache + import hook + treatment enum, and the treatment picker UI. Numeric parity
 against the Python reference remains open — see #48.
 
+**Carnyx: THE PIPELINE WAS PORTED FIRST AND READ SECOND.** OKLab, the connected
+components, the box blur and all five stages went into `src/logos.rs` and were
+cached to `dark.png` plus a `k-*` ladder — and nothing ever looked them up.
+`store::dark_path` had zero callers in the crate, so a dark face drew the LIGHT
+logo on a near-black card while a correct adapted variant sat on disk beside it.
+
+Closed by `assign::read_for_theme`, which answers with the art AND with which of
+four backings it needs (`assign::Backing` → `LogoPlate` in Slint): the light
+face's own rule, a white fallback plate for a dark face with no variant yet, no
+plate at all for `remap`/`halo`/`as-is`, and the grey `#E6E6E6` slab for `plate`
+— which is the one treatment whose PNG is a keyed mark rather than a finished
+picture, and which drawn without its slab is a dark logo on a dark card.
+
+Three more pieces went with it. The art cache is keyed by theme, so a switch at
+dusk costs the republish and not eight decodes. `Job::Adapt` on the logo worker
+builds a variant for any station that has a logo and no cache — which is every
+logo assigned before this read existed, since `assign_from_urls` adapts at import
+and nothing had ever gone back for the rest — guarded once per station per run,
+CarFM's `regenTried`. And a theme change republishes the presets, because a logo
+is a different FILE per theme and no property binding can reach across that.
+
+`shots/logo-plates{,-dark}.png` are the evidence: the four backings side by side,
+which no property assertion can reach.
+
+ONE DELIBERATE DEVIATION, in `HeroLogo`. The reference pins the image height and
+lets the plate shrink-wrap it, so the outer box grows with the padding — 4dp for
+the white paper, 0.11 of the logo for the grey slab. On a logo-only hero at the
+wide track that is a plate 48dp taller than the card containing it. Here the
+outer box is fixed at what the light plate takes and the image gives up the
+difference; every proportion the reference states survives and none of them can
+reach the card's geometry.
+
+STILL NOT PORTED: the treatment picker. It is parity rather than a gap — CarFM's
+`LogoDarkPicker` is mounted in `LogoSearchOverlay` and never opened (`setDarkPick`
+appears twice in that file, once to declare the state and once to clear it), so
+its `visible` is always false. The override path it would feed,
+`pipeline::choose_treatment`, is ported and tested against the day one exists.
+
 ### 21–25. Band themes: registry + matcher / face wiring / 6-tap panel / fonts / per-motif art
 **[Design EASTER-EGGS-BUILD §12]** — Five themes resolved from RadioText: AC/DC,
 The Beatles, Led Zeppelin, Nirvana, Nine Inch Nails. Real supplied typefaces

@@ -3023,6 +3023,54 @@ pub mod assign {
     use super::store::{LogoStore, StoreError};
     use super::{prep, ImageCodec, Raster};
 
+    /// What a surface must draw BEHIND the art it has just been handed.
+    ///
+    /// THE PIPELINE'S OUTPUT IS ONLY HALF THE FEATURE. Three of the four
+    /// treatments produce a PNG that reads on the dark surface unaided, and the
+    /// fourth — `plate` — deliberately does not: it keys the paper away and
+    /// leaves the mark to be set on a light rounded slab the UI draws, so the
+    /// corners stay vector-sharp and the fill can follow the theme
+    /// (`stages::PlateParams`, "PARAMS, NOT PIXELS"). A caller that drew every
+    /// variant the same way would put a keyed dark-on-dark mark on a dark card
+    /// and see nothing.
+    ///
+    /// So the read below answers with the art AND with which of four cases it is
+    /// in. Every surface maps the four to its own geometry — the hero's padding
+    /// is not a chip's — but none of them re-derives the case.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Backing {
+        /// The light face. Whatever the surface already did.
+        Light,
+        /// The dark face with NO cached variant — the LIGHT art on a white plate,
+        /// so a logo that has not been adapted yet stays visible instead of
+        /// vanishing into the card. CarFM's `darkFallbackBg`.
+        Fallback,
+        /// The dark face, adapted, `remap` / `halo` / `as-is`: no plate and no
+        /// padding. These carry their own readability.
+        Bare,
+        /// The dark face, adapted, `plate`: the grey slab, padded and rounded.
+        Plate,
+    }
+
+    /// The grey slab the `plate` treatment is drawn on, `#E6E6E6`.
+    ///
+    /// `stages::plate_params().fill` is `[0.90, 0.90, 0.90]` and this is that
+    /// value at 8 bits, stated once here so the three surfaces that draw a plate
+    /// cannot drift from the stage that chose it.
+    pub const PLATE_FILL: [u8; 3] = [0xE6, 0xE6, 0xE6];
+
+    /// The fraction of the box the plate pads by, and its corner radius, from
+    /// `stages::plate_params()`.
+    ///
+    /// THE HERO USES 0.11 FOR PADDING, not this. CarFM's `HeroLogo` states
+    /// `px = Math.round(height * 0.11)` where every other surface takes the
+    /// stage's 0.09, and the preset chip takes a flat 8dp rather than a fraction
+    /// at all. Both are the reference's own numbers; they are named at the call
+    /// sites rather than folded in here, because a single "plate padding" would
+    /// be a value none of the three surfaces actually uses.
+    pub const PLATE_PAD_FRAC: f32 = 0.09;
+    pub const PLATE_RADIUS_FRAC: f32 = 0.14;
+
     /// Build `display.png` and its ladder from the stored master.
     ///
     /// Best-effort by design: on any failure the master itself stays the display
@@ -3127,9 +3175,21 @@ pub mod assign {
                         .put_original(base, &img.bytes, &img.mime, "manual")
                         .map_err(|e: StoreError| e.to_string())?;
                     prepare_renditions(store, codec, base);
-                    // Auto-pick only: Carnyx has no counterpart to CarFM's
-                    // LogoDarkPicker, so the treatment is stored with
-                    // chosen = false and a later re-adapt is free to change it.
+                    // AUTO-PICK ONLY, AND SO IS THE REFERENCE'S. CarFM ships a
+                    // `LogoDarkPicker` that renders every candidate on the real
+                    // dark ground and lets a human override the metric — the
+                    // handoff's priority #2, "build the picker before more
+                    // algorithm work", because a glance caught five errors the
+                    // metric scored as successes. It is mounted in
+                    // `LogoSearchOverlay` and it is NEVER OPENED: `setDarkPick`
+                    // appears twice in that file, once to declare the state and
+                    // once to clear it, so `visible` is always false.
+                    //
+                    // So `chosen = false` here is parity, not a gap, and the
+                    // override path it feeds (`pipeline::choose_treatment`) is
+                    // ported and tested against the day a picker exists to set
+                    // it. Carnyx has no picker either; building one would be new
+                    // work, not a port.
                     let _ = regenerate_dark(store, codec, base, LOGO_DARK_BG);
                     return Ok(());
                 }
@@ -3151,6 +3211,66 @@ pub mod assign {
     ) -> Option<Raster> {
         let path = store.display_path(base, box_dp, scale)?;
         codec.decode(&std::fs::read(path).ok()?)
+    }
+
+    /// The art for the face AS IT CURRENTLY STANDS, and the backing it needs.
+    ///
+    /// THIS IS THE READ THE DARK PIPELINE WAS BUILT FOR, and until it existed
+    /// every one of those passes was written to disk and then ignored:
+    /// `store::dark_path` had no callers at all, so a station's `dark.png` and
+    /// its whole `k-*` ladder sat in the cache while the face drew the light logo
+    /// on a near-black card. The adaptation was not missing — the lookup was.
+    ///
+    /// FALLING BACK IS NOT FAILING. Three things can leave a dark face with no
+    /// variant: a logo assigned before this read existed, an adaptation that has
+    /// been queued but has not finished, and a `dark.png` that will not decode.
+    /// None of them may show nothing, so each yields the LIGHT art with
+    /// [`Backing::Fallback`], which is the white plate the reference keeps for
+    /// exactly this case. The caller queues an adaptation; the driver sees a
+    /// legible logo in the meantime.
+    pub fn read_for_theme(
+        store: &LogoStore,
+        codec: &dyn ImageCodec,
+        base: &str,
+        box_dp: Option<f32>,
+        scale: f32,
+        dark: bool,
+    ) -> Option<(Raster, Backing)> {
+        if !dark {
+            return Some((read_rendition(store, codec, base, box_dp, scale)?, Backing::Light));
+        }
+        // The variant first. `dark_path` reads the meta index and no files, so a
+        // station with no variant costs a map lookup rather than a `stat`.
+        let adapted = store.dark_path(base, box_dp, scale).and_then(|(path, t)| {
+            let r = codec.decode(&std::fs::read(path).ok()?)?;
+            // `plate` is the ONLY treatment whose PNG is unreadable on its own —
+            // it is a keyed mark meant for a light slab. The other three are
+            // finished pictures.
+            Some((r, if t == Treatment::Plate { Backing::Plate } else { Backing::Bare }))
+        });
+        match adapted {
+            Some(hit) => Some(hit),
+            None => Some((read_rendition(store, codec, base, box_dp, scale)?, Backing::Fallback)),
+        }
+    }
+
+    /// Does this station want a dark variant it does not have?
+    ///
+    /// The trigger for the on-demand adaptation, and it is deliberately a pure
+    /// question about the STORE rather than about a decode: it answers from the
+    /// meta index with no file I/O, so it can be asked once per station per
+    /// republish on the event loop. The answer being true is what queues seconds
+    /// of pixel work onto the worker thread.
+    ///
+    /// BOTH HALVES ARE LOAD-BEARING, and the second one was missing until a test
+    /// asked about a station the resolver had recorded a MISS for. A miss writes
+    /// meta — that is the whole point of it, so the cascade does not re-ask for a
+    /// TTL — and carries no master, so "has meta, has no variant" said yes to a
+    /// station with no logo at all. The pipeline would have found nothing to
+    /// decode and cleared a cache that was already empty, once per missed station
+    /// per dark republish.
+    pub fn wants_dark_adaptation(store: &LogoStore, base: &str) -> bool {
+        store.has_original(base) && store.meta(base).is_some_and(|m| m.dark.is_none())
     }
 }
 
@@ -4042,12 +4162,23 @@ pub mod service {
         /// hero's display flags.
         Saved { base: String },
         SaveFailed { reason: String },
+        /// A dark variant was built for a station that already had a logo.
+        ///
+        /// SEPARATE FROM `Saved` ON PURPOSE. `Saved` is the answer to a Confirm:
+        /// it closes the logo window, clears the search and writes a log line.
+        /// This one arrives unprompted, seconds after a driver switched to the
+        /// dark theme, and must do nothing but repaint that station's art — a
+        /// background pass that dismissed an overlay the driver had opened in the
+        /// meantime would be a defect with no visible cause.
+        Adapted { base: String },
     }
 
     enum Job {
         Search { generation: u64, query: String },
         Assign { base: String, urls: Vec<String>, flags: HeroFlags },
         SavePrefs { base: String, flags: HeroFlags },
+        /// Build the dark variant for a station that has a logo and no cache.
+        Adapt { base: String },
         Stop,
     }
 
@@ -4107,6 +4238,24 @@ pub mod service {
                                 store.set_prefs(&base, flags);
                                 sink(Event::Saved { base });
                             }
+                            // SILENT ON FAILURE, unlike every job above it.
+                            // `regenerate_dark` returns `None` for a master that
+                            // will not decode and leaves any prior cache intact;
+                            // there is nothing for the driver to do about that
+                            // and nothing they asked for that has not happened.
+                            // The white plate they are already looking at stays.
+                            Job::Adapt { base } => {
+                                if assign::regenerate_dark(
+                                    &store,
+                                    &*codec,
+                                    &base,
+                                    super::dark::LOGO_DARK_BG,
+                                )
+                                .is_some()
+                                {
+                                    sink(Event::Adapted { base });
+                                }
+                            }
                         }
                     }
                 })
@@ -4134,6 +4283,19 @@ pub mod service {
                 }
             };
             let _ = self.tx.send(job);
+        }
+
+        /// Build a station's dark variant off the event loop.
+        ///
+        /// NOT GENERATION-CHECKED, and that is the difference between this and
+        /// every other job here. A search is an answer to a question the driver
+        /// may already have moved past; an adaptation is a cache fill whose value
+        /// does not expire — the station will still want it on the next drive.
+        /// Queued behind whatever the worker is doing, which is correct: a
+        /// Confirm the driver is watching outranks a repaint they have not
+        /// noticed is pending.
+        pub fn adapt(&self, base: &str) {
+            let _ = self.tx.send(Job::Adapt { base: base.to_string() });
         }
 
         /// Abandon anything in flight — the window closed.
@@ -5048,6 +5210,139 @@ mod tests {
         assert_eq!(m.fetched_at, 1_700_000_000_000);
         assert!(!s.has_original("WHHI"));
         assert!(s.display_path("WHHI", Some(128.0), 2.0).is_none());
+    }
+
+    /// THE READ THE WHOLE DARK PIPELINE EXISTS FOR.
+    ///
+    /// Every stage of it was ported, tested and cached before this — and then
+    /// never looked up: `store::dark_path` had no caller in the crate, so a
+    /// station's `dark.png` and its whole `k-*` ladder sat on disk while the face
+    /// drew the light logo on a near-black card. This holds the four answers
+    /// apart by the FILE each one reads, not by the enum it returns, because
+    /// returning `Plate` while handing back `display.png` would satisfy a weaker
+    /// test and still show the wrong picture.
+    #[test]
+    fn the_dark_face_reads_the_adapted_file_and_the_light_face_does_not() {
+        let tmp = TempDir::new("theme-read");
+        let s = store::LogoStore::new(tmp.path());
+        // Two distinguishable pictures: one pixel of each, different colours, so
+        // the raster that comes back names the file it came from.
+        let light = Raster { w: 1, h: 1, rgba: vec![10, 20, 30, 255] };
+        let adapted = Raster { w: 1, h: 1, rgba: vec![200, 210, 220, 255] };
+        s.put_original("WMGN", b"master", "image/png", "manual").unwrap();
+        s.put_derived("WMGN", "display.png", &encoded(&light)).unwrap();
+        s.set_display_meta("WMGN", 1, 1, Vec::new()).unwrap();
+
+        // ── No variant yet: the LIGHT art, flagged as a fallback. ──
+        let (r, b) =
+            assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
+        assert_eq!(r, light, "with no variant the dark face shows the light art");
+        assert_eq!(b, assign::Backing::Fallback, "and says so, so a plate goes behind it");
+        assert!(assign::wants_dark_adaptation(&s, "WMGN"), "which is what queues the pass");
+
+        // ── Adapted, `halo`: the ADAPTED file, and nothing behind it. ──
+        s.put_dark("WMGN", dark::stages::Treatment::Halo, &encoded(&adapted), false).unwrap();
+        let (r, b) =
+            assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
+        assert_eq!(r, adapted, "the dark face must read dark.png, not display.png");
+        assert_eq!(b, assign::Backing::Bare, "halo carries its own readability");
+        assert!(!assign::wants_dark_adaptation(&s, "WMGN"), "and wants no second pass");
+
+        // ── THE LIGHT FACE IS UNTOUCHED BY ANY OF IT. ──
+        let (r, b) =
+            assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, false).expect("light read");
+        assert_eq!(r, light, "a pale face never reads the adapted file");
+        assert_eq!(b, assign::Backing::Light);
+
+        // ── `plate` is the one treatment that needs a slab drawn for it. ──
+        s.put_dark("WMGN", dark::stages::Treatment::Plate, &encoded(&adapted), false).unwrap();
+        let (_, b) =
+            assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
+        assert_eq!(
+            b,
+            assign::Backing::Plate,
+            "a keyed mark on no plate is a dark logo on a dark card"
+        );
+    }
+
+    /// THE LADDER IS PER THEME, and the dark one is read with the dark sizes.
+    ///
+    /// `dark_path` picks its rung from `meta.dark_sizes`, which is a different
+    /// list from `meta.sizes` — a station can have a 128 display rung and no dark
+    /// rung at all, and asking the dark ladder with the light list would read a
+    /// `k-128.png` that was never written.
+    #[test]
+    fn each_theme_takes_its_own_rung_of_its_own_ladder() {
+        let tmp = TempDir::new("theme-ladder");
+        let s = store::LogoStore::new(tmp.path());
+        let full = Raster { w: 1, h: 1, rgba: vec![1, 1, 1, 255] };
+        let rung = Raster { w: 1, h: 1, rgba: vec![2, 2, 2, 255] };
+        s.put_original("WERN", b"master", "image/png", "manual").unwrap();
+        s.put_derived("WERN", "display.png", &encoded(&full)).unwrap();
+        s.set_display_meta("WERN", 1, 1, vec![128]).unwrap();
+        s.put_derived("WERN", "d-128.png", &encoded(&rung)).unwrap();
+        s.put_dark("WERN", dark::stages::Treatment::Remap, &encoded(&full), false).unwrap();
+
+        // The dark master, because no dark rung has been written yet even though
+        // a LIGHT one has.
+        let (r, _) =
+            assign::read_for_theme(&s, &RawCodec, "WERN", Some(128.0), 1.0, true).unwrap();
+        assert_eq!(r, full, "an empty dark ladder falls back to dark.png");
+        // The light rung for the same box, which proves the two lists are read
+        // separately rather than one standing in for the other.
+        let (r, _) =
+            assign::read_for_theme(&s, &RawCodec, "WERN", Some(128.0), 1.0, false).unwrap();
+        assert_eq!(r, rung, "the light face takes its 128 rung");
+
+        s.put_derived("WERN", "k-128.png", &encoded(&rung)).unwrap();
+        s.set_dark_sizes("WERN", vec![128]).unwrap();
+        let (r, _) =
+            assign::read_for_theme(&s, &RawCodec, "WERN", Some(128.0), 1.0, true).unwrap();
+        assert_eq!(r, rung, "and the dark face takes its own once it exists");
+    }
+
+    /// A VARIANT THAT WILL NOT DECODE IS A FALLBACK, NOT A BLANK TILE.
+    ///
+    /// The store says a variant exists — the meta index carries it — and the file
+    /// is unreadable. Answering `None` there would draw the call-sign box over a
+    /// station that has perfectly good light art, which is a worse regression than
+    /// the missing feature this read fixes.
+    #[test]
+    fn an_unreadable_dark_variant_falls_back_rather_than_showing_nothing() {
+        let tmp = TempDir::new("theme-corrupt");
+        let s = store::LogoStore::new(tmp.path());
+        let light = Raster { w: 1, h: 1, rgba: vec![9, 9, 9, 255] };
+        s.put_original("WMMM", b"master", "image/png", "manual").unwrap();
+        s.put_derived("WMMM", "display.png", &encoded(&light)).unwrap();
+        s.set_display_meta("WMMM", 1, 1, Vec::new()).unwrap();
+        s.put_dark("WMMM", dark::stages::Treatment::Remap, b"not an image", false).unwrap();
+
+        let (r, b) = assign::read_for_theme(&s, &RawCodec, "WMMM", None, 1.0, true).unwrap();
+        assert_eq!(r, light);
+        assert_eq!(b, assign::Backing::Fallback);
+        // AND IT IS NOT RE-QUEUED. The meta says a variant was built; re-running
+        // the pipeline would write the same unreadable file again.
+        assert!(!assign::wants_dark_adaptation(&s, "WMMM"));
+    }
+
+    /// A STATION WITH NO LOGO NEVER QUEUES SECONDS OF PIXEL WORK.
+    ///
+    /// `wants_dark_adaptation` gates the worker job, and the answer for a station
+    /// the store has never heard of has to be no — a preset band of eight
+    /// unassigned frequencies would otherwise queue eight full pipeline runs on
+    /// the first dark republish.
+    #[test]
+    fn only_a_station_with_a_logo_wants_adapting() {
+        let tmp = TempDir::new("theme-wants");
+        let s = store::LogoStore::new(tmp.path());
+        assert!(!assign::wants_dark_adaptation(&s, "WQLF"), "never seen: no");
+        s.record_miss("WQLF").unwrap();
+        assert!(
+            !assign::wants_dark_adaptation(&s, "WQLF"),
+            "a recorded MISS has meta and no master: still no"
+        );
+        s.put_original("WQLF", b"master", "image/png", "manual").unwrap();
+        assert!(assign::wants_dark_adaptation(&s, "WQLF"), "a real logo with no variant: yes");
     }
 
     #[test]

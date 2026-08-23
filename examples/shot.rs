@@ -16,15 +16,23 @@
 //! is vacuous. It has been used as one; it proves nothing.
 //!
 //! Compare a copy instead, and compare PIXELS rather than checksums: identical
-//! images have come out with different PNG bytes here.
+//! images have come out with different PNG bytes here. `tools/cmp-shots.py` is
+//! that comparison — it reads RAW RGBA BYTES, because PIL's `getbbox()` on an
+//! RGBA difference looks at the ALPHA CHANNEL ALONE and once called 63 of 63
+//! shots identical across a change that repainted a whole card.
 //!
-//! FOUR SHOTS ARE NOT DETERMINISTIC and will differ between two runs of an
-//! unchanged tree — they capture a moment in something that moves:
+//!     cp -r shots /tmp/base   # before
+//!     tools/cmp-shots.py /tmp/base shots hero-step-morph.png …
+//!
+//! A HANDFUL OF SHOTS ARE NOT DETERMINISTIC and will differ between two runs of
+//! an unchanged tree — they capture a moment in something that moves:
 //! `hero-step-morph` (a frame mid-travel), `logo-search-loading` (the spinner),
-//! and `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
+//! `audio-released` (the power button's ring, by a single LSB), and
+//! `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
 //! `long-radiotext` drifts too when the marquee is mid-scroll. Everything else
 //! reproduces exactly, which is what makes the set usable as a regression check
-//! at all.
+//! at all — and the way to tell the two apart is to render twice from ONE build
+//! and compare those, which is how `audio-released` was added to this list.
 
 use std::rc::Rc;
 
@@ -38,7 +46,7 @@ use slint::{
 
 use carnyx::app::App;
 use carnyx::fake::FakeLocation;
-use carnyx::{GenreColumn, LogoSearchState, NearbyState, NearbyTab, Overlay};
+use carnyx::{GenreColumn, LogoPlate, LogoSearchState, NearbyState, NearbyTab, Overlay};
 
 /// The five first-class surfaces of ANDROID §2, plus the states worth a second
 /// look: (name, width, height, dark, state).
@@ -158,6 +166,21 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // New shots go on the end, where they cannot move the ones already here.
     ("acdc", 1024, 614, false, State::Acdc, 0.0),
     ("acdc-dark", 1024, 614, true, State::Acdc, 0.0),
+    // THE FOUR BACKINGS A DARK-MODE LOGO CAN NEED, side by side. Nothing here is
+    // assertable: what a `plate` treatment needs is a grey slab UNDER it, and the
+    // failure it guards against — a keyed dark mark drawn on a transparent plate
+    // over a near-black card — is an invisible tile, which no property can
+    // report.
+    //
+    // THE LIGHT SHOT IS THE GEOMETRY CONTROL, not a second colour test. Three of
+    // the four are the same picture on a pale ground, and `fallback`'s white
+    // plate is invisible on it by definition; what the pair proves together is
+    // that the BOX does not move — the tiles keep one size across all four, and
+    // the hero card is the same card whether or not its logo carries a slab.
+    // That is the deviation in `HeroLogo` under test: the reference's plate
+    // shrink-wraps and would stand 48dp taller than the card holding it.
+    ("logo-plates", 1024, 614, false, State::LogoPlates, 0.0),
+    ("logo-plates-dark", 1024, 614, true, State::LogoPlates, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -188,6 +211,8 @@ enum State {
     /// controls or collapse the line.
     LongGenre,
     Acdc,
+    /// The four logo backings on one band, plus one on the hero.
+    LogoPlates,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
     /// EIGHTEEN PRESETS. The strip is not limited, and this is the shot that
@@ -459,6 +484,47 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         State::Acdc => {
             driver.set_radio_text_for_test("AC/DC - Back in Black");
             driver.push_all();
+        }
+        // PROPERTIES, NOT THE STORE, and that is a limit of the host rather than
+        // a shortcut. `art_for` needs an `ImageCodec` to turn a stored PNG into
+        // pixels, and there is none off the device — `Net` is `None` here, which
+        // is why no other shot has ever shown a real logo. So this drives the
+        // face the way the READ would have: one synthetic picture, four backings,
+        // exactly the four values `logos::assign::read_for_theme` can return.
+        //
+        // What it proves is the half no test can see — that the four are drawn
+        // differently, and that `plate` gets a slab under it. What it does NOT
+        // prove is which of the four a given station resolves to; that is
+        // `the_dark_face_reads_the_adapted_file_and_the_light_face_does_not`.
+        State::LogoPlates => {
+            let art = logo_art(2);
+            let rows: Vec<carnyx::Preset> = [
+                ("LIGHT", 88.7, LogoPlate::Light),
+                ("FALLBACK", 90.5, LogoPlate::Fallback),
+                ("BARE", 96.3, LogoPlate::Bare),
+                ("PLATE", 105.5, LogoPlate::Plate),
+            ]
+            .iter()
+            .map(|&(call, mhz, plate)| carnyx::Preset {
+                name: call.into(),
+                call: call.into(),
+                brand: slint::Color::from_rgb_u8(0x3B, 0x6E, 0x4A),
+                freq_mhz: mhz,
+                freq_label: format!("{mhz:.1}").into(),
+                has_logo: true,
+                logo: art.clone(),
+                plate,
+            })
+            .collect();
+            ui.set_presets(ModelRc::from(Rc::new(VecModel::from(rows))));
+            // The hero takes the one backing with geometry of its own — the grey
+            // slab is padded by 0.11 of the logo height and rounded by 0.14,
+            // neither of which any other surface uses.
+            ui.set_has_logo(true);
+            ui.set_logo(art);
+            ui.set_logo_plate(LogoPlate::Plate);
+            ui.set_show_call(false);
+            ui.set_show_freq(false);
         }
         // The press below arms the drag with no hold, which is the rule once the
         // mode is already open.

@@ -6,7 +6,7 @@
 // the spec's dp for the space actually available.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot, EggTheme } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme, LogoPlate } from "types.slint";
 import { StatusBar } from "status-bar.slint";
 import { HeroRow, RadioTextStrip } from "hero.slint";
 import { PresetsBand } from "presets.slint";
@@ -17,6 +17,7 @@ export component Face inherits Rectangle {
     in property <string> freq-label: "—";
     in property <image> logo;
     in property <bool> has-logo: false;
+    in property <LogoPlate> logo-plate: LogoPlate.light;
     in property <bool> show-call: true;
     in property <bool> show-freq: true;
     in property <bool> saved: false;
@@ -209,6 +210,7 @@ export component Face inherits Rectangle {
                 freq-label: root.freq-label;
                 logo: root.logo;
                 has-logo: root.has-logo;
+                logo-plate: root.logo-plate;
                 show-call: root.show-call;
                 show-freq: root.show-freq;
                 saved: root.saved;
@@ -264,6 +266,7 @@ export component Face inherits Rectangle {
                 freq-label: root.freq-label;
                 logo: root.logo;
                 has-logo: root.has-logo;
+                logo-plate: root.logo-plate;
                 show-call: root.show-call;
                 show-freq: root.show-freq;
                 saved: root.saved;

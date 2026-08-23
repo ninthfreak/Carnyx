@@ -122,6 +122,19 @@ export global Pal {
     // §4.7 veils: a light grey one over the hero card, a darker one over the rest.
     out property <color> hero-veil:   Pal.dark ? #0000006B : #48526042;
     out property <color> screen-veil: Pal.dark ? #00000080 : #18202E57;
+    // ── The two plates a logo can be set on ──
+    //
+    // NEITHER IS THEMED and neither passes through `flat()`, because both exist
+    // to be a KNOWN ground rather than a surface: `logo-fallback` is the white
+    // paper an un-adapted logo was drawn for, and `logo-plate` is the slab the
+    // `plate` treatment keys its mark out onto — `stages::plate_params().fill`,
+    // `[0.90, 0.90, 0.90]`, at 8 bits. Both are already neutral, so `flat()`
+    // would return them unchanged on a dead face anyway. A BAND THEME MUST NOT
+    // REACH THEM EITHER: "Back in Black" turns the accent silver and the card
+    // near-black, and a logo's paper is not part of that — it is the ground the
+    // artwork was drawn against.
+    out property <color> logo-fallback: #FFFFFF;
+    out property <color> logo-plate: #E6E6E6;
     // The power button is the ONE element that keeps its colour when the face is
     // dead, so it is deliberately outside `flat()`.
     out property <color> power-on: #FFAE1A;

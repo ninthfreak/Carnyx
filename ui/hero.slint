@@ -8,7 +8,7 @@
 // preset tiles and peek cards).
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot, EggTheme } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme, LogoPlate } from "types.slint";
 import { PeekCard } from "presets.slint";
 import { StarIcon, PowerIcon, BoltIcon } from "icons.slint";
 
@@ -170,6 +170,8 @@ component HeroLogo inherits Rectangle {
     in property <length> logo-h;
     in property <length> max-w;
     in property <float> scale: 1.0;
+    /// Which backing this art needs, decided in Rust. See `LogoPlate`.
+    in property <LogoPlate> plate: LogoPlate.light;
 
     // Before the source is known, assume the 16/10 landscape shape the rest of
     // the face uses for logo plates, so the plate can never render one frame at
@@ -177,17 +179,64 @@ component HeroLogo inherits Rectangle {
     property <float> aspect: (root.logo.height > 0)
         ? (root.logo.width / root.logo.height) : 1.6;
 
-    width: Math.min(root.max-w, Math.round(root.logo-h / 1px * root.aspect) * 1px) + 16px * root.scale;
-    height: root.logo-h + 8px * root.scale;
-    border-radius: Metrics.s(16) * root.scale;
-    background: #FFFFFF;
+    // ── THE PLATE, WHICH THE HERO SIZES ITSELF ──
+    //
+    // The white paper is 8dp either side and 4dp top and bottom — the hero's own
+    // numbers, and the ones this card has always drawn. The grey `plate` slab is
+    // a FRACTION OF THE LOGO instead, and a bigger one than any other surface
+    // uses: 0.11 where `plate_params()` says 0.09, which is the reference's
+    // `HeroLogo` (`px = Math.round(height * 0.11)`) and not a typo for the stage
+    // constant. A keyed mark at hero size needs the extra breathing room.
+    //
+    // `logo-h` already carries the card's morph scale, so the fractions must not
+    // multiply by it again; the two fixed dp must.
+    property <bool> plated: root.plate == LogoPlate.plate;
+    property <length> pad-x: root.plated
+        ? Math.round(root.logo-h / 1px * 0.11) * 1px
+        : (root.plate == LogoPlate.bare ? 0px : 8px * root.scale);
+    property <length> pad-y: root.plated
+        ? root.pad-x
+        : (root.plate == LogoPlate.bare ? 0px : 4px * root.scale);
+
+    // ── THE PLATE MAY NOT GROW THE CARD, and the reference's would ──
+    //
+    // A DELIBERATE DEVIATION, and the only one here. CarFM pins the IMAGE to
+    // `heroLogoH` and lets the plate shrink-wrap it, so the outer box grows with
+    // the padding: 4dp for the white paper, 0.11 of the logo for the grey slab.
+    // On a logo-only hero at the wide track `logo-h` is 256 against a card that
+    // measures 262 — the white plate fills it exactly — so the grey one would
+    // stand 48dp taller than the card that contains it. Faithful, and visibly
+    // broken.
+    //
+    // So the OUTER box is fixed at what the light plate takes, which is what the
+    // card was laid out around, and the IMAGE gives up the difference. Every
+    // proportion the reference states survives — 0.11 padding, 0.14 radius, the
+    // logo's own aspect — and none of them can reach the card's geometry. The
+    // light and fallback cases resolve to exactly the arithmetic that was here
+    // before, so an unthemed hero is untouched.
+    property <length> box-h: root.logo-h + 8px * root.scale;
+    property <length> art-h: Math.min(root.logo-h, root.box-h - root.pad-y * 2);
+
+    width: Math.min(root.max-w, Math.round(root.art-h / 1px * root.aspect) * 1px) + root.pad-x * 2;
+    height: root.art-h + root.pad-y * 2;
+    border-radius: root.plated
+        ? Math.round(root.logo-h / 1px * 0.14) * 1px
+        : Metrics.s(16) * root.scale;
+    // WHITE IS THE FALLBACK, NOT THE DEFAULT, on a face that can be either
+    // theme. Light keeps the paper the artwork was drawn for; a dark face with
+    // no variant yet keeps it too, so the logo stays visible while the
+    // adaptation runs; an adapted `remap`/`halo`/`as-is` needs nothing behind
+    // it and gets nothing; `plate` gets the grey slab.
+    background: root.plated
+        ? Pal.logo-plate
+        : (root.plate == LogoPlate.bare ? transparent : Pal.logo-fallback);
     clip: true;
 
     Image {
         source: root.logo;
         image-fit: contain;
-        width: parent.width - 16px * root.scale;
-        height: root.logo-h;
+        width: parent.width - root.pad-x * 2;
+        height: root.art-h;
     }
 }
 
@@ -232,6 +281,8 @@ export component HeroCard inherits Rectangle {
     in property <string> freq-label;
     in property <image> logo;
     in property <bool> has-logo: false;
+    /// What goes behind `logo`, decided in Rust. See `LogoPlate`.
+    in property <LogoPlate> logo-plate: LogoPlate.light;
     /// Per-station hero options (§6.4). Both default OFF for a station that HAS a
     /// logo, so the logo fills the card; a no-logo hero always shows both.
     in property <bool> show-call: true;
@@ -340,6 +391,7 @@ export component HeroCard inherits Rectangle {
                     logo-h: root.logo-h;
                     max-w: root.logo-max-w;
                     scale: root.scale;
+                    plate: root.logo-plate;
                 }
             }
             if root.show-call && root.ident != "": Text {
@@ -554,6 +606,7 @@ export component HeroRow inherits Rectangle {
     in property <string> freq-label;
     in property <image> logo;
     in property <bool> has-logo: false;
+    in property <LogoPlate> logo-plate: LogoPlate.light;
     in property <bool> show-call: true;
     in property <bool> show-freq: true;
     in property <bool> saved: false;
@@ -913,6 +966,7 @@ export component HeroRow inherits Rectangle {
         freq-label: root.outgoing.freq-label;
         logo: root.outgoing.logo;
         has-logo: root.outgoing.has-logo;
+        logo-plate: root.outgoing.plate;
         show-call: root.outgoing.show-call;
         show-freq: root.outgoing.show-freq;
         saved: root.outgoing.saved;
@@ -982,6 +1036,7 @@ export component HeroRow inherits Rectangle {
         freq-label: root.freq-label;
         logo: root.logo;
         has-logo: root.has-logo;
+        logo-plate: root.logo-plate;
         show-call: root.show-call;
         show-freq: root.show-freq;
         saved: root.saved;
@@ -1013,6 +1068,7 @@ export component HeroRow inherits Rectangle {
         freq-label: root.freq-label;
         logo: root.logo;
         has-logo: root.has-logo;
+        logo-plate: root.logo-plate;
         show-call: root.show-call;
         show-freq: root.show-freq;
         saved: root.saved;

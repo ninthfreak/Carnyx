@@ -1,5 +1,5 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset, HeroSnapshot, Overlay, EggTheme } from "types.slint";
+import { Preset, HeroSnapshot, Overlay, EggTheme, LogoPlate } from "types.slint";
 import { Face } from "face.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn, NearbyTab } from "nearby.slint";
 import {
@@ -24,6 +24,11 @@ export component AppWindow inherits Window {
     /// whenever that station's own hero flags say to show the call sign anyway.
     in property <image> logo;
     in property <bool> has-logo: false;
+    /// What goes behind that logo — the light face's paper, the dark face's
+    /// white fallback while an adaptation is pending, nothing at all for an
+    /// adapted variant that reads on its own, or the grey slab the `plate`
+    /// treatment is keyed for. Decided in Rust; see `LogoPlate`.
+    in property <LogoPlate> logo-plate: LogoPlate.light;
     /// The station's hero flags (`logos::prefs::HeroFlags`). Meaningful only
     /// with a logo up: a no-logo hero always shows both rows.
     in property <bool> show-call: true;
@@ -254,6 +259,7 @@ export component AppWindow inherits Window {
         freq-label: root.freq-label;
         logo: root.logo;
         has-logo: root.has-logo;
+        logo-plate: root.logo-plate;
         show-call: root.show-call;
         show-freq: root.show-freq;
         saved: root.saved;

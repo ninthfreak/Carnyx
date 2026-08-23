@@ -5,6 +5,30 @@
 // is computed in Rust and arrives here as a finished value. Slint draws; it does
 // not decide.
 
+/// What a surface draws BEHIND a logo, decided in Rust by `logos::assign`.
+///
+/// A DARK-ADAPTED LOGO IS NOT ONE PICTURE, it is four, and only three of them
+/// are finished. `remap`, `halo` and `as-is` come off the pipeline readable on a
+/// near-black card and want nothing behind them; `plate` is deliberately the
+/// odd one — the mark is keyed out of its paper and is meant to be set on a
+/// light slab this side draws, so its corners stay vector-sharp and its fill can
+/// follow the theme. Drawing all four the same way puts a dark mark on a dark
+/// card and shows the driver an empty tile.
+///
+/// The fourth value is not a treatment at all: it is the honest answer for a
+/// station whose adaptation has not happened yet.
+export enum LogoPlate {
+    /// The light face. Whatever the surface already did.
+    light,
+    /// The dark face with no cached variant — the LIGHT art, kept legible on a
+    /// white plate while the adaptation runs. CarFM's `darkFallbackBg`.
+    fallback,
+    /// The dark face, adapted, `remap` / `halo` / `as-is`: nothing behind it.
+    bare,
+    /// The dark face, adapted, `plate`: the grey slab, padded and rounded.
+    plate,
+}
+
 /// One preset, as the band and the peek cards need it.
 export struct Preset {
     /// Stored preset name, used for accessibility and as the logo lookup key.
@@ -23,6 +47,8 @@ export struct Preset {
     /// A real logo asset. Empty unless `has-logo`.
     logo: image,
     has-logo: bool,
+    /// Which of the four backings `logo` needs. See [`LogoPlate`].
+    plate: LogoPlate,
 }
 
 /// The hero exactly as it stood BEFORE a preset step — the card that flies out
@@ -42,6 +68,10 @@ export struct HeroSnapshot {
     freq-label: string,
     logo: image,
     has-logo: bool,
+    /// Carried with the art it belongs to. The card that flies out keeps the
+    /// backing it was drawn with — recomputing it from the LIVE theme would be
+    /// right by accident, and wrong the moment a morph outlives a theme change.
+    plate: LogoPlate,
     show-call: bool,
     show-freq: bool,
     saved: bool,

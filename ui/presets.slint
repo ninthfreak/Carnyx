@@ -7,7 +7,7 @@
 // identical space. The peek cards use the exact same treatment as the tiles.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset } from "types.slint";
+import { Preset, LogoPlate } from "types.slint";
 import { MagnifierTower, LogoSearchIcon } from "icons.slint";
 
 // The colored call-letter box that stands in for a logo. The letters are fitted
@@ -40,11 +40,40 @@ component CallSignBox inherits Rectangle {
 component PlateBox inherits Rectangle {
     in property <Preset> preset;
     in property <length> radius: 12px;
+    /// Preset chips (`fill`) pad a plate by a FLAT 8dp; peek cards pad by a
+    /// fraction of their own box. Both are the reference's numbers — see `pad`.
+    in property <bool> fill: false;
 
-    border-radius: root.radius;
+    // ── WHAT GOES BEHIND THE ART (§ dark-mode logos) ──
+    //
+    // Four cases, decided in Rust and arriving as `preset.plate`; this only
+    // spends the answer. `light` and `bare` are the same picture from here — a
+    // borderless transparent plate, the image carrying the identity — but they
+    // are different FACTS, and collapsing them would leave nothing to notice
+    // when a dark face has no variant to be bare with.
+    property <bool> plated: root.preset.has-logo && root.preset.plate == LogoPlate.plate;
+    property <length> pad: root.plated
+        ? (root.fill
+            ? 8px
+            : Math.round(Math.max(root.width, root.height) / 1px * 0.09) * 1px)
+        : 0px;
+
+    // THE PLATE'S RADIUS IS ITS OWN, not the tile's. `plate_params().radius_frac`
+    // is 0.14 of the SHORT side, which on a landscape box is tighter than the
+    // 12/15dp a chip states — the slab is a smaller rounded rectangle sitting
+    // inside the tile, not the tile itself.
+    border-radius: root.plated && !root.fill
+        ? Math.round(Math.min(root.width, root.height) / 1px * 0.14) * 1px
+        : root.radius;
     clip: true;
-    // Real logo → borderless and transparent; the image carries the identity.
-    background: root.preset.has-logo ? transparent : Pal.flat(root.preset.brand);
+    // Real logo → borderless and transparent, UNLESS the dark face needs a
+    // ground: white while the adaptation is still pending, grey for the keyed
+    // `plate` mark. No logo → the brand-coloured call-sign box, as before.
+    background: !root.preset.has-logo
+        ? Pal.flat(root.preset.brand)
+        : root.preset.plate == LogoPlate.fallback
+            ? Pal.logo-fallback
+            : root.plated ? Pal.logo-plate : transparent;
 
     if root.preset.has-logo: Image {
         source: root.preset.logo;
@@ -59,8 +88,10 @@ component PlateBox inherits Rectangle {
         // colour. Fix it by desaturating the asset at load and keeping both
         // variants, not by reaching for a filter Slint does not have.
         image-fit: contain;
-        width: parent.width;
-        height: parent.height;
+        x: root.pad;
+        y: root.pad;
+        width: parent.width - root.pad * 2;
+        height: parent.height - root.pad * 2;
     }
     if !root.preset.has-logo: CallSignBox {
         width: parent.width;
@@ -93,6 +124,7 @@ export component PresetPlate inherits VerticalLayout {
         vertical-stretch: 1;
         preset: root.preset;
         radius: root.radius;
+        fill: true;
     }
     if !root.fill: PlateBox {
         width: root.plate-w;

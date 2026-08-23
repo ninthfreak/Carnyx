@@ -44,7 +44,7 @@
 //! thumbnail into the RDS decoder. Same wake, same drain, same UI thread.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -61,8 +61,8 @@ use crate::station::{brand_color, clean_call, format_mhz, plate_label};
 use crate::stations::{NearbyPicker, NearbyState, StationDb, StationRow};
 use crate::{fake, settings};
 use crate::{
-    AppWindow, BatteryState, DiagAction, EggTheme, GenreColumn, HeroSnapshot, NearbyStation,
-    NearbyTab,
+    AppWindow, BatteryState, DiagAction, EggTheme, GenreColumn, HeroSnapshot, LogoPlate,
+    NearbyStation, NearbyTab,
     Overlay, Preset, TunerAction, TunerDetail, TunerGlyph, TunerSource,
 };
 
@@ -638,14 +638,26 @@ struct State {
     /// The thread that owns every socket and every pixel pass. `None` on the
     /// host, which is what makes `run_logo_search` fall back to the fake.
     worker: Option<service::Worker>,
-    /// Decoded art, keyed by call-sign base and the ladder box it was read at.
+    /// Decoded art, keyed by call-sign base, the ladder box it was read at, and
+    /// WHICH THEME it was read for.
     ///
     /// NOT an optimisation. `push_presets` runs on every tune, every fix and
     /// every drain, and it renders up to eight tiles; without this, each of
     /// those would be a file read and a PNG decode on the UI thread of a 32-bit
     /// head unit. A `None` value is cached too — "this station has no art" is
     /// the common answer and is worth not re-deriving.
-    art: HashMap<(String, u32), Option<slint::Image>>,
+    ///
+    /// THE THEME IS PART OF THE KEY, not a reason to clear the map. Light and
+    /// dark are different FILES for the same station — `d-128.png` against
+    /// `k-128.png` — so a driver switching theme at dusk would otherwise pay for
+    /// eight decodes, and switching back would pay again. Keyed, both sets stay
+    /// warm and a switch costs the republish alone. It is also what makes the
+    /// backing safe to cache: a `LogoPlate` belongs to one theme's answer.
+    art: HashMap<(String, u32, bool), Option<(slint::Image, LogoPlate)>>,
+    /// Stations already queued for a dark adaptation this run. See
+    /// `request_dark_adaptation` — without it a master that will not decode
+    /// re-queues on every republish.
+    adapt_tried: HashSet<String>,
     /// The open logo window's own art, at full size.
     ///
     /// A `Raster` rather than an `Image` because `logos::ui::apply` wants one,
@@ -1133,6 +1145,7 @@ impl App {
                 codec,
                 worker,
                 art: HashMap::new(),
+                adapt_tried: HashSet::new(),
                 logo_art: None,
                 picker_at: None,
                 numpad: String::new(),
@@ -1405,7 +1418,14 @@ impl App {
                     // Every rung goes, not just one: the hero's entry and the
                     // tile's are different keys holding the same stale station.
                     let key = base.to_uppercase();
-                    s.art.retain(|(b, _), _| *b != key);
+                    s.art.retain(|(b, _, _), _| *b != key);
+                    // AND THE ONE-SHOT GUARD GOES WITH IT. A new master is a new
+                    // picture: `put_original` wipes the old dark treatment, and
+                    // `assign_from_urls` adapts the replacement at import — but
+                    // if THAT pass failed, this station is owed another attempt
+                    // and `adapt_tried` would otherwise refuse it for the rest of
+                    // the run.
+                    s.adapt_tried.remove(&key);
                     s.settings.log.push(&stamp(), &format!("logo saved: {key}"));
                 }
                 // Dismiss and tear down, in that order — `close_logo_search`
@@ -1415,6 +1435,24 @@ impl App {
                 self.push_hero();
                 self.push_presets();
                 self.push_settings();
+            }
+            // A BACKGROUND PASS FINISHED. It repaints one station's art and
+            // touches nothing else — no overlay is dismissed, no search state is
+            // cleared, nothing is announced. The driver did not ask for this and
+            // should notice only that a logo stopped sitting on a white plate.
+            service::Event::Adapted { base } => {
+                {
+                    let mut s = self.state.borrow_mut();
+                    let key = base.to_uppercase();
+                    // The DARK rungs only. The light entries are still correct —
+                    // an adaptation writes `dark.png` and the `k-*` ladder and
+                    // leaves `display.png` alone — and dropping them would buy a
+                    // decode per tile for a picture that has not changed.
+                    s.art.retain(|(b, _, dark), _| !(*dark && *b == key));
+                    s.settings.log.push(&stamp(), &format!("adapted {key} for dark"));
+                }
+                self.push_hero();
+                self.push_presets();
             }
             service::Event::SaveFailed { reason } => {
                 {
@@ -2226,7 +2264,12 @@ impl App {
         let art = self.art_for(&base, None);
         let flags = self.hero_flags(&base, art.is_some());
         ui.set_has_logo(art.is_some());
-        ui.set_logo(art.unwrap_or_default());
+        // The backing travels WITH the art, so a station with none leaves the
+        // property at `light` — the hero draws no plate without a logo anyway,
+        // and a stale `plate` left behind would size the next one wrongly for a
+        // frame.
+        ui.set_logo_plate(art.as_ref().map_or(LogoPlate::Light, |(_, p)| *p));
+        ui.set_logo(art.map(|(i, _)| i).unwrap_or_default());
         ui.set_show_call(flags.show_call);
         ui.set_show_freq(flags.show_freq);
     }
@@ -2243,7 +2286,7 @@ impl App {
             .iter()
             .map(|p| p.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone()))
             .collect();
-        let art: Vec<Option<slint::Image>> =
+        let art: Vec<Option<(slint::Image, LogoPlate)>> =
             bases.iter().map(|b| self.art_for(b, Some(TILE_BOX_DP))).collect();
 
         let s = self.state.borrow();
@@ -2583,7 +2626,12 @@ impl App {
     /// host), no logo for this station, an unreadable file, a decode that
     /// failed. Each one means the same thing to the face — draw the call-sign
     /// box.
-    fn read_art(&self, base: &str, box_dp: Option<f32>) -> Option<Raster> {
+    fn read_art(
+        &self,
+        base: &str,
+        box_dp: Option<f32>,
+        dark: bool,
+    ) -> Option<(Raster, crate::logos::assign::Backing)> {
         // Both handles cloned out BEFORE the read: this decodes a PNG through
         // JNI, and holding a `RefCell` borrow across that is a lock held across
         // a call into another runtime.
@@ -2592,7 +2640,7 @@ impl App {
             (s.store.clone(), s.codec.clone()?)
         };
         let scale = self.ui().window().scale_factor();
-        crate::logos::assign::read_rendition(&store, &*codec, base, box_dp, scale)
+        crate::logos::assign::read_for_theme(&store, &*codec, base, box_dp, scale, dark)
     }
 
     /// The image a surface should draw for `base`, or `None` for the call-sign
@@ -2610,11 +2658,16 @@ impl App {
     /// station". CarFM's `useStationLogo` never reads it. A hand-assigned logo is
     /// something the driver chose on purpose; a preference about background
     /// fetching has no business hiding it.
-    fn art_for(&self, base: &str, box_dp: Option<f32>) -> Option<slint::Image> {
+    fn art_for(&self, base: &str, box_dp: Option<f32>) -> Option<(slint::Image, LogoPlate)> {
         if base.is_empty() {
             return None;
         }
-        let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32);
+        // THE THEME IS READ ONCE PER LOOKUP, from the palette rather than from
+        // `settings.theme`: `Theme::System` sets neither, so the setting can say
+        // one thing while the face shows another, and what a logo has to match is
+        // the face.
+        let dark = self.ui().global::<crate::Pal>().get_dark();
+        let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32, dark);
         // Cloned out in its own statement for the reason spelt out in
         // `drain_events`: an `if let` scrutinee holds its borrow across the body
         // on edition 2021. This one is only a shared borrow and the read below
@@ -2623,9 +2676,48 @@ impl App {
         if let Some(hit) = hit {
             return hit;
         }
-        let image = self.read_art(&key.0, box_dp).as_ref().map(crate::logos::ui::to_image);
-        self.state.borrow_mut().art.insert(key, image.clone());
-        image
+        let read = self.read_art(&key.0, box_dp, dark);
+        let art = read.map(|(r, backing)| (crate::logos::ui::to_image(&r), plate_of(backing)));
+        self.state.borrow_mut().art.insert(key.clone(), art.clone());
+        // A DARK FACE SHOWING THE WHITE FALLBACK IS A CACHE MISS, not a state to
+        // live in, so ask the worker to build the variant. This is the on-demand
+        // half of CarFM's `useDarkLogo`, and it is what covers every logo saved
+        // before the dark pipeline existed — `assign_from_urls` adapts at import
+        // and nothing has ever gone back for the rest.
+        if matches!(art, Some((_, LogoPlate::Fallback))) {
+            self.request_dark_adaptation(&key.0);
+        }
+        art
+    }
+
+    /// Queue one station's dark adaptation, at most once per run.
+    ///
+    /// GUARDED BECAUSE THE TRIGGER REPEATS. `art_for` asks on every republish, and
+    /// a station whose master will not decode never stops answering "no variant" —
+    /// so without the guard a dark face would queue seconds of pixel work per tile
+    /// per tune, forever. CarFM's `regenTried` set, for the same reason.
+    ///
+    /// The set is never pruned: it is bounded by the number of stations that have
+    /// logos, and a driver who assigns a new one gets a fresh adaptation from
+    /// `assign_from_urls` at import rather than from here.
+    fn request_dark_adaptation(&self, base: &str) {
+        {
+            let mut s = self.state.borrow_mut();
+            if s.worker.is_none() || !s.adapt_tried.insert(base.to_string()) {
+                return;
+            }
+            // The store is asked LAST, so a station with no logo at all cannot
+            // reach the worker — `wants_dark_adaptation` is a meta lookup, but
+            // queueing on it without the guard above would still repeat.
+            if !crate::logos::assign::wants_dark_adaptation(&s.store, base) {
+                return;
+            }
+            s.settings.log.push(&stamp(), &format!("adapting {base} for dark"));
+        }
+        let s = self.state.borrow();
+        if let Some(w) = s.worker.as_ref() {
+            w.adapt(base);
+        }
     }
 
     /// The hero flags a station actually gets, once it is known whether it has
@@ -3006,12 +3098,16 @@ impl App {
             if let Some(theme) = settings::Theme::parse(t.as_str()) {
                 app.state.borrow_mut().settings.theme = theme;
                 app.apply_theme(theme);
-                // A BAND THEME STATES ITS PALETTE PER SCHEME, so the cut has to
-                // be re-resolved when the scheme moves under it: switch to dark
-                // with AC/DC playing and "Back in Black" only arrives here.
-                // Nothing else republishes on a theme change — every other token
-                // is derived inside `Pal` and turns on its own.
+                // TWO THINGS DO NOT DERIVE THEMSELVES FROM `Pal`, and both are
+                // republished here. A band theme states its palette per scheme,
+                // so the cut has to be re-resolved when the scheme moves under
+                // it — switch to dark with AC/DC playing and "Back in Black"
+                // only arrives on this line. And a logo is a different FILE per
+                // theme: the dark face reads `k-*`/`dark.png` where the light
+                // one reads `d-*`/`display.png`, and no property binding can
+                // reach across that. Every other token turns on its own.
                 app.push_hero();
+                app.push_presets();
             }
             app.push_settings();
         });
@@ -3850,7 +3946,15 @@ impl App {
         //
         // Read OUTSIDE any borrow — `read_art` decodes through JNI.
         let key = base.to_uppercase();
-        let existing = if key.is_empty() { None } else { self.read_art(&key, None) };
+        // FALSE, NOT THE LIVE THEME. This is the picture the window shows beside
+        // "Current logo", and what it is showing is the MASTER the driver
+        // assigned — the thing a new pick would replace. A dark-adapted variant
+        // there would offer to replace something that is not a file.
+        let existing = if key.is_empty() {
+            None
+        } else {
+            self.read_art(&key, None, false).map(|(r, _)| r)
+        };
         let stored = if key.is_empty() {
             None
         } else {
@@ -4016,6 +4120,7 @@ impl App {
             freq_label: ui.get_freq_label(),
             logo: ui.get_logo(),
             has_logo: ui.get_has_logo(),
+            plate: ui.get_logo_plate(),
             show_call: ui.get_show_call(),
             show_freq: ui.get_show_freq(),
             saved: ui.get_saved(),
@@ -4362,7 +4467,7 @@ fn step_anchor(asserted: Option<f32>, dial: f32, presets: &[Slot]) -> i32 {
 /// a chip decodes a 128 px PNG rather than a 512 px one.
 const TILE_BOX_DP: f32 = 128.0;
 
-fn to_preset(slot: &Slot, logo: Option<slint::Image>) -> Preset {
+fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
     let call = slot.call();
     Preset {
         name: slot.name().into(),
@@ -4373,7 +4478,24 @@ fn to_preset(slot: &Slot, logo: Option<slint::Image>) -> Preset {
         freq_mhz: slot.mhz,
         freq_label: format_mhz(slot.mhz).into(),
         has_logo: logo.is_some(),
-        logo: logo.unwrap_or_default(),
+        plate: logo.as_ref().map_or(LogoPlate::Light, |(_, p)| *p),
+        logo: logo.map(|(i, _)| i).unwrap_or_default(),
+    }
+}
+
+/// A read's answer as the face's own vocabulary.
+///
+/// TWO ENUMS FOR ONE FACT, and deliberately: `logos::assign::Backing` belongs to
+/// a module that has never heard of Slint — that separation is what lets the
+/// whole pipeline run in a unit test with no crates at all — and `LogoPlate` is
+/// generated from `types.slint`. This is the one place they meet.
+fn plate_of(b: crate::logos::assign::Backing) -> LogoPlate {
+    use crate::logos::assign::Backing;
+    match b {
+        Backing::Light => LogoPlate::Light,
+        Backing::Fallback => LogoPlate::Fallback,
+        Backing::Bare => LogoPlate::Bare,
+        Backing::Plate => LogoPlate::Plate,
     }
 }
 
@@ -5325,8 +5447,19 @@ mod tests {
         // A 1×1 image is enough: what is under test is that the flag follows the
         // Option, not what the pixels are.
         let px = crate::logos::ui::to_image(&Raster { w: 1, h: 1, rgba: vec![0, 0, 0, 255] });
-        let dressed = to_preset(&slot, Some(px));
+        let dressed = to_preset(&slot, Some((px.clone(), LogoPlate::Plate)));
         assert!(dressed.has_logo);
+        // AND THE BACKING RIDES WITH THE ART. A tile that took the picture and
+        // dropped the answer to "what goes behind it" would put a keyed `plate`
+        // mark on a transparent plate — a dark logo on a dark card.
+        assert_eq!(dressed.plate, LogoPlate::Plate);
+        assert_eq!(
+            to_preset(&slot, Some((px, LogoPlate::Bare))).plate,
+            LogoPlate::Bare,
+            "the tile reports what it was handed, not a constant"
+        );
+        // No art, no plate: a stale one would size the next logo wrongly.
+        assert_eq!(bare.plate, LogoPlate::Light);
     }
 
     /// The resolution is by POSITION, and the assertion that matters is the
