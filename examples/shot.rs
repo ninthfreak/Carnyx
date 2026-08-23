@@ -200,6 +200,13 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("zeppelin", 1024, 614, false, State::Zeppelin, 0.0),
     ("nirvana", 1024, 614, false, State::Nirvana, 0.0),
     ("nin", 1024, 614, false, State::Nin, 0.0),
+    // THE HERO FIT, ON THE TRACK THAT DOES NOT NEED IT. Nirvana carries the
+    // largest `heroScale` there is (1.5) and its Onyx is the face that overran
+    // the wide card hardest, so it is the one that shows whether the fit stayed
+    // a CAP rather than becoming a shrink: the tall card sizes to its own
+    // content and has nothing to overflow, and the lettering must still read as
+    // a display cut rather than as body type.
+    ("nirvana-portrait", 360, 800, false, State::Nirvana, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]

@@ -62,6 +62,15 @@ pub struct Egg {
     pub call_sign_bolt: bool,
     /// Horns overhang the hero card's top corners (EASTER-EGGS §2.1).
     pub horns: bool,
+    /// `stereoArtL` / `stereoArtR` — a fan of bolts stands in for the stereo
+    /// pill's speaker cones.
+    ///
+    /// ONE THEME HAS THIS, and the reference gates on the art's own presence
+    /// (`egg?.stereoArtL ? … : null`, `CarFmFace.tsx:1206`) rather than on
+    /// "a theme is showing". Only the AC/DC row names the two files, so every
+    /// other theme keeps the cones. Carried as a flag because the two PNGs are
+    /// bundled by name on this side and there is nothing for a path to select.
+    pub stereo_bolts: bool,
 
     // ── TYPE ─────────────────────────────────────────────────────────────────
     //
@@ -247,6 +256,7 @@ pub const PLAIN: Egg = Egg {
     accent: 0,
     call_sign_bolt: false,
     horns: false,
+    stereo_bolts: false,
     suppress_logos: false,
     body_face: "",
     hero_face: "",
@@ -283,6 +293,7 @@ pub const ACDC: Egg = Egg {
     accent: 0xE31E24,
     call_sign_bolt: true,
     horns: true,
+    stereo_bolts: true,
     suppress_logos: true,
     // Squealer on the hero and the RadioText. The genre line is NOT Squealer —
     // `eggGenreFont` reads `genreFont` alone and this entry names none — which
@@ -768,6 +779,45 @@ mod tests {
                 e.id
             );
         }
+    }
+
+    /// THE BOLTS BELONG TO ONE THEME, and this test exists because they were
+    /// gated on "a theme is showing" and appeared on all five. The reference
+    /// gates on the ART BEING NAMED — `egg?.stereoArtL ? … : null` — and only the
+    /// AC/DC row names `assets/fan-l2.png`, so every other theme keeps the
+    /// ordinary speaker cones.
+    #[test]
+    fn only_acdc_replaces_the_stereo_cones() {
+        assert_eq!(
+            REGISTRY
+                .iter()
+                .filter(|(e, _)| e.stereo_bolts)
+                .map(|(e, _)| e.id)
+                .collect::<Vec<_>>(),
+            vec!["AC/DC"],
+        );
+        // And the base carries none, so an unthemed face cannot reach them
+        // through a row that forgot to state it.
+        const { assert!(!PLAIN.stereo_bolts, "the base states no stereoArtL") };
+    }
+
+    /// A THEMED HERO TAKES NO MORE VERTICAL ROOM THAN AN ORDINARY ONE, which is
+    /// what `HeroCard`'s fit enforces at draw time against measured line boxes.
+    /// The registry side of it is that `heroScale` is a SCALE-UP and never a
+    /// shrink: a value below 1 would ask the fit to grow type, which it cannot
+    /// do, and would silently render at the ordinary size instead.
+    #[test]
+    fn hero_scale_never_asks_for_less_than_the_ordinary_size() {
+        for e in [&ACDC, &BEATLES, &ZEPPELIN, &NIRVANA, &NIN] {
+            assert!(e.hero_scale >= 1.0, "{} heroScale {}", e.id, e.hero_scale);
+        }
+        assert_eq!(ZEPPELIN.hero_scale, 1.3);
+        assert_eq!(NIRVANA.hero_scale, 1.5);
+        assert_eq!(NIN.hero_scale, 1.3);
+        // The two that state none sit at the ordinary size, so the fit is a
+        // no-op for them — which is what the shots show.
+        assert_eq!(ACDC.hero_scale, 1.0);
+        assert_eq!(BEATLES.hero_scale, 1.0);
     }
 
     /// Punctuation becomes a separator, never nothing — the difference between

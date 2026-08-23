@@ -194,7 +194,7 @@ export component StereoCluster inherits VerticalLayout {
                 Rectangle {
                     width: Metrics.stereo-wave-w;
                     height: Metrics.stereo-wave-h;
-                    if !root.blank && root.egg.on: Image {
+                    if !root.blank && root.egg.stereo-bolts: Image {
                         source: @image-url("art/acdc-bolts-left.png");
                         image-fit: contain;
                         width: parent.width;
@@ -208,7 +208,7 @@ export component StereoCluster inherits VerticalLayout {
                         // which is what `stereoArtFilter` was doing by hand.
                         colorize: root.locked ? Pal.blue : Pal.border;
                     }
-                    if !root.blank && !root.egg.on: StereoCone {
+                    if !root.blank && !root.egg.stereo-bolts: StereoCone {
                         flip: true;
                         color: root.locked ? Pal.blue : Pal.border;
                         stroke-w: root.locked ? 1.8 : 1.1;
@@ -251,14 +251,14 @@ export component StereoCluster inherits VerticalLayout {
                 Rectangle {
                     width: Metrics.stereo-wave-w;
                     height: Metrics.stereo-wave-h;
-                    if !root.blank && root.egg.on: Image {
+                    if !root.blank && root.egg.stereo-bolts: Image {
                         source: @image-url("art/acdc-bolts-right.png");
                         image-fit: contain;
                         width: parent.width;
                         height: parent.height;
                         colorize: root.locked ? Pal.blue : Pal.dim;
                     }
-                    if !root.blank && !root.egg.on: StereoCone {
+                    if !root.blank && !root.egg.stereo-bolts: StereoCone {
                         color: root.locked ? Pal.blue : Pal.dim;
                         stroke-w: root.locked ? 1.8 : 1.1;
                         w: Metrics.stereo-wave-w;

@@ -1563,6 +1563,39 @@ the ink comes from the palette. That is what makes them follow the accent to
 silver; the reference's `stereoArtFilter` (`grayscale(1) brightness(2.3)
 contrast(0.85)`) resolves to pure white on this art, not silver.
 
+**They are AC/DC's alone**, and for one round they were not: the two slots were
+gated on `egg.on` — "a theme is showing" — so all five themes lost their speaker
+cones to bolts. The reference gates on THE ART BEING NAMED
+(`egg?.stereoArtL ? … : null`, `CarFmFace.tsx:1206`) and only the AC/DC row names
+`assets/fan-l2.png`, which is now a `stereo_bolts` flag on the `Egg`, carried
+through `EggTheme`. `shots/beatles.png`, `zeppelin`, `nirvana` and `nin` show
+cones; `acdc` and `acdc-dark` show bolts.
+
+**And the themed heroes fit their card.** `heroScale` sets a display cut at the
+size the body face reads at — 1.3 for Led Zeppelin and Nine Inch Nails, 1.5 for
+Nirvana — and on the wide track the card it lands in is 98% of the hero row and
+does not grow (CarFM's `heroCardWide: { height: '98%' }` says the same). Measured
+on the shots, Led Zeppelin's frequency finished 15px BELOW the card's bottom
+edge, Nirvana's 2px below and Nine Inch Nails' 2px inside, against 26px of
+clearance on an unthemed card: the digits were drawn outside the panel they
+belong to. `HeroCard` now measures the call sign and the frequency through four
+hidden gauges and scales both down until the themed pair is no taller than the
+SAME two lines set in the ordinary face at the ordinary size.
+
+The yardstick is that ordinary pair and NOT the card, which took a wrong turn to
+learn: an unthemed card's two line boxes already come to 234dp inside a 213dp box
+and it renders perfectly, because a layout short of room compresses leading long
+before it touches ink. Fitting to the card shrank every ordinary station on the
+face by 9% — twenty-nine shots moved — to solve a problem five themes have. The
+cap leaves the scale-up intact (Kashmir lands at 1.13x, Gridnik 1.27, Onyx 1.38)
+and is a no-op for AC/DC and The Beatles, whose heroes are already at or under
+the ordinary height. It is stated in gauges rather than against the card's height
+for a second reason as well: `resolved-card-h` names the card's own preferred
+height in its tall-track branch, and Slint's binding-loop check is STATIC, so
+reading it from inside the card compiled nothing at all.
+`shots/nirvana-portrait.png` is the tall-track evidence — there the card sizes to
+its own content, and the cap is what keeps the two tracks reading the same.
+
 Two values in `modes.dark` are deliberately NOT carried: `card.sub` is declared
 in the registry and read by no component, and `uiAccentOn` has, in `eggTokens`'
 own words, "no home in the app palette".

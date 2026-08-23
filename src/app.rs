@@ -2215,6 +2215,7 @@ impl App {
                 genre_pulse: opt_rgb(nonzero(e.genre_pulse)),
                 call_bolt: e.call_sign_bolt,
                 horns: e.horns,
+                stereo_bolts: e.stereo_bolts,
                 suppress_logo: e.suppress_logos,
                 body_face: e.body_face.into(),
                 hero_face: e.hero_face.into(),

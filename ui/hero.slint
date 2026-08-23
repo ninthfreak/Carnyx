@@ -287,7 +287,14 @@ export component HeroCard inherits Rectangle {
     /// comparison — thirty-seven unthemed shots moved for a change that should
     /// have touched five.
     property <float> hero-mul: root.egg.hero-scale > 0 ? root.egg.hero-scale : 1.0;
-    property <length> call-size: Metrics.call-size * root.scale * root.hero-mul;
+    /// The call sign's size BEFORE the fit and after it. See `fit`.
+    property <length> call-size-nat: Metrics.call-size * root.scale * root.hero-mul;
+    property <length> call-size: root.call-size-nat * root.fit;
+    /// The frequency's, likewise. `freqScale` is stated by Nine Inch Nails alone,
+    /// at 0.95; zero is "unstated" for the same reason `hero-scale` is.
+    property <length> freq-size-nat: Metrics.freq-size * root.scale
+        * (root.egg.freq-scale > 0 ? root.egg.freq-scale : 1.0);
+    property <length> freq-size: root.freq-size-nat * root.fit;
     /// `heroTrack` — stated only by Nine Inch Nails, at 9dp. Everything else
     /// keeps the -1 the ordinary call sign has always had.
     property <length> call-track: root.egg.hero-track > 0px
@@ -384,7 +391,10 @@ export component HeroCard inherits Rectangle {
     ///
     /// A previous note here said this was infeasible because a marquee measures
     /// its own text. That was wrong: the marquee is `RadioTextStrip`, a SIBLING of
-    /// this card, not a child of it. Nothing inside this component measures text.
+    /// this card, not a child of it. The two gauges below DO measure text, and
+    /// they multiply through this number like everything else — their font sizes
+    /// carry `root.scale` and the height they are compared against arrives
+    /// pre-scaled, so the ratio they produce is the same at every size.
     in property <float> scale: 1.0;
 
     /// Drawn, but it takes no taps.
@@ -419,6 +429,101 @@ export component HeroCard inherits Rectangle {
                 : (root.tall ? 188 : Metrics.landscape ? 215 : 256)),
         Math.round(Metrics.h * 0.42) * 1px) * root.scale;
     property <length> logo-max-w: root.width - Metrics.s(root.tall ? 52 : 60) * root.scale;
+
+    // ── THE FIT: A THEMED HERO TAKES NO MORE ROOM THAN AN ORDINARY ONE ──
+    //
+    // `heroScale` sets a display cut at the size the body face reads at — 1.3 for
+    // Led Zeppelin and Nine Inch Nails, 1.5 for Nirvana — and on the wide track
+    // the card it lands in is 98% of the hero row and does NOT grow with it
+    // (CarFM says the same: `heroCardWide: { height: '98%' }`). MEASURED ON THE
+    // SHOTS, Led Zeppelin's frequency finished 15px BELOW the card's bottom edge,
+    // Nirvana's 2px below, Nine Inch Nails' 2px inside it, against 26px of
+    // clearance on an unthemed card. The digits were drawn outside the panel they
+    // belong to. Same answer the genre line got when its string ran long: give up
+    // POINTS before giving up the content.
+    //
+    // THE YARDSTICK IS THE ORDINARY HERO, NOT THE CARD, and that took a wrong
+    // turn to learn. Measuring the content against the card's inner height looks
+    // obviously right and is not: an UNTHEMED card's two line boxes already come
+    // to 234dp inside a 213dp box and it renders perfectly, because a layout that
+    // is short of room compresses leading long before it touches ink. Fitting to
+    // the card therefore shrank every ordinary station on the face by 9% to solve
+    // a problem five themes have. What the card can hold is exactly what it is
+    // already known to hold, so that is what a theme is held to: the SAME two
+    // line boxes set in the ordinary face at the ordinary size.
+    //
+    // It leaves the scale-up intact — Kashmir still lands at 1.13x, Gridnik 1.27,
+    // Onyx 1.38 — and it is a no-op for AC/DC and The Beatles, whose heroes are
+    // already at or under the ordinary height.
+    //
+    // WHY MEASURE AT ALL, RATHER THAN CAP `hero-scale`. The faces are not
+    // interchangeable at a size: Nirvana overflows at 1.5x with 103px of ink
+    // where Nine Inch Nails overflows at 1.3x with 80px, because Onyx, Kashmir
+    // and Gridnik each carry their own ascent and descent. The multiplier does
+    // not predict the overflow; the line box does.
+    //
+    // NOT A CYCLE, by the same split the genre gauge uses: all four gauges are
+    // pinned to `Metrics` and the theme, and depend on no layout — not even the
+    // card's own height, which is why the tall track needs no exemption. The
+    // gauges feed `fit`; the drawn text reads `fit`. Nothing reads back.
+    /// Each term is dropped when its row is not drawn: a card carrying a LOGO has
+    /// no call-sign line, and holding its frequency against one that is not there
+    /// would be a fit against nothing.
+    property <bool> freq-shown: root.scanning || root.show-freq || root.ident == "";
+    /// THE TWO LINE BOXES ALONE. The layout spacing between them and the
+    /// frequency's 6dp lead-in are the same constants on both sides of the ratio
+    /// and do not scale with the type, so carrying them would under-shrink by
+    /// exactly their weight.
+    property <length> fit-natural:
+        (root.lettering ? call-gauge.preferred-height : 0px)
+        + (root.freq-shown ? freq-gauge.preferred-height : 0px);
+    property <length> fit-plain:
+        (root.lettering ? call-plain.preferred-height : 0px)
+        + (root.freq-shown ? freq-plain.preferred-height : 0px);
+    property <float> fit: (root.fit-natural > root.fit-plain && root.fit-natural > 0px)
+        ? root.fit-plain / root.fit-natural
+        : 1.0;
+
+    // EXPLICIT GEOMETRY KEEPS A GAUGE OUT OF THE FOLD — the rule the genre
+    // gauge and the STEREO pill's invisible reserve both rely on. `visible: false`
+    // rather than `opacity: 0`: an invisible element still reports a preferred
+    // size and, unlike a transparent one, costs no layer and no draw.
+    //
+    // THE STRINGS ARE THE DRAWN ONES, because a line box is a property of the
+    // glyphs in it — a face whose digits carry a descender measures taller than
+    // its capitals do, and the frequency is all digits. Both pairs read the same
+    // two strings so the ratio compares like with like.
+    call-gauge := Text {
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.ident;
+        font-family: root.call-face; font-weight: Font.bold;
+        font-size: root.call-size-nat;
+    }
+    freq-gauge := Text {
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.freq-label;
+        font-family: root.egg.freq-face != "" ? root.egg.freq-face : root.call-face;
+        font-weight: Font.bold;
+        font-size: root.freq-size-nat;
+    }
+    /// The same two lines as an unthemed card sets them. This pair is what the
+    /// card is known to hold.
+    call-plain := Text {
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.ident;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.call-size * root.scale;
+    }
+    freq-plain := Text {
+        x: 0px; y: 0px; width: 0px; height: 0px;
+        visible: false;
+        text: root.freq-label;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.freq-size * root.scale;
+    }
 
     border-width: 1px * root.scale;
     border-radius: 28px * root.scale;
@@ -581,7 +686,7 @@ export component HeroCard inherits Rectangle {
 
         // Always show the frequency when there is no name, even if the user turned
         // the frequency line off — otherwise the hero would be blank.
-        if root.scanning || root.show-freq || root.ident == "": Rectangle {
+        if root.freq-shown: Rectangle {
             height: freq.preferred-height + 6px * root.scale;
             freq := Text {
                 y: 6px * root.scale;
@@ -608,8 +713,7 @@ export component HeroCard inherits Rectangle {
                 // why AC/DC's 88.7 is Squealer in `egg-acdc-dark.png`.
                 font-family: root.egg.freq-face != "" ? root.egg.freq-face : root.call-face;
                 font-weight: Font.bold;
-                font-size: Metrics.freq-size * root.scale
-                    * (root.egg.freq-scale > 0 ? root.egg.freq-scale : 1.0);
+                font-size: root.freq-size;
                 letter-spacing: root.egg.on ? 1px * root.scale : 0px;
                 color: root.freq-ink;
                 stroke: root.egg.outline-ink;
