@@ -267,7 +267,31 @@ export component HeroCard inherits Rectangle {
     /// The bolt takes the lettering's colour unless the theme names one — the
     /// reference states it as `dark ? '#C9C9C9' : heroCardText`, so the light cut
     /// leaves it transparent and falls through to exactly that.
+    ///
+    /// NOT `lettering` BELOW, DELIBERATELY. Under the outline treatment the call
+    /// sign is filled in the card's own black and the bolt sits between its two
+    /// halves — inheriting that fill would erase it. The reference hits the same
+    /// wall and answers the same way: "the bolt inherits that through
+    /// currentColor — so it needs its own fill there", and gives it the
+    /// outline's STROKE.
     property <color> bolt: root.egg.bolt-ink.alpha > 0 ? root.egg.bolt-ink : root.ink;
+
+    /// What the call sign and the frequency are actually painted in.
+    ///
+    /// `nameOutline.fill` when a theme states one, and the ordinary colour
+    /// otherwise — the card's text for the lettering, amber for the frequency.
+    /// AMBER IS A FIXED SAFETY COLOUR AND THIS IS ITS ONE EXCEPTION: §2.1 says
+    /// "call sign + frequency filled `#0B0B0B` with a 1.1px `#C9C9C9` outline",
+    /// the prototype spreads `outlineFx` over `freqStyle` AFTER its `color:
+    /// t.amber` so the fill wins, and `screenshots/egg-acdc-dark.png` renders
+    /// 88.7 hollow rather than gold. Stated three times over, so it is the rule
+    /// and not an oversight.
+    property <color> lettering-ink: root.egg.outline-fill.alpha > 0
+        ? root.egg.outline-fill
+        : root.ink;
+    property <color> freq-ink: root.egg.outline-fill.alpha > 0
+        ? root.egg.outline-fill
+        : Pal.amber;
 
     /// The call sign already cut in two for the AC/DC bolt to stand between.
     ///
@@ -415,7 +439,7 @@ export component HeroCard inherits Rectangle {
             font-family: root.call-face; font-weight: Font.bold;
             font-size: root.call-size;
             letter-spacing: -1px * root.scale;
-            color: root.ink;
+            color: root.lettering-ink;
             // `nameOutline` — drawn OUTSIDE the glyph so the letterform keeps its
             // own weight. A zero width is no outline, which is the light cut.
             stroke: root.egg.outline-ink;
@@ -438,7 +462,7 @@ export component HeroCard inherits Rectangle {
                 font-family: root.call-face; font-weight: Font.bold;
                 font-size: root.call-size;
                 letter-spacing: -1px * root.scale;
-                color: root.ink;
+                color: root.lettering-ink;
                 stroke: root.egg.outline-ink;
                 stroke-width: root.egg.outline-w * root.scale;
                 stroke-style: outside;
@@ -457,7 +481,7 @@ export component HeroCard inherits Rectangle {
                 font-family: root.call-face; font-weight: Font.bold;
                 font-size: root.call-size;
                 letter-spacing: -1px * root.scale;
-                color: root.ink;
+                color: root.lettering-ink;
                 stroke: root.egg.outline-ink;
                 stroke-width: root.egg.outline-w * root.scale;
                 stroke-style: outside;
@@ -473,9 +497,21 @@ export component HeroCard inherits Rectangle {
                 width: parent.width;
                 text: root.freq-label;
                 horizontal-alignment: center;
+                // KNOWN THIN, AND LEFT THAT WAY FOR NOW. §2.1 outlines the
+                // frequency as well as the call sign, and it does — but a 1.1px
+                // hairline around Atkinson's fat digits peaks at a quarter of
+                // `#C9C9C9` where the reference's peaks at all of it, because
+                // the reference sets the frequency in the theme's own face and
+                // a blackletter's thin strokes let the outline close. Putting
+                // `call-face` here did not change the render, so the digits are
+                // not coming from Squealer and that needs its own look. Not this
+                // handoff's business; recorded rather than chased.
                 font-family: Font.face; font-weight: Font.bold;
                 font-size: Metrics.freq-size * root.scale;
-                color: Pal.amber;
+                color: root.freq-ink;
+                stroke: root.egg.outline-ink;
+                stroke-width: root.egg.outline-w * root.scale;
+                stroke-style: outside;
             }
             // NO TOUCH AREA. The frequency used to open a standalone keypad modal;
             // the mini-handoff (§2, §7) removes that entry point outright — the

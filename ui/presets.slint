@@ -1148,7 +1148,7 @@ export component PresetsBand inherits Rectangle {
                 border-radius: self.width / 2;
                 background: root.reordering ? Pal.blue : Pal.nearby-disc;
                 border-width: root.reordering ? 0px : 1px;
-                border-color: Pal.border;
+                border-color: Pal.nearby-rim;
                 opacity: nearby-touch.pressed ? 0.7 : 1.0;
                 nearby-touch := TouchArea {
                     clicked => {

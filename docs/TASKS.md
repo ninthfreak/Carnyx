@@ -60,6 +60,54 @@ are listed at the top.)*
 
 # PENDING (31)
 
+### 85. Apply design handoff v1.16.1
+**[HANDOFF v1.16.1, 2026-08-23]** — Two visual changes, plus a re-shot reference
+set. The bundle POSTDATES the CarFM app, which still carries the old blue-navy
+dark ramp, so on these lines Carnyx is first and the bundle wins; where the app
+is still newer, the app still wins.
+
+**The dark theme is lifted and de-tinted** (ANDROID §3). The blue-navy ramp goes
+to a neutral charcoal one, one step lighter, with a wider page-to-panel step so
+cards still read as raised: page `#161E29`→`#24272C`, panel `#212B38`→`#33373D`,
+raised `#2A3644`→`#43474E`, dim `#8B97A7`→`#A3A9B2`. Text, amber, blue and every
+border / fill / meter ALPHA are untouched and ride the new bases. Light theme
+untouched. Verified by sampling `shots/head-unit-dark.png` against
+`screenshots/surface-head-unit-dark.png`: page, panel and raised match exactly.
+
+**The genre line is ~175%** (ANDROID §4.1, which states the PTY size for the
+first time). 15→26 wide, 19→33 tall; a band theme's line 33 inline / 47 centred
+at weight 800. The inline row was a fixed 36dp that clipped the larger text and
+is now a 36dp MINIMUM. The 200dp width cap is UNCHANGED, so a long PTY elides
+sooner than it did — "Adult Album Alternative and Classic Rock" now reads "Adult
+Album …" on the wide track. That is the design's own arithmetic, not a defect
+here, but it is the one visible cost of the change.
+
+**Back in Black sits on the lifted page** (EASTER-EGGS §2.1) — `#24272C`, not
+true black, so the near-black hero card reads AGAINST a grey field instead of
+merging into it. Encoded as "the theme restates no page" rather than as that hex.
+
+Two things the handoff did not ask for, corrected because its numbers exposed
+them:
+
+- The nearby magnifier's disc was one step too light. ANDROID §11 says "light
+  strokes on a raised disc" and the live source it tells you to render from has
+  always disagreed — disc `panel`, lens `raised` — and `CarFmLive` passes empty
+  strings for the dark set, so `RadioFace`'s own defaults ship. Its rim is now
+  its own token (`#D5DAE1` / `#565B63`) rather than the general border alpha.
+- `LOGO_DARK_BG` moved with `panel`, and the gate composites onto it. Cached dark
+  variants are now keyed by `(logoId, backgroundColour)` as DARK-MODE-LOGOS
+  specifies, so every variant judged against the old surface is re-adapted.
+
+**Not carried:** the demo-data change (101.5's RadioText) is prototype mock
+content — Carnyx's corpus is CarFM's captured group shapes, not the prototype's.
+
+**Open, and NOT part of this handoff:** the themed frequency's outline reads as a
+hairline. §2.1 outlines the call sign and the frequency alike, and both are; but
+the reference sets the frequency in the theme's own face, where a blackletter's
+thin strokes let a 1.1px outline close, and in Atkinson it peaks at a quarter of
+`#C9C9C9`. Setting `call-face` on it changed nothing, so the digits are not
+coming from Squealer and that wants its own look.
+
 ### 15. Wire a genre source for Nearby
 **[NO DETAIL FOUND]** — The Nearby picker (`src/components/carfm/NearbyPicker.tsx`)
 lists stations by frequency and signal but shows no genre/PTY. The face gets PTY

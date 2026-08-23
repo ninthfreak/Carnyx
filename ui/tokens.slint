@@ -1,10 +1,18 @@
-// Design tokens — the CarFM face, verbatim.
+// Design tokens — the CarFM face, verbatim, EXCEPT WHERE THE DESIGN HAS MOVED ON.
 //
-// Every value here is copied from CarFM's `src/components/carfm/tokens.ts` and
-// the token ramp in `CarFmFace.tsx`. The shipped app is the reference, NOT the
-// design bundle (docs/design/handoff, v1.10.0): the bundle predates the app on
-// several values — `amberFill` is 0.12/0.15 there and 0.08/0.10 in the app — and
-// the brief is a face identical to the one currently on the head unit.
+// Every value here was copied from CarFM's `src/components/carfm/tokens.ts` and
+// the token ramp in `CarFmFace.tsx`, on the rule that the shipped app is the
+// reference and the design bundle is not: the bundle in this tree was v1.10.0,
+// it predated the app on several values — `amberFill` is 0.12/0.15 there and
+// 0.08/0.10 in the app — and the brief was a face identical to the one on the
+// head unit.
+//
+// THE v1.16.1 HANDOFF INVERTS THAT FOR THE DARK RAMP. It postdates the CarFM
+// app, which still carries the old blue-navy values, so on these lines the
+// bundle is ahead and Carnyx is first: the dark theme is lifted one step and
+// de-tinted to neutral charcoal, with a wider page-to-panel gap so cards still
+// read as raised at the higher base. The rule is unchanged — the newest
+// statement wins — and where the app is still newer, the app still wins.
 //
 // Sizes are logical pixels, which Slint maps to Android dp, so the spec's dp
 // numbers transfer 1:1.
@@ -31,6 +39,9 @@ export global Font {
     out property <string> egg-acdc: "Squealer";
     out property <int> regular: 400;
     out property <int> bold: 700;
+    /// A band theme's genre line asks for ExtraBold. No 800 cut is bundled, so
+    /// the engine resolves it to the 700 above; see `GenreText`.
+    out property <int> heavy: 800;
 }
 
 export global Band {
@@ -86,7 +97,18 @@ export global Pal {
     in-out property <color> egg-page-bg: transparent;
     in-out property <color> egg-accent: transparent;
 
-    out property <color> bg:          Pal.flat(Pal.dark ? #161E29 : #EEF1F5);
+    // ── THE DARK RAMP (ANDROID §3, v1.16.0) ──
+    //
+    // LIFTED AND DE-TINTED. The blue-navy ramp — #161E29 / #212B38 / #2A3644 —
+    // is replaced by a neutral charcoal one, one step lighter overall and with a
+    // WIDER page-to-panel step (15 points, against 11) so a card still reads as
+    // raised at the higher base value.
+    //
+    // WHAT DID NOT MOVE IS THE POINT OF THE CHANGE: text, amber, blue and every
+    // border / fill / meter alpha are untouched, and the alphas simply ride the
+    // new base values. So the contrast decisions the design already made hold,
+    // and only the ground under them changed.
+    out property <color> bg:          Pal.flat(Pal.dark ? #24272C : #EEF1F5);
     // THE PAGE'S OWN GROUND, which is `bg` UNLESS a theme repaints it — and the
     // two are separate because the reference keeps them separate. `pageBg` is
     // threaded to the stage and the face (CarFmFace.tsx:1284, :1289) and to the
@@ -95,10 +117,10 @@ export global Pal {
     // LogoSearchOverlay:150) and so keep the ordinary ground on a black page.
     // One token for both would have quietly repainted those three as well.
     out property <color> page:        Pal.egg-page-bg.alpha > 0 ? Pal.egg-page-bg : Pal.bg;
-    out property <color> panel:       Pal.flat(Pal.dark ? #212B38 : #FFFFFF);
-    out property <color> raised:      Pal.flat(Pal.dark ? #2A3644 : #F5F7FA);
+    out property <color> panel:       Pal.flat(Pal.dark ? #33373D : #FFFFFF);
+    out property <color> raised:      Pal.flat(Pal.dark ? #43474E : #F5F7FA);
     out property <color> text:        Pal.flat(Pal.dark ? #E9EEF4 : #1B222C);
-    out property <color> dim:         Pal.flat(Pal.dark ? #8B97A7 : #67717F);
+    out property <color> dim:         Pal.flat(Pal.dark ? #A3A9B2 : #67717F);
     // Frequency amber is a FIXED safety colour (ANDROID §3) — never themed, never
     // part of the accent system. It differs by theme only for contrast.
     out property <color> amber:       Pal.flat(Pal.dark ? #FFB833 : #C9760A);
@@ -115,9 +137,27 @@ export global Pal {
     out property <color> backdrop:    Pal.flat(Pal.dark ? #0C1218 : #DCE0E6);
     out property <color> meter-empty: Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.10);
     out property <color> scroll-thumb: Pal.flat-a(#808690, 0.6);
+    // ── The nearby magnifier: strokes, disc, lens, rim ──
+    //
+    // THE SHIPPED VALUES, WHICH ARE NOT THE ONES THE PROSE GIVES. ANDROID §11
+    // says "light strokes on a raised disc, lens <the same>" and has said so
+    // since v1.10; the live source it tells you to render from has always
+    // disagreed, giving the disc `panel` and the LENS `raised` so the glass sits
+    // a step off the metal it is set in. `CarFmLive` passes empty strings for all
+    // four dark values, so what ships is `RadioFace`'s own defaults, and those
+    // are the values below.
+    //
+    // The disc was taking the prose's word for it and was one step too light.
+    // Corrected here rather than left, because the handoff that moved the ramp is
+    // the same document that made the two readings distinguishable.
     out property <color> nearby-line:  Pal.flat(Pal.dark ? #E9EEF4 : #111111);
-    out property <color> nearby-disc:  Pal.flat(Pal.dark ? #2A3644 : #FFFFFF);
-    out property <color> nearby-glass: Pal.flat(Pal.dark ? #2A3644 : #DCE7F5);
+    out property <color> nearby-disc:  Pal.flat(Pal.dark ? #33373D : #FFFFFF);
+    out property <color> nearby-glass: Pal.flat(Pal.dark ? #43474E : #DCE7F5);
+    // The rim is its OWN colour, not the general border alpha. `Pal.border` was
+    // standing in for it and lands within a couple of points on the new dark
+    // ramp — but it is a stated value, and a stand-in that happens to agree is
+    // still a stand-in.
+    out property <color> nearby-rim:   Pal.flat(Pal.dark ? #565B63 : #D5DAE1);
 
     // §4.7 veils: a light grey one over the hero card, a darker one over the rest.
     out property <color> hero-veil:   Pal.dark ? #0000006B : #48526042;
@@ -199,7 +239,28 @@ export global Metrics {
     out property <length> stereo-min-w: Metrics.s(Metrics.tall ? 196 : 158);
 
     // Small status type floors at legibility, not proportion (ANDROID §10).
-    out property <length> pty-font: Math.max(12px, Metrics.s(Metrics.tall ? 19 : 15));
+    //
+    // ── THE GENRE LINE, ~175% OF WHAT IT WAS (ANDROID §4.1, v1.16.0) ──
+    //
+    // 15 → 26 wide and 19 → 33 tall. §4.1 states the PTY size for the first time
+    // in this revision; before it, the number lived only in the prototype.
+    //
+    // A BAND THEME'S GENRE IS BIGGER AGAIN, and by a different step per track:
+    // 33 inline, 47 centred (`RadioFace`'s `ptyStyle` / `ptyCenteredStyle`,
+    // `fontSize: eggGenre ? … : (tall ? 33 : 26)`). Which of the two applies is
+    // decided by the TRACK and not by the theme, so it belongs here beside the
+    // plain sizes rather than in `EggTheme`.
+    //
+    // A THIRD SIZE EXISTS AND IS UNREACHABLE: a theme that names its own
+    // `genreFont` takes 38 inline / 53 centred at weight 400 instead of 800.
+    // `eggGenreFont` reads `egg.genreFont` ALONE — it does not fall back to the
+    // theme's general `font`, which is why AC/DC's gold line is Atkinson and not
+    // Squealer in `screenshots/egg-acdc-dark.png`. AC/DC is the only theme this
+    // app carries and it names no `genreFont`, so the branch would be dead code;
+    // the numbers are written down here instead, and it becomes a table row the
+    // day a theme states one.
+    out property <length> pty-font: Math.max(12px, Metrics.s(Metrics.tall ? 33 : 26));
+    out property <length> pty-egg-font: Math.max(12px, Metrics.s(Metrics.tall ? 47 : 33));
     out property <length> tell-font: Math.max(10px, Metrics.s(Metrics.tall ? 14 : 11));
 
     out property <length> band-height: Metrics.s(Metrics.two-rows ? 250 : Metrics.landscape ? 104 : 140);

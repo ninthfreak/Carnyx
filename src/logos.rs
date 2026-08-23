@@ -1083,14 +1083,29 @@ pub mod prep {
 /// one hard rule and it is the reason none of this is done in HSL.
 pub mod dark {
     /// The dark surface a treatment is judged against: `Pal.panel` in the dark
-    /// theme, `#212B38`, which `ui/tokens.slint:58` carries as the identical
-    /// value.
+    /// theme, `#33373D`, which `ui/tokens.slint` carries as the identical value.
     ///
-    /// The STORED png is background-independent — `remap` clears paper to
-    /// transparency rather than darkening it — so this colour is only ever the
-    /// gate's compositing surface. A future night theme would pass its own and get
-    /// its own cached variant; never hardcode it downstream.
-    pub const LOGO_DARK_BG: [f64; 3] = [33.0 / 255.0, 43.0 / 255.0, 56.0 / 255.0];
+    /// IT MOVED WITH THE RAMP. Handoff v1.16.0 lifted the dark theme off its
+    /// blue-navy values and this was `#212B38` before it. The stored PNG is
+    /// background-independent — `remap` clears paper to transparency rather than
+    /// darkening it — so the pixels are unaffected; what the background decides is
+    /// the GATE's verdict, and therefore which treatment gets picked. A variant
+    /// judged against the old surface can be the wrong CHOICE on the new one.
+    ///
+    /// DARK-MODE-LOGOS §"Caching" is explicit about the consequence: "the
+    /// dark-theme background colour is an input to stages 5a and 5d — read it from
+    /// the theme … key the cache by (logoId, backgroundColour)". `DarkInfo::bg` is
+    /// that key; see `assign::wants_dark_adaptation`.
+    pub const LOGO_DARK_BG: [f64; 3] = [51.0 / 255.0, 55.0 / 255.0, 61.0 / 255.0];
+
+    /// `LOGO_DARK_BG` as the 24-bit value the store records beside a variant.
+    ///
+    /// Stored as one integer rather than three floats because it is a cache KEY
+    /// and nothing else: it is compared for equality, never blended.
+    pub fn bg_key(bg: [f64; 3]) -> u32 {
+        let q = |v: f64| ((v * 255.0).round().clamp(0.0, 255.0) as u32) & 0xFF;
+        (q(bg[0]) << 16) | (q(bg[1]) << 8) | q(bg[2])
+    }
 
     /// sRGB ⇄ OKLab, Björn Ottosson's matrices.
     pub mod oklab {
@@ -2339,6 +2354,14 @@ pub mod store {
         /// True only when a HUMAN chose it. A re-adaptation keeps a chosen
         /// treatment and overwrites an automatic one.
         pub chosen: bool,
+        /// The dark surface the GATE judged this pick against, `0xRRGGBB`.
+        ///
+        /// DARK-MODE-LOGOS' own cache key. `0` means a variant written before this
+        /// field existed, which is treated as "unknown, therefore stale" — the
+        /// alternative is assuming it was judged against whichever background
+        /// happens to be current, which is the assumption that would hide the
+        /// problem.
+        pub bg: u32,
     }
 
     #[derive(Clone, Debug, Default, PartialEq)]
@@ -2390,9 +2413,10 @@ pub mod store {
             ));
             if let Some(d) = &self.dark {
                 parts.push(format!(
-                    "\"dark\":{{\"treatment\":{},\"chosen\":{}}}",
+                    "\"dark\":{{\"treatment\":{},\"chosen\":{},\"bg\":{}}}",
                     json::quote(&d.treatment),
-                    d.chosen
+                    d.chosen,
+                    d.bg
                 ));
             }
             format!("{{{}}}", parts.join(","))
@@ -2419,6 +2443,10 @@ pub mod store {
                     Some(DarkInfo {
                         treatment: d.get("treatment").and_then(Json::as_str)?.to_string(),
                         chosen: d.get("chosen").and_then(Json::as_bool).unwrap_or(false),
+                        // Absent on anything written before the ramp moved, and 0
+                        // is no valid background this app composites onto, so an
+                        // old entry reads as stale and gets re-judged.
+                        bg: d.get("bg").and_then(Json::as_u32).unwrap_or(0),
                     })
                 }),
             })
@@ -2745,17 +2773,22 @@ pub mod store {
             })
         }
 
+        /// Store the dark-adapted master, its treatment, and THE BACKGROUND THE
+        /// GATE JUDGED IT AGAINST — DARK-MODE-LOGOS' `(logoId, backgroundColour)`
+        /// cache key. Passing the background the pipeline actually ran with is the
+        /// caller's job; a variant recorded under the wrong one is worse than none.
         pub fn put_dark(
             &self,
             base: &str,
             treatment: Treatment,
             png: &[u8],
             chosen: bool,
+            bg: u32,
         ) -> Result<(), StoreError> {
             self.put_derived(base, "dark.png", png)?;
             self.patch_meta(base, |m| {
                 m.dark =
-                    Some(DarkInfo { treatment: treatment.as_enum().to_string(), chosen });
+                    Some(DarkInfo { treatment: treatment.as_enum().to_string(), chosen, bg });
                 m.dark_sizes = Vec::new();
             })
         }
@@ -3019,7 +3052,7 @@ pub trait LogoNet: Send + Sync {
 /// not milliseconds, so it MUST NOT run on the Slint event loop — see
 /// `service::Worker`, which is the only thing that should call in here.
 pub mod assign {
-    use super::dark::{pipeline, stages::Treatment, LOGO_DARK_BG};
+    use super::dark::{bg_key, pipeline, stages::Treatment, LOGO_DARK_BG};
     use super::store::{LogoStore, StoreError};
     use super::{prep, ImageCodec, Raster};
 
@@ -3136,7 +3169,7 @@ pub mod assign {
             .find(|c| c.treatment == treatment)
             .or_else(|| res.candidates.first())?;
         let png = codec.encode_png(&cand.raster)?;
-        store.put_dark(base, cand.treatment, &png, chosen).ok()?;
+        store.put_dark(base, cand.treatment, &png, chosen, bg_key(gate_bg)).ok()?;
         let mut sizes: Vec<u32> = Vec::new();
         for (size, r) in prep::ladder_rasters(&cand.raster) {
             let Some(p) = codec.encode_png(&r) else { continue };
@@ -3269,8 +3302,21 @@ pub mod assign {
     /// station with no logo at all. The pipeline would have found nothing to
     /// decode and cleared a cache that was already empty, once per missed station
     /// per dark republish.
-    pub fn wants_dark_adaptation(store: &LogoStore, base: &str) -> bool {
-        store.has_original(base) && store.meta(base).is_some_and(|m| m.dark.is_none())
+    pub fn wants_dark_adaptation(store: &LogoStore, base: &str, gate_bg: [f64; 3]) -> bool {
+        if !store.has_original(base) {
+            return false;
+        }
+        match store.meta(base).and_then(|m| m.dark) {
+            None => true,
+            // JUDGED AGAINST A DIFFERENT SURFACE, SO RE-JUDGE IT. The stored
+            // pixels are background-independent, but the GATE's verdict is not:
+            // it composites each candidate onto the real dark ground and asks
+            // whether the mark still separates from it. Move the ground and the
+            // answer can change, which is why DARK-MODE-LOGOS keys the cache by
+            // `(logoId, backgroundColour)` rather than by the logo alone. Handoff
+            // v1.16.0 moved it, so every variant cached before that is stale.
+            Some(d) => d.bg != bg_key(gate_bg),
+        }
     }
 }
 
@@ -5137,7 +5183,7 @@ mod tests {
         s.put_derived("WMGN", "display.png", b"d").unwrap();
         s.put_derived("WMGN", "d-128.png", b"d").unwrap();
         s.set_display_meta("WMGN", 200, 100, vec![128]).unwrap();
-        s.put_dark("WMGN", dark::stages::Treatment::Halo, b"k", true).unwrap();
+        s.put_dark("WMGN", dark::stages::Treatment::Halo, b"k", true, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
         assert!(s.dark_info("WMGN").is_some());
 
         // A DIFFERENT mime, so the old master must go rather than sit alongside.
@@ -5238,15 +5284,15 @@ mod tests {
             assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
         assert_eq!(r, light, "with no variant the dark face shows the light art");
         assert_eq!(b, assign::Backing::Fallback, "and says so, so a plate goes behind it");
-        assert!(assign::wants_dark_adaptation(&s, "WMGN"), "which is what queues the pass");
+        assert!(assign::wants_dark_adaptation(&s, "WMGN", dark::LOGO_DARK_BG), "which is what queues the pass");
 
         // ── Adapted, `halo`: the ADAPTED file, and nothing behind it. ──
-        s.put_dark("WMGN", dark::stages::Treatment::Halo, &encoded(&adapted), false).unwrap();
+        s.put_dark("WMGN", dark::stages::Treatment::Halo, &encoded(&adapted), false, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
         let (r, b) =
             assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
         assert_eq!(r, adapted, "the dark face must read dark.png, not display.png");
         assert_eq!(b, assign::Backing::Bare, "halo carries its own readability");
-        assert!(!assign::wants_dark_adaptation(&s, "WMGN"), "and wants no second pass");
+        assert!(!assign::wants_dark_adaptation(&s, "WMGN", dark::LOGO_DARK_BG), "and wants no second pass");
 
         // ── THE LIGHT FACE IS UNTOUCHED BY ANY OF IT. ──
         let (r, b) =
@@ -5255,7 +5301,7 @@ mod tests {
         assert_eq!(b, assign::Backing::Light);
 
         // ── `plate` is the one treatment that needs a slab drawn for it. ──
-        s.put_dark("WMGN", dark::stages::Treatment::Plate, &encoded(&adapted), false).unwrap();
+        s.put_dark("WMGN", dark::stages::Treatment::Plate, &encoded(&adapted), false, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
         let (_, b) =
             assign::read_for_theme(&s, &RawCodec, "WMGN", None, 1.0, true).expect("dark read");
         assert_eq!(
@@ -5281,7 +5327,7 @@ mod tests {
         s.put_derived("WERN", "display.png", &encoded(&full)).unwrap();
         s.set_display_meta("WERN", 1, 1, vec![128]).unwrap();
         s.put_derived("WERN", "d-128.png", &encoded(&rung)).unwrap();
-        s.put_dark("WERN", dark::stages::Treatment::Remap, &encoded(&full), false).unwrap();
+        s.put_dark("WERN", dark::stages::Treatment::Remap, &encoded(&full), false, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
 
         // The dark master, because no dark rung has been written yet even though
         // a LIGHT one has.
@@ -5315,14 +5361,63 @@ mod tests {
         s.put_original("WMMM", b"master", "image/png", "manual").unwrap();
         s.put_derived("WMMM", "display.png", &encoded(&light)).unwrap();
         s.set_display_meta("WMMM", 1, 1, Vec::new()).unwrap();
-        s.put_dark("WMMM", dark::stages::Treatment::Remap, b"not an image", false).unwrap();
+        s.put_dark("WMMM", dark::stages::Treatment::Remap, b"not an image", false, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
 
         let (r, b) = assign::read_for_theme(&s, &RawCodec, "WMMM", None, 1.0, true).unwrap();
         assert_eq!(r, light);
         assert_eq!(b, assign::Backing::Fallback);
         // AND IT IS NOT RE-QUEUED. The meta says a variant was built; re-running
         // the pipeline would write the same unreadable file again.
-        assert!(!assign::wants_dark_adaptation(&s, "WMMM"));
+        assert!(!assign::wants_dark_adaptation(&s, "WMMM", dark::LOGO_DARK_BG));
+    }
+
+    /// A VARIANT JUDGED AGAINST A DIFFERENT SURFACE IS STALE.
+    ///
+    /// DARK-MODE-LOGOS keys the cache by `(logoId, backgroundColour)` and says
+    /// why: the background is an INPUT to the gate, which composites each
+    /// candidate onto the real dark ground and asks whether the mark still
+    /// separates from it. The pixels do not depend on it — `remap` clears paper to
+    /// transparency — but the CHOICE does, so moving the ground can make a stored
+    /// pick the wrong one while the file itself stays perfectly valid.
+    ///
+    /// Handoff v1.16.0 moved it, `#212B38` to `#33373D`, which is what turned this
+    /// from a note in a document into a thing that had to be built.
+    #[test]
+    fn a_variant_judged_against_another_background_is_re_adapted() {
+        let tmp = TempDir::new("theme-bg-key");
+        let s = store::LogoStore::new(tmp.path());
+        s.put_original("WMAD", b"master", "image/png", "manual").unwrap();
+
+        let here = dark::LOGO_DARK_BG;
+        let elsewhere = [0.0, 0.0, 0.0];
+        assert_ne!(dark::bg_key(here), dark::bg_key(elsewhere));
+
+        // Adapted for the surface the face actually composites onto: settled.
+        s.put_dark("WMAD", dark::stages::Treatment::Remap, b"k", false, dark::bg_key(here))
+            .unwrap();
+        assert!(!assign::wants_dark_adaptation(&s, "WMAD", here));
+        // The SAME cached variant, asked about a different ground: re-judge it.
+        assert!(assign::wants_dark_adaptation(&s, "WMAD", elsewhere));
+
+        // AND A VARIANT FROM BEFORE THE KEY EXISTED IS STALE, not assumed
+        // current. `bg: 0` is what an older `index.json` deserialises to, and no
+        // background this app composites onto is 0 — treating it as a match would
+        // be assuming the answer to the question the field was added to ask.
+        s.put_dark("WMAD", dark::stages::Treatment::Remap, b"k", false, 0).unwrap();
+        assert_eq!(s.dark_info("WMAD").unwrap().bg, 0);
+        assert!(assign::wants_dark_adaptation(&s, "WMAD", here));
+    }
+
+    /// THE GATE BACKGROUND IS THE PALETTE'S, and it has to stay the palette's.
+    ///
+    /// `LOGO_DARK_BG` is `Pal.panel` on the dark theme written out as numbers,
+    /// because the pipeline runs on a worker thread that has no window to ask.
+    /// The two drifting apart is silent: every logo would be judged against a
+    /// surface it is never drawn on, and nothing would look broken enough to
+    /// investigate.
+    #[test]
+    fn the_gate_background_is_the_dark_panel_token() {
+        assert_eq!(dark::bg_key(dark::LOGO_DARK_BG), 0x33373D, "ui/tokens.slint `panel`, dark");
     }
 
     /// A STATION WITH NO LOGO NEVER QUEUES SECONDS OF PIXEL WORK.
@@ -5335,14 +5430,14 @@ mod tests {
     fn only_a_station_with_a_logo_wants_adapting() {
         let tmp = TempDir::new("theme-wants");
         let s = store::LogoStore::new(tmp.path());
-        assert!(!assign::wants_dark_adaptation(&s, "WQLF"), "never seen: no");
+        assert!(!assign::wants_dark_adaptation(&s, "WQLF", dark::LOGO_DARK_BG), "never seen: no");
         s.record_miss("WQLF").unwrap();
         assert!(
-            !assign::wants_dark_adaptation(&s, "WQLF"),
+            !assign::wants_dark_adaptation(&s, "WQLF", dark::LOGO_DARK_BG),
             "a recorded MISS has meta and no master: still no"
         );
         s.put_original("WQLF", b"master", "image/png", "manual").unwrap();
-        assert!(assign::wants_dark_adaptation(&s, "WQLF"), "a real logo with no variant: yes");
+        assert!(assign::wants_dark_adaptation(&s, "WQLF", dark::LOGO_DARK_BG), "a real logo with no variant: yes");
     }
 
     #[test]
@@ -5352,7 +5447,7 @@ mod tests {
             let s = store::LogoStore::new(tmp.path());
             s.put_original("WMLI", b"m", "image/webp", "manual").unwrap();
             s.set_display_meta("WMLI", 240, 120, vec![128]).unwrap();
-            s.put_dark("WMLI", dark::stages::Treatment::Remap, b"k", false).unwrap();
+            s.put_dark("WMLI", dark::stages::Treatment::Remap, b"k", false, dark::bg_key(dark::LOGO_DARK_BG)).unwrap();
         }
         let s = store::LogoStore::new(tmp.path());
         let m = s.meta("WMLI").unwrap();

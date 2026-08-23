@@ -315,24 +315,50 @@ component GenreText inherits Rectangle {
     /// STEREO pill's own band; the tall track lets it be its own line.
     in property <length> band-h: 0px;
 
+    // ── SIZE AND WEIGHT (v1.16.0) ──
+    //
+    // A themed genre line is bigger and heavier than a PTY string: 33/47 against
+    // 26/33, weight 800 against 700. Both pairs are stated in `Metrics`; which
+    // one applies is the only decision here.
+    //
+    // 800 IS ASKED FOR AND 700 IS WHAT ARRIVES. Atkinson Hyperlegible ships two
+    // cuts and this build bundles both — 400 and 700 — so there is no 800 face
+    // for the engine to find and it resolves to the nearest, which is the bold
+    // already in use. Written as the spec states it rather than silently reduced
+    // to 700: the day an ExtraBold cut is bundled, this line is already right.
+    property <length> size: root.egg.on ? Metrics.pty-egg-font : Metrics.pty-font;
+    property <int> weight: root.egg.on ? Font.heavy : Font.bold;
+
     // Both Texts bind their width to root.width, so this Rectangle has no
     // intrinsic width of its own — it has to be told one, or a HorizontalLayout
     // hands it zero and the genre silently disappears. (A VerticalLayout stretches
     // its children instead, which is how the wide track lost the line while the
     // tall track kept it.) No `width` binding, so the centred variant can still be
     // stretched by its parent; 200 is the design's cap on the wide track.
+    //
+    // THE CAP DOES NOT APPLY TO A THEMED LINE. `maxWidth: eggGenre ? 'none' :
+    // (tall ? 'none' : 200)` — a band theme's line is its own statement and is
+    // allowed to run past the PTY's budget rather than elide to "High Voltage
+    // Rock 'n…". The overflow rule goes with it: `overflow: eggGenre ? 'visible'
+    // : 'hidden'`.
     preferred-width: live.preferred-width;
-    max-width: root.centered ? 100000px : 200px;
-    height: root.band-h > 0px ? root.band-h : live.preferred-height;
+    max-width: (root.centered || root.egg.on) ? 100000px : 200px;
+
+    // A MINIMUM, NOT A FIXED HEIGHT, and this is the v1.16.0 fix that had to come
+    // with the larger type: the inline row was `height: 36` outright, so a line
+    // that grew past 36dp was clipped by the box meant to reserve space for it.
+    // `height:'auto', minHeight:36` — unchanged where the text fits, and it grows
+    // where it does not.
+    height: Math.max(root.band-h, live.preferred-height);
 
     Text {
         x: 0; width: root.width;
         y: (root.height - self.preferred-height) / 2 + 1px;
         text: root.text;
-        overflow: elide;
+        overflow: root.egg.on ? clip : elide;
         horizontal-alignment: root.centered ? center : left;
-        font-family: Font.face; font-weight: Font.bold;
-        font-size: Metrics.pty-font;
+        font-family: Font.face; font-weight: root.weight;
+        font-size: root.size;
         letter-spacing: 0.5px;
         color: Pal.dark ? #000000.with-alpha(0.5) : #FFFFFF.with-alpha(0.95);
     }
@@ -340,10 +366,10 @@ component GenreText inherits Rectangle {
         x: 0; width: root.width;
         y: (root.height - self.preferred-height) / 2;
         text: root.text;
-        overflow: elide;
+        overflow: root.egg.on ? clip : elide;
         horizontal-alignment: root.centered ? center : left;
-        font-family: Font.face; font-weight: Font.bold;
-        font-size: Metrics.pty-font;
+        font-family: Font.face; font-weight: root.weight;
+        font-size: root.size;
         letter-spacing: 0.5px;
         color: root.ink;
         // `genreOutline` — the LIGHT cut of AC/DC states one, so the gold has an
@@ -592,7 +618,7 @@ export component StatusBar inherits Rectangle {
                     border-radius: self.width / 2;
                     background: root.reordering ? Pal.blue : Pal.nearby-disc;
                     border-width: root.reordering ? 0px : 1px;
-                    border-color: Pal.border;
+                    border-color: Pal.nearby-rim;
                     opacity: nearby-touch.pressed ? 0.7 : 1.0;
                     nearby-touch := TouchArea {
                         clicked => {

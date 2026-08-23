@@ -93,8 +93,22 @@ pub struct Skin {
     /// `settingsBoltColor` is a different bolt — the settings gear's, on a motif
     /// this port does not carry.
     pub bolt_ink: Option<u32>,
-    /// `nameOutline` — stroke and width on the hero lettering. Its third field,
-    /// `fill`, is declared in the registry and read by nothing.
+    /// `nameOutline` — the hero lettering FILLED and hairline-outlined.
+    ///
+    /// ALL THREE FIELDS ARE REAL HERE, and the fill is the one that makes the
+    /// treatment what it is: the glyph is painted in the card's own near-black
+    /// and separated from it only by the silver hairline, so the call sign reads
+    /// as cut out of the panel rather than printed on it. The prototype's own
+    /// words: "the glyph is filled in the panel's own black and separated from it
+    /// only by a hairline outline".
+    ///
+    /// CARNYX FILLED IT `#E8E8E8` UNTIL v1.16.1's REFERENCE RENDER SETTLED IT.
+    /// CarFM cannot draw a real text stroke — React Native has none — so it fakes
+    /// one with a zero-offset shadow and never reads `fill` at all, which read as
+    /// the field being decorative. `screenshots/egg-acdc-dark.png` shows hollow
+    /// lettering, and Slint has `stroke` / `stroke-style: outside`, so there is
+    /// nothing to approximate.
+    pub outline_fill: Option<u32>,
     pub outline_ink: Option<u32>,
     pub outline_w: f32,
     /// `rtPlate` — the RadioText strip alone.
@@ -114,6 +128,7 @@ pub const NO_SKIN: Skin = Skin {
     card_border: None,
     card_text: None,
     bolt_ink: None,
+    outline_fill: None,
     outline_ink: None,
     outline_w: 0.0,
     rt_bg: None,
@@ -137,11 +152,20 @@ pub const ACDC: Egg = Egg {
     call_sign_bolt: true,
     horns: true,
     suppress_logos: true,
-    // "BACK IN BLACK": the page goes to true black, the hero card and the
-    // RadioText plate sit a few points off it, and the interactive accent stops
-    // being blue. Verbatim from `bandThemes.ts`'s `modes.dark` for this entry —
-    // `pageBg`, `card`, `nameOutline`, `uiAccent`, `rtPlate` — with two of that
-    // block's values deliberately absent:
+    // "BACK IN BLACK": a near-black hero card and RadioText plate, hollow silver
+    // lettering, and an interactive accent that stops being blue. Verbatim from
+    // `modes.dark` (EASTER-EGGS-BUILD §2.1, handoff v1.16.1).
+    //
+    // THE PAGE IS NO LONGER RESTATED, and that is the v1.16.0 change. It used to
+    // be true black, which put a `#0B0B0B` card on a `#000000` field and left the
+    // panel merging into the ground it was meant to sit on. §2.1 now says
+    // `page #24272C` — the SAME lifted charcoal every other station gets — so the
+    // card reads AGAINST a grey field. Stated here as "restates nothing" rather
+    // than as that hex: the changelog's own words are "sits on the same lifted
+    // page as every other station", and a copy of the value would silently stop
+    // meaning that the next time the ordinary page moves.
+    //
+    // Two of the block's values are deliberately absent:
     //
     //   `card.sub: '#7E7E7E'`   declared in the registry, read by no component.
     //   `uiAccentOn: '#0B0B0B'` `eggTokens`' own note: "has no home in the app
@@ -150,12 +174,12 @@ pub const ACDC: Egg = Egg {
     //
     // Carrying either would be inventing a rule the reference does not have.
     dark: Some(Skin {
-        page_bg: Some(0x000000),
         accent: Some(0xC9C9C9),
         card_bg: Some(0x0B0B0B),
         card_border: Some(0xA2A2A2),
         card_text: Some(0xE8E8E8),
         bolt_ink: Some(0xC9C9C9),
+        outline_fill: Some(0x0B0B0B),
         outline_ink: Some(0xC9C9C9),
         outline_w: 1.1,
         rt_bg: Some(0x070707),
@@ -303,15 +327,21 @@ mod tests {
     #[test]
     fn the_dark_cut_is_back_in_black() {
         let d = skin(&ACDC, true);
-        // TRUE BLACK, AND SPELLED OUT AS PRESENT. `Some(0x000000)` is the exact
-        // pair a zero sentinel could not tell apart, and this line is what would
-        // have caught it: the page ONLY reads black if the field says so.
-        assert_eq!(d.page_bg, Some(0x000000), "pageBg");
+        // THE PAGE IS THE ORDINARY LIFTED ONE. v1.16.0 took the theme off true
+        // black so its near-black card reads against a grey field instead of
+        // merging into it; restating nothing is how "the same page as every other
+        // station" is written down.
+        assert_eq!(d.page_bg, None, "pageBg");
         assert_eq!(d.card_bg, Some(0x0B0B0B), "card.bg");
         assert_eq!(d.card_border, Some(0xA2A2A2), "card.border");
         assert_eq!(d.card_text, Some(0xE8E8E8), "card.text");
         assert_eq!(d.outline_ink, Some(0xC9C9C9), "nameOutline.stroke");
         assert_eq!(d.outline_w, 1.1, "nameOutline.width");
+        // THE LETTERING IS HOLLOW. Fill and card differ by nothing the eye can
+        // measure, which is the whole treatment — the glyph is cut out of the
+        // panel and held by the hairline alone.
+        assert_eq!(d.outline_fill, Some(0x0B0B0B), "nameOutline.fill");
+        assert_eq!(d.outline_fill, d.card_bg, "the fill IS the card's own black");
         assert_eq!(d.accent, Some(0xC9C9C9), "uiAccent");
         assert_eq!(d.rt_bg, Some(0x070707), "rtPlate.bg");
         assert_eq!(d.rt_border, Some(0x171717), "rtPlate.border");

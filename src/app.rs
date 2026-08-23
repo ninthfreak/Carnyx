@@ -2201,6 +2201,7 @@ impl App {
                 card_border: opt_rgb(skin.card_border),
                 card_text: opt_rgb(skin.card_text),
                 bolt_ink: opt_rgb(skin.bolt_ink),
+                outline_fill: opt_rgb(skin.outline_fill),
                 outline_ink: opt_rgb(skin.outline_ink),
                 outline_w: skin.outline_w,
                 rt_bg: opt_rgb(skin.rt_bg),
@@ -2679,23 +2680,33 @@ impl App {
         let read = self.read_art(&key.0, box_dp, dark);
         let art = read.map(|(r, backing)| (crate::logos::ui::to_image(&r), plate_of(backing)));
         self.state.borrow_mut().art.insert(key.clone(), art.clone());
-        // A DARK FACE SHOWING THE WHITE FALLBACK IS A CACHE MISS, not a state to
-        // live in, so ask the worker to build the variant. This is the on-demand
-        // half of CarFM's `useDarkLogo`, and it is what covers every logo saved
-        // before the dark pipeline existed — `assign_from_urls` adapts at import
-        // and nothing has ever gone back for the rest.
-        if matches!(art, Some((_, LogoPlate::Fallback))) {
+        // ASKED ON EVERY DARK READ THAT FOUND ART, not only on the white
+        // fallback. The on-demand half of CarFM's `useDarkLogo` covers a station
+        // with no variant at all — every logo saved before the dark read existed,
+        // since `assign_from_urls` adapts at import and nothing has ever gone
+        // back for the rest. But a variant can also be PRESENT AND STALE: handoff
+        // v1.16.0 moved the dark surface the gate judges against, and a pick made
+        // against the old one draws as `Bare` or `Plate` rather than as a
+        // fallback, so gating on the fallback would never notice.
+        //
+        // `request_dark_adaptation` is the one that decides; this only asks.
+        if dark && art.is_some() {
             self.request_dark_adaptation(&key.0);
         }
         art
     }
 
-    /// Queue one station's dark adaptation, at most once per run.
+    /// Queue one station's dark adaptation IF IT NEEDS ONE, at most once per run.
     ///
-    /// GUARDED BECAUSE THE TRIGGER REPEATS. `art_for` asks on every republish, and
-    /// a station whose master will not decode never stops answering "no variant" —
-    /// so without the guard a dark face would queue seconds of pixel work per tile
-    /// per tune, forever. CarFM's `regenTried` set, for the same reason.
+    /// GUARDED BECAUSE THE TRIGGER REPEATS. `art_for` asks on every dark
+    /// republish, and a station whose master will not decode never stops
+    /// answering "no variant" — so without the guard a dark face would queue
+    /// seconds of pixel work per tile per tune, forever. CarFM's `regenTried`
+    /// set, for the same reason.
+    ///
+    /// TWO THINGS COUNT AS NEEDING ONE, and `wants_dark_adaptation` knows both:
+    /// no cached variant, and a variant whose gate background is not the one the
+    /// face composites onto now.
     ///
     /// The set is never pruned: it is bounded by the number of stations that have
     /// logos, and a driver who assigns a new one gets a fresh adaptation from
@@ -2709,7 +2720,11 @@ impl App {
             // The store is asked LAST, so a station with no logo at all cannot
             // reach the worker — `wants_dark_adaptation` is a meta lookup, but
             // queueing on it without the guard above would still repeat.
-            if !crate::logos::assign::wants_dark_adaptation(&s.store, base) {
+            if !crate::logos::assign::wants_dark_adaptation(
+                &s.store,
+                base,
+                crate::logos::dark::LOGO_DARK_BG,
+            ) {
                 return;
             }
             s.settings.log.push(&stamp(), &format!("adapting {base} for dark"));
@@ -4902,10 +4917,16 @@ mod tests {
         // ── THE SCHEME MOVES UNDER A THEME THAT IS ALREADY SHOWING. ──
         ui.invoke_settings_set_theme("DARK".into());
         let egg = ui.get_egg();
+        let dark_page = pal.get_page();
+        // THE PAGE IS THE ORDINARY LIFTED CHARCOAL, and this assertion inverted
+        // with handoff v1.16.0: it used to demand TRUE BLACK, which put a
+        // `#0B0B0B` card on a `#000000` field and let the panel merge into the
+        // ground it was meant to sit on. §2.1 now puts the theme on the same page
+        // as every other station, so the card reads AGAINST a grey field.
         assert_eq!(
-            pal.get_page(),
-            slint::Color::from_rgb_u8(0x00, 0x00, 0x00),
-            "the page goes to TRUE BLACK — the value a zero sentinel could not carry"
+            dark_page,
+            slint::Color::from_rgb_u8(0x24, 0x27, 0x2C),
+            "the theme sits on the lifted page, not on black"
         );
         assert_eq!(
             pal.get_blue(),
@@ -4915,6 +4936,11 @@ mod tests {
         assert_eq!(egg.card_bg, slint::Color::from_rgb_u8(0x0B, 0x0B, 0x0B), "the hero card");
         assert_eq!(egg.rt_bg, slint::Color::from_rgb_u8(0x07, 0x07, 0x07), "the RadioText plate");
         assert_eq!(egg.bolt_ink, slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9), "the call-sign bolt");
+        // THE LETTERING IS HOLLOW: filled in the card's own black, held by the
+        // silver hairline alone. The fill and the card must be the same colour —
+        // that identity IS the treatment.
+        assert_eq!(egg.outline_fill, egg.card_bg, "the call sign is cut out of the card");
+        assert_eq!(egg.outline_ink, slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9), "the hairline");
 
         // ── AND BACK, so the cut is chosen every time rather than latched. ──
         ui.invoke_settings_set_theme("LIGHT".into());
@@ -4922,13 +4948,18 @@ mod tests {
         assert_eq!(pal.get_blue(), plain_blue, "and the blue with it");
 
         // ── A TRACK CHANGE TAKES THE PALETTE BACK TOO, not just the ornament. ──
+        //
+        // The PAGE is no longer the thing to watch for that — the theme stopped
+        // restating it — so the accent is, and it is the better witness anyway:
+        // it is the token a dozen components read.
         ui.invoke_settings_set_theme("DARK".into());
-        let dark_page = slint::Color::from_rgb_u8(0x00, 0x00, 0x00);
-        assert_eq!(pal.get_page(), dark_page, "still black while the track plays");
+        let silver = slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9);
+        assert_eq!(pal.get_blue(), silver, "still silver while the track plays");
         driver.set_radio_text_for_test("Nicolet Law - Injured? Get Nicolet!");
         driver.push_all();
-        assert_ne!(pal.get_page(), dark_page, "the ground reverts with the theme");
-        assert_eq!(ui.get_egg().card_bg.alpha(), 0, "and so does the card");
+        assert_ne!(pal.get_blue(), silver, "the accent reverts with the theme");
+        assert_eq!(pal.get_page(), dark_page, "and the page never moved for it at all");
+        assert_eq!(ui.get_egg().card_bg.alpha(), 0, "the card reverts too");
     }
 
     /// A STEP REPORTS WHAT IT MANAGED, in the log the driver can export.

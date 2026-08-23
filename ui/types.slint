@@ -135,8 +135,13 @@ export struct EggTheme {
     /// The call sign's bolt. Silver on the dark cut; transparent means it takes
     /// the card's own text colour, which is what the light cut does.
     bolt-ink: color,
-    /// The hero lettering's outline — `nameOutline`, stroke `#C9C9C9` at 1.1.
-    /// Zero width means no outline, which is the light cut.
+    /// The hero lettering's outline — `nameOutline`. The call sign AND the
+    /// frequency are FILLED with `outline-fill` and held by a hairline of
+    /// `outline-ink` at `outline-w`, so the glyph reads as cut out of the card
+    /// rather than printed on it. A transparent fill leaves each of them the
+    /// colour it would otherwise have — the card's text, and amber; a zero width
+    /// is no outline at all, which is the light cut.
+    outline-fill: color,
     outline-ink: color,
     outline-w: length,
     /// The RADIOTEXT PLATE — `rtPlate.bg` / `.border` / `.text`. Its own surface,
