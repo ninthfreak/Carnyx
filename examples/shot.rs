@@ -207,8 +207,16 @@ enum State {
     NoCallsign,
     /// Nothing has reported yet, so the pill is EMPTY rather than asserting MONO.
     StereoUnknown,
-    /// A genre string past the 200dp cap, which must elide rather than push the
-    /// controls or collapse the line.
+    /// THE WIDEST GENRE THE RBDS TABLE CAN ACTUALLY EMIT.
+    ///
+    /// It used to be "Adult Album Alternative and Classic Rock", which no build
+    /// of this app can produce: `rds::pty_label` indexes a fixed table of 31
+    /// strings and the longest of them is two words. A shot testing a string the
+    /// face cannot receive proves nothing about the face — it only proves the
+    /// cap elides SOMETHING, which was never in doubt.
+    ///
+    /// "Foreign Language", PTY 18. What is under test is whether the real worst
+    /// case still fits the 200dp cap now that the type is 175% of what it was.
     LongGenre,
     Acdc,
     /// The four logo backings on one band, plus one on the hero.
@@ -472,7 +480,7 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         ),
         State::NoCallsign => ui.set_ident("".into()),
         State::StereoUnknown => ui.set_stereo_known(false),
-        State::LongGenre => ui.set_pty("Adult Album Alternative and Classic Rock".into()),
+        State::LongGenre => ui.set_pty(carnyx::rds::pty_label(Some(18)).into()),
         // Straight into the decoded RadioText, which is what the theme resolves
         // off, AND THEN A REPUBLISH — this arm runs before the window's first
         // publish, so unlike the arms above it that set a face property directly,

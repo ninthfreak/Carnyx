@@ -77,10 +77,32 @@ untouched. Verified by sampling `shots/head-unit-dark.png` against
 **The genre line is ~175%** (ANDROID §4.1, which states the PTY size for the
 first time). 15→26 wide, 19→33 tall; a band theme's line 33 inline / 47 centred
 at weight 800. The inline row was a fixed 36dp that clipped the larger text and
-is now a 36dp MINIMUM. The 200dp width cap is UNCHANGED, so a long PTY elides
-sooner than it did — "Adult Album Alternative and Classic Rock" now reads "Adult
-Album …" on the wide track. That is the design's own arithmetic, not a defect
-here, but it is the one visible cost of the change.
+is now a 36dp MINIMUM.
+
+**The 200dp width cap is UNCHANGED, and one real PTY no longer fits it.** The
+genre line does not print free text: `rds::pty_label` indexes a fixed table of 31
+RBDS strings, none longer than two words. Measured at the new size with the cap
+lifted, on the wide track:
+
+| Label | Width | |
+|---|---|---|
+| `Foreign Language` (18) | 225dp | **elides** — "Foreign Lang…" |
+| `Religious Music` (19) | 200dp | exactly on the cap |
+| `Emergency Test` (30) | 200dp | exactly on the cap |
+| `Spanish Music` (25) | 183dp | fits |
+| `Religious Talk` (20) | 180dp | fits |
+| `Spanish Talk` (24) | 163dp | fits |
+
+So the exposure is one label of 31, with two more sitting on the boundary. Left
+at 200 because 200 is what the design says and growing the type without growing
+the cap is the design's own arithmetic — but it is worth putting back to them,
+since the two at exactly 200dp will elide on any metric that rounds the other
+way.
+
+`shots/long-genre.png` USED TO TEST A STRING THE APP CANNOT PRODUCE — "Adult
+Album Alternative and Classic Rock", which is in no RBDS table. It now carries
+PTY 18, the real worst case, so it tests the cap against something the face can
+actually receive.
 
 **Back in Black sits on the lifted page** (EASTER-EGGS §2.1) — `#24272C`, not
 true black, so the near-black hero card reads AGAINST a grey field instead of
