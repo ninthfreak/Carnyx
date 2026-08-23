@@ -157,12 +157,33 @@ them:
 **Not carried:** the demo-data change (101.5's RadioText) is prototype mock
 content — Carnyx's corpus is CarFM's captured group shapes, not the prototype's.
 
-**Open, and NOT part of this handoff:** the themed frequency's outline reads as a
-hairline. §2.1 outlines the call sign and the frequency alike, and both are; but
-the reference sets the frequency in the theme's own face, where a blackletter's
-thin strokes let a 1.1px outline close, and in Atkinson it peaks at a quarter of
-`#C9C9C9`. Setting `call-face` on it changed nothing, so the digits are not
-coming from Squealer and that wants its own look.
+**Closed, and the diagnosis above it was wrong twice.** The themed outline read
+as a hairline, and it was blamed first on Atkinson's stroke weights and then on
+Squealer's digits. Neither: Squealer maps all 201 ASCII codepoints including the
+digits and the full stop (read out of its own `cmap`) and was rendering the whole
+time, and the call sign's outline was faint too — the 201 measured on it was the
+BOLT sitting between its halves, not the stroke.
+
+The cause is `stroke-style`. Measured in isolation against Slint 1.17.1's
+software renderer, text at `#0B0B0B` on a `#0B0B0B` ground with a `#C9C9C9`
+stroke:
+
+| style | peak | inked px |
+|---|---|---|
+| `outside`, width 0 / 1.1 / 4 | 57 of 201 | 632 (identical at every width) |
+| `center`, width 0 / 0.5 / 1.1 / 2 / 8 | **201** | 4234 (identical at every width) |
+
+So `outside` draws a quarter-coverage fringe rather than a stroke, and
+`stroke-width` is ignored outright — every width from 0 to 8 inks exactly the
+same pixels. `center` is now used everywhere, which is also the FAITHFUL choice:
+`-webkit-text-stroke` straddles the glyph edge, so a centred stroke is what the
+reference has always specified. `outside` was a guess with a plausible-sounding
+reason attached to it.
+
+`stroke-width` is kept at the design's 1.1 because a zero width still has to mean
+"no outline" and because THE DEVICE RENDERS WITH SKIA, which this container
+cannot run. The shots are evidence about stroke PRESENCE and not about stroke
+WEIGHT.
 
 ### 15. Wire a genre source for Nearby
 **[NO DETAIL FOUND]** — The Nearby picker (`src/components/carfm/NearbyPicker.tsx`)

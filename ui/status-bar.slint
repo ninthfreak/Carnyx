@@ -510,9 +510,13 @@ component GenreText inherits Rectangle {
         color: root.ink;
         // `genreOutline` — the LIGHT cut of AC/DC states one, so the gold has an
         // edge against a pale ground. Zero width is no outline.
+        //
+        // `center`, for the reason spelt out on the hero's lettering: it is what
+        // a CSS text-stroke does, and it is the only style Slint's software
+        // renderer draws at full colour.
         stroke: root.egg.genre-outline-ink;
         stroke-width: root.egg.genre-outline-w;
-        stroke-style: outside;
+        stroke-style: center;
     }
 }
 

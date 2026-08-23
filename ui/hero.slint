@@ -440,11 +440,29 @@ export component HeroCard inherits Rectangle {
             font-size: root.call-size;
             letter-spacing: -1px * root.scale;
             color: root.lettering-ink;
-            // `nameOutline` — drawn OUTSIDE the glyph so the letterform keeps its
-            // own weight. A zero width is no outline, which is the light cut.
+            // ── `nameOutline`, AND WHY THIS IS `center` ──
+            //
+            // CENTRED IS WHAT THE REFERENCE DOES. `-webkit-text-stroke` straddles
+            // the glyph edge — half the width inside, half outside — so a centred
+            // stroke is the faithful one, and `outside` was a guess dressed up as
+            // a reason ("so the letterform keeps its own weight").
+            //
+            // IT IS ALSO THE ONLY ONE SLINT 1.17.1's SOFTWARE RENDERER DRAWS.
+            // Measured: with `outside`, the peak coverage over a `#0B0B0B` ground
+            // is 57/201 — a quarter — and it does not change between width 0 and
+            // width 4. With `center` the same text reaches the full 201. The
+            // outlined call sign had been shipping as a hairline ghost because of
+            // it, and it was misread twice as a missing typeface.
+            //
+            // `stroke-width` IS IGNORED by that renderer either way — 0, 0.5, 1.1,
+            // 2 and 8 all ink exactly 4234 pixels. It is kept because it is the
+            // design's value, because a zero width still has to mean "no outline",
+            // and because the device renders with SKIA, which this container
+            // cannot run. What the shots show for stroke WEIGHT is therefore not
+            // evidence about the unit; what they show for stroke PRESENCE is.
             stroke: root.egg.outline-ink;
             stroke-width: root.egg.outline-w * root.scale;
-            stroke-style: outside;
+            stroke-style: center;
         }
 
         // WI⚡BA — the bolt splits the call sign at its midpoint.
@@ -465,7 +483,7 @@ export component HeroCard inherits Rectangle {
                 color: root.lettering-ink;
                 stroke: root.egg.outline-ink;
                 stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: outside;
+                stroke-style: center;
             }
             Rectangle {
                 width: root.call-size * 0.74;
@@ -484,7 +502,7 @@ export component HeroCard inherits Rectangle {
                 color: root.lettering-ink;
                 stroke: root.egg.outline-ink;
                 stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: outside;
+                stroke-style: center;
             }
         }
 
@@ -497,21 +515,26 @@ export component HeroCard inherits Rectangle {
                 width: parent.width;
                 text: root.freq-label;
                 horizontal-alignment: center;
-                // KNOWN THIN, AND LEFT THAT WAY FOR NOW. §2.1 outlines the
-                // frequency as well as the call sign, and it does — but a 1.1px
-                // hairline around Atkinson's fat digits peaks at a quarter of
-                // `#C9C9C9` where the reference's peaks at all of it, because
-                // the reference sets the frequency in the theme's own face and
-                // a blackletter's thin strokes let the outline close. Putting
-                // `call-face` here did not change the render, so the digits are
-                // not coming from Squealer and that needs its own look. Not this
-                // handoff's business; recorded rather than chased.
-                font-family: Font.face; font-weight: Font.bold;
+                // THE THEME'S FACE REACHES THE FREQUENCY. The prototype's
+                // `freqStyle` falls through `eggFreqFont || eggHeroFont ||
+                // eggFont`, so a theme with no frequency face of its own still
+                // lands its general one — Squealer here, which is why
+                // `screenshots/egg-acdc-dark.png` sets 88.7 in blackletter.
+                //
+                // THIS WAS BLAMED ON THE FONT AND IT WAS NEVER THE FONT. Squealer
+                // maps all of ASCII, digits and full stop included (201
+                // codepoints, checked against its own `cmap`), and it was
+                // rendering here all along. The outline was faint for the reason
+                // given on the call sign above, which is the same reason it was
+                // faint there — and the call sign's own outline reading as solid
+                // was the BOLT being measured, not the stroke.
+                font-family: root.call-face; font-weight: Font.bold;
                 font-size: Metrics.freq-size * root.scale;
+                letter-spacing: root.egg.on ? 1px * root.scale : 0px;
                 color: root.freq-ink;
                 stroke: root.egg.outline-ink;
                 stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: outside;
+                stroke-style: center;
             }
             // NO TOUCH AREA. The frequency used to open a standalone keypad modal;
             // the mini-handoff (§2, §7) removes that entry point outright — the
