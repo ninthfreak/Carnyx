@@ -160,9 +160,10 @@ export struct EggTheme {
     ghost-ink: color,
     ghost-dx: length,
     ghost-dy: length,
-    /// `heroGlitch` — the hero identity twitches sideways on a long loop: still
-    /// for 1900ms, then +2dp, −2dp and back over three 55ms legs. Nine Inch
-    /// Nails alone.
+    /// `heroGlitch` — every call sign is rebuilt as three horizontal bands, the
+    /// middle shifted +0.05em at 42% and the bottom -0.035em at 88%. Static, and
+    /// on the hero, the peek cards and the preset tiles alike, because the
+    /// offsets are in em. Nine Inch Nails alone; see `ui/glitch.slint`.
     hero-glitch: bool,
     /// Which band mark replaces the settings gear. `plain` is the ordinary one,
     /// which is also what Led Zeppelin keeps.

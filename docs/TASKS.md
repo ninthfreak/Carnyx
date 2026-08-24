@@ -1556,6 +1556,26 @@ whole word moving 2dp against nothing. Here the ghost is a real second
 impression, so the twitch is what pulls the two apart: the register slips and
 comes back, which is what `nameGhost` was describing in the first place.
 
+**`heroGlitch` IS THE THREE-BAND RECONSTRUCTION, and it took two wrong rounds to
+find that out.** EASTER-EGGS-BUILD §2.5 states it as a construction: "rebuild the
+text as three horizontal bands over a hidden layout copy — top band true and
+solid, middle band shifted +0.05em at 42% opacity, bottom band shifted -0.035em
+at 88%", with clip insets `inset(-5% -4% 60% -4%)`, `inset(38% -4% 33% -4%)`,
+`inset(65% -4% -5% -4%)` naming where the cuts fall. It is STATIC, and it is on
+EVERY call sign — hero, peek cards and preset tiles — because the offsets are in
+em "so the same treatment holds from a 99sp hero down to a 13sp tile label".
+Built as `ui/glitch.slint`; `shots/nin.png` against
+`docs/design/screenshots/egg-nin.png` is the check.
+
+CarFM's `GlitchWrap` is not that: it twitches the identity ±2dp on a 2s loop,
+which is React Native's stand-in for the thing RN cannot do — clip a run of text.
+This port read the workaround as the specification, shipped the twitch, and only
+then opened the document that defines the field. **THE HANDOFF IS NOW IN THIS
+TREE** (`docs/design/EASTER-EGGS-BUILD.md` and the six `egg-*.png` references),
+because every "§2.1 / §2.5 / §4 / §12" citation in `src/eggs.rs` and the `ui/`
+files pointed at a file neither repo carried, and judging a spec from the
+reference implementation's workaround is what that guarantees.
+
 `nameGhost` NOW REACHES THE PRESET CALL SIGNS, statically, which the reference
 does not do — it puts the ghost on the hero identity alone and gives a preset
 tile no shadow under any theme. Asked for directly: the distortion is what the
@@ -1566,13 +1586,8 @@ black and Nine Inch Nails 2/0 in 16%. `shots/nirvana.png` and `shots/nin.png`
 are the evidence; the tiles are the only thing on either face that moved, and no
 unthemed shot moved at all.
 
-Photographing the twitch needed a clock. The twitch is 110ms of movement in a 2065ms
-loop, so a renderer sampling the wall clock catches it roughly never, and "it is
-in the tree" is not evidence that it draws. `examples/shot.rs` now implements
-`Platform::duration_since_start` over a skew it can wind FORWARD only — time
-stays monotonic, and every shot that does not wind sees the clock it always saw.
-`shots/nin-glitch.png` winds 1930ms onto the first leg; it differs from
-`nin.png` in the hero lettering and nowhere else on the face.
+The twitch, and the wound clock and extra shot that existed to photograph it, are
+gone with it. A static effect needs neither.
 
 What AC/DC does here: the matcher, the gold "High Voltage Rock 'n' Roll" genre
 line with its pulse, the Squealer lettering, the bolt splitting the call sign

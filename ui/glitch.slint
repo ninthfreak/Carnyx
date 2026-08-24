@@ -1,0 +1,194 @@
+// `heroGlitch` — a call sign rebuilt as three horizontal bands
+// (EASTER-EGGS-BUILD §2.5, Nine Inch Nails).
+//
+// The handoff states it as a construction rather than as an effect, and this
+// file is that construction verbatim:
+//
+//     rebuild the text as three horizontal bands over a hidden layout copy —
+//     top band true and solid, middle band shifted +0.05em at 42% opacity,
+//     bottom band shifted -0.035em at 88%. Clip insets top/mid/bottom:
+//     inset(-5% -4% 60% -4%), inset(38% -4% 33% -4%), inset(65% -4% -5% -4%).
+//     Offsets are in em so the same treatment holds from a 99sp hero down to a
+//     13sp tile label.
+//
+// A CSS `inset(t r b l)` names the four edges' insets from the box, so the three
+// bands cut the line box at [-5%, 40%], [38%, 67%] and [65%, 105%] of its
+// height. The pairs OVERLAP by two points at each seam, which is what keeps a
+// rounding difference from opening a hairline gap across a glyph, and the -4%
+// sides are bleed so a shifted band is not clipped at its own edge.
+//
+// IT IS STATIC. CarFM has a `GlitchWrap` that twitches the identity ±2dp on a
+// 2s loop instead, and this port built that first, from the flag's name and that
+// component alone. The twitch is React Native's stand-in — RN cannot clip a run
+// of text, so it moves the whole word — and reading it as the specification was
+// this port's mistake, not the reference's.
+//
+// NOT AN OPACITY, AND DELIBERATELY. The two faded bands take their strength from
+// the INK's alpha, because `opacity` lowers to a layer Skia has to allocate and
+// composite, and a themed preset band would otherwise carry three of them per
+// tile. The result is identical over an opaque ground, which is every ground a
+// call sign is set on.
+
+/// One band: a clipped window onto a full copy of the line, drawn so the copy
+/// lands exactly where the hidden layout copy does, plus this band's shift.
+component Band inherits Rectangle {
+    in property <string> text;
+    in property <string> face;
+    in property <int> weight;
+    in property <length> font-size;
+    in property <length> tracking;
+    in property <color> ink;
+    in property <color> stroke-ink;
+    in property <length> stroke-w;
+    /// The line box being cut, in the parent's own coordinates.
+    in property <length> line-top;
+    in property <length> line-h;
+    in property <length> line-w;
+    in property <length> box-w;
+    /// This band's edges, as fractions of that box.
+    in property <float> from;
+    in property <float> to;
+    /// The shift, already resolved from em, and the ink's strength.
+    in property <length> shift;
+    in property <float> strength;
+
+    property <length> bleed: root.box-w * 0.04;
+
+    x: -root.bleed;
+    y: root.line-top + root.line-h * root.from;
+    width: root.box-w + root.bleed * 2;
+    height: root.line-h * (root.to - root.from);
+    clip: true;
+
+    // The copy is positioned so its own box coincides with the line box, then
+    // shifted: local x of `bleed` puts its left edge back at the parent's zero,
+    // and local y of `-line-h * from` pulls it up by however much of the line
+    // this band starts below.
+    //
+    // PLACED BY ARITHMETIC RATHER THAN BY AN ALIGNMENT, and that cost a render
+    // to learn. `vertical-alignment: center` centres the text inside its box
+    // using the FONT's ascent and descent, while Slint's own centring of a bare
+    // child uses the element's PREFERRED HEIGHT — for an asymmetric face the two
+    // land a few pixels apart, which moved the call letters on sixty shots that
+    // had nothing to do with this. Stating the box at the line's own size and
+    // positioning it is the same sum the plain line below does.
+    Text {
+        x: root.bleed + root.shift + (root.box-w - root.line-w) / 2;
+        y: -root.line-h * root.from;
+        width: root.line-w;
+        height: root.line-h;
+        text: root.text;
+        font-family: root.face;
+        font-weight: root.weight;
+        font-size: root.font-size;
+        letter-spacing: root.tracking;
+        color: root.ink.with-alpha(root.strength);
+        stroke: root.stroke-ink;
+        stroke-width: root.stroke-w;
+        stroke-style: center;
+    }
+}
+
+/// A call sign, banded when a theme asks for it and an ordinary line otherwise.
+///
+/// SIZED BY THE HIDDEN COPY, which is what the handoff means by "over a hidden
+/// layout copy": `gauge` is the only child without explicit geometry, so it and
+/// it alone folds into this component's preferred size, and the bands measure
+/// themselves against it rather than against whatever box the parent hands down.
+export component GlitchText inherits Rectangle {
+    in property <string> text;
+    in property <string> face;
+    in property <int> weight;
+    in property <length> font-size;
+    in property <length> tracking;
+    in property <color> ink;
+    /// Draw the bands. Off is one ordinary line and nothing else — no clip
+    /// items, no extra draws, and nothing instantiated.
+    in property <bool> on: false;
+    /// The ordinary line gives way when the box is too narrow, which is what the
+    /// hero's call sign has always done. A band never elides: it is a window
+    /// onto a copy, and a copy that elided at a different width from its
+    /// neighbours would break the word into three different words.
+    in property <bool> elide: false;
+    /// The themed outline the hero lettering can carry (`nameOutline`). Zero
+    /// width is no outline, which is every theme but AC/DC's dark cut.
+    in property <color> stroke-ink;
+    in property <length> stroke-w;
+
+    /// The line's own height, for a parent that needs to give this component a
+    /// box exactly one line tall.
+    out property <length> line-h: gauge.preferred-height;
+    out property <length> line-w: gauge.preferred-width;
+    /// Where that line sits inside the box this component was given.
+    property <length> line-top: (root.height - root.line-h) / 2;
+
+    gauge := Text {
+        visible: false;
+        text: root.text;
+        font-family: root.face;
+        font-weight: root.weight;
+        font-size: root.font-size;
+        letter-spacing: root.tracking;
+    }
+
+    // ── THE PLAIN LINE, IN THE TWO SHAPES IT REPLACES ──
+    //
+    // TWO BRANCHES AND NOT ONE PARAMETERISED, because the two call sites were
+    // not the same element and making them one moved sixty shots. The hero's
+    // call sign was a Text bound to its parent's width, centred and eliding; a
+    // tile's label was a BARE Text, which Slint centres for you off its
+    // preferred size. Restating the second as geometry — even with the same sum
+    // — lands it a fraction of a pixel out, and a fraction of a pixel is a
+    // different antialiasing on every letter. So the bare one stays bare.
+    if !root.on && root.elide: Text {
+        x: 0px; y: 0px;
+        width: root.width;
+        horizontal-alignment: center;
+        overflow: TextOverflow.elide;
+        text: root.text;
+        font-family: root.face;
+        font-weight: root.weight;
+        font-size: root.font-size;
+        letter-spacing: root.tracking;
+        color: root.ink;
+        stroke: root.stroke-ink;
+        stroke-width: root.stroke-w;
+        stroke-style: center;
+    }
+    if !root.on && !root.elide: Text {
+        text: root.text;
+        font-family: root.face;
+        font-weight: root.weight;
+        font-size: root.font-size;
+        letter-spacing: root.tracking;
+        color: root.ink;
+        stroke: root.stroke-ink;
+        stroke-width: root.stroke-w;
+        stroke-style: center;
+    }
+
+    if root.on: Band {
+        text: root.text; face: root.face; weight: root.weight;
+        font-size: root.font-size; tracking: root.tracking;
+        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
+        box-w: root.width;
+        from: -0.05; to: 0.40; shift: 0px; strength: 1.0;
+    }
+    if root.on: Band {
+        text: root.text; face: root.face; weight: root.weight;
+        font-size: root.font-size; tracking: root.tracking;
+        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
+        box-w: root.width;
+        from: 0.38; to: 0.67; shift: root.font-size * 0.05; strength: 0.42;
+    }
+    if root.on: Band {
+        text: root.text; face: root.face; weight: root.weight;
+        font-size: root.font-size; tracking: root.tracking;
+        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
+        box-w: root.width;
+        from: 0.65; to: 1.05; shift: -root.font-size * 0.035; strength: 0.88;
+    }
+}

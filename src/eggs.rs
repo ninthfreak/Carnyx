@@ -27,11 +27,12 @@
 //! it tilts the whole line. Recorded rather than faked.
 //!
 //! `heroGlitch` (Nine Inch Nails) WAS in that paragraph and should never have
-//! been. It was written off as "a transform on text" by reading `GlitchWrap`'s
-//! `translateX` and stopping there; what it translates is the hero identity,
-//! which on this side is a `Text` inside a box that already sets its own `x`,
-//! so the whole effect is an offset on a coordinate and needed no transform at
-//! all. Now built — see [`Egg::hero_glitch`].
+//! been, and the reason it was is worth keeping: it was judged from CarFM's
+//! `GlitchWrap` alone — a `translateX` — without opening the design handoff that
+//! defines it. §2.5 states a three-band reconstruction of the text, which needs
+//! clipping and not transforms, and RN's twitch is the stand-in for exactly the
+//! thing RN cannot do. Now built — see [`Egg::hero_glitch`] and
+//! `ui/glitch.slint`.
 //!
 //! PORTED FROM `src/components/carfm/bandThemes.ts`. The matcher is the part
 //! that earns its own module: it runs against whatever the broadcaster puts in
@@ -121,14 +122,23 @@ pub struct Egg {
     pub ghost_alpha: f32,
     pub ghost_dx: f32,
     pub ghost_dy: f32,
-    /// `heroGlitch` — the hero identity twitches sideways on a long loop.
+    /// `heroGlitch` — every call sign is rebuilt as three horizontal bands.
     ///
-    /// NINE INCH NAILS ALONE, and the reference states the MOVEMENT as well as
-    /// the flag, so nothing here is invented: `GlitchWrap` (`CarFmFace.tsx:407`)
-    /// holds still for 1900ms, then runs three 55ms legs — +2dp, −2dp, back to
-    /// zero — and repeats. "A DELIBERATELY subtle periodic horizontal jitter …
-    /// never sustained, so the type stays readable" is its own note, and a
-    /// dashboard is the one surface where that rule is not negotiable.
+    /// NINE INCH NAILS ALONE. EASTER-EGGS-BUILD §2.5 states it as a
+    /// construction: "rebuild the text as three horizontal bands over a hidden
+    /// layout copy — top band true and solid, middle band shifted +0.05em at 42%
+    /// opacity, bottom band shifted -0.035em at 88%", with clip insets naming
+    /// where the three cuts fall. It is STATIC, and it is on every call sign
+    /// rather than on the hero: the offsets are stated in em "so the same
+    /// treatment holds from a 99sp hero down to a 13sp tile label". Drawn by
+    /// `ui/glitch.slint`, which carries the numbers.
+    ///
+    /// CarFM's `GlitchWrap` (`CarFmFace.tsx:407`) is NOT that. It twitches the
+    /// identity ±2dp on a 2s loop, which is React Native's stand-in — RN cannot
+    /// clip a run of text, so it moves the whole word instead. This port built
+    /// the twitch first, from the flag's name and that component alone, and
+    /// shipped it as the effect. That was reading the workaround as the
+    /// specification.
     pub hero_glitch: bool,
     /// Which mark replaces the settings gear. See [`Gear`].
     pub gear: Gear,
@@ -798,12 +808,12 @@ mod tests {
         }
     }
 
-    /// ONE THEME MOVES ITS OWN LETTERING, and the same shape of test as the
-    /// bolts above, for the same reason: `heroGlitch` is a per-theme flag and a
-    /// face-wide twitch would be a legibility regression on a dashboard, not a
-    /// theme. Nine Inch Nails is the only row that sets it.
+    /// ONE THEME BANDS ITS CALL SIGNS, and the same shape of test as the bolts
+    /// above, for the same reason: `heroGlitch` reaches every call sign on the
+    /// face — hero, peek cards and preset tiles — so a second row picking it up
+    /// would rebuild every label on the strip without anyone asking.
     #[test]
-    fn only_nine_inch_nails_glitches_its_hero() {
+    fn only_nine_inch_nails_bands_its_call_signs() {
         assert_eq!(
             REGISTRY
                 .iter()
@@ -813,9 +823,9 @@ mod tests {
             vec!["Nine Inch Nails"],
         );
         const { assert!(!PLAIN.hero_glitch, "the base states no heroGlitch") };
-        // A theme that MOVES its lettering has to have something to move against,
-        // or the twitch is a whole word jumping 2dp and nothing sees it. The
-        // reference pairs the two on the same row and this holds them together.
+        // §2.5 states the bands and the off-register ghost as two effects on the
+        // same row, one over the other. The handoff pairs them; this holds them
+        // together, so neither can be dropped while the other stays.
         const { assert!(NIN.ghost_alpha > 0.0, "heroGlitch needs a ghost to slip") };
         assert_eq!(NIN.ghost_dx, 2.0);
         assert_eq!(NIN.ghost_dy, 0.0);

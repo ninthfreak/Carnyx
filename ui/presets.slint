@@ -9,6 +9,7 @@
 import { Pal, Metrics, Font } from "tokens.slint";
 import { Preset, LogoPlate, EggTheme } from "types.slint";
 import { MagnifierTower, LogoSearchIcon } from "icons.slint";
+import { GlitchText } from "glitch.slint";
 
 // The colored call-letter box that stands in for a logo. The letters are fitted
 // to the landscape box — bounded by its height AND by width/letter-count, so four
@@ -35,6 +36,11 @@ component CallSignBox inherits Rectangle {
     in property <color> ghost-ink;
     in property <length> ghost-dx;
     in property <length> ghost-dy;
+    /// `heroGlitch`, which is a CALL SIGN treatment and not a hero one — the
+    /// handoff says "on every call sign" and states the offsets in em "so the
+    /// same treatment holds from a 99sp hero down to a 13sp tile label", which
+    /// is this label. See `ui/glitch.slint`.
+    in property <bool> glitch;
 
     /// Hoisted so both impressions are set from ONE expression. Two copies of
     /// this arithmetic is two things to keep in step, and a ghost at a different
@@ -64,13 +70,17 @@ component CallSignBox inherits Rectangle {
         font-size: root.size;
     }
 
-    Text {
+    GlitchText {
+        x: 0px; y: 0px;
+        width: parent.width;
+        height: parent.height;
         text: root.shown;
-        color: #FFFFFF;
-        font-family: root.face != "" ? root.face : Font.face;
-        font-weight: Font.bold;
-        letter-spacing: 0.5px;
+        ink: #FFFFFF;
+        face: root.face != "" ? root.face : Font.face;
+        weight: Font.bold;
+        tracking: 0.5px;
         font-size: root.size;
+        on: root.glitch;
     }
 }
 
@@ -147,6 +157,7 @@ component PlateBox inherits Rectangle {
         ghost-ink: root.egg.ghost-ink;
         ghost-dx: root.egg.ghost-dx;
         ghost-dy: root.egg.ghost-dy;
+        glitch: root.egg.hero-glitch;
     }
 }
 
