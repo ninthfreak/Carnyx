@@ -695,9 +695,10 @@ public final class NwdBridge {
      * Watch for the head unit going to sleep, so the FM source can be handed back
      * before this process stops running.
      *
-     * <p>WHY: the MCU sleeps the SoC on ACC-off and restores its own radio app on
-     * ACC-on. An app still holding the source when it went down is an app
-     * contending with that one on the way back up.
+     * <p>WHY: the MCU sleeps the SoC on ACC-off, remembers the current source
+     * across the sleep, and restores it on ACC-on — so a unit left on FM comes
+     * back into FM and the stock radio app launches itself. Handing the source
+     * back on the way down leaves nothing for it to restore.
      *
      * <p>TWO ACTIONS, NOT EQUALLY GOOD.
      *
@@ -712,10 +713,10 @@ public final class NwdBridge {
      * broadcast, and unlike the activity lifecycle it does not fire when the
      * driver merely switches to maps. ITS HAZARD IS REAL: a screen timeout with
      * the engine running looks identical from here, and the audio would stop with
-     * the driver still listening. There is no auto-reclaim — coming back on wake
-     * is what the stock radio does and the whole point is not to fight it — so
-     * recovery is the power button. Delete the one {@code addAction} to remove
-     * that half.
+     * the driver still listening. There is no auto-reclaim, because reclaiming
+     * would put the source back and undo the point of releasing it, so recovery
+     * is the power button. Delete the one {@code addAction} to remove that
+     * half.
      *
      * <p>SCREEN_OFF CANNOT BE A MANIFEST RECEIVER (Android 8 took it off the
      * implicit-broadcast allowlist), which is no obstacle: this app is alive to

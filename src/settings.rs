@@ -330,14 +330,6 @@ pub fn clear_logos_label(clearing: bool) -> &'static str {
 pub struct Settings {
     pub selected: Source,
     pub theme: Theme,
-    /// "Start radio on boot", which this app cannot do.
-    ///
-    /// FALSE AND STAYS FALSE. The row is drawn because CarFM draws it, and it
-    /// reports itself unavailable when tapped — there is no boot receiver to
-    /// declare under cargo-apk, and CarFM's toggle starts a plugged-in RTL-SDR
-    /// this app does not have. Showing it ON would be the face asserting
-    /// something untrue about the next ignition cycle.
-    pub autostart: bool,
     pub battery: Battery,
     pub logos_on: bool,
     pub clearing_logos: bool,
@@ -345,11 +337,12 @@ pub struct Settings {
     /// Hand the FM source back when the head unit says it is going to sleep
     /// (#92).
     ///
-    /// DEFAULT ON, which is the only default that matches what it is for: the
-    /// MCU restores its own radio app on ACC-on, and an app still holding the
-    /// source contends with that one on every ignition cycle. Off is for a driver
-    /// who would rather Carnyx kept it, and for finding out whether this path is
-    /// the cause of something else.
+    /// DEFAULT ON, which is the only default that matches what it is for. The
+    /// MCU remembers the current source across a sleep and restores it on ACC-on,
+    /// so a unit left on FM comes back into FM and the stock radio app launches
+    /// itself. Handing the source back means there is nothing for it to restore.
+    /// Off is for a driver who would rather Carnyx kept it, and for finding out
+    /// whether this path is the cause of something else.
     pub release_on_sleep: bool,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
@@ -363,7 +356,6 @@ impl Default for Settings {
         Settings {
             selected: Source::Nwd,
             theme: Theme::System,
-            autostart: false,
             battery: Battery::NotExempt,
             logos_on: false,
             clearing_logos: false,

@@ -2018,8 +2018,9 @@ impl App {
             // ── THE UNIT IS GOING TO SLEEP ────────────────────────────────────
             //
             // Hand the FM source back before this process stops running. The MCU
-            // restores its own radio app on ACC-on, and an app still holding the
-            // source when it went down is one contending with that on the way up.
+            // remembers the current source across a sleep and restores it on
+            // ACC-on, so a unit left on FM comes back into FM and the stock radio
+            // app launches itself. Released, there is nothing to restore.
             //
             // FLAGGED HERE, ACTED ON AFTER THE DRAIN — the rule the panel key
             // follows, for the same reason: `set_audio_enabled` crosses into the
@@ -2688,7 +2689,6 @@ impl App {
             ui.set_settings_sources(ModelRc::from(Rc::new(VecModel::from(sources.clone()))));
         }
 
-        ui.set_settings_autostart(cfg.autostart);
         ui.set_settings_theme(cfg.theme.label().into());
         ui.set_settings_battery(match cfg.battery {
             settings::Battery::Checking => BatteryState::Checking,
@@ -3291,24 +3291,6 @@ impl App {
                 app.state.borrow_mut().settings.selected = src;
             }
             app.push_settings();
-        });
-        on!(on_settings_set_autostart, |app, v| {
-            let _ = v;
-            // THE FRAMEWORK EDGE, like the battery row above it. "Start radio on
-            // boot" needs something to run at boot, and Carnyx has no boot
-            // receiver: cargo-apk's manifest struct has one activity and no
-            // `receiver` field at all, so `BOOT_COMPLETED` and the NWD unit's
-            // own `com.nwd.ACTION_OS_WAKE_UP` cannot be declared. See the
-            // Cargo.toml comment beside `config_changes`.
-            //
-            // CarFM's toggle is not the same control either. Its key is
-            // `@vibesdr/car_autostart` (services/carMode.ts:13), it is VibeSDR
-            // lineage, and what it starts is a plugged-in RTL-SDR — hardware this
-            // app does not have and, by the provenance rule, will not inherit.
-            //
-            // So the row says so in the log rather than flipping a flag nothing
-            // can honour. It was flipping one, and persisting it.
-            app.log_unavailable("autostart needs a boot receiver, which cargo-apk cannot declare");
         });
         on!(on_settings_set_theme, |app, t| {
             let t: SharedString = t;
@@ -4894,8 +4876,8 @@ mod tests {
     /// THE IGNITION GOING OFF HANDS THE FM SOURCE BACK, AND IS NOT A POWER-OFF.
     ///
     /// The MCU sleeps the SoC on ACC-off and restores its own radio app on
-    /// ACC-on. An app still holding the source when it went down contends with
-    /// that one on the way back up, which is the whole reason for this path.
+    /// ACC-on, so a unit left on FM comes back into FM and the stock radio app
+    /// launches itself. Handing the source back is what stops that.
     ///
     /// ASSERTED THROUGH THE TUNER'S OWN SNAPSHOT rather than through a flag on
     /// this side: `FakeTuner` reports `mcu_source` as 4 while it holds the source

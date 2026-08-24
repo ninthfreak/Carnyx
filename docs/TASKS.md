@@ -1313,6 +1313,30 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 94. Remove "Start radio on boot", which never did anything
+**DONE — REMOVED, NOT FIXED.** The row's field never left `false` and a tap wrote
+"autostart needs a boot receiver, which cargo-apk cannot declare" into the log.
+That is the same shape as the five diagnostics rows removed in #91: a switch
+describing behaviour the app does not have, reading as a build limitation rather
+than as an unwritten function. Reported by the owner as "doesn't do anything",
+which it did not.
+
+**Its stated reason had also gone stale.** The comment blamed cargo-apk, and that
+was true when written — but #67 brought in a Gradle build that CAN declare a
+receiver, exactly as it declares `CarnyxService` and the pop-up's layout. So the
+obstacle is no longer the packager; the receiver simply has not been built.
+
+**What would earn the row back** is #67's other half: a manifest receiver on
+`com.nwd.ACTION_OS_WAKE_UP`, with `BOOT_COMPLETED` as a fallback rather than the
+other way round — this unit SLEEPS on ACC-off rather than shutting down, so
+`BOOT_COMPLETED` never fires on an ignition cycle. That is now the natural
+companion to #92: release the source going down, come back cleanly coming up.
+Until then there is no row.
+
+Removed with it: `Settings::autostart`, the `settings-autostart` property and
+`settings-set-autostart` callback through `app.slint` and `settings.slint`, and
+the `on_settings_set_autostart` handler. It was already absent from `prefs`.
+
 ### 93. Find out what could keep Carnyx alive through a sleep
 **BUILT, UNANSWERED.** A DIAGNOSTICS row, "What could keep Carnyx alive through
 sleep", and the class behind it.
@@ -1355,8 +1379,9 @@ removed rows had.
 ### 92. Hand the FM source back when the unit goes to sleep
 **DONE, AND THE TRIGGER IS UNVERIFIED.** The MCU sleeps the SoC on ACC-off and
 restores its own radio app on ACC-on. An app still holding the FM source when it
-went down is an app contending with that one on the way back up. This releases on
-the way down, so there is nothing to contend with.
+remembers the current source across the sleep, and restores it on ACC-on — so a
+unit left on FM comes back into FM and the stock radio app launches itself. This
+releases on the way down, leaving nothing for it to restore.
 
 **The release itself was already built and already proven.**
 `NwdBridge.setAudioEnabled(false)` broadcasts
@@ -1376,7 +1401,8 @@ unlike the activity lifecycle it does not fire when the driver switches to maps.
 **Its hazard is real** — a screen timeout with the engine running looks identical
 from here and would stop the audio with the driver still listening. There is no
 auto-reclaim, because coming back on wake is what the stock radio does and the
-point is not to fight it, so recovery is the power button. Deleting one
+point is that reclaiming would put the source back and undo the release, so
+recovery is the power button. Deleting one
 `addAction` removes that half.
 
 **What a drive settles.** Every event logs the action verbatim
