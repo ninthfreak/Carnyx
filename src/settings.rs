@@ -157,7 +157,7 @@ pub enum Action {
     /// one: the MCU kills apps on ACC-off, CarFM recorded that as settled and
     /// built its wake design around it, and nobody has ever checked whether this
     /// ROM has the keep-alive list vendor Androids usually do. The answer
-    /// decides whether #67's wake receiver is the whole story.
+    /// decides whether the wake receiver (#95) is the whole story.
     ProbeKeepAlive,
 }
 
@@ -320,8 +320,11 @@ pub fn clear_logos_label(clearing: bool) -> &'static str {
 /// `autostart` was in this list and is NOT persisted any more. It has no key
 /// under `@carfm/` at all — CarFM's is `@vibesdr/car_autostart`
 /// (services/carMode.ts:13), it is VibeSDR lineage, and what it starts is a
-/// plugged-in RTL-SDR. Carnyx has no SDR and can declare no boot receiver, so
-/// the row reports itself unavailable and there is nothing left to remember.
+/// plugged-in RTL-SDR, which Carnyx does not have. Its row is gone (#94): it
+/// described behaviour the app did not have, and there is nothing left to
+/// remember. The Gradle build CAN now declare a receiver and does (#95) — but
+/// what that receiver honours is a flag the lifecycle writes, not a switch, so
+/// nothing here came back with it.
 ///
 /// The rest are SESSION state and belong nowhere else: `battery` is read from
 /// the OS every launch, `clearing_logos` is a spinner, `details_open` is whether

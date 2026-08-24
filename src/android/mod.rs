@@ -49,6 +49,8 @@ pub mod nwd;
 pub mod probe;
 #[cfg(target_os = "android")]
 pub mod service;
+#[cfg(target_os = "android")]
+pub mod wake;
 
 #[cfg(target_os = "android")]
 pub use nwd::{init, NwdTuner};
@@ -811,8 +813,37 @@ pub fn clear_station_announcement() {}
 static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Called from the Android lifecycle listener. See [`FOREGROUND`].
+///
+/// It also writes the answer OUT OF THE PROCESS, to the shared preferences the
+/// wake receiver reads — see [`wake`]. That is folded in here rather than added
+/// beside the existing call in `lib.rs` on purpose: the value is the same value,
+/// and a second call site is a place for the two to drift apart on some future
+/// lifecycle edge. The atomic above is for this run; the file is for the next
+/// one, after the unit has slept and killed the process in between.
 pub fn set_foreground(on: bool) {
     FOREGROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+    record_foreground(on);
+}
+
+#[cfg(target_os = "android")]
+fn record_foreground(on: bool) {
+    wake::set_foreground(on);
+}
+
+/// The host has no receiver to leave a note for. See the Android arm.
+#[cfg(not(target_os = "android"))]
+fn record_foreground(_on: bool) {}
+
+/// What the wake receiver did on the way up, and forget it. See [`wake`].
+#[cfg(target_os = "android")]
+pub fn take_wake_note() -> String {
+    wake::take_last_wake()
+}
+
+/// The host is never woken by an ignition. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn take_wake_note() -> String {
+    String::new()
 }
 
 /// Is the activity in front? See [`FOREGROUND`].

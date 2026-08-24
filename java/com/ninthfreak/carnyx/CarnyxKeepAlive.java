@@ -29,7 +29,7 @@ import java.util.Locale;
  * <p>This is not CarFM's probe carried across. CarFM has no such thing; its
  * vendor probes asked about the tuner and the boot behaviour, and they have been
  * removed from this tree. This one is new, it asks Carnyx's own question, and it
- * exists because the answer decides whether #67's wake receiver is the whole
+ * exists because the answer decides whether the wake receiver (#95) is the whole
  * story or only half of it.
  *
  * <h2>What it reads, and what it will not do</h2>

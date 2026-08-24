@@ -309,6 +309,32 @@ fn android_main(android_app: slint::android::AndroidApp) {
         "station pop-up: unavailable — the alert class did not load"
     });
 
+    // THE WAKE RECEIVER'S HALF OF THE CONVERSATION (#67's other half).
+    //
+    // `init` does two things: it loads the class, and it seeds the flag the
+    // receiver reads after this process is killed — start-up is unambiguously in
+    // front, so `was_foreground` is true from here rather than from whenever
+    // `Resume` happens to arrive. Every later edge comes through
+    // `android::set_foreground`, which the lifecycle listener already calls.
+    //
+    // SAFETY: same pointers, same lifetime argument as the three above.
+    let _ = unsafe { android::wake::init(vm, activity) };
+
+    // AND WHAT THE RECEIVER DID, if it ran at all. THIS IS THE ONLY EVIDENCE
+    // THIS FEATURE CAN PRODUCE: the receiver runs in a process with no face, on
+    // a unit with no adb, so "the broadcast never arrived", "the flag said the
+    // driver was elsewhere" and "Android refused a background activity start"
+    // are three different outcomes that look identical from the driver's seat.
+    // Taken and cleared, so the line belongs to the drive it describes.
+    //
+    // Silence is the ordinary case and is NOT a failure: a launcher tap says
+    // nothing, and neither does a cargo-apk build, which packages no Java and
+    // whose manifest schema has no `<receiver>` field at all.
+    let wake_note = android::take_wake_note();
+    if !wake_note.is_empty() {
+        _driver.log_platform(&format!("wake: {wake_note}"));
+    }
+
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
     // a driver can get that the renderer saw it, since the alternative — Slint

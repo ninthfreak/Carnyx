@@ -11,7 +11,8 @@
   an APK built by cargo-apk has no service and no `CarnyxService` class, and the
   app detects that at run time rather than assuming either build.
 
-  The wake receiver is still to come; see the note at the bottom.
+  The wake receiver is the second component only this packager can declare, and
+  it is declared at the bottom.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -69,6 +70,21 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      RECEIVE_BOOT_COMPLETED, for the receiver at the bottom of this file.
+
+      NORMAL, granted at install, no runtime request. It gates exactly one
+      action: without it `android.intent.action.BOOT_COMPLETED` is never
+      delivered, silently.
+
+      It does NOT gate `com.nwd.ACTION_OS_WAKE_UP`, which is the broadcast that
+      actually fires on this unit — a vendor action guarded by no permission at
+      all. So the permission covers the fallback rather than the real path, and
+      is declared because the fallback is real on a unit that is ever genuinely
+      power-cycled.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
       PACKAGE VISIBILITY, load-bearing rather than defensive. From targetSdk 30
@@ -157,28 +173,40 @@
             android:exported="false" />
 
         <!--
-          ── STILL TO COME (#67's other half) ──────────────────────────────────
-
-          A receiver, so the app comes back when the unit wakes:
-
-              <receiver android:name=".WakeReceiver"
-                        android:exported="true" android:enabled="true">
-                  <intent-filter>
-                      <action android:name="com.nwd.ACTION_OS_WAKE_UP" />
-                      <action android:name="android.intent.action.BOOT_COMPLETED" />
-                  </intent-filter>
-              </receiver>
+          THE WAKE RECEIVER (#67's other half), so the face comes back when the
+          unit does.
 
           `com.nwd.ACTION_OS_WAKE_UP` is the one that matters and BOOT_COMPLETED
           is the fallback, not the other way round: CarFM's manifest records that
           THIS UNIT SLEEPS on ACC-off rather than shutting down, so BOOT_COMPLETED
           never fires on an ignition cycle
-          (CarFM android/app/src/main/AndroidManifest.xml:91-94). It has to be a
-          manifest receiver, because the process is killed while the unit sleeps
-          and only a manifest-declared receiver gets restarted.
+          (CarFM android/app/src/main/AndroidManifest.xml:91-94).
 
-          Not declared yet. A component with nothing behind it is worse than an
-          absent one.
+          `exported="true"` is REQUIRED here and is not the loose choice it looks
+          like. Every action below is broadcast by something outside this app —
+          the system for two of them, the MCU's service for the third — and an
+          unexported receiver receives from its own package only, so the filter
+          would match nothing at all. From API 31 the attribute must also be
+          stated explicitly for any component with an intent-filter, and the
+          installer reports its absence only as "App not installed".
+
+          It HAS to be a manifest receiver: the process is killed while the unit
+          sleeps, and only a manifest-declared receiver gets a process started to
+          deliver the broadcast.
+
+          LOCKED_BOOT_COMPLETED is deliberately absent — it reaches
+          `directBootAware` components only, and nothing here is one. See
+          WakeReceiver.java.
         -->
+        <receiver
+            android:name=".WakeReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="com.nwd.ACTION_OS_WAKE_UP" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

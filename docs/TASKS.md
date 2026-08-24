@@ -533,8 +533,14 @@ set from one drive. Needs real group captures from the unit to tune against; do
 not start it before #26.
 
 ### 67. Get a foreground service and a boot receiver into the APK
-**THE SERVICE IS IN. THE RECEIVER IS NOT.** Half done, and the half that is done
-is the one that answers "the app looks like it starts fresh when I switch back".
+**BOTH HALVES ARE NOW BUILT. NEITHER IS CONFIRMED WORKING ON THE UNIT.** The
+service is in and runs (below); the receiver is #95. This stays PENDING for that
+second sentence and not the first — the service's entry into the FOREGROUND and
+the receiver's delivery are both still unread, and each now writes its own line
+into the diagnostics log for the drive that will read them.
+
+The service half is the one that answers "the app looks like it starts fresh when
+I switch back".
 
 **What landed.** `android/app/src/main/java/com/ninthfreak/carnyx/CarnyxService.java`
 is a real foreground service, declared in the Gradle manifest with
@@ -635,23 +641,10 @@ There is no Android SDK and no NDK on the machine this was written on, so:
   build and launch are now confirmed and the two log lines above are what settle
   the rest.
 
-**Still open — the receiver.** So the app comes back when the unit wakes:
-
-    <receiver android:name=".WakeReceiver"
-              android:exported="true" android:enabled="true">
-        <intent-filter>
-            <action android:name="com.nwd.ACTION_OS_WAKE_UP" />
-            <action android:name="android.intent.action.BOOT_COMPLETED" />
-        </intent-filter>
-    </receiver>
-
-`com.nwd.ACTION_OS_WAKE_UP` is the one that matters and BOOT_COMPLETED is the
-fallback, not the other way round: CarFM's manifest records that THIS UNIT SLEEPS
-on ACC-off rather than shutting down, so BOOT_COMPLETED never fires on an ignition
-cycle (CarFM `android/app/src/main/AndroidManifest.xml:91-94`). It has to be a
-manifest receiver, because the process is killed while the unit sleeps and only a
-manifest-declared receiver gets restarted. It goes in the Gradle source set beside
-the service, for the same class-loader reason.
+**The receiver was the open half and is now built — its record is #95.** It went
+into the Gradle source set beside the service, for the same class-loader reason,
+and `com.nwd.ACTION_OS_WAKE_UP` is the action that matters with `BOOT_COMPLETED`
+as the fallback rather than the other way round.
 
 **Also worth doing, now that the service exists:** the notification line is set
 once at start-up and never updated, so it shows the dial the app opened on. Wiring
@@ -1313,6 +1306,95 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 95. Build the wake receiver
+**BUILT AND UNVERIFIED, AND IT WRITES ITS OWN EVIDENCE.** #67's other half: a
+manifest receiver that brings the face back when the unit does.
+
+**The event it is really for.** `com.nwd.ACTION_OS_WAKE_UP`, not
+`BOOT_COMPLETED`. THIS UNIT DOES NOT COLD-BOOT ON AN IGNITION CYCLE — the MCU
+sleeps the SoC on ACC-off and wakes it on ACC-on — so the classic action fires
+roughly never on a permanent install and is the fallback. It has to be a MANIFEST
+receiver: the process is killed while the unit sleeps, and only a manifest
+registration gets a process started to deliver the broadcast.
+
+**The wake path is conditional and the boot path is not.** On a genuine boot
+there is nothing else the driver could have been doing. On a wake there is — maps,
+a music app — and taking the foreground from it would be obnoxious. So a flag
+travels across the kill.
+
+**Four files, because the two halves can never meet in memory.** When the
+broadcast arrives the process is dead: no Rust, no `InMemoryDexClassLoader`, no
+embedded dex. They pass notes through the platform's own SharedPreferences, by
+NAME rather than through a shared class, the way `CarnyxProcess` names its
+service by string:
+
+- `android/app/src/main/java/.../WakeReceiver.java` — GRADLE source set, because
+  a manifest component is constructed by the application's class loader. Its
+  decision is written in Java rather than behind the Rust seam every other
+  decision lives behind, and that is not a lapse: loading `libcarnyx.so` to
+  answer one boolean, in a process that exists for a few milliseconds, would cost
+  more than the feature.
+- `java/com/ninthfreak/carnyx/CarnyxWake.java` — runtime dex. Writes
+  `was_foreground` on every lifecycle edge and reads back the receiver's note.
+- `src/android/wake.rs` — the JNI seam.
+- `src/android/mod.rs` — `set_foreground` now writes the flag OUT of the process
+  as well as into its atomic. Folded into the existing function rather than added
+  beside its call in `lib.rs`, because it is the same value and a second call site
+  is where the two would drift apart on some future lifecycle edge.
+
+**THE FLAG IS KEPT CURRENT, NOT WRITTEN ON THE WAY DOWN**, because there may be
+no way down — the kill can be abrupt and deliver no callback at all. True on
+Resume, false on Pause, and seeded true at start-up by `wake::init` rather than
+left to the first `Resume`, which arrives after the first frames rather than
+before them. Whatever it holds when the process dies is the honest answer.
+`apply()` there (a lifecycle callback the platform is blocking on) and `commit()`
+in the receiver (a process that may be torn down the moment `onReceive` returns)
+— opposite choices, opposite reasons.
+
+**THE NOTE BACK UP IS THE ONLY EVIDENCE THIS FEATURE CAN EVER PRODUCE.** The
+receiver runs with no face on screen, on a unit with no adb, so a `Log.i` from it
+reaches nobody — and "the broadcast never arrived", "the flag said the driver was
+elsewhere" and "Android 10 refused a background activity start" are three
+different outcomes that look identical from the driver's seat: the app is simply
+not there. So each writes a line, the app takes it on the way up, and it lands in
+the settings log as `wake: …`. Taken and cleared, so a stale
+"brought the face forward" does not head the log of every hand-launched drive
+after it.
+
+**Two deliberate absences.** `LOCKED_BOOT_COMPLETED` is in CarFM's receiver and
+not in ours: it reaches `directBootAware` components only, nothing here is one,
+and declaring the filter without the flag would be a line that looks like
+coverage and delivers nothing. And no `carBootAutostart` extra — CarFM sets one,
+Carnyx has nothing that reads it, and #94 removed the row that would have.
+
+**`RECEIVE_BOOT_COMPLETED` covers the fallback, not the real path.** It gates
+`BOOT_COMPLETED` alone, silently; `com.nwd.ACTION_OS_WAKE_UP` is a vendor action
+guarded by no permission at all. Declared because a genuine power-cycle is real.
+
+**WHAT WAS CHECKED OFF-DEVICE, and it is more than #67 got.** A real API-34
+framework jar (`org.robolectric:android-all:14-robolectric-10818077`, fetched for
+the check and not vendored) was available this time:
+
+- All six of our Java classes compile with `-Xlint:all` and ZERO diagnostics in
+  our own sources. The 381 warnings are the jar's own `UnsupportedAppUsage`
+  annotations.
+- `javap -s` confirms the three descriptors `wake.rs` names —
+  `(Landroid/content/Context;)V`, `(Z)V`, `()Ljava/lang/String;`.
+- `javap -c` confirms `carnyx_wake`, `was_foreground` and `last_wake` are
+  byte-identical constants in BOTH compiled classes, which is the one thing that
+  cannot be caught by a compiler: the two halves share nothing but these strings.
+- `javap` confirms `WakeReceiver` has the public no-arg constructor the platform
+  needs to instantiate it, and the manifest parses with the receiver declared.
+- THE RUST IS STILL NOT COMPILED FOR THE TARGET, and this was tried rather than
+  assumed: `cargo check --target armv7-linux-androideabi` panics in
+  skia-bindings' build script for want of an NDK
+  (`build_support/platform/android.rs:69`). Every JNI construct in `wake.rs` is
+  copied verbatim from `service.rs` and `probe.rs`.
+- Host: 287 tests pass, clippy clean.
+
+**What one ignition cycle settles.** Whether a `wake:` line appears at all, and
+which of the three it is. Nothing else can answer it from here.
+
 ### 94. Remove "Start radio on boot", which never did anything
 **DONE — REMOVED, NOT FIXED.** The row's field never left `false` and a tap wrote
 "autostart needs a boot receiver, which cargo-apk cannot declare" into the log.
@@ -1332,6 +1414,15 @@ other way round — this unit SLEEPS on ACC-off rather than shutting down, so
 `BOOT_COMPLETED` never fires on an ignition cycle. That is now the natural
 companion to #92: release the source going down, come back cleanly coming up.
 Until then there is no row.
+
+**THE RECEIVER IS NOW BUILT (#95), AND THE ROW STILL DOES NOT COME BACK.** Two
+reasons, and the second is the one that matters. The receiver is unverified — no
+ignition cycle has been run — so a switch offering the behaviour would be the
+same promise this task removed. And the behaviour it would govern is not a
+setting the app can honour: coming forward on a wake is decided by a flag the
+LIFECYCLE writes, in a process that no longer exists, and a driver who does not
+want it can simply leave the face in the background. Revisit only if the drive
+shows the wake path working AND someone wants it off.
 
 Removed with it: `Settings::autostart`, the `settings-autostart` property and
 `settings-set-autostart` callback through `app.slint` and `settings.slint`, and
