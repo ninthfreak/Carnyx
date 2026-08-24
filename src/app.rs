@@ -2232,6 +2232,7 @@ impl App {
                 ghost_ink: ghost(e),
                 ghost_dx: e.ghost_dx,
                 ghost_dy: e.ghost_dy,
+                hero_glitch: e.hero_glitch,
                 gear: match e.gear {
                     crate::eggs::Gear::Plain => BandGear::Plain,
                     crate::eggs::Gear::Bolt => BandGear::Bolt,

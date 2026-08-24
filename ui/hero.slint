@@ -525,6 +525,45 @@ export component HeroCard inherits Rectangle {
         font-size: Metrics.freq-size * root.scale;
     }
 
+    // ── `heroGlitch` — A MACHINE THAT DOES NOT QUITE LOCK (Nine Inch Nails) ──
+    //
+    // The reference states the movement, not just the flag: `GlitchWrap`
+    // (CarFmFace.tsx:407) holds the identity still for 1900ms, then runs three
+    // 55ms legs — +2dp, −2dp, back to zero — and repeats, "a DELIBERATELY subtle
+    // periodic horizontal jitter … never sustained, so the type stays readable".
+    // A dashboard is the one surface where that last clause is not negotiable,
+    // so the amplitude and the duty cycle are transcribed rather than tuned.
+    //
+    // IT NEEDS NO TRANSFORM, and the claim that it did was this file's own error
+    // — written off by reading `translateX` and stopping there. What that
+    // translates is the hero identity, and the hero identity here is a `Text`
+    // inside a box that already sets its own `x` for the ghost's sake. Moving it
+    // is an offset on a coordinate.
+    //
+    // ONE STEPPED SAWTOOTH, not a timer and not a state. `glitch-turn` runs
+    // 0 → 1 on the cycle's own length and the legs are read off it as hard
+    // steps, which is also closer to the intent than an interpolated slide: a
+    // glitch snaps. It is READ only while a glitching theme is showing — the
+    // guard below short-circuits — so every other face never depends on the
+    // animation and never redraws for it, the same rule the genre pulse follows.
+    property <float> glitch-turn: 0;
+    init => { self.glitch-turn = 1.0; }
+    animate glitch-turn {
+        duration: 2065ms; easing: linear; iteration-count: -1;
+    }
+    /// THE LIVE LETTERING MOVES AND ITS GHOST DOES NOT, which is a deviation and
+    /// the reason for it is that the ghost is a different KIND of thing here. In
+    /// RN it is `textShadow` on the very Text being translated, so it cannot do
+    /// anything but travel with it — and a whole word stepping 2dp sideways is
+    /// invisible without something to step against. On this side the ghost is a
+    /// real second impression, so the twitch is what pulls the two apart: the
+    /// register slips and comes back. That is what `nameGhost` is describing.
+    property <length> glitch-dx: !root.egg.hero-glitch ? 0px
+        : root.glitch-turn < 0.9201 ? 0px
+        : root.glitch-turn < 0.9467 ? 2px * root.scale
+        : root.glitch-turn < 0.9734 ? -2px * root.scale
+        : 0px;
+
     border-width: 1px * root.scale;
     border-radius: 28px * root.scale;
     border-color: root.edge;
@@ -609,7 +648,7 @@ export component HeroCard inherits Rectangle {
             }
 
             live-call := Text {
-            x: 0; y: 0; width: parent.width;
+            x: root.glitch-dx; y: 0; width: parent.width;
             text: root.ident;
             horizontal-alignment: center;
             overflow: elide;

@@ -207,6 +207,13 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // content and has nothing to overflow, and the lettering must still read as
     // a display cut rather than as body type.
     ("nirvana-portrait", 360, 800, false, State::Nirvana, 0.0),
+    // `heroGlitch` CAUGHT IN THE ACT. The twitch is 110ms of movement in a
+    // 2065ms loop, so the ordinary `nin` shot samples the still 95% and shows
+    // nothing — the two shots differ ONLY in when the shutter opens. Diffing
+    // this against `nin.png` is the whole proof that the effect draws: the
+    // lettering steps 2dp off its ghost and everything else on the face is
+    // identical.
+    ("nin-glitch", 1024, 614, false, State::NinGlitch, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -251,6 +258,10 @@ enum State {
     Zeppelin,
     Nirvana,
     Nin,
+    /// Nine Inch Nails with the clock wound onto `heroGlitch`'s first leg. Same
+    /// face as `Nin` in every other respect — the difference is WHEN it is
+    /// photographed, not what is set.
+    NinGlitch,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
     /// EIGHTEEN PRESETS. The strip is not limited, and this is the shot that
@@ -315,11 +326,30 @@ enum State {
 
 struct Headless {
     window: Rc<MinimalSoftwareWindow>,
+    /// When the platform believes it started, and how far the harness has pushed
+    /// that belief forward.
+    ///
+    /// A CLOCK THE SHOTS CAN WIND, because one effect cannot be photographed
+    /// otherwise. Nine Inch Nails' `heroGlitch` is 110ms of movement in a 2065ms
+    /// loop — 5% of the time — so a renderer sampling the wall clock catches it
+    /// roughly never, and "it is in the tree" is not evidence that it draws.
+    ///
+    /// ADDED TO REAL TIME RATHER THAN REPLACING IT, and that is deliberate:
+    /// Slint reads this to advance animations and a clock that jumps BACKWARD
+    /// between two calls is not something to hand it. Winding forward only is
+    /// monotonic by construction, and every shot that does not wind sees exactly
+    /// the clock it saw before this existed.
+    start: std::time::Instant,
+    skew: Rc<std::cell::Cell<std::time::Duration>>,
 }
 
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(self.window.clone())
+    }
+
+    fn duration_since_start(&self) -> std::time::Duration {
+        self.start.elapsed() + self.skew.get()
     }
 }
 
@@ -335,8 +365,15 @@ const DRAG_TO_X: f32 = 480.0;
 
 fn main() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless { window: window.clone() }))
-        .expect("set platform");
+    // Shared with the platform so a shot can wind the clock forward — see
+    // `Headless::skew`.
+    let skew = Rc::new(std::cell::Cell::new(std::time::Duration::ZERO));
+    slint::platform::set_platform(Box::new(Headless {
+        window: window.clone(),
+        start: std::time::Instant::now(),
+        skew: skew.clone(),
+    }))
+    .expect("set platform");
     std::fs::create_dir_all("shots").expect("create shots/");
 
     let face = SURFACES.iter().map(|&(n, w, h, d, s)| (n, w, h, d, s, 0.0));
@@ -360,6 +397,17 @@ fn main() {
         apply(&ui, &driver, state);
         window.set_size(PhysicalSize::new(w, h));
         ui.show().expect("show");
+
+        // WIND THE CLOCK ONTO THE GLITCH. Every `animate` in the tree starts
+        // when its binding is first set, which for a card built this frame is
+        // `show()` — so pushing the platform's clock forward here by 1930ms puts
+        // `HeroCard::glitch-turn` at 1930/2065 of its cycle, which is inside the
+        // first 55ms leg (1900–1955ms) with 30ms of margin either side. The wind
+        // is forward-only and never undone, so time stays monotonic for the
+        // shots that follow; they simply start their own animations later.
+        if state == State::NinGlitch {
+            skew.set(skew.get() + std::time::Duration::from_millis(1930));
+        }
 
         // Settle any `init =>` writes and let the first animation frame land
         // before asking for pixels.
@@ -539,7 +587,7 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             driver.set_radio_text_for_test("Nirvana - Smells Like Teen Spirit");
             driver.push_all();
         }
-        State::Nin => {
+        State::Nin | State::NinGlitch => {
             driver.set_radio_text_for_test("Nine Inch Nails - The Hand That Feeds");
             driver.push_all();
         }

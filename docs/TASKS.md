@@ -1534,10 +1534,35 @@ replaces the settings gear.
 
 NOT CARRIED, and each for a stated reason. `stripes` and `chromeInk` are declared
 in the registry and read by no component in the reference, like `card.sub` and
-`uiAccentOn`. `heroGlitch` and `genreDroop` ARE consumed there and are transforms
-on text, which Slint 1.17.1 offers for nothing but `Image` and `Path`; CarFM's
-own droop is already an approximation, since §2.2 asks for a per-character
-baseline and RN tilts the whole line instead.
+`uiAccentOn`. `genreDroop` IS consumed there and ROTATES the genre line -4°,
+which Slint 1.17.1 offers for nothing but `Image` and `Path`; CarFM's own droop
+is already an approximation, since §2.2 asks for a per-character baseline and RN
+tilts the whole line instead.
+
+**`heroGlitch` was in that paragraph and should not have been — now built.** It
+was written off as "a transform on text" by reading `GlitchWrap`'s `translateX`
+and stopping there. What that translates is the hero identity, and the hero
+identity here is a `Text` inside a box that already sets its own `x` so the
+`nameGhost` can sit beside it, so the whole effect is an offset on a coordinate
+and needs no transform at all. `HeroCard` now runs one stepped sawtooth on the
+reference's own timing — still for 1900ms, then +2dp and −2dp over two 55ms legs
+— read only while a glitching theme is showing, so no other face depends on the
+animation or redraws for it.
+
+The LIVE LETTERING MOVES AND ITS GHOST DOES NOT, which is a deviation with a
+reason. In RN the ghost is `textShadow` on the very Text being translated and
+cannot do anything but travel with it, which makes a 2dp step invisible — a
+whole word moving 2dp against nothing. Here the ghost is a real second
+impression, so the twitch is what pulls the two apart: the register slips and
+comes back, which is what `nameGhost` was describing in the first place.
+
+Photographing it needed a clock. The twitch is 110ms of movement in a 2065ms
+loop, so a renderer sampling the wall clock catches it roughly never, and "it is
+in the tree" is not evidence that it draws. `examples/shot.rs` now implements
+`Platform::duration_since_start` over a skew it can wind FORWARD only — time
+stays monotonic, and every shot that does not wind sees the clock it always saw.
+`shots/nin-glitch.png` winds 1930ms onto the first leg; it differs from
+`nin.png` in the hero lettering and nowhere else on the face.
 
 What AC/DC does here: the matcher, the gold "High Voltage Rock 'n' Roll" genre
 line with its pulse, the Squealer lettering, the bolt splitting the call sign

@@ -160,6 +160,10 @@ export struct EggTheme {
     ghost-ink: color,
     ghost-dx: length,
     ghost-dy: length,
+    /// `heroGlitch` — the hero identity twitches sideways on a long loop: still
+    /// for 1900ms, then +2dp, −2dp and back over three 55ms legs. Nine Inch
+    /// Nails alone.
+    hero-glitch: bool,
     /// Which band mark replaces the settings gear. `plain` is the ordinary one,
     /// which is also what Led Zeppelin keeps.
     gear: BandGear,

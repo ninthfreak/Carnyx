@@ -20,13 +20,18 @@
 //! registry and read by NO component in the reference, alongside `card.sub` and
 //! `uiAccentOn`. Carrying a field nothing consumes would be inventing a rule.
 //!
-//! `heroGlitch` (Nine Inch Nails) and `genreDroop` (The Beatles) ARE consumed
-//! there and are not portable here. Both are transforms on text —
-//! `GlitchWrap` twitches the identity, and droop rotates the genre line -4° —
-//! and Slint 1.17.1 offers no rotation for anything but `Image` and `Path`.
-//! CarFM's own droop is already an approximation: §2.2 asks for a drooping
-//! PER-CHARACTER baseline and RN cannot do that either, so it tilts the whole
-//! line. Recorded rather than faked.
+//! `genreDroop` (The Beatles) IS consumed there and is not portable here: droop
+//! ROTATES the genre line -4°, and Slint 1.17.1 offers no rotation for anything
+//! but `Image` and `Path`. CarFM's own droop is already an approximation — §2.2
+//! asks for a drooping PER-CHARACTER baseline and RN cannot do that either, so
+//! it tilts the whole line. Recorded rather than faked.
+//!
+//! `heroGlitch` (Nine Inch Nails) WAS in that paragraph and should never have
+//! been. It was written off as "a transform on text" by reading `GlitchWrap`'s
+//! `translateX` and stopping there; what it translates is the hero identity,
+//! which on this side is a `Text` inside a box that already sets its own `x`,
+//! so the whole effect is an offset on a coordinate and needed no transform at
+//! all. Now built — see [`Egg::hero_glitch`].
 //!
 //! PORTED FROM `src/components/carfm/bandThemes.ts`. The matcher is the part
 //! that earns its own module: it runs against whatever the broadcaster puts in
@@ -116,6 +121,15 @@ pub struct Egg {
     pub ghost_alpha: f32,
     pub ghost_dx: f32,
     pub ghost_dy: f32,
+    /// `heroGlitch` — the hero identity twitches sideways on a long loop.
+    ///
+    /// NINE INCH NAILS ALONE, and the reference states the MOVEMENT as well as
+    /// the flag, so nothing here is invented: `GlitchWrap` (`CarFmFace.tsx:407`)
+    /// holds still for 1900ms, then runs three 55ms legs — +2dp, −2dp, back to
+    /// zero — and repeats. "A DELIBERATELY subtle periodic horizontal jitter …
+    /// never sustained, so the type stays readable" is its own note, and a
+    /// dashboard is the one surface where that rule is not negotiable.
+    pub hero_glitch: bool,
     /// Which mark replaces the settings gear. See [`Gear`].
     pub gear: Gear,
     /// `motif: 'runes'` — the vehicle-in-motion tell flies an airship instead of
@@ -274,6 +288,7 @@ pub const PLAIN: Egg = Egg {
     ghost_alpha: 0.0,
     ghost_dx: 0.0,
     ghost_dy: 0.0,
+    hero_glitch: false,
     gear: Gear::Plain,
     airship: false,
     dark: None,
@@ -470,6 +485,8 @@ pub const NIN: Egg = Egg {
     ghost_alpha: 0.16,
     ghost_dx: 2.0,
     ghost_dy: 0.0,
+    // The only theme that moves its own lettering. See `Egg::hero_glitch`.
+    hero_glitch: true,
     suppress_logos: true,
     gear: Gear::Spiral,
     ..PLAIN
@@ -779,6 +796,29 @@ mod tests {
                 e.id
             );
         }
+    }
+
+    /// ONE THEME MOVES ITS OWN LETTERING, and the same shape of test as the
+    /// bolts above, for the same reason: `heroGlitch` is a per-theme flag and a
+    /// face-wide twitch would be a legibility regression on a dashboard, not a
+    /// theme. Nine Inch Nails is the only row that sets it.
+    #[test]
+    fn only_nine_inch_nails_glitches_its_hero() {
+        assert_eq!(
+            REGISTRY
+                .iter()
+                .filter(|(e, _)| e.hero_glitch)
+                .map(|(e, _)| e.id)
+                .collect::<Vec<_>>(),
+            vec!["Nine Inch Nails"],
+        );
+        const { assert!(!PLAIN.hero_glitch, "the base states no heroGlitch") };
+        // A theme that MOVES its lettering has to have something to move against,
+        // or the twitch is a whole word jumping 2dp and nothing sees it. The
+        // reference pairs the two on the same row and this holds them together.
+        const { assert!(NIN.ghost_alpha > 0.0, "heroGlitch needs a ghost to slip") };
+        assert_eq!(NIN.ghost_dx, 2.0);
+        assert_eq!(NIN.ghost_dy, 0.0);
     }
 
     /// THE BOLTS BELONG TO ONE THEME, and this test exists because they were
