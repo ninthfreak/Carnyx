@@ -309,9 +309,30 @@ component GenreText inherits Rectangle {
         duration: 900ms; easing: ease-in-out;
         iteration-count: -1; direction: alternate;
     }
-    property <color> ink: root.egg.on
-        ? root.egg.genre-ink.mix(root.egg.genre-pulse, 1.0 - root.beat)
-        : Pal.dim;
+    // ── WHAT COLOUR THIS LINE IS, AND WHAT AN UNSTATED COLOUR MEANS ──
+    //
+    // ZERO IS THE ORDINARY TOKEN, NOT TRANSPARENT. `app.rs` has always said so
+    // where it maps the registry — "a zero here has to fall through to `Pal.dim`
+    // and not paint the line black" — and it maps an unstated colour to a fully
+    // transparent one, expecting THIS to test the alpha. It did not. Nirvana and
+    // Nine Inch Nails both name a genre and neither names a colour, so the live
+    // layer was drawn in nothing and the only thing on screen was the backing
+    // copy below — white at 95% on a light face. The reference render
+    // (`docs/design/screenshots/egg-nirvana.png`) shows that line DIM.
+    //
+    // A ZERO PULSE IS NO PULSE. `genrePulseOn` is AC/DC's alone; The Beatles
+    // names an ink and no pulse, and mixing toward an unstated colour walked its
+    // line to transparent and back once a second.
+    //
+    // A BASIC THEME IS WHY BOTH MATTER NOW. A row that states a genre and no
+    // palette is the ordinary case for the tier, not the exception, so
+    // "unstated" has to be a working answer rather than an untrodden path.
+    property <color> base: root.egg.genre-ink.alpha > 0 ? root.egg.genre-ink : Pal.dim;
+    property <color> ink: !root.egg.on
+        ? Pal.dim
+        : (root.egg.genre-pulse.alpha > 0
+            ? root.base.mix(root.egg.genre-pulse, 1.0 - root.beat)
+            : root.base);
     /// Vertical band to centre within. The wide track sits the genre on the
     /// STEREO pill's own band; the tall track lets it be its own line.
     in property <length> band-h: 0px;
@@ -646,9 +667,23 @@ export component StatusBar inherits Rectangle {
     in property <bool> ta: false;
     in property <bool> af: false;
     in property <string> pty: "";
-    /// The band theme. When one is showing it REPLACES the genre line — the PTY
-    /// this station broadcasts is not what the driver is being told about.
+    /// The band theme. When it names a genre of its own it REPLACES this line —
+    /// the PTY this station broadcasts is not what the driver is being told
+    /// about.
     in property <EggTheme> egg;
+
+    /// What the genre line actually says, resolved ONCE for both layout tracks.
+    ///
+    /// A THEME MAY DRESS THIS LINE WITHOUT REPLACING IT. The five advanced
+    /// themes each name a genre, so for them this is simply `egg.genre`; a BASIC
+    /// theme is allowed to name only a font, and then the broadcaster's own PTY
+    /// is what gets set in that font. Written here rather than twice below,
+    /// because the wide and tall arms carried the same expression and one of
+    /// them would eventually have been fixed alone.
+    property <string> genre-line: root.egg.on && root.egg.genre != ""
+        ? root.egg.genre
+        : root.pty;
+
     in property <bool> in-band: true;
     /// No compatible tuner session. This pill REPLACES the whole OK cluster —
     /// with no tuner there is no signal, RDS, stereo or genre to read, so the
@@ -726,8 +761,15 @@ export component StatusBar inherits Rectangle {
                 }
                 // PTY: plain dim ellipsized text, no border or fill, on the
                 // pill's own band.
-                if (root.egg.on || root.pty != "") && !root.dead: GenreText {
-                    text: root.egg.on ? root.egg.genre : root.pty;
+                // A THEME'S GENRE, OR THE BROADCASTER'S, and the fall-through
+                // is what lets a theme carry a FACE without carrying a line.
+                // This read `egg.on ? egg.genre : pty`, so a theme with no genre
+                // of its own blanked the PTY instead of restyling it. None of
+                // the five advanced themes can reach that — every one names a
+                // line — but a basic theme is allowed to name only a font, and
+                // that is exactly the row it would have silenced.
+                if root.genre-line != "" && !root.dead: GenreText {
+                    text: root.genre-line;
                     egg: root.egg;
                     band-h: Metrics.stereo-h;
                 }
@@ -767,8 +809,9 @@ export component StatusBar inherits Rectangle {
                 rds: root.rds; tp: root.tp; ta: root.ta; af: root.af;
                 dead: root.dead; egg: root.egg;
             }
-            if (root.egg.on || root.pty != "") && !root.dead: GenreText {
-                text: root.egg.on ? root.egg.genre : root.pty;
+            // Same line, same rule. See the wide arm above.
+            if root.genre-line != "" && !root.dead: GenreText {
+                text: root.genre-line;
                 egg: root.egg;
                 centered: true;
             }

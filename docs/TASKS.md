@@ -1306,6 +1306,94 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 98. Build the framework for basic Easter eggs
+**DONE — THE FRAMEWORK. NO BAND USES IT YET, AND THAT IS DELIBERATE.** Asked for
+directly: *"All currently defined band Easter Eggs are now considered 'advanced'
+Easter Eggs. We're going to introduce 'basic' Easter Eggs. Basic Easter Eggs
+don't get a listing in the hidden six-tab menu in settings. Basic Easter eggs
+have one or two out of two items: 1- A custom Genre. 2- A custom font. Custom
+fonts, when defined, will be used for both the genre and radio text."*
+
+**The tier.** `eggs::Tier` — `Advanced` for the five the design handoff
+specifies, `Basic` for the new one. `PLAIN` defaults to `Basic`, so a row that
+forgets to say makes the SMALLER claim: an advanced row that forgot would be
+missing from the picker, which someone notices the first time they look, where a
+basic row that forgot would appear in it and nobody would notice until the list
+was a hundred long.
+
+**The constructor.** `eggs::basic(id, genre, face)`, and `""` is how either is
+left out. The font lands on `genre_face` AND `rt_face` from the one argument —
+the owner's rule — and deliberately not on `hero_face`, `body_face` or
+`freq_face`, which is the line between the tiers. It is the only place in the
+file where one face feeds two fields; the advanced rows keep them apart because
+the reference's fallbacks are not uniform, and a basic row has no fallbacks to be
+asymmetric about.
+
+**The listing rule has code behind it.** `eggs::listed()` returns the advanced
+rows and only those. THE PICKER ITSELF DOES NOT EXIST — `ui/settings.slint`
+records that CarFM wraps the about line in a Pressable counting to six, that the
+picker was ported once against themes that did not exist, and that it was removed
+rather than left half-built. `listed()` is what it reads when it is rebuilt, and
+it exists now because a rule with no code behind it is a comment.
+
+**Precedence is structural.** `ADVANCED` and `BASIC` are separate slices chained
+advanced-first, so RadioText naming both an advanced band and a basic one gets
+the whole dress rather than one restyled line. One flat list would have made that
+a comment nobody has to obey.
+
+**TWO THINGS IN THE FACE BLOCKED THE TIER, AND BOTH WERE BUGS ALREADY.**
+
+- **An empty genre blanked the line instead of dressing it.** `StatusBar` read
+  `egg.on ? egg.genre : pty`, so a theme with a font and no genre — the whole
+  point of item 2 on its own — would have silenced the broadcaster's PTY. Now
+  resolved once into `genre-line`, which falls through to the PTY. None of the
+  five can reach that path; every one names a line.
+- **An unstated genre colour rendered transparent.** `app.rs` has always mapped
+  a zero to a fully transparent colour and said in a comment that `GenreText`
+  "tests the alpha" — it did not. Nirvana and Nine Inch Nails both name a genre
+  and neither names a colour, so the live layer was drawn in nothing and the only
+  thing on screen was the backing copy: white at 95% on a light face. The
+  reference render `docs/design/screenshots/egg-nirvana.png` shows that line DIM.
+  A zero pulse had the same shape — The Beatles names an ink and no pulse, and
+  mixing toward an unstated colour walked its line to transparent and back once a
+  second. Both now fall through, which is what the comment always claimed.
+
+  This mattered enough to fix rather than work around: a basic row that states a
+  genre and no palette is the ORDINARY case for the tier, not the exception.
+
+**The font guard.** `BUNDLED_FACES` maps family to file, and
+`every_face_a_theme_names_is_bundled_and_imported` reads both ends — every face
+any row names is in the table, every file in the table exists in `ui/fonts/`, and
+every one is `import`ed by `ui/tokens.slint`. A face nobody imported is not an
+error in Slint; it is Atkinson, silently. That was survivable while five faces
+arrived with a handoff and stops being survivable when a basic row is one line
+and the likeliest thing wrong with it is the face.
+
+**The name-length floor.** `no_basic_name_is_short_enough_to_fire_on_prose`
+requires six characters. `match_egg_id` carries the field failure it guards: an
+advert for "Hometown HVAC DC power" repainted CarFM's whole face as AC/DC. Five
+long names were nearly safe; a long tail is not — "Yes", "Free", "Air", "Bread",
+"War" are all real bands and all ordinary English. SIX IS A FLOOR, NOT A
+GUARANTEE, and the honest check is a person asking whether a car dealership could
+say it.
+
+**`BASIC` is empty.** The handoff specifies five artists and all five are
+advanced, so any row would be one this project invented. Two `cfg(test)`
+fixtures — one genre-only, one font-only — are APPENDED to the registry so the
+matcher, the picker filter and the two registry rules assert over something
+rather than over nothing; they are a superset, never a substitute, so no existing
+matcher test runs against anything but the real rows.
+
+**Evidence.** 298 tests, clippy clean. 78 shots rendered and compared byte-wise:
+69 identical, 5 known-unstable, and 4 that moved — `nirvana`,
+`nirvana-portrait` and `nin` from the ink fall-through, `beatles` from the pulse,
+all four in the direction of the reference renders, and `nirvana` checked by eye
+against `egg-nirvana.png`.
+
+**NOT DONE, and neither was asked for:** no band is registered, so nothing
+renders a basic theme; and the six-tap picker is still not built, so "does not
+get a listing" is enforced by a test rather than by a screen.
+
 ### 97. Bug sweep over one day's work
 **DONE — THREE REAL DEFECTS, ONE FALSE ALARM, ONE WRONG COMMENT.** A review of
 the eighteen commits made in one session, asked for directly: *"We've done a

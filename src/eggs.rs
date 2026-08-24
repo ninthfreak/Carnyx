@@ -5,9 +5,20 @@
 //! "scale-up rule" says a theme may change no layout, no control and no
 //! behaviour, and nothing here returns anything but colours, strings and flags.
 //!
-//! ALL FIVE: AC/DC, The Beatles, Led Zeppelin, Nirvana and Nine Inch Nails. The
-//! registry was a slice with one row for exactly this reason, and adding the
-//! other four was four rows and a motif arm rather than a refactor.
+//! ── TWO TIERS ────────────────────────────────────────────────────────────────
+//!
+//! ADVANCED: AC/DC, The Beatles, Led Zeppelin, Nirvana and Nine Inch Nails —
+//! every theme the design handoff specifies, each a palette, five faces, marks
+//! and ornament. The registry was a slice with one row for exactly this reason,
+//! and adding the other four was four rows and a motif arm rather than a
+//! refactor. These are the rows the hidden picker in settings would list.
+//!
+//! BASIC: a genre line, a face, or both, and nothing else — one line of registry
+//! through [`basic`], no art, no palette, no shot, and NO LISTING. The tail of
+//! bands worth a nod is long and none of them is worth a build. See [`Tier`].
+//!
+//! The distinction is the owner's and the second tier is new; [`BASIC`] is empty
+//! until somebody names a band for it.
 //!
 //! THREE OF THE FIVE CHANGE NO COLOUR AT ALL. Led Zeppelin, Nirvana and Nine
 //! Inch Nails state `accent`/`glow`/`chromeInk` as the LIVE TOKENS, which is the
@@ -39,6 +50,28 @@
 //! RadioText, which on this market's stations is rotating advert copy, and it
 //! has already been wrong once in the field. See [`match_egg_id`].
 
+/// How much of the face a theme dresses, and whether it is worth listing.
+///
+/// TWO TIERS, and the distinction is the owner's: *"All currently defined band
+/// Easter Eggs are now considered 'advanced' Easter Eggs."*
+///
+/// The difference is not a limit the code enforces — an [`Egg`] is one struct and
+/// a `Basic` row could in principle set any field on it. It is a statement about
+/// what a row IS, and two things follow from it mechanically: [`listed`] returns
+/// only the advanced ones, and [`basic`] is the only way to build a basic row, so
+/// a basic row cannot reach a field it is not meant to have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// The full dress: palette, marks, type, ornament. All five of the original
+    /// bands. LISTED in the hidden picker in settings.
+    Advanced,
+    /// One or two things and nothing else — a genre line, a face, or both. See
+    /// [`basic`]. NEVER listed: the picker is a way to look at the five themes
+    /// without waiting for the right track, and a hundred rows that each change
+    /// a font is not that.
+    Basic,
+}
+
 /// A resolved band theme.
 ///
 /// Every field is a value the face reads directly — no palette lookups, no
@@ -51,6 +84,8 @@
 pub struct Egg {
     /// What the theme is called, and the key the face switches its motif on.
     pub id: &'static str,
+    /// Advanced or basic. See [`Tier`].
+    pub tier: Tier,
     /// The line that replaces the PTY genre text.
     pub genre: &'static str,
     /// Base colour of that line.
@@ -274,6 +309,11 @@ pub const NO_SKIN: Skin = Skin {
 /// row would bury the four or five fields that are the theme.
 pub const PLAIN: Egg = Egg {
     id: "",
+    // BASIC, so a row that forgets to say is the SMALLER claim. An advanced row
+    // that forgot would be missing from the picker, which someone notices the
+    // first time they look; a basic row that forgot would appear in it, which
+    // nobody notices until the list is a hundred long.
+    tier: Tier::Basic,
     genre: "",
     genre_ink: 0,
     genre_pulse: 0,
@@ -312,6 +352,7 @@ pub const PLAIN: Egg = Egg {
 /// red is just a bug with a costume on.
 pub const ACDC: Egg = Egg {
     id: "AC/DC",
+    tier: Tier::Advanced,
     genre: "High Voltage Rock 'n' Roll",
     genre_ink: 0xE8A400,
     genre_pulse: 0xFFE24A,
@@ -399,6 +440,7 @@ const FACE_SINGOTHIC: &str = "Singothic";
 /// reference draws it this way on purpose, and the veto is the port.
 pub const BEATLES: Egg = Egg {
     id: "The Beatles",
+    tier: Tier::Advanced,
     genre: "Rock",
     genre_ink: 0x4A2C15,
     hero_lower: true,
@@ -438,6 +480,7 @@ const BEATLES_SKIN: Skin = Skin {
 /// theme that leaves the settings gear alone.
 pub const ZEPPELIN: Egg = Egg {
     id: "Led Zeppelin",
+    tier: Tier::Advanced,
     hero_face: FACE_KASHMIR,
     hero_scale: 1.3,
     rt_face: FACE_KASHMIR,
@@ -455,6 +498,7 @@ pub const ZEPPELIN: Egg = Egg {
 /// the lettering at 20% black — a photocopied look, which is what `xerox` names.
 pub const NIRVANA: Egg = Egg {
     id: "Nirvana",
+    tier: Tier::Advanced,
     genre: "Verse Chorus Verse",
     body_face: FACE_MARKER,
     hero_face: FACE_ONYX,
@@ -480,6 +524,7 @@ pub const NIRVANA: Egg = Egg {
 /// `heroGlitch` IS NOT CARRIED — see this module's header.
 pub const NIN: Egg = Egg {
     id: "Nine Inch Nails",
+    tier: Tier::Advanced,
     genre: "Broken Machines",
     genre_cycle: "Things Falling Apart",
     body_face: FACE_GRIDNIK,
@@ -502,15 +547,188 @@ pub const NIN: Egg = Egg {
     ..PLAIN
 };
 
-/// Every theme that exists here, in match order — the registry's own order, so
-/// a RadioText naming two bands resolves the same way it does in the reference.
-const REGISTRY: &[(&Egg, &[&str])] = &[
+// ── BASIC THEMES ─────────────────────────────────────────────────────────────
+
+/// A basic theme: a genre line, a face, or both, and NOTHING else.
+///
+/// ## What it is for
+///
+/// The five advanced themes are each a build — a palette, marks, five faces,
+/// ornament, a per-scheme cut. That is the right amount of work for a band worth
+/// dressing the whole face for, and far too much for the long tail. A basic row
+/// is the long tail: one line of registry, no art, no palette, no shot.
+///
+/// ## Both arguments are optional, and `""` is how you say so
+///
+/// `""` for the genre keeps the PTY the broadcaster sent — see `GenreText`,
+/// which falls through to it. `""` for the face keeps the ordinary one. A row
+/// with neither changes nothing and is caught by
+/// `a_basic_theme_has_to_actually_do_something`.
+///
+/// ## ONE FACE, TWO PLACES
+///
+/// The face lands on the genre line AND the RadioText, which is the owner's
+/// rule: *"Custom fonts, when defined, will be used for both the genre and radio
+/// text."* It deliberately does NOT reach the hero, the preset tiles or the
+/// frequency readout — those are `hero_face`, `body_face` and `freq_face`, and a
+/// row that set them would be an advanced theme with a basic row's paperwork.
+///
+/// Note this is the one place in the file where a single face feeds two fields.
+/// The advanced rows keep them apart because the reference's fallbacks are not
+/// uniform (see the TYPE block on [`Egg`]); a basic row has no fallbacks to be
+/// asymmetric about, so the rule can be stated once here.
+pub const fn basic(id: &'static str, genre: &'static str, face: &'static str) -> Egg {
+    Egg {
+        id,
+        tier: Tier::Basic,
+        genre,
+        genre_face: face,
+        rt_face: face,
+        ..PLAIN
+    }
+}
+
+// ── THE REGISTRY ─────────────────────────────────────────────────────────────
+
+/// The advanced themes, in match order — the reference registry's own order, so
+/// a RadioText naming two bands resolves the same way it does there.
+const ADVANCED: &[(&Egg, &[&str])] = &[
     (&ACDC, &["ac dc", "acdc"]),
     (&BEATLES, &["beatles"]),
     (&ZEPPELIN, &["led zeppelin", "zeppelin"]),
     (&NIRVANA, &["nirvana"]),
     (&NIN, &["nine inch nails"]),
 ];
+
+/// The basic themes, in match order among themselves.
+///
+/// EMPTY, AND THAT IS THE HONEST STATE. The framework is built and no band has
+/// been named for it: the design handoff specifies five artists and all five are
+/// advanced, so any row here would be one this project invented. Add rows with
+/// [`basic`]; nothing else has to change.
+///
+/// ── BEFORE ADDING ONE, READ [`match_egg_id`] ──
+///
+/// This list is where the false-match hazard gets dangerous. Five long names are
+/// nearly safe; a long tail is not, because the matcher runs against rotating
+/// advert copy and a short or ordinary-word band name — "Yes", "Bread", "Free",
+/// "Air" — will fire on prose that has nothing to do with music.
+/// `no_basic_name_is_short_enough_to_fire_on_prose` holds a floor under it, and
+/// a floor is not a substitute for thinking about the name.
+const BASIC: &[(&Egg, &[&str])] = &[];
+
+/// Two basic rows that exist ONLY under `cfg(test)`.
+///
+/// [`BASIC`] is empty and honestly so, which leaves every rule about the tier —
+/// the matcher, the picker filter, the two registry checks — asserting over
+/// nothing and passing. These give them something to assert over.
+///
+/// A SUPERSET, NOT A SUBSTITUTE. [`registry`] chains these AFTER the shipped
+/// rows rather than in place of them, so every existing matcher test still runs
+/// against the real registry and a fixture cannot mask a shipped row. The names
+/// are deliberately not bands.
+///
+/// One of each shape, because the two fail differently: a row with a genre and
+/// no font is the ordinary case, and a row with a font and no genre is the one
+/// that used to blank the genre line instead of dressing it.
+#[cfg(test)]
+const BASIC_FIXTURES: &[(&Egg, &[&str])] = &[
+    (&FIXTURE_GENRE, &["fixture genre"]),
+    (&FIXTURE_FACE, &["fixture face"]),
+];
+
+#[cfg(test)]
+const FIXTURE_GENRE: Egg = basic("Fixture Genre", "Test Signal", "");
+#[cfg(test)]
+const FIXTURE_FACE: Egg = basic("Fixture Face", "", FACE_ONYX);
+
+/// Every theme, advanced first.
+///
+/// THE ORDER IS THE PRECEDENCE and it is structural rather than a convention
+/// about where to paste a row: a RadioText that names an advanced band and a
+/// basic one gets the advanced dress, because chaining puts those rows first.
+/// One flat list would have made that a comment nobody has to obey.
+fn registry() -> impl Iterator<Item = &'static (&'static Egg, &'static [&'static str])> {
+    let basic = BASIC.iter();
+    // Appended, never substituted — see [`BASIC_FIXTURES`].
+    #[cfg(test)]
+    let basic = basic.chain(BASIC_FIXTURES.iter());
+    ADVANCED.iter().chain(basic)
+}
+
+/// Every basic row the rules below apply to, fixtures included.
+#[cfg(test)]
+fn basic_rows() -> impl Iterator<Item = &'static (&'static Egg, &'static [&'static str])> {
+    BASIC.iter().chain(BASIC_FIXTURES.iter())
+}
+
+/// The themes the hidden picker in settings would list — the advanced ones.
+///
+/// THE PICKER DOES NOT EXIST. `ui/settings.slint` carries the note: CarFM wraps
+/// the about line in a Pressable that counts to six and reveals a band-theme
+/// picker, and that picker was ported here once against themes that did not
+/// exist yet, so it moved a radio button and changed nothing. It was removed
+/// rather than left half-built.
+///
+/// This function is what it will read when it is rebuilt, and it exists now
+/// because it is the mechanical half of what "basic" MEANS: the owner's rule is
+/// that basic themes get no listing, and a rule with no code behind it is a
+/// comment. Whatever builds the picker takes this and does not filter again.
+pub fn listed() -> Vec<&'static Egg> {
+    registry().map(|(egg, _)| *egg).filter(|e| e.tier == Tier::Advanced).collect()
+}
+
+/// Every theme, listed or not, for tests and for anything that has to check the
+/// whole set rather than the picker's slice of it.
+pub fn all() -> Vec<&'static Egg> {
+    registry().map(|(egg, _)| *egg).collect()
+}
+
+/// Every display face this app can actually draw, as `(family, file)`.
+///
+/// THE FAMILY IS NOT THE FILENAME and that is the whole reason this table exists
+/// rather than a list of names. Slint resolves `font-family` against the family
+/// the file DECLARES in its `name` table, so `BeatlesYellowSub.ttf` answers to
+/// "YellowSubmarine" and `Gridnik.otf` to "FoundryGridnik".
+/// `ui/tokens.slint` records that it was checked file by file, and records that
+/// copying CarFM's own keys would have missed every one of them.
+///
+/// ── WHY THIS IS A GUARD AND NOT DOCUMENTATION ────────────────────────────────
+///
+/// A face nobody bundled does not fail. Slint asks for the family, does not find
+/// it, and quietly draws Atkinson — so a theme naming a font that is not in
+/// `ui/fonts/` looks like a theme whose font "didn't work", on a unit with no way
+/// to ask why. That was survivable while five faces arrived with a design
+/// handoff. It stops being survivable the moment a basic theme is one line, and
+/// the one line most likely to be wrong is the face.
+///
+/// `every_face_a_theme_names_is_bundled_and_imported` reads BOTH ends: that every
+/// face named by any row is in this table, and that every file in this table is
+/// `import`ed by `ui/tokens.slint`. Naming a face and forgetting the import is
+/// then a red test rather than a silent Atkinson.
+pub const BUNDLED_FACES: &[(&str, &str)] = &[
+    (FACE_SQUEALER, "Squealer.otf"),
+    (FACE_BEATLES, "BeatlesYellowSub.ttf"),
+    (FACE_BEATLES_GENRE, "MadieRoger.ttf"),
+    (FACE_KASHMIR, "Kashmir.ttf"),
+    (FACE_MARKER, "PermanentMarker.ttf"),
+    (FACE_ONYX, "Onyx.ttf"),
+    (FACE_GRIDNIK, "Gridnik.otf"),
+    (FACE_SINGOTHIC, "Singothic.ttf"),
+];
+
+/// Every face `egg` names, in no particular order, skipping the empty ones.
+///
+/// The five type fields are separate on [`Egg`] because their fallbacks differ;
+/// anything asking "what fonts does this row need" wants them together, and
+/// wants to be updated when a sixth is added rather than to keep working while
+/// missing it.
+pub fn faces_used(egg: &Egg) -> Vec<&'static str> {
+    [egg.body_face, egg.hero_face, egg.genre_face, egg.rt_face, egg.freq_face]
+        .into_iter()
+        .filter(|f| !f.is_empty())
+        .collect()
+}
 
 /// RadioText reduced to lower-case words separated by single spaces.
 ///
@@ -549,8 +767,7 @@ pub fn match_egg_id(rt: &str) -> Option<&'static Egg> {
     if padded.trim().is_empty() {
         return None;
     }
-    REGISTRY
-        .iter()
+    registry()
         .find(|(_, names)| names.iter().any(|n| padded.contains(&format!(" {n} "))))
         .map(|(egg, _)| *egg)
 }
@@ -815,10 +1032,10 @@ mod tests {
     #[test]
     fn only_nine_inch_nails_bands_its_call_signs() {
         assert_eq!(
-            REGISTRY
-                .iter()
-                .filter(|(e, _)| e.hero_glitch)
-                .map(|(e, _)| e.id)
+            all()
+                .into_iter()
+                .filter(|e| e.hero_glitch)
+                .map(|e| e.id)
                 .collect::<Vec<_>>(),
             vec!["Nine Inch Nails"],
         );
@@ -838,16 +1055,16 @@ mod tests {
     #[test]
     fn the_ghost_belongs_to_nirvana_and_nine_inch_nails() {
         assert_eq!(
-            REGISTRY
-                .iter()
-                .filter(|(e, _)| e.ghost_alpha > 0.0)
-                .map(|(e, _)| (e.id, e.ghost_dx, e.ghost_dy))
+            all()
+                .into_iter()
+                .filter(|e| e.ghost_alpha > 0.0)
+                .map(|e| (e.id, e.ghost_dx, e.ghost_dy))
                 .collect::<Vec<_>>(),
             vec![("Nirvana", 3.0, 3.0), ("Nine Inch Nails", 2.0, 0.0)],
         );
         // A ghost with no offset is the letters printed twice in the same place,
         // which is not an impression off register — it is just darker type.
-        for (e, _) in REGISTRY.iter().filter(|(e, _)| e.ghost_alpha > 0.0) {
+        for e in all().into_iter().filter(|e| e.ghost_alpha > 0.0) {
             assert!(e.ghost_dx != 0.0 || e.ghost_dy != 0.0, "{}", e.id);
         }
     }
@@ -860,10 +1077,10 @@ mod tests {
     #[test]
     fn only_acdc_replaces_the_stereo_cones() {
         assert_eq!(
-            REGISTRY
-                .iter()
-                .filter(|(e, _)| e.stereo_bolts)
-                .map(|(e, _)| e.id)
+            all()
+                .into_iter()
+                .filter(|e| e.stereo_bolts)
+                .map(|e| e.id)
                 .collect::<Vec<_>>(),
             vec!["AC/DC"],
         );
@@ -897,5 +1114,198 @@ mod tests {
     fn punctuation_separates_rather_than_vanishing() {
         assert_eq!(normalize_rt("AC/DC"), "ac dc");
         assert_eq!(normalize_rt("Hi-Fi, 2026!"), "hi fi  2026 ");
+    }
+
+    // ── THE TWO TIERS ────────────────────────────────────────────────────────
+
+    /// THE FIVE ORIGINALS ARE ADVANCED AND NOTHING ELSE IS.
+    ///
+    /// The owner's words: *"All currently defined band Easter Eggs are now
+    /// considered 'advanced' Easter Eggs."* Asserted by NAME rather than by
+    /// counting, so adding a sixth advanced theme is a deliberate edit here and
+    /// adding a basic one is not an edit at all.
+    #[test]
+    fn the_five_original_bands_are_the_advanced_tier() {
+        let advanced: Vec<&str> = all()
+            .into_iter()
+            .filter(|e| e.tier == Tier::Advanced)
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(
+            advanced,
+            ["AC/DC", "The Beatles", "Led Zeppelin", "Nirvana", "Nine Inch Nails"]
+        );
+    }
+
+    /// THE PICKER LISTS THE ADVANCED ONES AND ONLY THOSE.
+    ///
+    /// This is the whole mechanical content of "basic themes don't get a
+    /// listing". The picker itself does not exist — see [`listed`] — so this is
+    /// the only place the rule is enforced, and it has to be enforced somewhere
+    /// or it is a sentence in a comment.
+    #[test]
+    fn the_hidden_picker_never_lists_a_basic_theme() {
+        let listed = listed();
+        assert!(!listed.is_empty(), "the picker would have nothing to show");
+        for e in &listed {
+            assert_eq!(e.tier, Tier::Advanced, "{} is listed and is not advanced", e.id);
+        }
+        for e in all() {
+            if e.tier == Tier::Basic {
+                assert!(
+                    !listed.iter().any(|l| l.id == e.id),
+                    "{} is basic and reached the picker",
+                    e.id
+                );
+            }
+        }
+    }
+
+    /// A BASIC THEME TOUCHES EXACTLY TWO THINGS, AND THE FONT TOUCHES TWO PLACES.
+    ///
+    /// The owner's rule for the tier, stated as a test because `basic` is a
+    /// constructor and a constructor is easy to extend by accident: *"Basic
+    /// Easter eggs have one or two out of two items: 1- A custom Genre. 2- A
+    /// custom font. Custom fonts, when defined, will be used for both the genre
+    /// and radio text."*
+    ///
+    /// The negative half is the important half. `hero_face`, `body_face` and
+    /// `freq_face` are the three the font must NOT reach, and a row that set
+    /// them would be an advanced theme wearing a basic row's paperwork.
+    #[test]
+    fn a_basic_theme_is_a_genre_a_face_and_nothing_else() {
+        let both = basic("Fixture", "Sludge", FACE_ONYX);
+        assert_eq!(both.tier, Tier::Basic);
+        assert_eq!(both.genre, "Sludge");
+        assert_eq!(both.genre_face, FACE_ONYX, "the font dresses the genre line");
+        assert_eq!(both.rt_face, FACE_ONYX, "and the RadioText, from the same one");
+        assert_eq!(both.hero_face, "", "and NOT the hero");
+        assert_eq!(both.body_face, "", "nor the preset tiles");
+        assert_eq!(both.freq_face, "", "nor the dial");
+
+        // Everything else is PLAIN: no palette, no marks, no ornament, and the
+        // logo stays on the card.
+        assert_eq!(Egg { id: "", genre: "", genre_face: "", rt_face: "", ..both }, PLAIN);
+
+        // ONE OF THE TWO IS ENOUGH, both ways round.
+        let genre_only = basic("Genre Only", "Skiffle", "");
+        assert_eq!(genre_only.genre, "Skiffle");
+        assert_eq!(genre_only.rt_face, "", "no font named, no font applied");
+
+        let font_only = basic("Font Only", "", FACE_KASHMIR);
+        assert_eq!(font_only.genre, "", "no line of its own — the PTY is dressed instead");
+        assert_eq!(font_only.genre_face, FACE_KASHMIR);
+        assert_eq!(font_only.rt_face, FACE_KASHMIR);
+    }
+
+    /// A BASIC THEME HAS TO ACTUALLY DO SOMETHING.
+    ///
+    /// `basic(id, "", "")` compiles and is a theme that matches a band and then
+    /// changes nothing on the face — indistinguishable from no theme at all
+    /// except that it suppresses any later row that would have matched. The
+    /// constructor cannot refuse it, so the registry is checked instead.
+    #[test]
+    fn a_basic_theme_has_to_actually_do_something() {
+        let mut seen = 0;
+        for (egg, _) in basic_rows() {
+            assert!(
+                !egg.genre.is_empty() || !egg.genre_face.is_empty(),
+                "{} states neither a genre nor a font",
+                egg.id
+            );
+            seen += 1;
+        }
+        assert!(seen >= 2, "the fixtures are missing, so this asserted nothing");
+    }
+
+    /// A BASIC ROW RESOLVES THROUGH THE LIVE MATCHER, AND AN ADVANCED ONE WINS.
+    ///
+    /// The tier is not a second lookup: basic rows go through [`match_egg_id`]
+    /// exactly as the five do, with the same whole-token rule, so the same field
+    /// failure is guarded the same way. What the two lists buy is PRECEDENCE —
+    /// [`registry`] chains advanced first, so RadioText naming both dresses the
+    /// whole face rather than restyling one line.
+    #[test]
+    fn a_basic_row_resolves_and_yields_to_an_advanced_one() {
+        assert_eq!(match_egg_id("Fixture Genre - Some Track").map(|e| e.id), Some("Fixture Genre"));
+        assert_eq!(match_egg_id("now playing fixture face").map(|e| e.id), Some("Fixture Face"));
+        // Whole tokens, for a basic row too.
+        assert_eq!(match_egg_id("prefixture genre"), None);
+        // Both named: the advanced dress wins wherever it sits in the string.
+        assert_eq!(
+            match_egg_id("Fixture Genre and Nirvana").map(|e| e.id),
+            Some("Nirvana"),
+            "an advanced theme outranks a basic one"
+        );
+        // And a basic row is reachable but never listed.
+        assert!(all().iter().any(|e| e.id == "Fixture Genre"));
+        assert!(!listed().iter().any(|e| e.id == "Fixture Genre"));
+    }
+
+    /// NO BASIC NAME IS SHORT ENOUGH TO FIRE ON PROSE.
+    ///
+    /// [`match_egg_id`] carries the field failure this guards against: an advert
+    /// for "Hometown HVAC DC power" repainted CarFM's whole face as AC/DC, and
+    /// this matcher runs against rotating advert copy rather than a slogan. Five
+    /// long names were nearly safe. A long tail is not — "Yes", "Free", "Air",
+    /// "Bread", "War", "Cream" are all real bands and all ordinary English.
+    ///
+    /// SIX CHARACTERS IS A FLOOR, NOT A GUARANTEE, and it is deliberately crude:
+    /// the honest check is a person reading the name and asking whether a car
+    /// dealership could say it. What this stops is the whole class of two- and
+    /// three-letter matches getting in without anyone noticing.
+    #[test]
+    fn no_basic_name_is_short_enough_to_fire_on_prose() {
+        for (egg, names) in basic_rows() {
+            for n in *names {
+                assert!(
+                    n.len() >= 6,
+                    "{}: {n:?} is short enough to appear in advert copy",
+                    egg.id
+                );
+                assert_eq!(*n, normalize_rt(n).trim(), "{}: {n:?} is not normalised", egg.id);
+            }
+        }
+    }
+
+    /// EVERY FACE A THEME NAMES IS BUNDLED, AND EVERY BUNDLED FILE IS IMPORTED.
+    ///
+    /// The failure this exists for is silent at every stage. Slint resolves
+    /// `font-family` against the family a file declares; a family nobody
+    /// imported is not an error, it is Atkinson. So a theme naming a font that
+    /// is not in `ui/fonts/` — or one that is there and was never imported in
+    /// `ui/tokens.slint` — renders as "the font didn't work", on a unit with no
+    /// way to ask why.
+    ///
+    /// BOTH ENDS, because either alone leaves a hole: the table could name a
+    /// file that does not exist, or `tokens.slint` could import a file the table
+    /// does not know about. The file list is read from the source rather than
+    /// restated here.
+    #[test]
+    fn every_face_a_theme_names_is_bundled_and_imported() {
+        let tokens = include_str!("../ui/tokens.slint");
+        for (family, file) in BUNDLED_FACES {
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("ui/fonts")
+                    .join(file)
+                    .is_file(),
+                "{family} names {file}, which is not in ui/fonts/"
+            );
+            assert!(
+                tokens.contains(&format!("import \"fonts/{file}\";")),
+                "{file} is bundled but ui/tokens.slint never imports it, so {family} \
+                 silently resolves to Atkinson"
+            );
+        }
+        for egg in all() {
+            for face in faces_used(egg) {
+                assert!(
+                    BUNDLED_FACES.iter().any(|(family, _)| *family == face),
+                    "{} names {face:?}, which is not in BUNDLED_FACES",
+                    egg.id
+                );
+            }
+        }
     }
 }
