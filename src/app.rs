@@ -2380,12 +2380,13 @@ impl App {
         // Only a change the driver cannot already see is worth a banner, so this
         // is the one place the foreground flag is read.
         //
-        // THE LOGO IS THE MESSAGE WHEN THERE IS ONE. A station's own mark says
-        // which station this is faster than its call letters do, and a driver
-        // glancing at a notification is doing exactly that — so a station with a
-        // saved logo gets the picture and no words, and one without gets the call
-        // sign and the dial. The Java side falls back to the words if the file
-        // will not decode, because a banner with neither says nothing.
+        // THE CALL SIGN AND THE DIAL ALWAYS, AND THE MARK AS WELL WHEN THERE IS
+        // ONE. Sending the logo alone was tried and does not survive contact with
+        // the platform: `setLargeIcon` draws into a small square at the banner's
+        // right edge, and station logos are landscape wordmarks, so the name ends
+        // up a few pixels tall with an empty card beside it. The words are what a
+        // driver can read at a glance; the logo identifies the station next to
+        // them, and its absence costs nothing.
         if moved && !crate::android::is_foreground() {
             let dial = format_mhz(landed);
             // The call sign leads when there is one; the dial is the honest

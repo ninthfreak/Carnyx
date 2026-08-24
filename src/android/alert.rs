@@ -97,8 +97,10 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// Say what is tuned now.
 ///
 /// `title` is the call sign, or the dial when no call sign has resolved; `text`
-/// is the second line. `logo` is the station's saved picture, and an EMPTY
-/// STRING is "there is none" rather than a separate `Option` crossing JNI —
+/// is the second line. Both are ALWAYS shown — a logo-only banner was tried and
+/// the platform draws a landscape wordmark into a square slot too small to read.
+/// `logo` is the station's saved picture, drawn beside the words when there is
+/// one, and an EMPTY STRING is "there is none" rather than an `Option` — 
 /// there is no null String to hand `new_string`, and the Java side tests for
 /// empty anyway.
 ///

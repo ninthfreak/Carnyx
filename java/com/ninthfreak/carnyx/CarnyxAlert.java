@@ -96,17 +96,16 @@ public final class CarnyxAlert {
      * notification updated four times, not four notifications — the driver wants
      * to know where they landed, not where they have been.
      *
-     * <p>THE LOGO WINS WHEN THERE IS ONE. A station's own mark says which station
-     * this is faster than its call letters do, and a driver glancing at a banner
-     * is doing exactly that — so when {@code logoPath} names a file that decodes,
-     * the notification carries the picture and NO text at all. The call sign and
-     * the dial are what a station with no saved logo has instead.
+     * <p>THE CALL SIGN AND THE DIAL ALWAYS, and the logo beside them when the
+     * station has one. A logo-only banner was tried first and does not work —
+     * see {@link #build} for what the platform actually does with a landscape
+     * wordmark in a square slot.
      *
      * @param title the call sign, or the dial when no call sign has resolved
      * @param text the second line, the dial
      * @param logoPath the station's saved logo, or empty for none. A path that
-     *     does not decode falls back to the text, because a banner with neither
-     *     picture nor words says nothing.
+     *     does not decode simply leaves the banner as words, which is the whole
+     *     message either way.
      * @return true when the platform was handed the notification. False means it
      *     could not be posted AND the reason is in the log; it is never a silent
      *     no.
@@ -190,8 +189,8 @@ public final class CarnyxAlert {
      *
      * <p>Returns null for anything that does not decode — a missing file, a
      * format the platform will not read, a master that was truncated on the way
-     * in. The caller falls back to text, because a banner with neither picture
-     * nor words says nothing.
+     * in. Nothing is lost when it does: the banner carries the call sign and the
+     * dial regardless, and the mark was only ever beside them.
      */
     private static Bitmap decode(String path) {
         if (path == null || path.isEmpty()) {
@@ -236,16 +235,20 @@ public final class CarnyxAlert {
                 // one reused id would mean only the first change was ever seen.
                 .setOnlyAlertOnce(false)
                 .setShowWhen(false);
+        // THE WORDS ALWAYS, THE MARK AS WELL WHEN THERE IS ONE. A logo-only
+        // banner was tried and does not work: `setLargeIcon` draws into a small
+        // square at the card's right edge, and station logos are landscape
+        // wordmarks — the three in the handoff are 408x296, 545x200 and 255x144 —
+        // so fitting one to that slot leaves the name a few pixels tall and the
+        // rest of the card empty. The call sign and the dial are what a driver
+        // can actually read at a glance; the mark identifies the station beside
+        // them.
+        b.setContentTitle(title == null || title.isEmpty() ? "Carnyx" : title);
+        if (text != null && !text.isEmpty()) {
+            b.setContentText(text);
+        }
         if (logo != null) {
-            // JUST THE LOGO. The mark is the whole message; the call sign and the
-            // dial beside it would be saying the same thing twice, in words, to a
-            // driver who has already read the picture.
             b.setLargeIcon(logo);
-        } else {
-            b.setContentTitle(title == null || title.isEmpty() ? "Carnyx" : title);
-            if (text != null && !text.isEmpty()) {
-                b.setContentText(text);
-            }
         }
         PendingIntent tap = launchIntent();
         if (tap != null) {

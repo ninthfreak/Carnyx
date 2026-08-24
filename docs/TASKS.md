@@ -1273,12 +1273,18 @@ without. **Open:** whether that should become a one-time prompt on a 33+ unit,
 since unlike location this feature cannot degrade — it either shows or it does
 not.
 
-**WHAT IT SHOWS: the logo when there is one, the words when there is not.** A
-station's own mark says which station this is faster than its call letters do,
-and a driver glancing at a banner is doing exactly that — so a station with a
-saved logo gets the picture and NO text, and one without gets the call sign as
-the title and the dial beneath it. The Java side falls back to the words when the
-file will not decode, because a banner with neither says nothing.
+**WHAT IT SHOWS: the call sign and the dial always, the logo beside them when
+there is one.** Sending the logo ALONE was tried first and does not survive
+contact with the platform. `setLargeIcon` draws into a small square at the
+banner's right edge, and station logos are landscape wordmarks — the three in the
+handoff are 408x296, 545x200 and 255x144 — so fitting one to that slot leaves the
+station's name a few pixels tall with an empty card beside it. The words are what
+a driver can read at a glance; the mark identifies the station next to them, and
+its absence costs nothing. `BigPictureStyle` does not rescue the logo-only form
+either: a heads-up shows the COLLAPSED notification, so the big picture is only
+ever seen by someone who has already opened the shade. Drawing the logo large
+would take a `RemoteViews` layout, which needs an XML resource and would
+therefore be Gradle-only, like `CarnyxService` — not built.
 
 A PATH CROSSES THE SEAM, NOT PIXELS. `logos::assign::path_for_theme` mirrors
 `read_for_theme`'s pick and stops short of its decode: Android reads the file
