@@ -1212,6 +1212,11 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
 ### 89. Draw the diagnostics log on the face
+**CLOSED — NOT PORTING.** See #91. The switch has been removed rather than the
+overlay built.
+
+<details><summary>The original entry</summary>
+
 **OPEN. The switch is there and it drives nothing.** CarFM's
 `src/components/carfm/DiagOverlay.tsx` puts the tail of the tuner log on the
 radio face itself — "the settings panel already shows the whole log, but reading
@@ -1233,7 +1238,14 @@ That makes the row a promise the app does not keep: its own subtitle reads
 happen. Unexplained events are highlighted." Nothing is mirrored and nothing is
 highlighted.
 
+</details>
+
 ### 90. Build what reception testing mode says it does
+**CLOSED — NOT PORTING.** See #91. The switch has been removed rather than the
+sampler and the rating bar built.
+
+<details><summary>The original entry</summary>
+
 **OPEN, TWO THIRDS OF IT.** The row's subtitle states three behaviours —
 "Records signal level, position and RDS health every 15 seconds, and puts four
 audio-quality buttons on the radio. Quiets the routine RDS chatter." Only the
@@ -1261,6 +1273,45 @@ cached fix, because at highway speed the dataset needs the fix's AGE above all �
 "a position minutes old makes distance and bearing to a transmitter fiction while
 the car keeps moving." Carnyx has the ingredients — `signal.rs`, `stations.rs`'s
 prediction, `rds.rs`'s counters, `android::location` — and no sampler.
+
+</details>
+
+### 91. Dump the diagnostics that came from CarFM
+**DONE.** CarFM's diagnostics are not features. They are utilities somebody built
+to answer a question they had at the time, and porting them wholesale carried
+another project's open investigations into this one as though they were
+requirements. They are out.
+
+**Removed.** Three switches — "Show the log on the radio", "Raw RDS capture",
+"Reception testing mode" — with their preferences (`diagOverlayOn`,
+`rdsCaptureOn`, `debugOn`), their callbacks, their Slint properties, and the
+`Settings` fields behind them. Five of the seven DIAGNOSTICS action rows: export
+the raw capture, dump the head unit's boot settings, probe the vendor-app
+trampoline, dump every tuner getter, probe `NwdFmManager`. None of the five had
+ever been written; all five fell into a `_` arm that wrote "not available without
+the head unit" into the log, which read as a build limitation and was an
+unwritten function. That arm is gone with them, so `run_diag_action` now has no
+catch-all left to write.
+
+**Kept, and why.** The log ring, the settings panel's view of it, "Save to file",
+"Clear log" and the "Tuner log" master switch. That is the MECHANISM rather than
+an investigation: this unit has no adb, so a line written into that ring and read
+back out of Downloads is the only channel there is, and every new diagnostic this
+project needs will be built on it. The station pop-up's own evidence line (#88),
+`service: started`, `lifecycle:` and the crash report all go through it already.
+
+**What fell out with them.** `set_debug` and the dependant-clearing half of
+`set_diag` — nothing hangs off the log switch any more, so it is a plain setter.
+Two log lines that were suppressed in reception-testing mode, the RDS state line
+and the accepted-level line, are now unconditional. `diag_actions` takes no
+arguments, because the list no longer changes shape with the capture flag or the
+live source.
+
+**A file from an older build still loads.** `from_json` reads named fields and
+ignores the rest, so the three dropped keys cost a driver nothing; the test that
+covered `autostart`'s removal now covers all four.
+
+Closes #87, #89 and #90.
 
 ### 88. Say what is tuned when the driver is in another app
 **BUILT, AND ONE THING ABOUT IT IS UNVERIFIED.** The wheel changes station whether
@@ -1395,6 +1446,11 @@ song — was asked about and set aside until the RDS work is trusted; a PS that
 scrolls song titles would otherwise fire it continuously.
 
 ### 87. Port the diagnostics rows that were skipped
+**CLOSED — NOT PORTING, AND THE ROWS ARE GONE.** See #91. The five open rows here
+were CarFM's vendor probes; "Save to file" survives as the mechanism.
+
+<details><summary>The original entry</summary>
+
 **"Save to file" DONE. The other five OPEN.**
 
 THE SKIP WAS THE WRONG CALL AND IT WAS MINE. `NwdBridge.java:47-51` recorded it
@@ -1453,6 +1509,8 @@ unresolved `android.*` symbol) and the JNI call shape was type-checked in a
 throwaway crate against `jni` 0.22.4. Neither the Rust for `armv7-linux-androideabi`
 nor the dex has been built. That is the same claim `src/android/nwd.rs:19-21`
 already makes about the whole module.
+
+</details>
 
 ### 85. Stop the vendor's bank walk keeping the radio
 **DONE.**

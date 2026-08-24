@@ -685,11 +685,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         }
         State::SettingsDiagFull => {
             ui.invoke_settings_set_diag(true);
-            // Raw capture on is what adds the export row — the only second
-            // action row reachable without a head unit, since the four vendor
-            // probes need a live NWD service.
-            ui.invoke_settings_set_rds_capture(true);
-            ui.invoke_settings_set_diag_overlay(true);
+            // The two switches that used to be set here — raw capture, mirror to
+            // the face — were CarFM's diagnostics and are gone, along with the
+            // export row that capture used to add. What is left is the log
+            // itself, which is what this shot is of.
             // Two real tunes, so the log has more in it than the connect line.
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);

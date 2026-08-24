@@ -1121,9 +1121,6 @@ impl App {
                     theme: saved.theme,
                     logos_on: saved.logos_on,
                     diag_on: saved.diag_on,
-                    diag_overlay_on: saved.diag_overlay_on,
-                    rds_capture_on: saved.rds_capture_on,
-                    debug_on: saved.debug_on,
                     ..settings::Settings::default()
                 },
                 logo: crate::logos::search::Model::new(),
@@ -1845,10 +1842,11 @@ impl App {
                 // line and a CarFM line from the same drive diffable — it was
                 // written for exactly this and had no caller.
                 //
-                // Change-gated, and quiet in debug mode, both as CarFM has it:
-                // the unchanged case is the common one, since the same group
-                // repeats many times a second.
-                if changed && !s.settings.debug_on {
+                // Change-gated: the unchanged case is the common one, since the
+                // same group repeats many times a second. It used to be quiet in
+                // reception-testing mode as well; that mode was CarFM's and is
+                // gone.
+                if changed {
                     let line = rds::format_state(&s.rds_state, &s.rds.stats(), &s.rds.quality());
                     let at = stamp();
                     s.settings.log.push(&at, &format!("RDS {line}"));
@@ -1897,16 +1895,14 @@ impl App {
                     // budget some earlier retune spent.
                     s.level_retries = signal::LEVEL_RETRY_MAX;
                     s.level = Some(l.level);
-                    // CarFM logs every accepted reading with what it becomes on
-                    // the glyph, and suppresses it in debug mode where the
-                    // structured sample carries the same figures. Carnyx has no
-                    // structured sample, so debug mode simply goes quiet here.
-                    if !s.settings.debug_on {
-                        let lit = signal::level_to_lit(Some(f64::from(l.level)));
-                        let shown = signal::describe(lit.as_ref());
-                        let at = stamp();
-                        s.settings.log.push(&at, &format!("level {} @ {} → {shown}", l.level, l.asked));
-                    }
+                    // Every accepted reading, with what it becomes on the glyph.
+                    // This used to be suppressed in reception-testing mode, where
+                    // CarFM's structured sample carried the same figures; that
+                    // mode was CarFM's and is gone, so the line is unconditional.
+                    let lit = signal::level_to_lit(Some(f64::from(l.level)));
+                    let shown = signal::describe(lit.as_ref());
+                    let at = stamp();
+                    s.settings.log.push(&at, &format!("level {} @ {} → {shown}", l.level, l.asked));
                 } else {
                     // A REJECTION IS RETRIED, not left to the periodic watch.
                     //
@@ -2658,9 +2654,6 @@ impl App {
         ui.set_settings_clearing_logos(cfg.clearing_logos);
 
         ui.set_settings_diag_on(cfg.diag_on);
-        ui.set_settings_diag_overlay_on(cfg.diag_overlay_on);
-        ui.set_settings_rds_capture_on(cfg.rds_capture_on);
-        ui.set_settings_debug_on(cfg.debug_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
         // again, and it matters most here: the diagnostics overlay is the one a
         // driver leaves open while watching the radio misbehave. The cache write
@@ -2670,11 +2663,13 @@ impl App {
         if diag_changed {
             ui.set_settings_diag_lines(strings(&lines));
         }
-        // THE DIAGNOSTICS BUTTONS, same rule. The rows appear and disappear with
-        // the raw-capture switch and with whether the built-in tuner is live, so
-        // this list does change — just never at the rate it was being rebuilt at.
+        // THE DIAGNOSTICS BUTTONS, same rule. The list is now fixed — the five
+        // rows that came and went with the raw-capture switch and the live source
+        // were CarFM's probes and are gone — so this could in principle be built
+        // once, but it is cheap and the shape is shared with every other list
+        // here.
         let diag_actions: Vec<DiagAction> = cfg
-            .actions(nwd_active)
+            .actions()
             .iter()
             .map(|a| DiagAction {
                 label: a.label.as_str().into(),
@@ -3308,18 +3303,6 @@ impl App {
             app.state.borrow_mut().settings.set_diag(v);
             app.push_settings();
         });
-        on!(on_settings_set_diag_overlay, |app, v| {
-            app.state.borrow_mut().settings.diag_overlay_on = v;
-            app.push_settings();
-        });
-        on!(on_settings_set_rds_capture, |app, v| {
-            app.state.borrow_mut().settings.rds_capture_on = v;
-            app.push_settings();
-        });
-        on!(on_settings_set_debug, |app, v| {
-            app.state.borrow_mut().settings.set_debug(v);
-            app.push_settings();
-        });
         on!(on_settings_pick_diag_action, |app, i| {
             app.run_diag_action(i);
         });
@@ -3529,9 +3512,6 @@ impl App {
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
             diag_on: s.settings.diag_on,
-            diag_overlay_on: s.settings.diag_overlay_on,
-            rds_capture_on: s.settings.rds_capture_on,
-            debug_on: s.settings.debug_on,
         };
         if now == s.saved {
             return;
@@ -4010,18 +3990,15 @@ impl App {
 
     /// The DIAGNOSTICS rows.
     ///
-    /// "Clear log" and "Save to file" are implemented. The rest still cross the
-    /// framework edge with nothing behind them, and each says so by name in the
-    /// log it would have written to — more useful than a silent no-op, and honest
-    /// about what has never run. See docs/TASKS.md #87 for what each still needs.
+    /// BOTH ROWS DO SOMETHING NOW, which they did not before: five of the seven
+    /// fell through to a line saying they were unavailable, because they were
+    /// CarFM's vendor probes and had never been written. Those rows are gone
+    /// rather than stubbed, so there is no catch-all arm left to write.
     fn run_diag_action(self: &Rc<App>, index: i32) {
-        let (action, label) = {
+        let action = {
             let s = self.state.borrow();
-            let nwd_active =
-                s.tuner.is_available() && s.settings.selected == settings::Source::Nwd;
-            let rows = s.settings.actions(nwd_active);
-            match rows.get(index as usize) {
-                Some(a) => (a.action, a.label.clone()),
+            match s.settings.actions().get(index as usize) {
+                Some(a) => a.action,
                 None => return,
             }
         };
@@ -4055,12 +4032,6 @@ impl App {
                         };
                         s.settings.log.push(&at, &line);
                     }
-                }
-                _ => {
-                    let at = stamp();
-                    s.settings
-                        .log
-                        .push(&at, &format!("{label}: not available without the head unit"));
                 }
             }
         }
@@ -5314,55 +5285,6 @@ mod tests {
         assert!(line.contains("no frames at all"), "got {line:?}");
     }
 
-    /// A GUARDED MODEL STILL UPDATES — which is the failure a guard invites.
-    ///
-    /// `push_settings` used to hand Slint a fresh diagnostics-button list on
-    /// every wake from the tuner queue, about eleven times a second, whether or
-    /// not a character differed; that is a repeater torn down and rebuilt for
-    /// nothing, and with the panel open it measured 10.2ms per wake-plus-frame
-    /// against 4.3ms for the face alone. It is compared now and skipped when
-    /// equal, which took that to 6.9-7.6ms.
-    ///
-    /// The cost of getting a guard wrong is not slowness, it is a panel that
-    /// stops telling the truth. This drives the one input that really changes the
-    /// list — the raw-capture switch adds and removes a row — and holds that the
-    /// model follows it in BOTH directions, so a guard that never invalidates
-    /// fails here rather than on the dashboard.
-    #[test]
-    fn a_guarded_settings_model_still_updates() {
-        use slint::Model as _;
-        let _ui_lock = harness::ui_lock();
-        let (ui, driver) = app_for("settings-guard");
-        driver.push_all();
-
-        let labels = |ui: &AppWindow| -> Vec<String> {
-            ui.get_settings_diag_actions().iter().map(|a| a.label.to_string()).collect()
-        };
-
-        let before = labels(&ui);
-        assert!(
-            !before.iter().any(|l| l.contains("Export raw RDS capture")),
-            "the export row is absent while capture is off, got {before:?}"
-        );
-
-        ui.invoke_settings_set_rds_capture(true);
-        let on = labels(&ui);
-        assert_eq!(on.len(), before.len() + 1, "capture adds exactly one row");
-        assert!(
-            on.iter().any(|l| l.contains("Export raw RDS capture")),
-            "and the published model shows it, got {on:?}"
-        );
-
-        // A REPUBLISH THAT CHANGES NOTHING MUST NOT UNDO IT. This is the half a
-        // guard gets wrong in the other direction — skipping a publish is only
-        // correct while the cache and the model still agree.
-        driver.push_all();
-        assert_eq!(labels(&ui), on, "an idle wake leaves the list where it was");
-
-        ui.invoke_settings_set_rds_capture(false);
-        assert_eq!(labels(&ui), before, "and turning it back off removes the row");
-    }
-
     /// "SAVE TO FILE" WRITES THE WHOLE RING, NOT THE HANDFUL ON SCREEN.
     ///
     /// The row existed and did nothing: every action but "Clear log" fell into a
@@ -5449,9 +5371,8 @@ mod tests {
     /// rather than an index that a reorder would silently change.
     fn row_index(driver: &Rc<App>, label: &str) -> i32 {
         let s = driver.state.borrow();
-        let nwd_active = s.tuner.is_available() && s.settings.selected == settings::Source::Nwd;
         s.settings
-            .actions(nwd_active)
+            .actions()
             .iter()
             .position(|a| a.label == label)
             .unwrap_or_else(|| panic!("no {label:?} row")) as i32

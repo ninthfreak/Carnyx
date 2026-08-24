@@ -193,9 +193,6 @@ export component AppWindow inherits Window {
     // shipping SettingsPanel.tsx does; four switches, a log ring and a list of
     // action rows whose membership and dividers Rust decides.
     in property <bool> settings-diag-on: false;
-    in property <bool> settings-diag-overlay-on: false;
-    in property <bool> settings-rds-capture-on: false;
-    in property <bool> settings-debug-on: false;
     in property <[string]> settings-diag-lines;
     in property <[DiagAction]> settings-diag-actions;
     in property <string> settings-about;
@@ -208,9 +205,6 @@ export component AppWindow inherits Window {
     callback settings-set-logos(bool);
     callback settings-clear-logos();
     callback settings-set-diag(bool);
-    callback settings-set-diag-overlay(bool);
-    callback settings-set-rds-capture(bool);
-    callback settings-set-debug(bool);
     callback settings-pick-diag-action(int);
 
     // §6.4 logo search.
@@ -384,9 +378,6 @@ export component AppWindow inherits Window {
         clear-logos-label: root.settings-clear-logos-label;
         clearing-logos: root.settings-clearing-logos;
         diag-on: root.settings-diag-on;
-        diag-overlay-on: root.settings-diag-overlay-on;
-        rds-capture-on: root.settings-rds-capture-on;
-        debug-on: root.settings-debug-on;
         diag-lines: root.settings-diag-lines;
         diag-actions: root.settings-diag-actions;
         about: root.settings-about;
@@ -399,9 +390,6 @@ export component AppWindow inherits Window {
         set-logos(v) => { root.settings-set-logos(v); }
         clear-logos => { root.settings-clear-logos(); }
         set-diag(v) => { root.settings-set-diag(v); }
-        set-diag-overlay(v) => { root.settings-set-diag-overlay(v); }
-        set-rds-capture(v) => { root.settings-set-rds-capture(v); }
-        set-debug(v) => { root.settings-set-debug(v); }
         pick-diag-action(i) => { root.settings-pick-diag-action(i); }
         close => { root.dismiss(); }
     }

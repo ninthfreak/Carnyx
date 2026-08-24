@@ -75,9 +75,6 @@ pub struct Prefs {
     pub theme: Theme,
     pub logos_on: bool,
     pub diag_on: bool,
-    pub diag_overlay_on: bool,
-    pub rds_capture_on: bool,
-    pub debug_on: bool,
 }
 
 impl Default for Prefs {
@@ -92,9 +89,6 @@ impl Default for Prefs {
             theme: s.theme,
             logos_on: s.logos_on,
             diag_on: s.diag_on,
-            diag_overlay_on: s.diag_overlay_on,
-            rds_capture_on: s.rds_capture_on,
-            debug_on: s.debug_on,
         }
     }
 }
@@ -210,9 +204,10 @@ fn from_json(text: &str) -> Option<Prefs> {
     };
     p.logos_on = flag("logosOn", p.logos_on);
     p.diag_on = flag("diagOn", p.diag_on);
-    p.diag_overlay_on = flag("diagOverlayOn", p.diag_overlay_on);
-    p.rds_capture_on = flag("rdsCaptureOn", p.rds_capture_on);
-    p.debug_on = flag("debugOn", p.debug_on);
+    // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
+    // They were CarFM's diagnostics and are gone; a file written by an older
+    // build still carries them, and ignoring an unknown key is what this reader
+    // has always done with every other one.
     Some(p)
 }
 
@@ -233,17 +228,13 @@ pub fn to_json(p: &Prefs) -> String {
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
-            "\"logosOn\":{},\"diagOn\":{},\"diagOverlayOn\":{},",
-            "\"rdsCaptureOn\":{},\"debugOn\":{}}}"
+            "\"logosOn\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
         json::quote(theme_name(p.theme)),
         p.logos_on,
         p.diag_on,
-        p.diag_overlay_on,
-        p.rds_capture_on,
-        p.debug_on,
     )
 }
 
@@ -333,9 +324,6 @@ mod tests {
             theme: Theme::Dark,
             logos_on: true,
             diag_on: true,
-            diag_overlay_on: true,
-            rds_capture_on: true,
-            debug_on: true,
         };
         save(&d, &p);
         assert_eq!(load(&d), p);
@@ -362,17 +350,21 @@ mod tests {
         let d = tmpdir("partial");
         fs::write(
             path(&d),
-            r#"{"presets":[88.7,105.5],"theme":"chartreuse","logosOn":"yes","debugOn":true}"#,
+            r#"{"presets":[88.7,105.5],"theme":"chartreuse","logosOn":"yes","diagOn":true}"#,
         )
         .unwrap();
         let p = load(&d);
         assert_eq!(p.presets, vec![at(88.7, None), at(105.5, None)], "presets survive");
         assert_eq!(p.theme, Theme::System, "unknown theme falls back");
         assert_eq!(p.logos_on, Prefs::default().logos_on, "wrong type falls back");
-        assert!(p.debug_on, "the readable field is still read");
+        assert!(p.diag_on, "the readable field is still read");
     }
 
-    /// A FILE FROM THE BUILD BEFORE `autostart` WAS DROPPED still reads.
+    /// A FILE FROM A BUILD BEFORE FIELDS WERE DROPPED still reads.
+    ///
+    /// Now covers two removals, not one: `autostart`, and the three diagnostics
+    /// flags that went with CarFM's tools — `diagOverlayOn`, `rdsCaptureOn` and
+    /// `debugOn`. Every unit in the field has all four in its file.
     ///
     /// This is the one way removing a persisted field can hurt a driver, and it
     /// is worth a test rather than an assurance: `from_json` reads named fields
@@ -395,8 +387,7 @@ mod tests {
         assert_eq!(p.presets, vec![at(102.1, Some("WQLF")), at(88.7, None)]);
         assert_eq!(p.selected, Source::Nwd);
         assert_eq!(p.theme, Theme::Dark);
-        assert!(p.logos_on && p.diag_on && p.rds_capture_on);
-        assert!(!p.diag_overlay_on && !p.debug_on);
+        assert!(p.logos_on && p.diag_on);
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -1212,9 +1212,6 @@ export component SettingsOverlay inherits Rectangle {
     // (diag.ts:74-79), so the row's shown state and its stored state use different
     // rules. One value, one rule, held in Rust.
     in property <bool> diag-on: false;
-    in property <bool> diag-overlay-on: false;
-    in property <bool> rds-capture-on: false;
-    in property <bool> debug-on: false;
     /// The ring, oldest first, each line already `HH:MM:SS␣␣text`. Only read while
     /// `diag-on` — the TSX renders the log inside the same conditional.
     in property <[string]> diag-lines;
@@ -1259,9 +1256,6 @@ export component SettingsOverlay inherits Rectangle {
     /// line, the raw-RDS one pushes a flag to the native pump, and reception
     /// testing implies capture (SettingsPanel.tsx:107-114).
     callback set-diag(bool);
-    callback set-diag-overlay(bool);
-    callback set-rds-capture(bool);
-    callback set-debug(bool);
     /// The index into `diag-actions`. Every one of these crosses the framework
     /// edge — a native file write, a vendor-service probe, a read-only root
     /// recon — and none of it is decided or described here.
@@ -1505,32 +1499,6 @@ export component SettingsOverlay inherits Rectangle {
                 if root.diag-on: VerticalLayout {
                     // The log is worth capturing on every drive; the on-face tail
                     // only when watching for something specific — an unnamed panel
-                    // key, the headlights, a dropout.
-                    SwitchRow {
-                        title: "Show the log on the radio";
-                        sub: "Mirror the last few events onto the face itself, so you can see them as they happen. Unexplained events are highlighted.";
-                        on: root.diag-overlay-on;
-                        toggled(v) => { root.set-diag-overlay(v); }
-                    }
-
-                    // Raw INPUT, where the two above record decoded output. Its
-                    // value is that the decoders can be replayed against real air
-                    // afterwards; it writes continuously, which is why the copy says
-                    // to turn it off again.
-                    SwitchRow {
-                        title: "Raw RDS capture";
-                        sub: "Write every raw RDS group to a file for later analysis. Built-in tuner only. Leave off unless a drive is being recorded — it writes continuously.";
-                        on: root.rds-capture-on;
-                        toggled(v) => { root.set-rds-capture(v); }
-                    }
-
-                    SwitchRow {
-                        title: "Reception testing mode";
-                        sub: "Records signal level, position and RDS health every 15 seconds, and puts four audio-quality buttons on the radio. Quiets the routine RDS chatter. Each reading commands the tuner.";
-                        on: root.debug-on;
-                        toggled(v) => { root.set-debug(v); }
-                    }
-
                     DiagLog { lines: root.diag-lines; }
 
                     // No rule between the log and the first action — the TSX runs

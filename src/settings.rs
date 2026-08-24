@@ -135,55 +135,32 @@ pub struct DiagAction {
     pub action: Action,
 }
 
-/// What a DIAGNOSTICS row does. Every variant but [`Action::ClearLog`] crosses
-/// the framework edge and has no implementation on the host.
+/// What a DIAGNOSTICS row does.
+///
+/// TWO ROWS, AND THEY ARE THE MECHANISM RATHER THAN AN INVESTIGATION. There were
+/// seven: five more carried CarFM's own probes across — export the raw RDS
+/// capture, dump the head unit's boot settings, probe the vendor-app trampoline,
+/// dump every tuner getter, probe `NwdFmManager`. Those were built to answer
+/// CarFM's questions, and porting them was reading someone else's notebook as a
+/// specification. They are gone. What is left is somewhere to write a line and a
+/// way to read it back on a unit with no adb, which is what any NEW diagnostic
+/// this project needs will be built on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     SaveLog,
-    ExportRdsCapture,
-    DumpSettings,
-    ProbeTrampoline,
-    RunRdsProbe,
-    ProbeFmManager,
     ClearLog,
 }
 
 /// The rows that exist right now, in order, with their dividers.
 ///
-/// Read off `SettingsPanel.tsx:565-609` row by row rather than re-derived: "Save
-/// to file" is always present and carries NO rule (the log well runs straight
-/// into it), the raw-capture export appears only while capture is on, the four
-/// vendor probes appear only while the built-in tuner is the live source, and
-/// "Clear log" is always last. Every row after the first carries a rule.
-pub fn diag_actions(rds_capture_on: bool, nwd_active: bool) -> Vec<DiagAction> {
-    let mut rows = vec![DiagAction {
-        label: "Save to file".into(),
-        divider_above: false,
-        action: Action::SaveLog,
-    }];
-    let mut push = |label: &str, action: Action| {
-        rows.push(DiagAction { label: label.into(), divider_above: true, action });
-    };
-    if rds_capture_on {
-        push("Export raw RDS capture", Action::ExportRdsCapture);
-    }
-    if nwd_active {
-        push(
-            "Dump head unit settings (boot / power-on behaviour)",
-            Action::DumpSettings,
-        );
-        push(
-            "Probe vendor-app replacement (read-only; may prompt for root)",
-            Action::ProbeTrampoline,
-        );
-        push("Run RDS probe (dumps every tuner getter)", Action::RunRdsProbe);
-        push(
-            "Probe NwdFmManager (signal \u{00B7} raw RDS \u{00B7} stereo)",
-            Action::ProbeFmManager,
-        );
-    }
-    push("Clear log", Action::ClearLog);
-    rows
+/// No longer conditional on anything. The old list grew and shrank with the
+/// capture flag and the live source, because four of its rows only meant
+/// anything against the vendor tuner; with those gone both rows always apply.
+pub fn diag_actions() -> Vec<DiagAction> {
+    vec![
+        DiagAction { label: "Save to file".into(), divider_above: false, action: Action::SaveLog },
+        DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
+    ]
 }
 
 /// The tuner log: a bounded ring of already-stamped lines, oldest first.
@@ -350,10 +327,10 @@ pub struct Settings {
     pub logos_on: bool,
     pub clearing_logos: bool,
     pub details_open: bool,
+    /// The master switch for the log itself. The three flags that used to sit
+    /// beside it — mirror the log onto the face, capture raw RDS, reception
+    /// testing mode — were CarFM's investigation tools and are gone.
     pub diag_on: bool,
-    pub diag_overlay_on: bool,
-    pub rds_capture_on: bool,
-    pub debug_on: bool,
     pub log: DiagLog,
 }
 
@@ -368,40 +345,22 @@ impl Default for Settings {
             clearing_logos: false,
             details_open: false,
             diag_on: false,
-            diag_overlay_on: false,
-            rds_capture_on: false,
-            debug_on: false,
             log: DiagLog::new(),
         }
     }
 }
 
 impl Settings {
-    /// Reception testing implies capture (`SettingsPanel.tsx:107-114`): the
-    /// sampler's whole output is the captured stream, so a debug session with
-    /// capture off records nothing.
-    pub fn set_debug(&mut self, on: bool) {
-        self.debug_on = on;
-        if on {
-            self.diag_on = true;
-        }
-    }
-
-    /// Turning the log off takes its dependants with it. The TSX leaves them set
-    /// and merely stops drawing them, which is how it can show a stored `true`
-    /// against a section that is not running.
+    /// Turn the log on or off. Nothing hangs off it any more — the three flags
+    /// that did were CarFM's and have been removed — so this is now the plain
+    /// setter it looks like.
     pub fn set_diag(&mut self, on: bool) {
         self.diag_on = on;
-        if !on {
-            self.diag_overlay_on = false;
-            self.rds_capture_on = false;
-            self.debug_on = false;
-        }
     }
 
     /// The rows the DIAGNOSTICS action list currently has.
-    pub fn actions(&self, nwd_active: bool) -> Vec<DiagAction> {
-        diag_actions(self.rds_capture_on, nwd_active)
+    pub fn actions(&self) -> Vec<DiagAction> {
+        diag_actions()
     }
 
     /// The four rows of the source picker, with availability filled in.
@@ -437,41 +396,22 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// The order and the dividers, read off `SettingsPanel.tsx:565-609`. The
-    /// first row's missing rule is the whole point: the log well runs into it.
+    /// TWO ROWS, ALWAYS, AND ONLY THE FIRST HAS NO RULE ABOVE IT.
+    ///
+    /// This test used to enumerate seven and assert which of them appeared under
+    /// which conditions. Five were CarFM's vendor probes — export the raw
+    /// capture, dump the boot settings, probe the trampoline, dump every getter,
+    /// probe `NwdFmManager` — and none of them had ever been written. They are
+    /// gone, and with them the whole idea of a list that changes shape.
     #[test]
-    fn the_action_rows_appear_by_their_own_rules() {
-        let base = diag_actions(false, false);
+    fn the_action_rows_are_the_mechanism_and_nothing_else() {
+        let rows = diag_actions();
         assert_eq!(
-            base.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
+            rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
             ["Save to file", "Clear log"]
         );
-        assert!(!base[0].divider_above);
-        assert!(base[1].divider_above);
-
-        let capture = diag_actions(true, false);
-        assert_eq!(capture[1].label, "Export raw RDS capture");
-        assert_eq!(capture.len(), 3);
-
-        let full = diag_actions(true, true);
-        assert_eq!(
-            full.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
-            [
-                "Save to file",
-                "Export raw RDS capture",
-                "Dump head unit settings (boot / power-on behaviour)",
-                "Probe vendor-app replacement (read-only; may prompt for root)",
-                "Run RDS probe (dumps every tuner getter)",
-                "Probe NwdFmManager (signal \u{00B7} raw RDS \u{00B7} stereo)",
-                "Clear log",
-            ]
-        );
-        // Every row after the first carries a rule, and only the first does not.
-        assert!(!full[0].divider_above);
-        assert!(full[1..].iter().all(|a| a.divider_above));
-        // The label is drawn, the action is dispatched, and they are separate —
-        // so re-wording a row cannot change what it does.
-        assert_eq!(full[5].action, Action::ProbeFmManager);
+        assert!(!rows[0].divider_above, "the log well runs straight into the first");
+        assert!(rows[1].divider_above);
     }
 
     /// The shape, byte for byte. Two spaces either side of each U+00B7 is what
@@ -529,20 +469,18 @@ mod tests {
         assert!(log.is_empty());
     }
 
+    /// THE LOG SWITCH HAS NO DEPENDANTS ANY MORE, which is the point of the
+    /// test rather than a reason to delete it. It used to drag three flags down
+    /// with it — mirror to the face, raw capture, reception testing — and one of
+    /// those turned it back ON when set. All three were CarFM's and are gone, so
+    /// this is now a plain switch and must stay one.
     #[test]
-    fn turning_the_log_off_takes_its_dependants_with_it() {
+    fn the_log_switch_is_a_plain_switch() {
         let mut s = Settings::default();
         s.set_diag(true);
-        s.diag_overlay_on = true;
-        s.rds_capture_on = true;
-        s.set_debug(true);
-        assert!(s.diag_on && s.debug_on);
-        s.set_diag(false);
-        assert!(!s.diag_overlay_on && !s.rds_capture_on && !s.debug_on);
-        // And reception testing turns the log back on, because its output IS the
-        // log — SettingsPanel.tsx:107-114.
-        s.set_debug(true);
         assert!(s.diag_on);
+        s.set_diag(false);
+        assert!(!s.diag_on);
     }
 
     #[test]
