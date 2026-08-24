@@ -127,6 +127,28 @@ fn android_main(android_app: slint::android::AndroidApp) {
     slint::android::init_with_event_listener(android_app, |event| {
         use android_activity::{MainEvent, PollEvent};
         let PollEvent::Main(main) = event else { return };
+        // WHICH SIDE OF THE GLASS THE DRIVER IS ON, and this listener is the only
+        // code that ever finds out. The station pop-up reads it: a notification
+        // announcing a tune the face is already showing would be noise, and one
+        // announcing a tune the driver cannot see is the whole feature.
+        //
+        // BEFORE the `parting` match below and not folded into it, because that
+        // one returns early for everything it does not recognise — `Resume`
+        // included — and this has to see both edges.
+        match main {
+            MainEvent::Resume { .. } => {
+                android::set_foreground(true);
+                // The face IS the answer now, so the banner has nothing left to
+                // say. Cleared on the way in rather than left to time out, so a
+                // driver who taps the pop-up does not arrive at the face with it
+                // still sitting in the shade behind them.
+                android::clear_station_announcement();
+            }
+            MainEvent::Pause | MainEvent::Stop | MainEvent::Destroy => {
+                android::set_foreground(false)
+            }
+            _ => {}
+        }
         let parting = match main {
             MainEvent::Pause => session::Parting::Pause,
             MainEvent::Stop => session::Parting::Stop,
@@ -267,6 +289,20 @@ fn android_main(android_app: slint::android::AndroidApp) {
         "service: started"
     } else {
         "service: none — this build has no service class, or the platform refused it"
+    });
+
+    // THE STATION POP-UP'S CLASS, loaded here rather than lazily on the first
+    // station change: that change happens while the driver is in another app,
+    // which is the worst moment to discover the dex will not load. Loading is
+    // all this does — nothing is posted until there is something to say, and on
+    // a host build there is no class and `post` answers false forever.
+    //
+    // SAFETY: same pointers, same lifetime argument as the two above.
+    let alerts = unsafe { android::alert::init(vm, activity) }.is_ok();
+    _driver.log_platform(if alerts {
+        "station pop-up: ready"
+    } else {
+        "station pop-up: unavailable — the alert class did not load"
     });
 
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The

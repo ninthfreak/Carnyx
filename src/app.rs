@@ -466,6 +466,23 @@ struct State {
     /// Taken and re-commanded by `drain_events`, never from inside `apply_event`
     /// — that runs with `State` borrowed and `tune` re-enters the same cell.
     reassert: Option<f32>,
+    /// The dial the station pop-up last spoke for, in MHz.
+    ///
+    /// A `Cell` because `push_hero` is the one place that has both the resolved
+    /// identity and the landed dial, and it runs with `State` borrowed SHARED.
+    ///
+    /// KEPT IN STEP WHETHER OR NOT ANYTHING IS POSTED, which is the part that is
+    /// easy to get wrong: if it only moved when a notification went out, then
+    /// tuning on the face and THEN switching away would leave it stale, and the
+    /// next ordinary push — an RDS group, a level read — would announce a
+    /// station the driver had chosen by hand a minute earlier. It tracks the
+    /// dial; the foreground flag decides whether the change is worth saying.
+    ///
+    /// `f32::NAN` so the first push can never match it. No dial compares equal
+    /// to NaN, including NaN, which is exactly the "nothing has been announced"
+    /// this needs and is why it is not `0.0` — a zero would be a real value the
+    /// out-of-band path could in principle land on.
+    announced: std::cell::Cell<f32>,
     /// How many re-commands the LIVE hold has left. Re-armed when a step takes a
     /// hold, so a budget one press spent is not inherited by the next.
     reasserts_left: u8,
@@ -1068,6 +1085,7 @@ impl App {
                 tuner: Arc::from(tuner),
                 tuner_is_real,
                 rds: RdsDecoder::new(),
+                announced: std::cell::Cell::new(f32::NAN),
                 // The DECODER is not seeded, only the published state. A decoder
                 // restored from disk would have consensus tallies it never
                 // earned, and the first corrupt group off the air would then
@@ -2195,6 +2213,51 @@ impl App {
 
         ui.set_radio_text(shown_rt.as_str().into());
         ui.set_pty(rds::pty_label(st.pty).into());
+
+        // ── THE STATION POP-UP ────────────────────────────────────────────────
+        //
+        // The wheel changes station whether or not the face is on screen: the
+        // MCU broadcasts, `NwdBridge` hears it, and `State::reassert` makes this
+        // app's choice the one that plays. A driver in another app therefore
+        // gets a station change with NOTHING TO SEE. This is the only place that
+        // holds both halves of what such a driver needs told — the resolved
+        // identity and the dial it landed on — which is why it happens here
+        // rather than beside the tune.
+        //
+        // TWO CONDITIONS, AND THE ORDER OF THE FIRST TWO LINES MATTERS. The
+        // marker moves on every dial change; only a change the driver cannot
+        // already see is spoken. Tuning on the face and then switching away must
+        // stay silent, and it does, because the marker moved while the face was
+        // in front.
+        //
+        // The comparison is `!=` rather than an epsilon on purpose: `shown()` is
+        // a dial the app itself commanded in 0.1 MHz steps, not a measurement, so
+        // two presses never land a float's-breadth apart — and `announced` starts
+        // as NaN, which compares unequal to everything including itself.
+        let landed = s.shown();
+        #[allow(clippy::float_cmp)]
+        let moved = s.announced.get() != landed;
+        if moved {
+            s.announced.set(landed);
+            if !crate::android::is_foreground() {
+                let dial = format_mhz(landed);
+                // The call sign leads when there is one; the dial is the honest
+                // fallback and never an inaccurate "Tuning…", the same rule the
+                // hero lettering follows two dozen lines above.
+                let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
+                let posted = crate::android::announce_station(&title, &format!("{dial} FM"));
+                // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
+                // wheel press retunes at all depends on the Slint event loop
+                // pumping while the activity is stopped, which cannot be tested
+                // off the unit — so every announcement records that it happened
+                // and whether the platform took it. One drive reads it back out
+                // of the settings log.
+                crate::android::ingest_note(format!(
+                    "station pop-up: {title} at {dial} — {}",
+                    if posted { "posted" } else { "not posted" }
+                ));
+            }
+        }
 
         // THE PER-SCHEME CUT. "Back in Black" means nothing on a white page, so a
         // theme states its palette for light and dark separately and the face's
@@ -4744,6 +4807,64 @@ mod tests {
     /// which is what the tuner sends for an ordinary retune.
     fn vendor_reports(mhz: f32) {
         crate::android::ingest_frequency(0, (mhz * 100.0).round() as i32, String::new(), -1);
+    }
+
+    /// WHAT THE POP-UP SAYS, AND WHEN IT KEEPS QUIET.
+    ///
+    /// The posting itself is Android's and cannot run here — `announce_station`
+    /// is a no-op off the unit — but the RULE is not platform work and this is
+    /// where it is settled: which dial changes are worth telling a driver about,
+    /// and which the driver can already see.
+    #[test]
+    fn the_station_pop_up_speaks_only_for_a_change_the_driver_cannot_see() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("popup");
+        let strip = fake::SEED_PRESET_MHZ;
+        let said = |driver: &Rc<App>| -> Vec<String> {
+            driver
+                .state
+                .borrow()
+                .settings
+                .log
+                .lines()
+                .into_iter()
+                .filter(|l| l.contains("station pop-up:"))
+                .collect()
+        };
+
+        // ── IN FRONT: the face is the answer, so nothing is announced.
+        crate::android::set_foreground(true);
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        assert!(said(&driver).is_empty(), "a tune the driver is watching says nothing");
+
+        // ── THE STALE-MARKER BUG, and the reason the marker moves even when
+        // nothing is posted. Switching away after tuning by hand must stay
+        // silent: the dial has not moved since, and an ordinary push — an RDS
+        // group, a level read — must not announce a station the driver chose
+        // themselves a minute ago.
+        crate::android::set_foreground(false);
+        driver.push_all();
+        assert!(said(&driver).is_empty(), "switching away is not a station change");
+
+        // ── AWAY: now the dial moves, and this is the whole feature.
+        driver.tune_for_test(strip[2]);
+        driver.drain_events();
+        let lines = said(&driver);
+        assert_eq!(lines.len(), 1, "one change, one line: {lines:?}");
+        assert!(
+            lines[0].contains(&format_mhz(strip[2]).to_string()),
+            "the line names the dial it landed on: {lines:?}"
+        );
+
+        // ── AND ONCE PER CHANGE. Every RDS group and every level read pushes the
+        // hero again; none of them is a station change.
+        driver.push_all();
+        driver.push_all();
+        assert_eq!(said(&driver).len(), 1, "a redraw is not a retune");
+
+        // Leave the flag as every other test expects to find it.
+        crate::android::set_foreground(true);
     }
 
     /// THE WHOLE WHEEL PATH, from the broadcast to the dial it lands on.

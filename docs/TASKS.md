@@ -1211,6 +1211,72 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
+### 88. Say what is tuned when the driver is in another app
+**BUILT, AND ONE THING ABOUT IT IS UNVERIFIED.** The wheel changes station whether
+or not the face is on screen — the MCU broadcasts `com.nwd.action.ACTION_KEY_VALUE`,
+`NwdBridge` hears it, `State::reassert` makes this app's choice the one that
+plays — so a driver in another app got a station change with NOTHING TO SEE. A
+heads-up notification now says what is tuned.
+
+**Where it lives, and why not in the service.** `java/com/ninthfreak/carnyx/CarnyxAlert.java`,
+the RUNTIME dex, beside `CarnyxProcess`. `CarnyxService` is in the Gradle source
+set and does not exist under cargo-apk at all; posting a notification needs none
+of that, because any component holding a `Context` can do it. It also sidesteps a
+rule that would have bitten at once: reaching the service means `startService`
+FROM THE BACKGROUND, which API 26 forbids and API 31 forbids again for
+`startForegroundService` — and the background is the only time this fires.
+
+**Its own channel, `IMPORTANCE_HIGH`.** The service's is `IMPORTANCE_LOW` and
+stays that way: an ongoing "this is running" line with no banner. A station
+confirmation the driver never sees is not a confirmation, so this one earns the
+heads-up — with `setSound(null)` and vibration off, because a chime over the radio
+they are already listening to is not the message. Two channels rather than one
+raised, so a driver can keep one and refuse the other in Settings.
+
+**One id, so repeats replace.** Stepping four presets is one banner updated four
+times, not four banners; `setOnlyAlertOnce(false)` is what keeps each change
+raising it, since the default alerts once per id and then updates quietly.
+`setTimeoutAfter` clears the entry so the shade does not fill with stale
+stations, and `Resume` cancels it outright — the face is the answer once it is
+back in front.
+
+**The rule is Rust and is tested on the host.** `push_hero` is the only place
+holding both halves a backgrounded driver needs — the resolved identity and the
+dial it landed on. `State::announced` tracks the dial and MOVES WHETHER OR NOT
+ANYTHING IS POSTED: if it only moved when a notification went out, tuning on the
+face and then switching away would leave it stale and the next ordinary push
+would announce a station the driver had chosen by hand. It starts as `f32::NAN`,
+which compares unequal to everything including itself, so the first push can
+never match it. `the_station_pop_up_speaks_only_for_a_change_the_driver_cannot_see`
+covers all four cases and was sabotage-checked against dropping the foreground
+guard.
+
+**WHAT IS NOT CONFIRMED, and it is the prerequisite.** A wheel press reaches Rust
+through `ingest_panel_key`, queues a `TunerEvent`, and is drained by
+`slint::invoke_from_event_loop` — the SLINT event loop. Whether that loop pumps
+while the activity is STOPPED decides whether a backgrounded wheel press retunes
+at all, and so whether there is ever a change to announce. `android-activity`'s
+main thread keeps polling, so it should; that is a reading of the crate, not a
+measurement on a unit. Every announcement therefore writes a line into the
+settings log — `station pop-up: WERN at 88.7 — posted` — which one drive reads
+back out.
+
+**Android 10 is the unit; the app is not only for it.** `POST_NOTIFICATIONS`
+arrived in API 33, so on this head unit posting needs no permission and simply
+works. On a newer one an ungranted permission makes the platform DROP the
+notification silently, which is the one failure worth being loud about: `post`
+checks `areNotificationsEnabled()` and logs rather than returning as though it
+had worked. The app still does not raise the runtime dialog — the manifest's
+standing note applies, that a request "needs someone to tap Allow, which on a
+dashboard at night is nobody" — so there the driver grants it in Settings or does
+without. **Open:** whether that should become a one-time prompt on a 33+ unit,
+since unlike location this feature cannot degrade — it either shows or it does
+not.
+
+**Not built, and deliberately.** A notification when RadioText changes — a new
+song — was asked about and set aside until the RDS work is trusted; a PS that
+scrolls song titles would otherwise fire it continuously.
+
 ### 87. Port the diagnostics rows that were skipped
 **"Save to file" DONE. The other five OPEN.**
 

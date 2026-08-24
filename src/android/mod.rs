@@ -36,6 +36,8 @@
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "android")]
+pub mod alert;
+#[cfg(target_os = "android")]
 mod dex;
 #[cfg(target_os = "android")]
 pub mod location;
@@ -741,6 +743,58 @@ pub fn ingest_level(level: i32, asked: i32, landed: i32, ok: bool, error: Option
 
 pub fn ingest_panel_key(code: i32, action: String) {
     emit(TunerEvent::PanelKey { code, key: PanelKey::from_code(code), action });
+}
+
+/// Say what is tuned now, to a driver who is looking at another app.
+///
+/// A SHIM SO THE CALLER NEEDS NO `cfg`. `app.rs` decides WHEN to announce — that
+/// is a rule about foreground and about the dial changing, and it is the same
+/// rule on every target, so it is tested on the host like everything else. Only
+/// the posting is platform work, and off Android there is nothing to post to.
+#[cfg(target_os = "android")]
+pub fn announce_station(title: &str, text: &str) -> bool {
+    alert::post(title, text)
+}
+
+/// The host has no notification shade. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn announce_station(_title: &str, _text: &str) -> bool {
+    false
+}
+
+/// Take the station pop-up down; the driver is back on the face.
+#[cfg(target_os = "android")]
+pub fn clear_station_announcement() {
+    alert::clear();
+}
+
+/// The host has no notification shade. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn clear_station_announcement() {}
+
+/// Whether the face is the thing the driver is looking at.
+///
+/// WRITTEN BY THE LIFECYCLE LISTENER IN `lib.rs`, which is the only code that
+/// sees `Resume` and `Pause` at all, and read by anything whose behaviour has to
+/// differ when the driver is in another app — today that is the station pop-up,
+/// which must never fire over a face already showing the same change.
+///
+/// TRUE UNTIL TOLD OTHERWISE, which is the safe default rather than an
+/// assumption. The app is launched into the foreground and `Resume` arrives
+/// after the first frames rather than before them, so a `false` start would mean
+/// a notification for the station the driver is watching being tuned. Every host
+/// build — probes, shots, tests — installs no listener at all and stays true,
+/// which is what keeps the pop-up out of them without a `cfg`.
+static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Called from the Android lifecycle listener. See [`FOREGROUND`].
+pub fn set_foreground(on: bool) {
+    FOREGROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Is the activity in front? See [`FOREGROUND`].
+pub fn is_foreground() -> bool {
+    FOREGROUND.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {

@@ -29,7 +29,11 @@
 //! `hero-step-morph` (a frame mid-travel), `logo-search-loading` (the spinner),
 //! `audio-released` (the power button's ring, by a single LSB), and
 //! `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
-//! `long-radiotext` drifts too when the marquee is mid-scroll. Everything else
+//! `long-radiotext` drifts too when the marquee is mid-scroll, and so do the
+//! THEMED shots whose genre line pulses — `acdc`, `acdc-portrait`, `beatles-dark`
+//! have all been seen to move by a dozen levels between two runs of one build,
+//! which is the 900ms `GenreText` animation caught at a different phase and not a
+//! change. Everything else
 //! reproduces exactly, which is what makes the set usable as a regression check
 //! at all — and the way to tell the two apart is to render twice from ONE build
 //! and compare those, which is how `audio-released` was added to this list.
