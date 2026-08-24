@@ -3182,6 +3182,75 @@ pub mod assign {
         Some(cand.treatment)
     }
 
+    /// Every dark treatment this station's master can produce, for the picker.
+    ///
+    /// ONE PIPELINE PASS FOR ALL FOUR, which is what makes a picker affordable at
+    /// all: `adapt_logo_for_dark` builds every candidate on the way to choosing
+    /// one, so showing the driver what each looks like costs the same as deciding
+    /// automatically did. Four separate runs would not have been shippable — the
+    /// adaptation is seconds of pixel work on this unit.
+    ///
+    /// The order is the pipeline's own: routed candidates first, the plate floor
+    /// last. Empty when the station has no master, or when the master will not
+    /// decode — the picker then has nothing to offer and says so.
+    pub fn dark_choices(
+        store: &LogoStore,
+        codec: &dyn ImageCodec,
+        base: &str,
+        gate_bg: [f64; 3],
+    ) -> Vec<(Treatment, Raster)> {
+        let Some(bytes) = store.read_master(base) else { return Vec::new() };
+        let Some(master) = codec.decode(&bytes) else { return Vec::new() };
+        pipeline::adapt_logo_for_dark(&master, gate_bg)
+            .candidates
+            .into_iter()
+            .map(|c| (c.treatment, c.raster))
+            .collect()
+    }
+
+    /// Fix this station's dark treatment to `t`, as the DRIVER's choice.
+    ///
+    /// The difference from [`regenerate_dark`] is one bit on disk. That function
+    /// writes `chosen = false`, meaning "this is what the pipeline picked, ask
+    /// again next time the ground moves"; this one writes `chosen = true`, which
+    /// `pipeline::choose_treatment` then honours on every later regeneration as
+    /// long as the treatment is still buildable. So a choice made here survives a
+    /// re-adaptation, a handoff that moves the dark surface, and a reinstall of
+    /// the same master — and is only overridden if the driver picks again or
+    /// replaces the logo, which clears the meta outright.
+    ///
+    /// Returns false when there is nothing to choose from: no master, a master
+    /// that will not decode, or a treatment this particular image cannot build.
+    pub fn set_dark_treatment(
+        store: &LogoStore,
+        codec: &dyn ImageCodec,
+        base: &str,
+        t: Treatment,
+        gate_bg: [f64; 3],
+    ) -> bool {
+        let Some(bytes) = store.read_master(base) else { return false };
+        let Some(master) = codec.decode(&bytes) else { return false };
+        let res = pipeline::adapt_logo_for_dark(&master, gate_bg);
+        let Some(cand) = res.candidates.iter().find(|c| c.treatment == t) else { return false };
+        let Some(png) = codec.encode_png(&cand.raster) else { return false };
+        if store.put_dark(base, cand.treatment, &png, true, bg_key(gate_bg)).is_err() {
+            return false;
+        }
+        // The ladder is rebuilt because the rungs are renditions OF the variant,
+        // and a rung left over from the old treatment would be served for any box
+        // that asks by size — which is every preset tile.
+        let mut sizes: Vec<u32> = Vec::new();
+        for (size, r) in prep::ladder_rasters(&cand.raster) {
+            let Some(p) = codec.encode_png(&r) else { continue };
+            if store.put_derived(base, &format!("k-{size}.png"), &p).is_ok() {
+                sizes.push(size);
+            }
+        }
+        sizes.sort_unstable();
+        let _ = store.set_dark_sizes(base, sizes);
+        true
+    }
+
     /// Assign a logo from an ordered list of candidate URLs — the full-size image
     /// first, DDG's proxied thumbnail second.
     ///
@@ -5206,6 +5275,58 @@ mod tests {
         assert_eq!(ext_for("IMAGE/JPEG"), "jpg");
         assert_eq!(ext_for("image/webp"), "webp");
         assert_eq!(ext_for("application/octet-stream"), "png");
+    }
+
+    /// THE DRIVER'S OWN DARK TREATMENT, AND THAT IT STICKS.
+    ///
+    /// The three claims worth pinning: every treatment is offered from ONE
+    /// pipeline pass, choosing one writes it as the driver's rather than the
+    /// pipeline's, and a later automatic regeneration leaves that choice alone —
+    /// which is the whole reason for the `chosen` bit and the only thing that
+    /// makes a picker more than a suggestion.
+    #[test]
+    fn a_chosen_dark_treatment_outlives_the_pipeline_changing_its_mind() {
+        let tmp = TempDir::new("dark-pick");
+        let s = store::LogoStore::new(tmp.path());
+        let codec = RawCodec;
+        // A mark on white paper: enough ink for the router to build more than the
+        // plate floor, which is what gives a picker anything to pick between.
+        let mut master = field(24, 24, [255, 255, 255, 255]);
+        block(&mut master, 6, 6, 12, 12, [20, 40, 200, 255]);
+        s.put_original("WMGN", &encoded(&master), "image/png", "manual").unwrap();
+
+        let offered = assign::dark_choices(&s, &codec, "WMGN", dark::LOGO_DARK_BG);
+        assert!(offered.len() >= 2, "a picker needs something to pick, got {}", offered.len());
+        assert!(
+            offered.iter().any(|(t, _)| *t == dark::stages::Treatment::Plate),
+            "the plate floor is always offered: {:?}",
+            offered.iter().map(|(t, _)| *t).collect::<Vec<_>>()
+        );
+
+        // The automatic pass first, so there is a pick to override.
+        assign::regenerate_dark(&s, &codec, "WMGN", dark::LOGO_DARK_BG).unwrap();
+        assert!(!s.dark_info("WMGN").unwrap().chosen, "the pipeline's own pick is not a choice");
+
+        // Now the driver picks the plate, which is never the automatic answer for
+        // an image the router has better options for.
+        assert!(assign::set_dark_treatment(
+            &s, &codec, "WMGN", dark::stages::Treatment::Plate, dark::LOGO_DARK_BG
+        ));
+        let after = s.dark_info("WMGN").unwrap();
+        assert_eq!(after.treatment, "PLATE");
+        assert!(after.chosen, "and it is recorded as the driver's");
+
+        // THE POINT: re-adapting does not take it back.
+        assign::regenerate_dark(&s, &codec, "WMGN", dark::LOGO_DARK_BG).unwrap();
+        let kept = s.dark_info("WMGN").unwrap();
+        assert_eq!(kept.treatment, "PLATE", "a regeneration must not overrule the driver");
+        assert!(kept.chosen);
+
+        // A station with no master has nothing to offer and nothing to set.
+        assert!(assign::dark_choices(&s, &codec, "WQLF", dark::LOGO_DARK_BG).is_empty());
+        assert!(!assign::set_dark_treatment(
+            &s, &codec, "WQLF", dark::stages::Treatment::Plate, dark::LOGO_DARK_BG
+        ));
     }
 
     /// WHAT THE NOTIFICATION IS HANDED, which is a path and not pixels.
