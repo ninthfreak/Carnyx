@@ -22,20 +22,55 @@ component CallSignBox inherits Rectangle {
     /// scopes Kashmir to the hero: a display cut at tile size is unreadable and
     /// the theme reads from the hero anyway (`fontScope: 'hero'`).
     in property <string> face;
+    /// `nameGhost`, REACHING THE TILES. A second impression of the call letters
+    /// printed off register beneath the first, static — the same treatment the
+    /// hero lettering carries, and the same three values off the same registry
+    /// row, so a theme cannot state one and get the other.
+    ///
+    /// NOT IN THE REFERENCE, which puts `nameGhost` on the hero identity alone
+    /// and gives a preset tile no shadow under any theme. Asked for directly:
+    /// the distortion is what the call signs are meant to show. A fully
+    /// transparent ink is no ghost, which is every theme but two — Nirvana 3/3
+    /// down in 20% black and Nine Inch Nails 2/0 in 16%.
+    in property <color> ghost-ink;
+    in property <length> ghost-dx;
+    in property <length> ghost-dy;
+
+    /// Hoisted so both impressions are set from ONE expression. Two copies of
+    /// this arithmetic is two things to keep in step, and a ghost at a different
+    /// size from its letters is not a ghost.
+    property <length> size: Math.max(11px, Math.round(Math.min(
+        root.height / 1px * 0.52,
+        (root.width / 1px * 0.82) / Math.max(root.label.character-count, 1) * 1.55)) * 1px);
+    property <string> shown: root.label == "" ? "·" : root.label;
 
     border-radius: root.radius;
     clip: true;
     background: Pal.flat(root.brand);
 
+    // CENTRED BY ARITHMETIC, not by the parent. A bare child of a Rectangle is
+    // centred for you, and the live line below still is — but a centred child
+    // cannot also be offset, so this one states where it is. The two strings and
+    // the two fonts are identical, so their preferred widths are, and this lands
+    // exactly where the live line lands plus the offset.
+    if root.ghost-ink.alpha > 0: Text {
+        x: (parent.width - self.preferred-width) / 2 + root.ghost-dx;
+        y: (parent.height - self.preferred-height) / 2 + root.ghost-dy;
+        text: root.shown;
+        color: root.ghost-ink;
+        font-family: root.face != "" ? root.face : Font.face;
+        font-weight: Font.bold;
+        letter-spacing: 0.5px;
+        font-size: root.size;
+    }
+
     Text {
-        text: root.label == "" ? "·" : root.label;
+        text: root.shown;
         color: #FFFFFF;
         font-family: root.face != "" ? root.face : Font.face;
         font-weight: Font.bold;
         letter-spacing: 0.5px;
-        font-size: Math.max(11px, Math.round(Math.min(
-            root.height / 1px * 0.52,
-            (root.width / 1px * 0.82) / Math.max(root.label.character-count, 1) * 1.55)) * 1px);
+        font-size: root.size;
     }
 }
 
@@ -106,6 +141,12 @@ component PlateBox inherits Rectangle {
         brand: root.preset.brand;
         radius: root.radius;
         face: root.egg.body-face;
+        // The tiles take the theme's ghost as the hero does. Scaled by nothing:
+        // a chip and a peek card are both drawn at their own size and the offset
+        // is stated in dp, which is what `nameGhost` states.
+        ghost-ink: root.egg.ghost-ink;
+        ghost-dx: root.egg.ghost-dx;
+        ghost-dy: root.egg.ghost-dy;
     }
 }
 

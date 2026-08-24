@@ -821,6 +821,27 @@ mod tests {
         assert_eq!(NIN.ghost_dy, 0.0);
     }
 
+    /// TWO THEMES PRINT A SECOND IMPRESSION, and since `nameGhost` now reaches
+    /// the preset call signs as well as the hero lettering, which rows state it
+    /// is no longer a detail of one card. A third row picking it up would put a
+    /// drop shadow on every tile on the face without anyone asking.
+    #[test]
+    fn the_ghost_belongs_to_nirvana_and_nine_inch_nails() {
+        assert_eq!(
+            REGISTRY
+                .iter()
+                .filter(|(e, _)| e.ghost_alpha > 0.0)
+                .map(|(e, _)| (e.id, e.ghost_dx, e.ghost_dy))
+                .collect::<Vec<_>>(),
+            vec![("Nirvana", 3.0, 3.0), ("Nine Inch Nails", 2.0, 0.0)],
+        );
+        // A ghost with no offset is the letters printed twice in the same place,
+        // which is not an impression off register — it is just darker type.
+        for (e, _) in REGISTRY.iter().filter(|(e, _)| e.ghost_alpha > 0.0) {
+            assert!(e.ghost_dx != 0.0 || e.ghost_dy != 0.0, "{}", e.id);
+        }
+    }
+
     /// THE BOLTS BELONG TO ONE THEME, and this test exists because they were
     /// gated on "a theme is showing" and appeared on all five. The reference
     /// gates on the ART BEING NAMED — `egg?.stereoArtL ? … : null` — and only the

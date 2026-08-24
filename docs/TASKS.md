@@ -1556,7 +1556,17 @@ whole word moving 2dp against nothing. Here the ghost is a real second
 impression, so the twitch is what pulls the two apart: the register slips and
 comes back, which is what `nameGhost` was describing in the first place.
 
-Photographing it needed a clock. The twitch is 110ms of movement in a 2065ms
+`nameGhost` NOW REACHES THE PRESET CALL SIGNS, statically, which the reference
+does not do — it puts the ghost on the hero identity alone and gives a preset
+tile no shadow under any theme. Asked for directly: the distortion is what the
+call signs are meant to show, and it has always been static. Same three values
+off the same registry row, so a theme cannot state one and get the other, which
+means it lands on the two rows that state a ghost — Nirvana 3/3 down in 20%
+black and Nine Inch Nails 2/0 in 16%. `shots/nirvana.png` and `shots/nin.png`
+are the evidence; the tiles are the only thing on either face that moved, and no
+unthemed shot moved at all.
+
+Photographing the twitch needed a clock. The twitch is 110ms of movement in a 2065ms
 loop, so a renderer sampling the wall clock catches it roughly never, and "it is
 in the tree" is not evidence that it draws. `examples/shot.rs` now implements
 `Platform::duration_since_start` over a skew it can wind FORWARD only — time
