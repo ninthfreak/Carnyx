@@ -1567,6 +1567,28 @@ em "so the same treatment holds from a 99sp hero down to a 13sp tile label".
 Built as `ui/glitch.slint`; `shots/nin.png` against
 `docs/design/screenshots/egg-nin.png` is the check.
 
+**The themed heroes are fake-bolded.** `stationStyle` sets every themed hero at
+`fontWeight: 700` and NOT ONE display face has a bold cut — Gridnik's
+`usWeightClass` is 500 and the file in this tree is byte-identical to the
+handoff's. A browser answers that by thickening the glyph; Slint asks the family
+for 700, is handed the one face there is, and draws it as-is. Measured on
+`egg-nin.png` against `nin.png`, both 1024x614 and normalised to the same word
+width: 26 against 19, a factor of 1.37. The control is Atkinson — the `RDS` tell
+renders identically in both, so the text pipeline was never in question.
+
+Done by DILATION, not by a stroke: `stroke-width` is inert in Slint 1.17.1's
+software renderer, probed at 4.4px on this very line with the stems unchanged at
+8px, so a stroked bold would be invisible in every shot. The line is drawn at the
+four corners of a square of radius 0.0125em as well as true. Two consequences
+worth keeping: a faded band cannot then carry its strength as ALPHA, because five
+42% copies pile up wherever they overlap — nor can `opacity` fix it, since that
+renderer has no group-opacity path and just draws each child at that alpha — so a
+band's strength is resolved to an OPAQUE colour mixed against the ground it sits
+on, which composites exactly however the copies overlap and allocates no layer.
+Applied only where a theme names a hero face, so an unthemed hero and The
+Beatles' vetoed one keep Atkinson, which has a real bold. AC/DC's split call sign
+is a different branch and does not go through it.
+
 CarFM's `GlitchWrap` is not that: it twitches the identity ±2dp on a 2s loop,
 which is React Native's stand-in for the thing RN cannot do — clip a run of text.
 This port read the workaround as the specification, shipped the twitch, and only

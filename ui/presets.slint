@@ -76,6 +76,7 @@ component CallSignBox inherits Rectangle {
         height: parent.height;
         text: root.shown;
         ink: #FFFFFF;
+        ground: Pal.flat(root.brand);
         face: root.face != "" ? root.face : Font.face;
         weight: Font.bold;
         tracking: 0.5px;

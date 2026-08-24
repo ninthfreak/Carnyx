@@ -617,10 +617,19 @@ export component HeroCard inherits Rectangle {
             font-size: root.call-size;
             tracking: root.call-track;
             ink: root.lettering-ink;
+            ground: root.surface;
             /// `heroGlitch` — the call sign rebuilt as three horizontal bands.
             /// See `ui/glitch.slint`; Nine Inch Nails is the only theme that
             /// asks for it, and every other face draws one ordinary line here.
             on: root.egg.hero-glitch;
+            /// THE BOLD THE DISPLAY FACES DO NOT HAVE. `stationStyle` sets the
+            /// hero at weight 700 and every themed hero face ships ONE weight,
+            /// so the design's own rendering is a browser fake-bold. Applied
+            /// only where a theme names a hero face: an unthemed hero is
+            /// Atkinson, which has a real bold cut and needs no help, and so is
+            /// The Beatles' — §4 vetoes its SgtPeppers and leaves it on the
+            /// ordinary face. See `GlitchText::bold` for the measurement.
+            bold: root.egg.hero-face != "" ? root.call-size * 0.0125 : 0px;
             // ── `nameOutline`, AND WHY THIS IS `center` ──
             //
             // CENTRED IS WHAT THE REFERENCE DOES. `-webkit-text-stroke` straddles

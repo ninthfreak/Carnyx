@@ -38,6 +38,8 @@ component Band inherits Rectangle {
     in property <length> font-size;
     in property <length> tracking;
     in property <color> ink;
+    /// What the line is set ON. See `band-ink`.
+    in property <color> ground;
     in property <color> stroke-ink;
     in property <length> stroke-w;
     /// The line box being cut, in the parent's own coordinates.
@@ -51,8 +53,28 @@ component Band inherits Rectangle {
     /// The shift, already resolved from em, and the ink's strength.
     in property <length> shift;
     in property <float> strength;
+    /// Synthetic-bold radius. See `GlitchText::bold`.
+    in property <length> bold;
+    in property <[{dx: float, dy: float}]> offsets;
 
     property <length> bleed: root.box-w * 0.04;
+
+    /// A FADED BAND IS MIXED, NOT MADE TRANSPARENT, and that is what makes the
+    /// dilation possible at all. Five copies at 42% ALPHA do not composite to
+    /// 42% — they pile up wherever they overlap, which is almost everywhere, and
+    /// the middle band came out nearly as dark as the true one. Wrapping the band
+    /// in `opacity` instead does not help either: Slint 1.17.1's software
+    /// renderer has no group-opacity path, so it simply draws each child at that
+    /// alpha and they stack again.
+    ///
+    /// So the strength is resolved to an OPAQUE colour against the ground the
+    /// line is set on, and five opaque copies of one colour composite to exactly
+    /// that colour however they overlap. Every ground a call sign sits on is
+    /// opaque — the hero card's surface, a tile's brand fill — so nothing is
+    /// lost, and no band allocates a layer on either renderer.
+    property <color> band-ink: root.strength >= 1.0
+        ? root.ink
+        : root.ink.mix(root.ground, root.strength);
 
     x: -root.bleed;
     y: root.line-top + root.line-h * root.from;
@@ -72,9 +94,9 @@ component Band inherits Rectangle {
     // land a few pixels apart, which moved the call letters on sixty shots that
     // had nothing to do with this. Stating the box at the line's own size and
     // positioning it is the same sum the plain line below does.
-    Text {
-        x: root.bleed + root.shift + (root.box-w - root.line-w) / 2;
-        y: -root.line-h * root.from;
+    for o in root.offsets: Text {
+        x: root.bleed + root.shift + (root.box-w - root.line-w) / 2 + o.dx * root.bold;
+        y: -root.line-h * root.from + o.dy * root.bold;
         width: root.line-w;
         height: root.line-h;
         text: root.text;
@@ -82,7 +104,7 @@ component Band inherits Rectangle {
         font-weight: root.weight;
         font-size: root.font-size;
         letter-spacing: root.tracking;
-        color: root.ink.with-alpha(root.strength);
+        color: root.band-ink;
         stroke: root.stroke-ink;
         stroke-width: root.stroke-w;
         stroke-style: center;
@@ -102,6 +124,9 @@ export component GlitchText inherits Rectangle {
     in property <length> font-size;
     in property <length> tracking;
     in property <color> ink;
+    /// The opaque colour this line is set on, which the faded bands are mixed
+    /// against rather than made transparent. See `Band::band-ink`.
+    in property <color> ground;
     /// Draw the bands. Off is one ordinary line and nothing else — no clip
     /// items, no extra draws, and nothing instantiated.
     in property <bool> on: false;
@@ -114,6 +139,34 @@ export component GlitchText inherits Rectangle {
     /// width is no outline, which is every theme but AC/DC's dark cut.
     in property <color> stroke-ink;
     in property <length> stroke-w;
+    /// ── SYNTHETIC BOLD, AND WHY THE LINE IS DRAWN FIVE TIMES ──
+    ///
+    /// The design sets every themed hero at `fontWeight: 700`
+    /// (`RadioFace.dc.html` `stationStyle`) and NOT ONE OF THE DISPLAY FACES HAS
+    /// A BOLD CUT — Gridnik, Kashmir, Onyx and Squealer each ship a single
+    /// weight, and Gridnik's `usWeightClass` is 500. A browser answers that by
+    /// FAKE-BOLDING: it thickens the glyph itself. Slint asks the family for 700,
+    /// is handed the one face there is, and draws it as-is — so the reference's
+    /// call sign is measurably heavier than this one at the same size. Measured
+    /// on `egg-nin.png` against `nin.png`, both 1024x614 and normalised to the
+    /// same word width: 26 against 19, a factor of 1.37.
+    ///
+    /// NOT A STROKE, and that was the first attempt: `stroke-width` is INERT in
+    /// Slint 1.17.1's software renderer — probed at 4.4px on this very line, the
+    /// stems stayed 8px — so a stroked bold would be invisible in every shot and
+    /// unverifiable off the device. The line is dilated instead, by drawing it at
+    /// the four corners of a square of this radius as well as true. Vertical
+    /// stems, horizontal bars and diagonals all thicken by twice the radius, and
+    /// every copy is a whole `Text` with its own box, so nothing is clipped.
+    ///
+    /// ZERO IS ONE COPY AND NOTHING ELSE. An unthemed face never pays for this.
+    in property <length> bold;
+
+    /// Where the copies go. One entry when there is no bold to synthesise, which
+    /// is the ordinary case and costs exactly what it did before.
+    property <[{dx: float, dy: float}]> offsets: root.bold > 0px
+        ? [{dx: 0, dy: 0}, {dx: -1, dy: -1}, {dx: 1, dy: -1}, {dx: -1, dy: 1}, {dx: 1, dy: 1}]
+        : [{dx: 0, dy: 0}];
 
     /// The line's own height, for a parent that needs to give this component a
     /// box exactly one line tall.
@@ -140,8 +193,10 @@ export component GlitchText inherits Rectangle {
     // preferred size. Restating the second as geometry — even with the same sum
     // — lands it a fraction of a pixel out, and a fraction of a pixel is a
     // different antialiasing on every letter. So the bare one stays bare.
-    if !root.on && root.elide: Text {
-        x: 0px; y: 0px;
+    if !root.on && root.elide: Rectangle {
+      x: 0px; y: 0px; width: root.width; height: root.height;
+      for o in root.offsets: Text {
+        x: o.dx * root.bold; y: o.dy * root.bold;
         width: root.width;
         horizontal-alignment: center;
         overflow: TextOverflow.elide;
@@ -154,6 +209,7 @@ export component GlitchText inherits Rectangle {
         stroke: root.stroke-ink;
         stroke-width: root.stroke-w;
         stroke-style: center;
+      }
     }
     if !root.on && !root.elide: Text {
         text: root.text;
@@ -170,25 +226,25 @@ export component GlitchText inherits Rectangle {
     if root.on: Band {
         text: root.text; face: root.face; weight: root.weight;
         font-size: root.font-size; tracking: root.tracking;
-        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        ink: root.ink; ground: root.ground; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
         line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
-        box-w: root.width;
+        box-w: root.width; bold: root.bold; offsets: root.offsets;
         from: -0.05; to: 0.40; shift: 0px; strength: 1.0;
     }
     if root.on: Band {
         text: root.text; face: root.face; weight: root.weight;
         font-size: root.font-size; tracking: root.tracking;
-        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        ink: root.ink; ground: root.ground; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
         line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
-        box-w: root.width;
+        box-w: root.width; bold: root.bold; offsets: root.offsets;
         from: 0.38; to: 0.67; shift: root.font-size * 0.05; strength: 0.42;
     }
     if root.on: Band {
         text: root.text; face: root.face; weight: root.weight;
         font-size: root.font-size; tracking: root.tracking;
-        ink: root.ink; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
+        ink: root.ink; ground: root.ground; stroke-ink: root.stroke-ink; stroke-w: root.stroke-w;
         line-top: root.line-top; line-h: root.line-h; line-w: root.line-w;
-        box-w: root.width;
+        box-w: root.width; bold: root.bold; offsets: root.offsets;
         from: 0.65; to: 1.05; shift: -root.font-size * 0.035; strength: 0.88;
     }
 }
