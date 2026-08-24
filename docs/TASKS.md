@@ -1211,6 +1211,57 @@ of 3.543 kW, and all four weak rows the exemption used to spare),
 `a_row_whose_erp_is_not_a_number_is_dropped_before_scoring` (the filter half) and
 `a_nan_score_sinks_instead_of_aborting` (the sort half).
 
+### 89. Draw the diagnostics log on the face
+**OPEN. The switch is there and it drives nothing.** CarFM's
+`src/components/carfm/DiagOverlay.tsx` puts the tail of the tuner log on the
+radio face itself — "the settings panel already shows the whole log, but reading
+it means leaving the radio, and the events worth catching are the ones tied to
+something you just did: pressing a wheel button, turning the headlights on,
+driving under a bridge". Notable lines are drawn in amber, which today means a
+panel key the app has no name for (see #83). It is never interactive —
+`pointerEvents="none"` throughout — so it cannot take a touch from the controls
+under it.
+
+Carnyx has every part of this EXCEPT the drawing. `prefs::diag_overlay_on` is
+persisted, `app.rs:3311` handles the toggle, `app.rs:2661` pushes it to the UI,
+and `ui/app.slint:387` hands it to the settings panel — where the only thing that
+reads it is the switch that sets it. Grep for `diag-overlay` across `ui/` returns
+the switch and nothing else.
+
+That makes the row a promise the app does not keep: its own subtitle reads
+"Mirror the last few events onto the face itself, so you can see them as they
+happen. Unexplained events are highlighted." Nothing is mirrored and nothing is
+highlighted.
+
+### 90. Build what reception testing mode says it does
+**OPEN, TWO THIRDS OF IT.** The row's subtitle states three behaviours —
+"Records signal level, position and RDS health every 15 seconds, and puts four
+audio-quality buttons on the radio. Quiets the routine RDS chatter." Only the
+third is built: `app.rs:1851` and `app.rs:1904` suppress the routine RDS lines
+when `debug_on`. Beyond that `debug_on` is read only by the settings push and by
+`prefs`.
+
+**The four buttons** are CarFM's `src/components/carfm/RatingBar.tsx` — "a
+one-tap verdict from the driver's seat, so the targets are large, the words are
+short, and nothing confirms or animates: press it and keep driving". They are
+deliberately NOT a scale but four distinct experiences pointing at different
+physical causes, and deliberately momentary: an earlier build kept the last
+choice outlined and "read as an ongoing status that had to be changed rather than
+a note that had been taken". Acknowledgement is a brief amber flash and nothing
+persists.
+
+**The 15-second sample** is `src/services/debugMode.ts` and `debugSample.ts`. The
+question it exists to answer is worth carrying with it: "does the tuner's
+measured level, and does the bundled FCC database's PREDICTION of receivability,
+agree with what a person actually hears in the car?" Each line records the
+measured level, the position, what the database predicts for that station from
+that position, and the RDS health a level reading cannot see; the driver's rating
+rides along. It takes the position from `getDetailedLocation()` rather than the
+cached fix, because at highway speed the dataset needs the fix's AGE above all —
+"a position minutes old makes distance and bearing to a transmitter fiction while
+the car keeps moving." Carnyx has the ingredients — `signal.rs`, `stations.rs`'s
+prediction, `rds.rs`'s counters, `android::location` — and no sampler.
+
 ### 88. Say what is tuned when the driver is in another app
 **BUILT, AND ONE THING ABOUT IT IS UNVERIFIED.** The wheel changes station whether
 or not the face is on screen — the MCU broadcasts `com.nwd.action.ACTION_KEY_VALUE`,
