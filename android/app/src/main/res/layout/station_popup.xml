@@ -75,13 +75,16 @@
       A second line carrying a station's long name would need `ellipsize` and a
       `maxWidth` back.
 
-      For the two lines centred on each other rather than ranged left, add
-      `android:gravity="center_horizontal"` here.
+      The two lines are centred ON EACH OTHER as well as with the logo, which is
+      what `gravity` does here — the column is only as wide as its widest line,
+      so this ranges the shorter one against the longer instead of against the
+      left edge. Drop it for a ragged right.
     -->
     <LinearLayout
         android:orientation="vertical"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal">
 
         <TextView
             android:id="@+id/popup_call"
