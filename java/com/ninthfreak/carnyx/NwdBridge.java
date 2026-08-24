@@ -172,6 +172,7 @@ public final class NwdBridge {
             synchronized (LOCK) { bound = true; }
             startPanelKeyWatch();
             startIlluminationWatch();
+            startSleepWatch();
             // NOT startRdsPump() here: bindService is asynchronous, so at this
             // point `radio` is still null and setRDSState has not run. The pump
             // starts from onServiceConnected, once RDS has actually been enabled.
@@ -688,6 +689,54 @@ public final class NwdBridge {
         }
     }
 
+    private static BroadcastReceiver sleepReceiver;
+
+    /**
+     * Watch for the head unit going to sleep, so the FM source can be handed back
+     * before this process stops running.
+     *
+     * <p>WHY: the MCU sleeps the SoC on ACC-off and restores its own radio app on
+     * ACC-on. An app still holding the source when it went down is an app
+     * contending with that one on the way back up.
+     *
+     * <p>TWO ACTIONS, NOT EQUALLY GOOD.
+     *
+     * <p>{@code com.nwd.ACTION_ACCOFF_UPDATE} is the precise one — CarFM's
+     * BootReceiver records the vendor service handling it on the way down, which
+     * is exactly the moment wanted. What is NOT known is whether a third-party
+     * app receives it at all: it is a vendor action, it may be protected, and
+     * nothing in either app has ever listened for it. If it never arrives this
+     * costs nothing and the other action still fires.
+     *
+     * <p>{@code ACTION_SCREEN_OFF} is the certain one — a standard system
+     * broadcast, and unlike the activity lifecycle it does not fire when the
+     * driver merely switches to maps. ITS HAZARD IS REAL: a screen timeout with
+     * the engine running looks identical from here, and the audio would stop with
+     * the driver still listening. There is no auto-reclaim — coming back on wake
+     * is what the stock radio does and the whole point is not to fight it — so
+     * recovery is the power button. Delete the one {@code addAction} to remove
+     * that half.
+     *
+     * <p>SCREEN_OFF CANNOT BE A MANIFEST RECEIVER (Android 8 took it off the
+     * implicit-broadcast allowlist), which is no obstacle: this app is alive to
+     * register it, and the foreground service is what keeps it that way.
+     */
+    public static synchronized void startSleepWatch() {
+        if (sleepReceiver != null || ctx == null) return;
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                safeSleep(i == null || i.getAction() == null ? "" : i.getAction());
+            }
+        };
+        IntentFilter f = new IntentFilter();
+        f.addAction("com.nwd.ACTION_ACCOFF_UPDATE");
+        f.addAction(Intent.ACTION_SCREEN_OFF);
+        if (registerExported(r, f)) {
+            sleepReceiver = r;
+            Log.i(TAG, "sleep watch registered");
+        }
+    }
+
     // There is no stopIlluminationWatch, on purpose. See disconnect().
 
     /** Android's night flag right now, as a readable string. */
@@ -1052,6 +1101,7 @@ public final class NwdBridge {
     private static native void nativeLevel(int level, int asked, int landed, boolean ok, String err);
     private static native void nativePanelKey(int key, String action);
     private static native void nativeIllumination(String action, String extras, String uiMode);
+    private static native void nativeSleep(String action);
 
     // Every crossing is wrapped. A callback runs on the VENDOR's binder thread:
     // an exception escaping into it is the vendor service's problem, not ours,
@@ -1092,6 +1142,10 @@ public final class NwdBridge {
     private static void safePanelKey(int key, String action) {
         try { nativePanelKey(key, action); } catch (Throwable t) { jniFailed(t); }
     }
+    private static void safeSleep(String action) {
+        try { nativeSleep(action); } catch (Throwable t) { jniFailed(t); }
+    }
+
     private static void safeIllumination(String action, String extras, String uiMode) {
         try { nativeIllumination(action, extras, uiMode); } catch (Throwable t) { jniFailed(t); }
     }

@@ -507,6 +507,11 @@ fn natives() -> Vec<NativeMethod<'static>> {
                 jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
                 native_illumination as *mut c_void,
             ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeSleep"),
+                jni_str!("(Ljava/lang/String;)V"),
+                native_sleep as *mut c_void,
+            ),
         ]
     }
 }
@@ -648,6 +653,17 @@ extern "system" fn native_panel_key<'a>(
 ) {
     guard(&mut env, |env| {
         super::ingest_panel_key(key, text(env, &action));
+        Ok(())
+    });
+}
+
+extern "system" fn native_sleep<'a>(
+    mut env: EnvUnowned<'a>,
+    _class: JClass<'a>,
+    action: JString<'a>,
+) {
+    guard(&mut env, |env| {
+        super::ingest_sleep(text(env, &action));
         Ok(())
     });
 }

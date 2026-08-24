@@ -464,6 +464,15 @@ pub enum TunerEvent {
         extras: String,
         ui_mode: String,
     },
+    /// The head unit is going to sleep, and this app should stop holding the FM
+    /// source before it stops running.
+    ///
+    /// `action` is the broadcast that said so, carried rather than collapsed to a
+    /// flag because the two are not equally trustworthy — see
+    /// `NwdBridge.startSleepWatch`. `com.nwd.ACTION_ACCOFF_UPDATE` is the real
+    /// signal; `android.intent.action.SCREEN_OFF` is a proxy a screen timeout
+    /// also trips. Which one arrived is the first thing a drive log has to answer.
+    Sleep { action: String },
 }
 
 // ── Shared state and the event sink ──────────────────────────────────────────
@@ -795,6 +804,10 @@ pub fn set_foreground(on: bool) {
 /// Is the activity in front? See [`FOREGROUND`].
 pub fn is_foreground() -> bool {
     FOREGROUND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn ingest_sleep(action: String) {
+    emit(TunerEvent::Sleep { action });
 }
 
 pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {

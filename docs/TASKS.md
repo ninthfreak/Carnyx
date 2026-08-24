@@ -1313,6 +1313,48 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 92. Hand the FM source back when the unit goes to sleep
+**DONE, AND THE TRIGGER IS UNVERIFIED.** The MCU sleeps the SoC on ACC-off and
+restores its own radio app on ACC-on. An app still holding the FM source when it
+went down is an app contending with that one on the way back up. This releases on
+the way down, so there is nothing to contend with.
+
+**The release itself was already built and already proven.**
+`NwdBridge.setAudioEnabled(false)` broadcasts
+`com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE extra_source_id=0`, and its own note
+records why that call and no other: the probe of 2026-07-26 found `EXIT_ARM_FM`
+and app-OUT both left `mcu_current_source=4` with the MCU re-powering FM a second
+later — the "comes back on" bug — while source→0 made the audio STAY off. What
+was missing was only a trigger.
+
+**Two triggers, and they fail differently.**
+`com.nwd.ACTION_ACCOFF_UPDATE` is the precise one: CarFM's `BootReceiver`
+records the vendor service handling it on the way down, which is exactly the
+moment wanted. Whether a third-party app receives it at all is NOT known — it is
+a vendor action, it may be protected, and nothing in either app has ever listened
+for it. `ACTION_SCREEN_OFF` is the certain one: a standard system broadcast, and
+unlike the activity lifecycle it does not fire when the driver switches to maps.
+**Its hazard is real** — a screen timeout with the engine running looks identical
+from here and would stop the audio with the driver still listening. There is no
+auto-reclaim, because coming back on wake is what the stock radio does and the
+point is not to fight it, so recovery is the power button. Deleting one
+`addAction` removes that half.
+
+**What a drive settles.** Every event logs the action verbatim
+(`sleep: <action>`) followed by `FM source released for sleep`, so one ignition
+cycle says which broadcast arrives, whether both do, and in what order.
+
+**Two things it is deliberately not.** It does not set `user_powered_off` — that
+flag is the driver's own choice at the power button, and an ignition cycle is
+nobody's choice. And it is not the activity lifecycle: `Pause`/`Stop` fire
+whenever the driver opens another app, and releasing the source then would be
+wrong.
+
+Pinned by `sleep_hands_the_source_back_and_is_not_a_power_off`, which asserts
+through the TUNER'S OWN SNAPSHOT — `FakeTuner` reports `mcu_source` 4 while it
+holds the source and 0 once it does not — so it proves the call crossed the seam
+rather than that Carnyx decided it had.
+
 ### 88. Say what is tuned when the driver is in another app
 **BUILT, AND ONE THING ABOUT IT IS UNVERIFIED.** The wheel changes station whether
 or not the face is on screen — the MCU broadcasts `com.nwd.action.ACTION_KEY_VALUE`,

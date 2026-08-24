@@ -519,6 +519,15 @@ struct State {
     /// register, and an explicit power-off must survive that. CarFM's
     /// `userPoweredOffRef` (RadioScreen.tsx:3010).
     user_powered_off: bool,
+    /// The unit told us it is going to sleep and the FM source has not been
+    /// handed back yet.
+    ///
+    /// A FLAG RATHER THAN THE CALL, because the arm that sets it holds a borrow
+    /// of this struct and the call crosses into the vendor's binder. DISTINCT
+    /// from `user_powered_off`: that is the driver's own choice at the power
+    /// button and is meant to survive, this is the ignition going off, which is
+    /// nobody's choice and must not come back looking like one.
+    sleep_release: bool,
     /// The post-retune level schedule: read at 1s, correct at 4s, retry a
     /// rejection twice. See [`crate::signal`] for the measurements and
     /// `arm_level_schedule` for the wiring.
@@ -1106,6 +1115,7 @@ impl App {
                 dotted: 0,
                 audio: true,
                 user_powered_off: false,
+                sleep_release: false,
                 level_first: slint::Timer::default(),
                 level_correction: slint::Timer::default(),
                 level_retry: slint::Timer::default(),
@@ -1287,6 +1297,20 @@ impl App {
         loop {
             let Some(event) = logo_queue().pop_front() else { break };
             self.apply_logo_event(event);
+        }
+        // THE SLEEP RELEASE, before the panel key and deferred for the same
+        // reason: no borrow may be held across the vendor call. Taken in its own
+        // statement so the `RefMut` is dropped before the call runs.
+        let releasing = std::mem::replace(&mut self.state.borrow_mut().sleep_release, false);
+        if releasing {
+            let (tuner, at) = {
+                let s = self.state.borrow();
+                (s.tuner.clone(), stamp())
+            };
+            tuner.set_audio_enabled(false);
+            let mut s = self.state.borrow_mut();
+            s.audio = false;
+            s.settings.log.push(&at, "FM source released for sleep");
         }
         // The panel key, after the queue is empty and every borrow is gone. Both
         // arms retune, and a retune drains again — which is why this is taken
@@ -1989,6 +2013,23 @@ impl App {
             }
             TunerEvent::Illumination { ui_mode, .. } => {
                 s.settings.log.push(&stamp(), &format!("illumination {ui_mode}"));
+            }
+            // ── THE UNIT IS GOING TO SLEEP ────────────────────────────────────
+            //
+            // Hand the FM source back before this process stops running. The MCU
+            // restores its own radio app on ACC-on, and an app still holding the
+            // source when it went down is one contending with that on the way up.
+            //
+            // FLAGGED HERE, ACTED ON AFTER THE DRAIN — the rule the panel key
+            // follows, for the same reason: `set_audio_enabled` crosses into the
+            // vendor's binder, and a `RefCell` borrow held across a call into
+            // another runtime is a lock held over code that can call back.
+            //
+            // The action is logged verbatim because the two triggers are not
+            // equally trustworthy, and which one arrives is what a drive settles.
+            TunerEvent::Sleep { action } => {
+                s.settings.log.push(&stamp(), &format!("sleep: {action}"));
+                s.sleep_release = true;
             }
             TunerEvent::ScanState(_) | TunerEvent::RadioState(_) => {}
         }
@@ -4811,6 +4852,59 @@ mod tests {
         );
         (ui, driver)
     }
+
+    /// THE IGNITION GOING OFF HANDS THE FM SOURCE BACK, AND IS NOT A POWER-OFF.
+    ///
+    /// The MCU sleeps the SoC on ACC-off and restores its own radio app on
+    /// ACC-on. An app still holding the source when it went down contends with
+    /// that one on the way back up, which is the whole reason for this path.
+    ///
+    /// ASSERTED THROUGH THE TUNER'S OWN SNAPSHOT rather than through a flag on
+    /// this side: `FakeTuner` reports `mcu_source` as 4 while it holds the source
+    /// and 0 once it does not, so this proves `set_audio_enabled(false)` actually
+    /// crossed the seam rather than that Carnyx merely decided it had.
+    ///
+    /// AND `user_powered_off` MUST NOT MOVE. That flag is the driver's own choice
+    /// at the power button; the ignition going off is nobody's choice, and a
+    /// sleep that set it would be a face that came back dead for a reason the
+    /// driver never gave.
+    #[test]
+    fn sleep_hands_the_source_back_and_is_not_a_power_off() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("sleep");
+        driver.drain_events();
+        assert_eq!(
+            driver.state.borrow().tuner.snapshot().unwrap().mcu_source,
+            Some(4),
+            "the app holds the source before the unit sleeps"
+        );
+        assert!(driver.state.borrow().audio);
+
+        crate::android::ingest_sleep("com.nwd.ACTION_ACCOFF_UPDATE".into());
+        driver.drain_events();
+
+        let s = driver.state.borrow();
+        assert_eq!(
+            s.tuner.snapshot().unwrap().mcu_source,
+            Some(0),
+            "and hands it back when the unit says it is going down"
+        );
+        assert!(!s.audio, "the face knows it no longer holds it");
+        assert!(!s.user_powered_off, "an ignition cycle is not the driver powering off");
+
+        // BOTH LINES, because which trigger fired is the open question this path
+        // exists to settle on the unit — `ACTION_ACCOFF_UPDATE` or `SCREEN_OFF`.
+        let lines = s.settings.log.lines();
+        assert!(
+            lines.iter().any(|l| l.contains("sleep: com.nwd.ACTION_ACCOFF_UPDATE")),
+            "the log names the broadcast verbatim, got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("FM source released for sleep")),
+            "and records that the release ran, got {lines:?}"
+        );
+    }
+
 
     /// Pretend the vendor service retuned its own bank and reported it.
     ///
