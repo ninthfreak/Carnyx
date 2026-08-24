@@ -70,12 +70,19 @@ public final class CarnyxWake {
     /**
      * Record whether the face is in front.
      *
-     * <p>{@code apply()} rather than {@code commit()}: this runs on the Android
-     * main thread from a lifecycle callback that the platform is BLOCKING on, and
-     * a synchronous disk write there is the shape that turns a pause into a
-     * dropped frame. `apply` writes to memory immediately and to disk on a
-     * background thread; the flag is only ever read after a process death, by
-     * which time the write has long landed.
+     * <p>{@code apply()} rather than {@code commit()}: this runs from a lifecycle
+     * callback that the platform is BLOCKING on, and a synchronous disk write
+     * there is the shape that turns a pause into a dropped frame. {@code apply}
+     * writes to memory immediately and to disk on a background thread; the flag
+     * is only ever read after a process death, by which time the write has long
+     * landed.
+     *
+     * <p>NOT the Java main thread, which an earlier version of this note claimed.
+     * The call arrives on the NATIVE thread running {@code android_main} — Slint
+     * delivers it through {@code init_with_event_listener} — while the Java main
+     * thread waits for that thread to acknowledge the command. The reasoning is
+     * unchanged, because what matters is that something is blocked on this
+     * returning, not which thread is blocked.
      */
     public static synchronized void setForeground(boolean front) {
         if (ctx == null) {

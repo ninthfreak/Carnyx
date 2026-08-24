@@ -288,7 +288,22 @@ public final class CarnyxAlert {
         if (text != null && !text.isEmpty()) {
             b.setContentText(text);
         }
-        if (logo != null) {
+
+        boolean custom = ensureLayout();
+
+        // THE LARGE ICON IS THE FALLBACK'S LOGO, AND ONLY THE FALLBACK'S.
+        //
+        // It was set unconditionally, which put the mark on screen TWICE in a
+        // Gradle build: {@code DecoratedCustomViewStyle} keeps the platform's own
+        // decoration, and the large icon is part of it — so the wordmark appeared
+        // squeezed into the decoration's square slot AND again, correctly sized,
+        // in the custom row below it. The squeezed one is exactly what the custom
+        // layout was written to get rid of.
+        //
+        // Under cargo-apk there is no layout — that packager ships no resources —
+        // and then the large icon IS the only way to show a logo at all, which is
+        // why this is a branch rather than a deletion.
+        if (logo != null && !custom) {
             b.setLargeIcon(logo);
         }
 
@@ -308,7 +323,7 @@ public final class CarnyxAlert {
         // banner over another app, which is the whole feature; `Content` is the
         // entry left behind in the shade. Setting only the first leaves the two
         // looking like different notifications.
-        if (ensureLayout()) {
+        if (custom) {
             RemoteViews rv = new RemoteViews(ctx.getPackageName(), layoutId);
             rv.setTextViewText(callId, title == null ? "" : title);
             rv.setTextViewText(dialId, text == null ? "" : text);

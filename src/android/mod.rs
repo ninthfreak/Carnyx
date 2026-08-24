@@ -934,6 +934,16 @@ pub trait Tuner: Send + Sync {
     /// command lands last is where the driver ends up.
     fn vendor_tune_for_test(&self, _mhz: f32) {}
 
+    /// TEST HOOK. The IGNITION going off, delivered the way the device delivers
+    /// it — through a receiver that has to have been registered first.
+    ///
+    /// Defaulted to nothing, and `FakeTuner` answers it only once
+    /// `start_sleep_watch` has run. Calling `ingest_sleep` instead would push the
+    /// event straight past the registration and prove nothing about whether
+    /// anything is listening, which is the entire content of the bug this hook
+    /// exists to pin.
+    fn push_sleep_for_test(&self, _action: &str) {}
+
     /// TEST HOOK. Where the front end actually is, which on the device only the
     /// hardware knows. `None` from a real tuner: this exists so a test can
     /// assert about the RADIO rather than about the label, and those are the
@@ -987,6 +997,22 @@ pub trait Tuner: Send + Sync {
     /// this inside connect alone, so a session that never bound the built-in
     /// tuner never registered the receiver and stayed light all night. Idempotent.
     fn start_illumination_watch(&self);
+
+    /// Start listening for the head unit going to sleep, so the FM source can be
+    /// handed back before this process stops running.
+    ///
+    /// SEPARATE FROM `connect` FOR THE REASON DIRECTLY ABOVE, and it was not.
+    /// `NwdBridge.startSleepWatch` was called from inside `connect()`, after
+    /// `bindService` returned true — so a unit whose vendor service refused the
+    /// bind registered no receiver, and the `sleep:` line that is the ONLY
+    /// evidence of which broadcast fires never appeared on the session most worth
+    /// reading. That is the illumination bug again, one line away from the note
+    /// describing it. The ignition going off belongs to the vehicle, not to
+    /// whichever tuner is selected.
+    ///
+    /// Defaulted to nothing rather than required: four example probes implement
+    /// this trait and none of them has an ignition. Idempotent.
+    fn start_sleep_watch(&self) {}
 
     /// Write the diagnostics log to the head unit's public Downloads folder and
     /// return the human-readable path.
@@ -1049,6 +1075,10 @@ struct FakeState {
     level: i32,
     audio: bool,
     ill_watching: bool,
+    /// Has the sleep watch been armed? Same rule as `ill_watching` and for the
+    /// same reason: an event the app never asked to hear must not arrive, or the
+    /// "registered inside connect" bug is unreproducible here.
+    sleep_watching: bool,
     /// Does `tune` report the new frequency back straight away?
     ///
     /// TRUE BY DEFAULT AND FALSE ON THE DEVICE. `NwdBridge.tune` calls
@@ -1079,6 +1109,7 @@ impl FakeTuner {
                 level: 62,
                 audio: false,
                 ill_watching: false,
+                sleep_watching: false,
                 echo: true,
                 log_dir: None,
                 logs_written: 0,
@@ -1155,6 +1186,15 @@ impl FakeTuner {
         self.lock().audio
     }
 
+    /// Pretend the ignition went off. A no-op unless the watch was started, so
+    /// the "registered inside connect, so a refused bind hears nothing" bug is
+    /// reproducible here rather than only on a dashboard.
+    pub fn push_sleep(&self, action: &str) {
+        if self.lock().sleep_watching {
+            ingest_sleep(action.into());
+        }
+    }
+
     /// Pretend the headlights changed. A no-op unless the watch was started, so
     /// the "an RTL-SDR session stayed light all night" bug is reproducible.
     pub fn push_illumination(&self, extras: &str, ui_mode: &str) {
@@ -1220,6 +1260,10 @@ impl Tuner for FakeTuner {
 
     fn vendor_tune_for_test(&self, mhz: f32) {
         self.vendor_tunes(mhz);
+    }
+
+    fn push_sleep_for_test(&self, action: &str) {
+        self.push_sleep(action);
     }
 
     fn tuned_mhz_for_test(&self) -> Option<f32> {
@@ -1296,6 +1340,11 @@ impl Tuner for FakeTuner {
         // There are no headlights in a container. `push_illumination` is how a
         // test or a mock-up drives the day/night path.
         self.lock().ill_watching = true;
+    }
+
+    fn start_sleep_watch(&self) {
+        // And no ignition. `push_sleep` is how a test drives that path.
+        self.lock().sleep_watching = true;
     }
 
     /// The same file, somewhere a host can reach.

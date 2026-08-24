@@ -1222,6 +1222,13 @@ impl App {
         // CarFM registered the receiver inside connect alone, and a session that
         // never bound the built-in tuner stayed light all night.
         app.state.borrow().tuner.start_illumination_watch();
+        // AND THE IGNITION, on exactly the same argument. This was registered
+        // inside `NwdBridge.connect()` instead, after `bindService` returned
+        // true, so a unit whose vendor service refused the bind never heard the
+        // unit go to sleep — and the `sleep:` line is the only evidence of which
+        // broadcast fires at all. Same bug as the headlights, one line away from
+        // the comment describing it.
+        app.state.borrow().tuner.start_sleep_watch();
         // The restored theme has to reach the palette; `Settings` alone only
         // records the choice.
         let theme = app.state.borrow().settings.theme;
@@ -2744,6 +2751,15 @@ impl App {
         );
         // The borrow above must be released before `save_prefs` takes its own —
         // and before the diagnostics cache is written back.
+        //
+        // AND THE `save_prefs` AT THE END OF THIS FUNCTION IS WHERE EVERY PANEL
+        // SETTING PERSISTS. Five fields of `prefs::Prefs` — the source, the
+        // theme, the logo switch, the sleep release and the diagnostics switch —
+        // are moved by callbacks that write nothing themselves, and they reach
+        // the disk because every one of those callbacks ends in `push_settings`.
+        // Worth saying out loud: from the callback's side that write is
+        // invisible, and the obvious "fix" is to add one there — a second write
+        // of the same struct, which the equality check below would discard.
         drop(s);
         {
             let mut s = self.state.borrow_mut();
@@ -3286,6 +3302,14 @@ impl App {
             app.state.borrow_mut().settings.details_open = !open;
             app.push_settings();
         });
+        // NONE OF THE HANDLERS BELOW CALLS `save_prefs`, AND THAT IS NOT AN
+        // OMISSION — `push_settings` ends with it, and every one of them ends
+        // with `push_settings`. Stated here because the absence reads as a bug
+        // from this side: five of these switches are fields of `prefs::Prefs`
+        // and are read back at launch, so a reader looking for where they are
+        // written finds nothing in the handler that moves them. An explicit call
+        // here would be a second write of the same struct, which `save_prefs`
+        // would discard anyway on its equality check.
         on!(on_settings_pick_source, |app, i| {
             if let Some(&src) = settings::Source::ORDER.get(i as usize) {
                 app.state.borrow_mut().settings.selected = src;
@@ -3334,7 +3358,6 @@ impl App {
         });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;
-            app.save_prefs();
             app.push_settings();
         });
         on!(on_settings_set_diag, |app, v| {
@@ -4903,6 +4926,90 @@ mod tests {
             fake::FakeLocation::default(),
         );
         (ui, driver)
+    }
+
+    /// EVERY SWITCH IN THE PANEL REACHES THE DISK.
+    ///
+    /// `Prefs` carries five settings and `App::with_tuner` reads all five back at
+    /// launch, so every one of them is meant to survive — and NOT ONE of the five
+    /// callbacks that move them writes anything. They persist because each ends
+    /// in `push_settings`, whose last statement is `save_prefs`.
+    ///
+    /// WRITTEN BECAUSE THAT ARRANGEMENT LOOKS BROKEN FROM THE CALLBACK'S SIDE and
+    /// was read that way once, during a bug sweep, on the way to adding four
+    /// redundant saves. The file is the only place the answer is unambiguous, so
+    /// this asserts against the file rather than the model — which also makes it
+    /// the test that fails if anyone ever takes `save_prefs` out of
+    /// `push_settings` and fixes up only the callers they can see.
+    ///
+    /// The chip label matters: `Theme::parse` matches the panel's own upper-case
+    /// label and leaves the choice alone on anything else, so a lower-case string
+    /// here would change nothing and pass against a genuinely broken save.
+    #[test]
+    fn every_remembered_setting_is_written_when_it_changes() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("persist");
+        let dir = std::env::temp_dir().join("carnyx-apptest-persist");
+        driver.drain_events();
+
+        // A fresh directory has no file at all until something writes one. The
+        // chip label is what the panel passes and `Theme::parse` matches, and it
+        // is upper case — a lower-case string here parses to nothing, changes
+        // nothing, and would make this test pass against a broken save.
+        ui.invoke_settings_set_theme(settings::Theme::Dark.label().into());
+        let after_theme = crate::prefs::load(&dir);
+        assert_eq!(after_theme.theme, settings::Theme::Dark, "the theme reaches the disk");
+
+        ui.invoke_settings_set_logos(false);
+        assert!(!crate::prefs::load(&dir).logos_on, "and so does the logo switch");
+
+        ui.invoke_settings_set_diag(true);
+        assert!(crate::prefs::load(&dir).diag_on, "and the diagnostics switch");
+
+        let i = settings::Source::ORDER.iter().position(|s| *s == settings::Source::Rtl).unwrap();
+        ui.invoke_settings_pick_source(i as i32);
+        assert_eq!(
+            crate::prefs::load(&dir).selected,
+            settings::Source::Rtl,
+            "and the source picker"
+        );
+
+        // The one that was already right, kept here so a future edit cannot
+        // quietly take it back with the others.
+        ui.invoke_settings_set_release_on_sleep(false);
+        assert!(!crate::prefs::load(&dir).release_on_sleep, "and the sleep release");
+    }
+
+    /// THE SLEEP WATCH IS ARMED AT START-UP, NOT INSIDE `connect`.
+    ///
+    /// `NwdBridge.startSleepWatch` was called from `connect()`, after
+    /// `bindService` returned true. A unit whose vendor service refuses the bind
+    /// therefore registered no receiver at all — and the `sleep:` line is the
+    /// only evidence of WHICH broadcast fires, on the session most worth reading.
+    /// It is the illumination bug, which this file already carries a comment
+    /// about, repeated one line away from that comment.
+    ///
+    /// `FakeTuner::push_sleep` is a no-op until the watch is armed, exactly as
+    /// `push_illumination` is, so this fails if the arming is ever moved back.
+    /// Going through the fake rather than `ingest_sleep` is the whole point: the
+    /// ingest edge would deliver the event either way and prove nothing.
+    #[test]
+    fn the_sleep_watch_does_not_depend_on_the_tuner_binding() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("sleepwatch");
+        driver.drain_events();
+
+        // Through the TUNER, which stays silent unless someone armed the watch.
+        let tuner = driver.state.borrow().tuner.clone();
+        tuner.push_sleep_for_test("com.nwd.ACTION_ACCOFF_UPDATE");
+        driver.drain_events();
+
+        let s = driver.state.borrow();
+        assert!(!s.audio, "the source went back, so the watch was armed");
+        assert!(
+            s.settings.log.lines().iter().any(|l| l.contains("sleep: com.nwd.ACTION_ACCOFF_UPDATE")),
+            "and the broadcast is named in the log"
+        );
     }
 
     /// THE IGNITION GOING OFF HANDS THE FM SOURCE BACK, AND IS NOT A POWER-OFF.

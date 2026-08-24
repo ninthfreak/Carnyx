@@ -1306,6 +1306,82 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 97. Bug sweep over one day's work
+**DONE — THREE REAL DEFECTS, ONE FALSE ALARM, ONE WRONG COMMENT.** A review of
+the eighteen commits made in one session, asked for directly: *"We've done a
+number of things today, check for bugs."*
+
+**1. THE SLEEP WATCH ONLY ARMED IF THE VENDOR BIND SUCCEEDED.**
+`NwdBridge.startSleepWatch` was called from inside `connect()`, after
+`bindService` returned true — so a unit whose vendor service refuses the bind
+registered no receiver, released nothing, and wrote no `sleep:` line. That line
+is the ONLY evidence of which broadcast fires, and the session most worth reading
+is exactly the one where the bind failed.
+
+It is the illumination bug, which this tree already carries two comments about,
+repeated **one line away from one of them**: `connect()` calls
+`startIlluminationWatch()` and `startSleepWatch()` on consecutive lines, and only
+the first also has a start-up path. Fixed the same way — `Tuner::start_sleep_watch`,
+defaulted to nothing so the four example probes still compile, called from
+`App::with_tuner` beside the illumination watch. The `connect()` call stays; it is
+idempotent, as illumination's is.
+
+Pinned by `the_sleep_watch_does_not_depend_on_the_tuner_binding`, and the pin is
+the interesting part: `FakeTuner` now refuses to deliver a sleep until the watch
+is armed, exactly as it already refused to deliver an illumination change. The
+test drives `push_sleep_for_test` rather than `ingest_sleep` — the ingest edge
+would deliver the event either way and prove nothing. Verified by removing the
+arming and watching it fail.
+
+**2. THE STATION POP-UP SHOWED THE LOGO TWICE.** `CarnyxAlert.build` set
+`setLargeIcon` unconditionally and then, when the custom layout resolved, added a
+`RemoteViews` carrying the same bitmap. `DecoratedCustomViewStyle` keeps the
+platform's decoration, and the large icon is part of it — so a Gradle build would
+draw the wordmark squeezed into the decoration's square slot AND again, correctly
+sized, in the custom row. The squeezed one is precisely what
+`station_popup.xml` was written to get rid of. Now mutually exclusive: the large
+icon is the fallback's logo and only the fallback's, because under cargo-apk
+there are no resources and it is the only way to show one at all.
+
+**3. THE SLEEP RELEASE'S SWITCH DID NOT MENTION ITS OWN HAZARD.** The watch
+listens for `ACTION_SCREEN_OFF` as well as the vendor's ACC-off broadcast,
+because the first may never reach a third-party app and the second certainly
+arrives. `NwdBridge.startSleepWatch` calls that hazard REAL in as many words — a
+screen blanking on a timer is indistinguishable from an ignition going off, so
+the radio stops with the driver still listening and the recovery is the power
+button. The switch defaults ON and its subtitle said nothing about it. It does
+now, in the second sentence, naming the recovery.
+
+**THE FALSE ALARM, recorded because it cost more than the fixes.** Four settings
+callbacks — source, theme, logos, diagnostics — appeared not to persist: each is
+a field of `prefs::Prefs`, each is read back at launch, and not one of them calls
+`save_prefs`. Four calls were added before a test proved they changed nothing:
+`push_settings` ends with `save_prefs`, and every one of those callbacks ends with
+`push_settings`. All four were reverted. What stayed is the test —
+`every_remembered_setting_is_written_when_it_changes`, asserting against the FILE
+— and a comment at the save itself saying that this is where panel settings
+persist, because the arrangement reads as broken from the callback's side and was
+read that way once. The redundant call added the same day to the sleep-release
+handler went with them.
+
+**AND ONE COMMENT THAT WAS WRONG.** `CarnyxWake.setForeground` said it runs on
+the Android main thread. It does not — the callback arrives on the NATIVE thread
+running `android_main`, which Slint drives through
+`init_with_event_listener`, while the Java main thread waits on it. The
+conclusion was unaffected (`apply()` over `commit()`, because something is
+blocked on the call returning) but the stated reason was not the true one.
+
+**Evidence.** 291 tests, clippy clean, examples check. The Java touched compiles
+with `-Xlint:all` against a real API-34 framework jar with no diagnostic in our
+sources. 78 shots rendered and compared byte-wise: 69 identical, 6 known-unstable,
+and 3 that moved — `settings-head-unit`, `settings-head-unit-dark` and
+`settings-scrolled-mid`, all three the longer subtitle from fix 3, checked by eye
+for wrapping and alignment.
+
+**What the sweep did NOT cover:** anything that only fails on the unit. The wake
+receiver, both probes, the pop-up itself and the sleep broadcast have still never
+run on Android.
+
 ### 96. Probe where the stock radio app can be intercepted, without root
 **BUILT, UNRUN.** A second DIAGNOSTICS row — "Where the stock radio app can be
 intercepted" — and the class behind it. Asked for directly: *"I want a probe to

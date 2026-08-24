@@ -1363,7 +1363,16 @@ export component SettingsOverlay inherits Rectangle {
                 // until there is a receiver behind it; see #94.
                 SwitchRow {
                     title: "Release FM on sleep";
-                    sub: "Hand the FM source back when the head unit sleeps, so the stock radio app does not launch itself on the way back";
+                    // THE SECOND SENTENCE IS THE HAZARD, AND IT WAS MISSING. The
+                    // watch behind this listens for the vendor's ACC-off
+                    // broadcast AND for SCREEN_OFF, because the first may never
+                    // reach a third-party app and the second certainly arrives.
+                    // A screen blanking on a timer is indistinguishable from an
+                    // ignition going off, so the radio can stop with the driver
+                    // still listening — and this switch defaults ON.
+                    // `NwdBridge.startSleepWatch` has always called that hazard
+                    // real; the person it happens to had no way to know.
+                    sub: "Hand the FM source back when the head unit sleeps, so the stock radio app does not launch itself on the way back. A screen that goes dark on its own counts as sleeping: if that happens while you are listening the radio stops, and the power button starts it again.";
                     on: root.release-on-sleep;
                     toggled(v) => { root.set-release-on-sleep(v); }
                 }

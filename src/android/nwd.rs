@@ -376,6 +376,13 @@ impl Tuner for NwdTuner {
         });
     }
 
+    fn start_sleep_watch(&self) {
+        call_void("startSleepWatch", |env, class| {
+            env.call_static_method(class, jni_str!("startSleepWatch"), jni_sig!("()V"), &[])?;
+            Ok(())
+        });
+    }
+
     /// See `Tuner::write_log`. The only call out of here that passes a string IN.
     ///
     /// THE FAILURE COMES BACK AS A VALUE, not as a Java exception, and the "!"
