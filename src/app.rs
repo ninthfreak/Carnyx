@@ -2214,21 +2214,24 @@ impl App {
         ui.set_radio_text(shown_rt.as_str().into());
         ui.set_pty(rds::pty_label(st.pty).into());
 
-        // ── THE STATION POP-UP ────────────────────────────────────────────────
+        // ── THE STATION POP-UP, HALF ONE: HAS THE DIAL MOVED? ─────────────────
         //
         // The wheel changes station whether or not the face is on screen: the
         // MCU broadcasts, `NwdBridge` hears it, and `State::reassert` makes this
         // app's choice the one that plays. A driver in another app therefore
-        // gets a station change with NOTHING TO SEE. This is the only place that
-        // holds both halves of what such a driver needs told — the resolved
-        // identity and the dial it landed on — which is why it happens here
-        // rather than beside the tune.
+        // gets a station change with NOTHING TO SEE.
         //
-        // TWO CONDITIONS, AND THE ORDER OF THE FIRST TWO LINES MATTERS. The
-        // marker moves on every dial change; only a change the driver cannot
-        // already see is spoken. Tuning on the face and then switching away must
-        // stay silent, and it does, because the marker moved while the face was
-        // in front.
+        // THE QUESTION IS ANSWERED HERE AND ACTED ON BELOW, because the second
+        // half needs the station's LOGO, and the logo is resolved after this
+        // borrow is dropped — `art_for` writes its decode back into the same
+        // cell. The marker has to move inside the borrow; the announcement has
+        // to wait for the picture.
+        //
+        // THE MARKER MOVES WHETHER OR NOT ANYTHING IS ANNOUNCED. Tuning on the
+        // face and then switching away must stay silent, and it does, because
+        // the marker moved while the face was in front. Had it only moved on an
+        // announcement, the next ordinary push — an RDS group, a level read —
+        // would announce a station the driver had chosen by hand a minute ago.
         //
         // The comparison is `!=` rather than an epsilon on purpose: `shown()` is
         // a dial the app itself commanded in 0.1 MHz steps, not a measurement, so
@@ -2239,24 +2242,6 @@ impl App {
         let moved = s.announced.get() != landed;
         if moved {
             s.announced.set(landed);
-            if !crate::android::is_foreground() {
-                let dial = format_mhz(landed);
-                // The call sign leads when there is one; the dial is the honest
-                // fallback and never an inaccurate "Tuning…", the same rule the
-                // hero lettering follows two dozen lines above.
-                let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
-                let posted = crate::android::announce_station(&title, &format!("{dial} FM"));
-                // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
-                // wheel press retunes at all depends on the Slint event loop
-                // pumping while the activity is stopped, which cannot be tested
-                // off the unit — so every announcement records that it happened
-                // and whether the platform took it. One drive reads it back out
-                // of the settings log.
-                crate::android::ingest_note(format!(
-                    "station pop-up: {title} at {dial} — {}",
-                    if posted { "posted" } else { "not posted" }
-                ));
-            }
         }
 
         // THE PER-SCHEME CUT. "Back in Black" means nothing on a white page, so a
@@ -2389,6 +2374,60 @@ impl App {
         ui.set_logo(art.map(|(i, _)| i).unwrap_or_default());
         ui.set_show_call(flags.show_call);
         ui.set_show_freq(flags.show_freq);
+
+        // ── THE STATION POP-UP, HALF TWO: SAY IT ──────────────────────────────
+        //
+        // Only a change the driver cannot already see is worth a banner, so this
+        // is the one place the foreground flag is read.
+        //
+        // THE LOGO IS THE MESSAGE WHEN THERE IS ONE. A station's own mark says
+        // which station this is faster than its call letters do, and a driver
+        // glancing at a notification is doing exactly that — so a station with a
+        // saved logo gets the picture and no words, and one without gets the call
+        // sign and the dial. The Java side falls back to the words if the file
+        // will not decode, because a banner with neither says nothing.
+        if moved && !crate::android::is_foreground() {
+            let dial = format_mhz(landed);
+            // The call sign leads when there is one; the dial is the honest
+            // fallback and never an inaccurate "Tuning…", which is the rule the
+            // hero lettering follows above.
+            let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
+            let logo = self.notification_logo(&base);
+            let posted = crate::android::announce_station(&title, &format!("{dial} FM"), &logo);
+            // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
+            // wheel press retunes at all depends on the Slint event loop pumping
+            // while the activity is stopped, which cannot be tested off the unit
+            // — so every announcement records that it happened, what it showed,
+            // and whether the platform took it. One drive reads it back out of
+            // the settings log.
+            crate::android::ingest_note(format!(
+                "station pop-up: {title} at {dial} ({}) — {}",
+                if logo.is_empty() { "no logo" } else { "logo" },
+                if posted { "posted" } else { "not posted" }
+            ));
+        }
+    }
+
+    /// The file the station pop-up should show for `base`, or empty for none.
+    ///
+    /// THE SAME PICTURE THE FACE WOULD DRAW, chosen by `path_for_theme` — which
+    /// mirrors `read_for_theme`'s pick and stops short of its decode, because
+    /// Android decodes the file itself and at a size it chooses.
+    ///
+    /// ASKED AT THE TILE RUNG rather than the hero's full size. A large icon is
+    /// drawn at about 64dp; handing the platform a master a thousand pixels on a
+    /// side to resample is work for nothing, and 128dp is the smallest rendition
+    /// this store keeps.
+    fn notification_logo(&self, base: &str) -> String {
+        if base.is_empty() {
+            return String::new();
+        }
+        let store = self.state.borrow().store.clone();
+        let dark = self.ui().global::<crate::Pal>().get_dark();
+        let scale = self.ui().window().scale_factor();
+        crate::logos::assign::path_for_theme(&store, base, Some(TILE_BOX_DP), scale, dark)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     fn push_presets(&self) {
@@ -4862,6 +4901,30 @@ mod tests {
         driver.push_all();
         driver.push_all();
         assert_eq!(said(&driver).len(), 1, "a redraw is not a retune");
+
+        // ── AND THE LOGO BRANCH. A station with a saved mark sends the mark
+        // and no words; the line records which was sent, so the wiring from
+        // `notification_logo` through to the announcement is covered here and
+        // not only in `path_for_theme`'s own test.
+        assert!(lines[0].contains("(no logo)"), "nothing is saved for this one yet: {lines:?}");
+
+        let base = driver.hero_row().map(|r| r.callsign_base).unwrap_or_default();
+        assert!(!base.is_empty(), "the seeded strip resolves to a real station");
+        driver
+            .state
+            .borrow()
+            .store
+            .put_original(&base, b"a picture", "image/png", "manual")
+            .unwrap();
+        driver.tune_for_test(strip[3]);
+        driver.drain_events();
+        driver.tune_for_test(strip[2]);
+        driver.drain_events();
+        let lines = said(&driver);
+        assert!(
+            lines.last().unwrap().contains("(logo)"),
+            "a station with a master sends the picture: {lines:?}"
+        );
 
         // Leave the flag as every other test expects to find it.
         crate::android::set_foreground(true);

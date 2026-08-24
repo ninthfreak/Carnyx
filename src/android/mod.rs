@@ -752,13 +752,13 @@ pub fn ingest_panel_key(code: i32, action: String) {
 /// rule on every target, so it is tested on the host like everything else. Only
 /// the posting is platform work, and off Android there is nothing to post to.
 #[cfg(target_os = "android")]
-pub fn announce_station(title: &str, text: &str) -> bool {
-    alert::post(title, text)
+pub fn announce_station(title: &str, text: &str, logo: &str) -> bool {
+    alert::post(title, text, logo)
 }
 
 /// The host has no notification shade. See the Android arm.
 #[cfg(not(target_os = "android"))]
-pub fn announce_station(_title: &str, _text: &str) -> bool {
+pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> bool {
     false
 }
 

@@ -6,6 +6,8 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.util.Log;
 
@@ -68,6 +70,12 @@ public final class CarnyxAlert {
      */
     private static final long TIMEOUT_MS = 8000;
 
+    /**
+     * Roughly what the platform draws a large icon at, in dp. Used only to pick
+     * a decode step; the platform does the final scaling either way.
+     */
+    private static final float ICON_DP = 64f;
+
     private static Context ctx;
     private static boolean channelMade;
 
@@ -88,14 +96,22 @@ public final class CarnyxAlert {
      * notification updated four times, not four notifications — the driver wants
      * to know where they landed, not where they have been.
      *
-     * @param title the call sign, or the frequency when there is no call sign yet
-     * @param text the second line — the frequency, and the station name when one
-     *     is known
+     * <p>THE LOGO WINS WHEN THERE IS ONE. A station's own mark says which station
+     * this is faster than its call letters do, and a driver glancing at a banner
+     * is doing exactly that — so when {@code logoPath} names a file that decodes,
+     * the notification carries the picture and NO text at all. The call sign and
+     * the dial are what a station with no saved logo has instead.
+     *
+     * @param title the call sign, or the dial when no call sign has resolved
+     * @param text the second line, the dial
+     * @param logoPath the station's saved logo, or empty for none. A path that
+     *     does not decode falls back to the text, because a banner with neither
+     *     picture nor words says nothing.
      * @return true when the platform was handed the notification. False means it
      *     could not be posted AND the reason is in the log; it is never a silent
      *     no.
      */
-    public static synchronized boolean post(String title, String text) {
+    public static synchronized boolean post(String title, String text, String logoPath) {
         if (ctx == null) {
             Log.i(TAG, "post() before attach()");
             return false;
@@ -114,7 +130,7 @@ public final class CarnyxAlert {
         }
         ensureChannel(nm);
         try {
-            nm.notify(NOTIFICATION_ID, build(title, text));
+            nm.notify(NOTIFICATION_ID, build(title, text, decode(logoPath)));
             return true;
         } catch (Exception e) {
             Log.w(TAG, "notify failed: " + e);
@@ -163,9 +179,48 @@ public final class CarnyxAlert {
         channelMade = true;
     }
 
-    private static Notification build(String title, String text) {
+    /**
+     * The station's logo, sized for a notification and not for a hero card.
+     *
+     * <p>TWO PASSES, WHICH IS NOT A FLOURISH. A master can be a thousand pixels
+     * on a side and a large icon is drawn at about sixty-four dp; decoding the
+     * former to show the latter allocates megabytes on a unit that has none to
+     * spare. {@code inJustDecodeBounds} reads the header alone, and
+     * {@code inSampleSize} then decodes at the nearest power-of-two step down.
+     *
+     * <p>Returns null for anything that does not decode — a missing file, a
+     * format the platform will not read, a master that was truncated on the way
+     * in. The caller falls back to text, because a banner with neither picture
+     * nor words says nothing.
+     */
+    private static Bitmap decode(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(path, bounds);
+            int longest = Math.max(bounds.outWidth, bounds.outHeight);
+            if (longest <= 0) {
+                return null;
+            }
+            int want = Math.round(ICON_DP * ctx.getResources().getDisplayMetrics().density);
+            int sample = 1;
+            while (longest / (sample * 2) >= want) {
+                sample *= 2;
+            }
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            return BitmapFactory.decodeFile(path, opts);
+        } catch (Throwable t) {
+            Log.i(TAG, "logo did not decode: " + t);
+            return null;
+        }
+    }
+
+    private static Notification build(String title, String text, Bitmap logo) {
         Notification.Builder b = new Notification.Builder(ctx, CHANNEL_ID)
-                .setContentTitle(title == null ? "Carnyx" : title)
                 .setSmallIcon(android.R.drawable.stat_sys_headset)
                 // TRANSPORT, not SERVICE: this announces a change in what is
                 // playing, which is what the category is for, and it is what
@@ -181,8 +236,16 @@ public final class CarnyxAlert {
                 // one reused id would mean only the first change was ever seen.
                 .setOnlyAlertOnce(false)
                 .setShowWhen(false);
-        if (text != null && !text.isEmpty()) {
-            b.setContentText(text);
+        if (logo != null) {
+            // JUST THE LOGO. The mark is the whole message; the call sign and the
+            // dial beside it would be saying the same thing twice, in words, to a
+            // driver who has already read the picture.
+            b.setLargeIcon(logo);
+        } else {
+            b.setContentTitle(title == null || title.isEmpty() ? "Carnyx" : title);
+            if (text != null && !text.isEmpty()) {
+                b.setContentText(text);
+            }
         }
         PendingIntent tap = launchIntent();
         if (tap != null) {

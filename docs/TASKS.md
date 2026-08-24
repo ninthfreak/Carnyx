@@ -1273,6 +1273,28 @@ without. **Open:** whether that should become a one-time prompt on a 33+ unit,
 since unlike location this feature cannot degrade — it either shows or it does
 not.
 
+**WHAT IT SHOWS: the logo when there is one, the words when there is not.** A
+station's own mark says which station this is faster than its call letters do,
+and a driver glancing at a banner is doing exactly that — so a station with a
+saved logo gets the picture and NO text, and one without gets the call sign as
+the title and the dial beneath it. The Java side falls back to the words when the
+file will not decode, because a banner with neither says nothing.
+
+A PATH CROSSES THE SEAM, NOT PIXELS. `logos::assign::path_for_theme` mirrors
+`read_for_theme`'s pick and stops short of its decode: Android reads the file
+itself, and at a size it chooses. It is asked at the TILE rung rather than the
+hero's full size, because a large icon is drawn at about 64dp and handing the
+platform a thousand-pixel master to resample is work for nothing —
+`CarnyxAlert.decode` then reads the header alone and picks an `inSampleSize`,
+rather than allocating megabytes on a unit that has none spare.
+
+`plate` IS REFUSED, which is the one asymmetry. Three of the four dark treatments
+are finished pictures; `plate` is a mark keyed out of its paper, meant for the
+light slab the hero card draws behind it. Nothing draws that slab in a
+notification shade, so a plate variant there would be a dark mark on whatever
+ground the platform used. The master is the honest answer — it is the picture the
+driver chose, and it is readable on its own by construction.
+
 **Not built, and deliberately.** A notification when RadioText changes — a new
 song — was asked about and set aside until the RDS work is trusted; a PS that
 scrolls song titles would otherwise fire it continuously.

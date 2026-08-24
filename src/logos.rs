@@ -3287,6 +3287,39 @@ pub mod assign {
         }
     }
 
+    /// The FILE the face would draw for this station, for a consumer that wants
+    /// the PICTURE rather than the pixels.
+    ///
+    /// [`read_for_theme`] decodes, because a Slint `Image` needs pixels. The
+    /// notification does not: Android decodes the file itself, and handing it a
+    /// path instead of marshalling a bitmap across JNI is both less code and less
+    /// copying. This mirrors that function's choice and stops short of its
+    /// decode.
+    ///
+    /// PLATE IS REFUSED, and that is the one asymmetry worth stating. Three of
+    /// the four dark treatments are finished pictures; `plate` is a mark keyed
+    /// out of its paper, meant to be set on the light slab the hero card draws
+    /// behind it. Nothing draws that slab in a notification shade, so a `plate`
+    /// variant there would be a dark mark on whatever ground the platform
+    /// happens to use. The master is the honest answer instead — it is the
+    /// picture the driver chose, and it is readable on its own by construction.
+    pub fn path_for_theme(
+        store: &LogoStore,
+        base: &str,
+        box_dp: Option<f32>,
+        scale: f32,
+        dark: bool,
+    ) -> Option<std::path::PathBuf> {
+        if dark {
+            if let Some((path, t)) = store.dark_path(base, box_dp, scale) {
+                if t != Treatment::Plate && path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+        store.master_path(base)
+    }
+
     /// Does this station want a dark variant it does not have?
     ///
     /// The trigger for the on-demand adaptation, and it is deliberately a pure
@@ -5173,6 +5206,45 @@ mod tests {
         assert_eq!(ext_for("IMAGE/JPEG"), "jpg");
         assert_eq!(ext_for("image/webp"), "webp");
         assert_eq!(ext_for("application/octet-stream"), "png");
+    }
+
+    /// WHAT THE NOTIFICATION IS HANDED, which is a path and not pixels.
+    ///
+    /// The three cases that matter: a light face takes the master, a dark face
+    /// takes its adapted variant, and a dark face whose variant is a `plate`
+    /// takes the MASTER instead — because a plate is a mark keyed out of its
+    /// paper, meant for the light slab the hero card draws, and there is no such
+    /// slab in a notification shade.
+    #[test]
+    fn the_notification_gets_a_picture_that_reads_on_its_own() {
+        let tmp = TempDir::new("notif-path");
+        let s = store::LogoStore::new(tmp.path());
+        s.put_original("WERN", b"master", "image/png", "manual").unwrap();
+        let master = s.master_path("WERN").unwrap();
+
+        // Light: the master, always.
+        assert_eq!(assign::path_for_theme(&s, "WERN", None, 1.0, false), Some(master.clone()));
+
+        // Dark with a finished variant: the variant.
+        s.put_dark("WERN", dark::stages::Treatment::Halo, b"k", true, dark::bg_key(dark::LOGO_DARK_BG))
+            .unwrap();
+        let dark_pick = assign::path_for_theme(&s, "WERN", None, 1.0, true).unwrap();
+        assert_ne!(dark_pick, master, "a dark face takes the adapted picture");
+
+        // Dark with a PLATE variant: back to the master, because nothing out
+        // there draws the slab a plate needs.
+        s.put_dark("WERN", dark::stages::Treatment::Plate, b"k", true, dark::bg_key(dark::LOGO_DARK_BG))
+            .unwrap();
+        assert_eq!(
+            assign::path_for_theme(&s, "WERN", None, 1.0, true),
+            Some(master),
+            "a keyed plate has no slab in a notification shade"
+        );
+
+        // No station, no picture — and no panic on the empty base the hero uses
+        // when nothing has resolved.
+        assert_eq!(assign::path_for_theme(&s, "", None, 1.0, false), None);
+        assert_eq!(assign::path_for_theme(&s, "WMGN", None, 1.0, false), None);
     }
 
     #[test]

@@ -96,15 +96,24 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 
 /// Say what is tuned now.
 ///
-/// `title` is the call sign, or the frequency when no call sign has resolved;
-/// `text` is the second line. ONE NOTIFICATION ID BEHIND THIS, so stepping four
-/// presets updates one banner rather than stacking four — the driver wants to
-/// know where they landed, not where they have been.
+/// `title` is the call sign, or the dial when no call sign has resolved; `text`
+/// is the second line. `logo` is the station's saved picture, and an EMPTY
+/// STRING is "there is none" rather than a separate `Option` crossing JNI —
+/// there is no null String to hand `new_string`, and the Java side tests for
+/// empty anyway.
+///
+/// A PATH, NOT PIXELS. Android decodes the file itself, and at a size it picks;
+/// marshalling a decoded bitmap across this seam would be more code and a copy
+/// of an image the platform is about to resample anyway.
+///
+/// ONE NOTIFICATION ID BEHIND THIS, so stepping four presets updates one banner
+/// rather than stacking four — the driver wants to know where they landed, not
+/// where they have been.
 ///
 /// Returns false when nothing was posted, which is the ordinary answer on a host
 /// build (no class), and on a device where the driver has notifications off. It
 /// is never a silent no: the Java side logs which.
-pub fn post(title: &str, text: &str) -> bool {
+pub fn post(title: &str, text: &str, logo: &str) -> bool {
     let Some(class) = CLASS_REF.get() else {
         return false;
     };
@@ -114,11 +123,12 @@ pub fn post(title: &str, text: &str) -> bool {
     jvm.attach_current_thread(|env: &mut Env| -> Result<bool, jni::errors::Error> {
         let t = env.new_string(title)?;
         let x = env.new_string(text)?;
+        let l = env.new_string(logo)?;
         env.call_static_method(
             class,
             jni_str!("post"),
-            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Z"),
-            &[(&t).into(), (&x).into()],
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z"),
+            &[(&t).into(), (&x).into(), (&l).into()],
         )?
         .z()
     })
