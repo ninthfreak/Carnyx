@@ -1130,6 +1130,7 @@ impl App {
                     selected: saved.selected,
                     theme: saved.theme,
                     logos_on: saved.logos_on,
+                    release_on_sleep: saved.release_on_sleep,
                     diag_on: saved.diag_on,
                     ..settings::Settings::default()
                 },
@@ -2028,8 +2029,16 @@ impl App {
             // The action is logged verbatim because the two triggers are not
             // equally trustworthy, and which one arrives is what a drive settles.
             TunerEvent::Sleep { action } => {
-                s.settings.log.push(&stamp(), &format!("sleep: {action}"));
-                s.sleep_release = true;
+                // LOGGED EITHER WAY. Which broadcast arrives, and whether one
+                // arrives at all, is the open question this path exists to
+                // settle — and it is worth answering on a unit where the driver
+                // has turned the release off.
+                let on = s.settings.release_on_sleep;
+                s.settings.log.push(
+                    &stamp(),
+                    &format!("sleep: {action}{}", if on { "" } else { " (release is off)" }),
+                );
+                s.sleep_release = on;
             }
             TunerEvent::ScanState(_) | TunerEvent::RadioState(_) => {}
         }
@@ -2694,6 +2703,7 @@ impl App {
         );
         ui.set_settings_clearing_logos(cfg.clearing_logos);
 
+        ui.set_settings_release_on_sleep(cfg.release_on_sleep);
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
         // again, and it matters most here: the diagnostics overlay is the one a
@@ -3340,6 +3350,11 @@ impl App {
             // ui/confirm.slint exists this must not do the work.
             app.log_unavailable("clear all logos needs the confirm dialog first");
         });
+        on!(on_settings_set_release_on_sleep, |app, v| {
+            app.state.borrow_mut().settings.release_on_sleep = v;
+            app.save_prefs();
+            app.push_settings();
+        });
         on!(on_settings_set_diag, |app, v| {
             app.state.borrow_mut().settings.set_diag(v);
             app.push_settings();
@@ -3552,6 +3567,7 @@ impl App {
             selected: s.settings.selected,
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
+            release_on_sleep: s.settings.release_on_sleep,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -4924,6 +4940,37 @@ mod tests {
         assert!(
             lines.iter().any(|l| l.contains("FM source released for sleep")),
             "and records that the release ran, got {lines:?}"
+        );
+        drop(s);
+
+        // ── AND THE SWITCH REALLY SWITCHES IT OFF ─────────────────────────────
+        //
+        // Default ON, so the half above is the shipped behaviour. Off must leave
+        // the source alone — and must STILL LOG the broadcast, because which one
+        // arrives is the open question and is worth answering on a unit where the
+        // driver does not want the release.
+        driver.set_audio(true);
+        assert_eq!(driver.state.borrow().tuner.snapshot().unwrap().mcu_source, Some(4));
+        driver.state.borrow_mut().settings.release_on_sleep = false;
+
+        crate::android::ingest_sleep("android.intent.action.SCREEN_OFF".into());
+        driver.drain_events();
+
+        let s = driver.state.borrow();
+        assert_eq!(
+            s.tuner.snapshot().unwrap().mcu_source,
+            Some(4),
+            "with the switch off the source is kept"
+        );
+        assert!(s.audio, "and the face still holds it");
+        let lines = s.settings.log.lines();
+        assert!(
+            lines.iter().any(|l| l.contains("SCREEN_OFF") && l.contains("release is off")),
+            "the broadcast is still recorded, and says why nothing happened: {lines:?}"
+        );
+        assert!(
+            !lines.iter().skip_while(|l| !l.contains("SCREEN_OFF")).any(|l| l.contains("released for sleep")),
+            "and nothing was released after it: {lines:?}"
         );
     }
 

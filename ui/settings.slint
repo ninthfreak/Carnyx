@@ -1177,6 +1177,7 @@ export component SettingsOverlay inherits Rectangle {
 
     // ── TUNER: autostart ──
     in property <bool> autostart: false;
+    in property <bool> release-on-sleep: true;
 
     // ── APPEARANCE ──
     /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in Rust.
@@ -1236,6 +1237,7 @@ export component SettingsOverlay inherits Rectangle {
     callback pick-source(int);
     /// The NEW value, as the references' `onSetAutostart(!autostart)`.
     callback set-autostart(bool);
+    callback set-release-on-sleep(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
     callback set-theme(string);
@@ -1360,6 +1362,19 @@ export component SettingsOverlay inherits Rectangle {
                     sub: "Resume FM automatically when the head unit powers up";
                     on: root.autostart;
                     toggled(v) => { root.set-autostart(v); }
+                }
+
+                RowDivider { }
+
+                // BESIDE "Start radio on boot" because they are the two halves of
+                // the same thing: what this app does at either end of an ignition
+                // cycle. On the way up, come back; on the way down, get out of the
+                // way of the radio the unit is about to restore.
+                SwitchRow {
+                    title: "Release FM on sleep";
+                    sub: "Hand the FM source back when the head unit sleeps, so the stock radio does not fight Carnyx for it on the way back";
+                    on: root.release-on-sleep;
+                    toggled(v) => { root.set-release-on-sleep(v); }
                 }
             }
 

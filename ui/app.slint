@@ -181,6 +181,7 @@ export component AppWindow inherits Window {
     in property <[TunerDetail]> settings-tuner-details;
     in property <[TunerSource]> settings-sources;
     in property <bool> settings-autostart: false;
+    in property <bool> settings-release-on-sleep: true;
     in property <[string]> settings-theme-chips;
     in property <string> settings-theme;
     in property <BatteryState> settings-battery: BatteryState.checking;
@@ -200,6 +201,7 @@ export component AppWindow inherits Window {
     callback settings-toggle-details();
     callback settings-pick-source(int);
     callback settings-set-autostart(bool);
+    callback settings-set-release-on-sleep(bool);
     callback settings-set-theme(string);
     callback settings-fix-battery();
     callback settings-set-logos(bool);
@@ -369,6 +371,7 @@ export component AppWindow inherits Window {
         tuner-details: root.settings-tuner-details;
         sources: root.settings-sources;
         autostart: root.settings-autostart;
+        release-on-sleep: root.settings-release-on-sleep;
         theme-chips: root.settings-theme-chips;
         theme: root.settings-theme;
         battery: root.settings-battery;
@@ -385,6 +388,7 @@ export component AppWindow inherits Window {
         toggle-details => { root.settings-toggle-details(); }
         pick-source(i) => { root.settings-pick-source(i); }
         set-autostart(v) => { root.settings-set-autostart(v); }
+        set-release-on-sleep(v) => { root.settings-set-release-on-sleep(v); }
         set-theme(t) => { root.settings-set-theme(t); }
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }

@@ -342,6 +342,15 @@ pub struct Settings {
     pub logos_on: bool,
     pub clearing_logos: bool,
     pub details_open: bool,
+    /// Hand the FM source back when the head unit says it is going to sleep
+    /// (#92).
+    ///
+    /// DEFAULT ON, which is the only default that matches what it is for: the
+    /// MCU restores its own radio app on ACC-on, and an app still holding the
+    /// source contends with that one on every ignition cycle. Off is for a driver
+    /// who would rather Carnyx kept it, and for finding out whether this path is
+    /// the cause of something else.
+    pub release_on_sleep: bool,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
     /// testing mode — were CarFM's investigation tools and are gone.
@@ -359,6 +368,7 @@ impl Default for Settings {
             logos_on: false,
             clearing_logos: false,
             details_open: false,
+            release_on_sleep: true,
             diag_on: false,
             log: DiagLog::new(),
         }

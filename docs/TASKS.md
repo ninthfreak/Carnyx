@@ -1383,6 +1383,20 @@ point is not to fight it, so recovery is the power button. Deleting one
 (`sleep: <action>`) followed by `FM source released for sleep`, so one ignition
 cycle says which broadcast arrives, whether both do, and in what order.
 
+**IT IS A SETTING, DEFAULT ON.** "Release FM on sleep", in the TUNER section
+directly under "Start radio on boot" — the two are halves of the same thing, what
+this app does at either end of an ignition cycle: on the way up come back, on the
+way down get out of the way of the radio the unit is about to restore. On is the
+only default that matches what it is for. Off is for a driver who would rather
+Carnyx kept the source, and for finding out whether this path is the cause of
+something else.
+
+The broadcast is LOGGED EITHER WAY, with `(release is off)` appended when the
+switch is off: which trigger arrives is the open question, and it is worth
+answering on a unit where the driver does not want the release. A preferences
+file written before the key existed comes back ON, because `from_json` falls
+back through `Settings::default`.
+
 **Two things it is deliberately not.** It does not set `user_powered_off` — that
 flag is the driver's own choice at the power button, and an ignition cycle is
 nobody's choice. And it is not the activity lifecycle: `Pause`/`Stop` fire
