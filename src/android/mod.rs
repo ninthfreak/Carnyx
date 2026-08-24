@@ -50,6 +50,8 @@ pub mod probe;
 #[cfg(target_os = "android")]
 pub mod service;
 #[cfg(target_os = "android")]
+pub mod stock;
+#[cfg(target_os = "android")]
 pub mod wake;
 
 #[cfg(target_os = "android")]
@@ -784,6 +786,18 @@ pub fn keep_alive_report() -> Vec<String> {
 /// The host has no vendor power manager to ask about. See the Android arm.
 #[cfg(not(target_os = "android"))]
 pub fn keep_alive_report() -> Vec<String> {
+    Vec::new()
+}
+
+/// Where the stock radio app could be intercepted without root. See `stock`.
+#[cfg(target_os = "android")]
+pub fn stock_radio_report() -> Vec<String> {
+    stock::report()
+}
+
+/// The host has no stock radio app to displace. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn stock_radio_report() -> Vec<String> {
     Vec::new()
 }
 

@@ -172,6 +172,18 @@ target_sdk_version = 34
 [[package.metadata.android.queries.package]]
 name = "com.nwd.radio.service"
 
+# THE STOCK RADIO APP, declared for the probe rather than for the tuner. Nothing
+# in Carnyx talks to it — it is the app that launches itself on ACC-on and the
+# subject of the "Where the stock radio app can be intercepted" row (#96). That
+# probe reads its install shape, its components and its task affinities, and on
+# targetSdk 30+ every one of those calls would come back empty WITHOUT SAYING
+# WHY, which is precisely the shape of finding the probe exists to avoid.
+#
+# It costs nothing on this unit, which is Android 10 and filters nothing. It is
+# here so the probe still answers on a ROM that is not.
+[[package.metadata.android.queries.package]]
+name = "com.nwd.radio"
+
 # LOCATION. The nearby-station picker sorts by distance and the face carries a
 # satellite glyph, and neither can be honest without a fix — today both run on
 # `fake::FakeLocation`, which is pinned to Madison.

@@ -4033,6 +4033,27 @@ impl App {
     /// fell through to a line saying they were unavailable, because they were
     /// CarFM's vendor probes and had never been written. Those rows are gone
     /// rather than stubbed, so there is no catch-all arm left to write.
+    /// Put a probe's report in the log, or say that it had nothing to say.
+    ///
+    /// SHARED BY BOTH PROBE ROWS so the two cannot drift. The rule is the part
+    /// worth holding in one place: an empty report is a STATE, not a failure —
+    /// on a host build the class does not exist, and on the unit it means the
+    /// class never loaded — and both deserve a line rather than a tap that does
+    /// nothing visible, which is the exact fault the five removed rows had.
+    ///
+    /// One stamp for the whole report, not one per line: it is a single reading,
+    /// and stamping each line would read as a burst of separate events.
+    fn log_report(log: &mut settings::DiagLog, lines: Vec<String>, unavailable: &str) {
+        let at = stamp();
+        if lines.is_empty() {
+            log.push(&at, unavailable);
+            return;
+        }
+        for line in lines {
+            log.push(&at, &line);
+        }
+    }
+
     fn run_diag_action(self: &Rc<App>, index: i32) {
         let action = {
             let s = self.state.borrow();
@@ -4057,15 +4078,26 @@ impl App {
                 // loaded. Both deserve a line rather than a tap that does
                 // nothing visible.
                 settings::Action::ProbeKeepAlive => {
-                    let at = stamp();
                     let lines = crate::android::keep_alive_report();
-                    if lines.is_empty() {
-                        s.settings.log.push(&at, "keep-alive probe: unavailable in this build");
-                    } else {
-                        for line in lines {
-                            s.settings.log.push(&at, &line);
-                        }
-                    }
+                    Self::log_report(
+                        &mut s.settings.log,
+                        lines,
+                        "keep-alive probe: unavailable in this build",
+                    );
+                }
+                // ── WHERE THE STOCK RADIO APP CAN BE INTERCEPTED ──────────────
+                //
+                // Same channel and the same rule about an empty report. This one
+                // is LONGER — it details a package, its components and an intent
+                // sweep — so the Java side caps every list it prints; the ring
+                // holds 200 lines and this is one of several writers.
+                settings::Action::ProbeStockRadio => {
+                    let lines = crate::android::stock_radio_report();
+                    Self::log_report(
+                        &mut s.settings.log,
+                        lines,
+                        "stock radio probe: unavailable in this build",
+                    );
                 }
                 settings::Action::SaveLog => {
                     let at = stamp();
@@ -5537,6 +5569,60 @@ mod tests {
             "and it names the probe, got {:?}",
             lines.last()
         );
+    }
+
+    /// THE SAME BAR FOR THE SECOND PROBE ROW, and it earns its own test rather
+    /// than riding on the shared helper: the two rows reach different classes
+    /// through different seams, and a row wired to the wrong one would pass any
+    /// test that only exercised the helper.
+    #[test]
+    fn the_stock_radio_probe_leaves_a_line_even_where_it_cannot_run() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("stockradio");
+        driver.drain_events();
+        let before = driver.state.borrow().settings.log.lines().len();
+
+        ui.invoke_settings_pick_diag_action(row_index(
+            &driver,
+            "Where the stock radio app can be intercepted",
+        ));
+
+        let lines = driver.state.borrow().settings.log.lines();
+        assert!(lines.len() > before, "the tap wrote something");
+        assert!(
+            lines.last().unwrap().contains("stock radio probe"),
+            "and it names the probe, got {:?}",
+            lines.last()
+        );
+    }
+
+    /// EVERY ROW RUNS ITS OWN ACTION, AND EVERY ACTION HAS A ROW.
+    ///
+    /// The failure this catches is the one a copied `DiagAction` block produces
+    /// silently: `row_index` finds the FIRST row with a label, so two rows
+    /// carrying the same `Action` would send both taps to one probe and both
+    /// tests above would still pass. The other direction is a variant with no
+    /// row — a probe nobody can reach.
+    #[test]
+    fn each_diagnostics_row_runs_its_own_action() {
+        let rows = settings::diag_actions();
+        let mut seen: Vec<settings::Action> = Vec::new();
+        for row in &rows {
+            assert!(
+                !seen.contains(&row.action),
+                "{:?} is on two rows, so one of them is dead",
+                row.action
+            );
+            seen.push(row.action);
+        }
+        for action in [
+            settings::Action::SaveLog,
+            settings::Action::ClearLog,
+            settings::Action::ProbeKeepAlive,
+            settings::Action::ProbeStockRadio,
+        ] {
+            assert!(seen.contains(&action), "{action:?} has no row");
+        }
     }
 
     /// Where a labelled diagnostics row currently sits, so a test names the row

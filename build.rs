@@ -63,6 +63,7 @@ const JAVA_SOURCES: &[&str] = &[
     "com/ninthfreak/carnyx/CarnyxProcess.java",
     "com/ninthfreak/carnyx/CarnyxAlert.java",
     "com/ninthfreak/carnyx/CarnyxKeepAlive.java",
+    "com/ninthfreak/carnyx/CarnyxStockRadio.java",
     "com/ninthfreak/carnyx/CarnyxWake.java",
     "com/nwd/radio/service/data/Frequency.java",
     "com/nwd/radio/service/data/RadioPoint.java",

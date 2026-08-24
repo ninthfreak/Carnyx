@@ -1306,6 +1306,91 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 96. Probe where the stock radio app can be intercepted, without root
+**BUILT, UNRUN.** A second DIAGNOSTICS row — "Where the stock radio app can be
+intercepted" — and the class behind it. Asked for directly: *"I want a probe to
+investigate replacing the default radio app with a trampoline. I do not have root
+on the head unit, and haven't found an easy way to get it."*
+
+**THE NO-ROOT CONSTRAINT IS THE WHOLE DESIGN, and it kills CarFM's plan
+outright.** CarFM shipped `probeTrampolineFeasibility`
+(`VibeStreamModule.kt:570`) for the same idea: move the vendor APK off `/system`
+and install a same-named stub in its place. Every step of that needs root —
+remount `/system` rw, delete the system copy, install a package whose name is
+taken — so this probe is NOT that one carried across, and #91's rule holds. It
+reads no verity property, stats no partition, looks for no `su` binary and
+starts no process at all. CarFM's ran `su -c id` on purpose, to raise a Superuser
+prompt as its answer; this one runs nothing.
+
+**The four routes that survive, which are what the report is organised around:**
+
+1. **No trampoline at all** — `pm disable-user --user 0 com.nwd.radio` from an
+   adb shell. The shell user already holds the permission; no root anywhere. If
+   this works there is nothing to build, so the report reads `adb_enabled` and
+   `development_settings_enabled` FIRST. CarFM's own note named the cheap
+   experiment and never ran it: disable the app, run one ignition cycle.
+2. **Become a handler** — only if the firmware launches the app by an IMPLICIT
+   intent. Then Carnyx declares the same filter and can be made the default. The
+   action sweep is what finds such a door.
+3. **Jump in front** — notice the stock app arrive and come back over it. Blocked
+   by the Android 10 background-activity-start restriction unless the app holds
+   an exemption, and the two a driver can grant in Settings are a notification
+   listener and an accessibility service. Both are read, not assumed. EITHER WOULD
+   ALSO COVER #95'S KNOWN RISK, which is the same restriction.
+4. **Share its task** — an activity declaring the stock app's own `taskAffinity`.
+   Listed last because it is the most fragile; the affinities are reported so the
+   option is a measurement rather than a guess.
+
+**What it reports.** Candidate packages (found by sweep, not by trusting a
+constant — CarFM's `com.nwd.radio` is one unit's firmware as recorded by another
+project). Then for the best candidate: version, uid, system/overlay flags,
+enabled setting, launcher component, and whether it SHARES A SIGNING CERTIFICATE
+with Carnyx — the one result that would revive a same-name install with no root,
+almost certainly no, measured because "almost certainly" is not an answer. Its
+activities, receivers and services with `exported`, `launchMode`, `taskAffinity`
+and `permission`. A sweep of sixteen intents — every `com.nwd.*` action this tree
+has seen plus the framework shapes a head unit plausibly uses — reporting who
+answers each, with a `DOOR` marker when the stock app does. The HOME apps. The
+three foreground-from-behind grants. And what it cannot answer.
+
+**THE MOST VALUABLE LINE IS THE APK PATH.** Intent filters cannot be enumerated
+through the package manager — the platform answers "who handles THIS intent" and
+will not list what a package declares — so the sweep can only ask about actions
+this code knows to name, and a vendor string nobody has seen is invisible to it.
+A `/system` APK is world-readable; the report prints its path, size and whether
+`canRead()` succeeds, because a file manager can then copy it to a USB stick and
+the question gets answered properly on a desktop. The probe deliberately does not
+copy it: that is a file manager's job and this row is read-only.
+
+**Package visibility was extended for it**, in BOTH manifests — `com.nwd.radio`
+added beside `com.nwd.radio.service` in `Cargo.toml`'s cargo-apk stanza and in
+the Gradle manifest. Nothing in Carnyx talks to that package; the declaration
+exists so that on targetSdk 30+ the probe's calls do not all return empty WITHOUT
+SAYING WHY, which is the exact shape of finding it exists to avoid. Free on this
+unit, which is Android 10 and filters nothing.
+
+**Output is capped and says so** — 18 activities, 12 receivers, 8 services, 12
+candidates, 4 handlers per action, and a `… N more not shown` line wherever a
+list was cut. The ring holds 200 lines and this is one of several writers.
+
+**What it cannot answer, in its own output:** whether the firmware resolves the
+radio app by package or by explicit component (only disabling it plus one ACC
+cycle says), what the app's real intent filters are (read the APK), whether the
+tuner service needs the app (it must stay either way), and whether a background
+start is actually permitted until one is tried.
+
+**Checked off-device.** Compiles with `-Xlint:all` against a real API-34
+framework jar with zero diagnostics in our sources; `javap` confirms the two
+descriptors `stock.rs` names. Both manifests parse and carry the new `<queries>`
+entry. Host: 289 tests, clippy clean. THE REPORT HAS NEVER RUN — there is no
+Android here, and every line of its output is unseen.
+
+**Two rows, one investigation.** It sits directly under #93's keep-alive probe
+with no rule between them, and `the_action_rows_are_the_mechanism_and_two_probes`
+now pins that grouping. `each_diagnostics_row_runs_its_own_action` was added with
+it: `row_index` finds the first row by label, so two rows sharing an `Action`
+would send both taps to one probe and every other test would still pass.
+
 ### 95. Build the wake receiver
 **BUILT AND UNVERIFIED, AND IT WRITES ITS OWN EVIDENCE.** #67's other half: a
 manifest receiver that brings the face back when the unit does.

@@ -291,6 +291,20 @@ fn android_main(android_app: slint::android::AndroidApp) {
         "service: none — this build has no service class, or the platform refused it"
     });
 
+    // THE TWO DIAGNOSTICS PROBES' CLASSES. Loaded here rather than on the tap,
+    // because a row that cannot load its class has nothing to say and a settings
+    // panel is a poor place to find that out. Loading is ALL this does — neither
+    // walks a package list or a settings table until a driver asks it to, which
+    // is the whole reason they are rows and not start-up work.
+    //
+    // The outcome is deliberately not logged: on a host build there is no dex at
+    // all, and the rows already answer "unavailable in this build" when tapped,
+    // which is a better place to read it than a line at the top of every log.
+    //
+    // SAFETY: same pointers, same lifetime argument as the two above.
+    let _ = unsafe { android::probe::init(vm, activity) };
+    let _ = unsafe { android::stock::init(vm, activity) };
+
     // THE STATION POP-UP'S CLASS, loaded here rather than lazily on the first
     // station change: that change happens while the driver is in another app,
     // which is the worst moment to discover the dex will not load. Loading is
@@ -298,10 +312,6 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // a host build there is no class and `post` answers false forever.
     //
     // SAFETY: same pointers, same lifetime argument as the two above.
-    // The keep-alive probe's class, loaded beside the others and for the same
-    // reason: a DIAGNOSTICS row that cannot load its class has nothing to say,
-    // and a settings panel is a poor place to find that out.
-    let _ = unsafe { android::probe::init(vm, activity) };
     let alerts = unsafe { android::alert::init(vm, activity) }.is_ok();
     _driver.log_platform(if alerts {
         "station pop-up: ready"

@@ -95,6 +95,18 @@
     -->
     <queries>
         <package android:name="com.nwd.radio.service" />
+        <!--
+          THE STOCK RADIO APP, declared for the probe rather than for the tuner.
+          Nothing here talks to it: it is the app that launches itself on ACC-on,
+          and the "Where the stock radio app can be intercepted" row (#96) reads
+          its install shape, components and task affinities. On targetSdk 30+
+          every one of those calls returns empty WITHOUT SAYING WHY — the same
+          silent filtering the note above describes, in the one place where a
+          silent empty answer would be read as "there is nothing there".
+
+          Free on this unit, which is Android 10 and filters nothing.
+        -->
+        <package android:name="com.nwd.radio" />
     </queries>
 
     <application

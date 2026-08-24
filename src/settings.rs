@@ -159,6 +159,16 @@ pub enum Action {
     /// ROM has the keep-alive list vendor Androids usually do. The answer
     /// decides whether the wake receiver (#95) is the whole story.
     ProbeKeepAlive,
+    /// Ask where the stock radio app could be intercepted. See
+    /// `CarnyxStockRadio.java`.
+    ///
+    /// ALSO NEW, AND NOT CarFM's. CarFM had a "Probe vendor-app replacement" row
+    /// and it went with the other four, because its question was whether
+    /// `/system` could be remounted to install a same-named stub — a plan that
+    /// needs root, which this unit does not have. This row asks the question
+    /// that is left: what an UNPRIVILEGED app can do about the stock radio
+    /// launching itself on ACC-on.
+    ProbeStockRadio,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -173,6 +183,14 @@ pub fn diag_actions() -> Vec<DiagAction> {
             label: "What could keep Carnyx alive through sleep".into(),
             divider_above: true,
             action: Action::ProbeKeepAlive,
+        },
+        // Beneath the keep-alive row and above the divider it shares, because
+        // the two are one investigation from opposite ends: whether Carnyx can
+        // survive the sleep, and what to do about the app that wakes instead.
+        DiagAction {
+            label: "Where the stock radio app can be intercepted".into(),
+            divider_above: false,
+            action: Action::ProbeStockRadio,
         },
         DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
     ]
@@ -416,22 +434,36 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// TWO ROWS, ALWAYS, AND ONLY THE FIRST HAS NO RULE ABOVE IT.
+    /// FOUR ROWS IN THREE GROUPS, AND A DIVIDER MEANS A CHANGE OF SUBJECT.
     ///
     /// This test used to enumerate seven and assert which of them appeared under
     /// which conditions. Five were CarFM's vendor probes — export the raw
     /// capture, dump the boot settings, probe the trampoline, dump every getter,
     /// probe `NwdFmManager` — and none of them had ever been written. They are
     /// gone, and with them the whole idea of a list that changes shape.
+    ///
+    /// It also used to say every row after the first carries a rule, which was
+    /// true of a list where no two rows belonged together. The two PROBES do:
+    /// one asks whether Carnyx can survive the sleep, the other what to do about
+    /// the app that wakes instead, and a rule between them would read as two
+    /// unrelated tools.
     #[test]
-    fn the_action_rows_are_the_mechanism_and_nothing_else() {
+    fn the_action_rows_are_the_mechanism_and_two_probes() {
         let rows = diag_actions();
         assert_eq!(
             rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
-            ["Save to file", "What could keep Carnyx alive through sleep", "Clear log"]
+            [
+                "Save to file",
+                "What could keep Carnyx alive through sleep",
+                "Where the stock radio app can be intercepted",
+                "Clear log",
+            ]
         );
-        assert!(!rows[0].divider_above, "the log well runs straight into the first");
-        assert!(rows[1..].iter().all(|a| a.divider_above));
+        assert_eq!(
+            rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
+            [false, true, false, true],
+            "the log well runs into the first row; rules open the probes and close them"
+        );
     }
 
     /// The shape, byte for byte. Two spaces either side of each U+00B7 is what
