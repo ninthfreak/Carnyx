@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The station pop-up's banner (#88).
+
+  THE FIRST RESOURCE THIS APP HAS EVER HAD. `android/app/src/main/` held only a
+  manifest and a Java tree until now, and `build.rs` has no aapt2 step at all —
+  it compiles Java and dexes it, nothing more. So this file exists only in the
+  GRADLE build, and `CarnyxAlert` looks it up by NAME at run time rather than
+  through `R`: under cargo-apk it is simply absent, `getIdentifier` answers 0,
+  and the notification falls back to the platform's own template. That is the
+  same shape as `CarnyxService`, which is also Gradle-only, and it is why no
+  build breaks for want of a layout.
+
+  WHAT IT REPLACES, AND WHY. The standard template puts a large icon in a small
+  square at the banner's right edge. Station logos are landscape wordmarks — the
+  three in the handoff are 408x296, 545x200 and 255x144 — so one fitted to that
+  slot leaves the station's name a few pixels tall. Given the card's own width
+  the same mark is legible, which is the whole reason for a custom view.
+
+  ── THE VIEWS ARE NOT A FREE CHOICE ──
+  Only classes marked `@RemoteView` inflate in the shade's process: the four
+  plain layouts, TextView, ImageView, Button, ImageButton, ProgressBar,
+  Chronometer, ViewFlipper and the list types. No ConstraintLayout, no custom
+  views, and only the fixed set of `setX` operations `RemoteViews` exposes.
+
+  ── COLOURS COME FROM ATTRIBUTES, NOT FROM HEX ──
+  This is inflated by SystemUI against the NOTIFICATION theme, which is light or
+  dark depending on the shade — and a hard-coded `#1C2028` is invisible on half
+  of them. `?android:attr/textColorPrimary` and `textColorSecondary` are public
+  platform attributes and resolve to whatever that theme says, which is the only
+  way a custom notification layout survives both.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="12dp"
+    android:baselineAligned="false"
+    android:gravity="center">
+
+    <!--
+      GONE RATHER THAN INVISIBLE when the station has no saved logo. `gone` takes
+      the view out of the measure entirely, so the two lines centre in the card
+      on their own; `invisible` would keep its width and leave them shoved off
+      centre by an empty slot.
+
+      `adjustViewBounds` with a fixed HEIGHT and `wrap_content` width is what
+      preserves a landscape mark's aspect: the height is the constraint and the
+      width follows from it, up to `maxWidth` for a mark far wider than it is
+      tall.
+    -->
+    <ImageView
+        android:id="@+id/popup_logo"
+        android:layout_width="wrap_content"
+        android:layout_height="56dp"
+        android:maxWidth="180dp"
+        android:adjustViewBounds="true"
+        android:scaleType="fitCenter"
+        android:layout_marginEnd="18dp"
+        android:contentDescription="@null"
+        android:visibility="gone" />
+
+    <!--
+      `wrap_content` AND NO WEIGHT, which is the whole of the centring. A column
+      at `0dp` with `layout_weight="1"` swallows every remaining pixel, so the
+      group always spans the card and `gravity` has nothing left to centre. Sized
+      to its contents, the group is as wide as the logo and the words together
+      and the root's `center` puts it in the middle.
+
+      The cost is that a string wider than the card CLIPS rather than elides.
+      Nothing sent here can be: a call sign is four characters and a dial is six.
+      A second line carrying a station's long name would need `ellipsize` and a
+      `maxWidth` back.
+
+      For the two lines centred on each other rather than ranged left, add
+      `android:gravity="center_horizontal"` here.
+    -->
+    <LinearLayout
+        android:orientation="vertical"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content">
+
+        <TextView
+            android:id="@+id/popup_call"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="?android:attr/textColorPrimary" />
+
+        <TextView
+            android:id="@+id/popup_dial"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:textSize="15sp"
+            android:textColor="?android:attr/textColorSecondary" />
+    </LinearLayout>
+</LinearLayout>
