@@ -46,6 +46,8 @@ pub mod net;
 #[cfg(target_os = "android")]
 pub mod nwd;
 #[cfg(target_os = "android")]
+pub mod probe;
+#[cfg(target_os = "android")]
 pub mod service;
 
 #[cfg(target_os = "android")]
@@ -769,6 +771,18 @@ pub fn announce_station(title: &str, text: &str, logo: &str) -> bool {
 #[cfg(not(target_os = "android"))]
 pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> bool {
     false
+}
+
+/// What could keep this app alive through a sleep. See `probe`.
+#[cfg(target_os = "android")]
+pub fn keep_alive_report() -> Vec<String> {
+    probe::report()
+}
+
+/// The host has no vendor power manager to ask about. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn keep_alive_report() -> Vec<String> {
+    Vec::new()
 }
 
 /// Take the station pop-up down; the driver is back on the face.

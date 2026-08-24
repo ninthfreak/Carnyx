@@ -149,6 +149,16 @@ pub struct DiagAction {
 pub enum Action {
     SaveLog,
     ClearLog,
+    /// Ask what could keep this app alive through a sleep. See
+    /// `CarnyxKeepAlive.java`.
+    ///
+    /// A NEW ROW, NOT A RETURNING ONE. The five that went were CarFM's probes,
+    /// carried across without a question of our own behind them. This one has
+    /// one: the MCU kills apps on ACC-off, CarFM recorded that as settled and
+    /// built its wake design around it, and nobody has ever checked whether this
+    /// ROM has the keep-alive list vendor Androids usually do. The answer
+    /// decides whether #67's wake receiver is the whole story.
+    ProbeKeepAlive,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -159,6 +169,11 @@ pub enum Action {
 pub fn diag_actions() -> Vec<DiagAction> {
     vec![
         DiagAction { label: "Save to file".into(), divider_above: false, action: Action::SaveLog },
+        DiagAction {
+            label: "What could keep Carnyx alive through sleep".into(),
+            divider_above: true,
+            action: Action::ProbeKeepAlive,
+        },
         DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
     ]
 }
@@ -408,10 +423,10 @@ mod tests {
         let rows = diag_actions();
         assert_eq!(
             rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
-            ["Save to file", "Clear log"]
+            ["Save to file", "What could keep Carnyx alive through sleep", "Clear log"]
         );
         assert!(!rows[0].divider_above, "the log well runs straight into the first");
-        assert!(rows[1].divider_above);
+        assert!(rows[1..].iter().all(|a| a.divider_above));
     }
 
     /// The shape, byte for byte. Two spaces either side of each U+00B7 is what

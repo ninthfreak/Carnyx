@@ -1313,6 +1313,45 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 93. Find out what could keep Carnyx alive through a sleep
+**BUILT, UNANSWERED.** A DIAGNOSTICS row, "What could keep Carnyx alive through
+sleep", and the class behind it.
+
+**Why a new probe is not the thing #91 removed.** #91 dumped CarFM's diagnostics
+because they were another project's open investigations carried across as though
+they were requirements — and its own closing words were "only build new ones as
+needed". This is one that is needed. CarFM recorded the kill as settled ("the
+process is killed, so it cannot observe the sleep") and built its whole wake
+design on coming back rather than surviving; nobody has ever checked WHY it is
+killed, or whether this ROM has the keep-alive list vendor Androids usually do.
+The answer decides whether #67's wake receiver is the whole story or half of it.
+
+**What it reads.** The Doze exemption — recorded to be RULED OUT, since Doze is
+AOSP's idle policy and the kill happens on ACC-off, which is the vendor's. Rows
+of `Settings.Global`, `.Secure` and `.System` whose NAME reads like a keep-alive
+list, matched on a keyword rather than a guessed key, because the vendor's name
+for its own list is the unknown. And the packages that plausibly own such a list,
+so the owner knows where to look in the unit's own settings.
+
+**READ-ONLY, NO ROOT, NO SHELL.** Public APIs and world-readable providers
+throughout. CarFM's one probe with a real blast radius shelled out and could
+prompt for root; a question about power management is not worth a chance of
+changing it.
+
+**Two limits stated in the output rather than left to be discovered.** Package
+visibility is unfiltered on this unit (Android 10) and would be nearly empty on
+API 30+. And an empty result is NOT an answer — a ROM can hold its list in a
+private provider, a file or its own service, none of them reachable — so the
+report says "nothing matched, which is not the same as no list".
+
+The report goes into the diagnostics log rather than a dialog, because the log is
+the only thing that leaves this unit and "Save to file" is the row above it.
+
+Pinned by `the_keep_alive_probe_leaves_a_line_even_where_it_cannot_run`: on the
+host the class cannot load, and the row must still write a line saying so. A tap
+that writes nothing reads as a broken row, which is the exact failure the five
+removed rows had.
+
 ### 92. Hand the FM source back when the unit goes to sleep
 **DONE, AND THE TRIGGER IS UNVERIFIED.** The MCU sleeps the SoC on ACC-off and
 restores its own radio app on ACC-on. An app still holding the FM source when it

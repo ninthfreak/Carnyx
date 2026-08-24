@@ -4047,6 +4047,28 @@ impl App {
             let mut s = self.state.borrow_mut();
             match action {
                 settings::Action::ClearLog => s.settings.log.clear(),
+                // ── WHAT COULD KEEP US ALIVE THROUGH A SLEEP ──────────────────
+                //
+                // The report is a handful of lines and they go into the log
+                // rather than into a dialog, because the log is the only thing
+                // on this unit that can be carried off it — the panel has no
+                // alert, and "Save to file" is right there under this row.
+                //
+                // AN EMPTY REPORT IS A STATE, NOT A FAILURE: on a host build the
+                // class does not exist, and on the unit it means the class never
+                // loaded. Both deserve a line rather than a tap that does
+                // nothing visible.
+                settings::Action::ProbeKeepAlive => {
+                    let at = stamp();
+                    let lines = crate::android::keep_alive_report();
+                    if lines.is_empty() {
+                        s.settings.log.push(&at, "keep-alive probe: unavailable in this build");
+                    } else {
+                        for line in lines {
+                            s.settings.log.push(&at, &line);
+                        }
+                    }
+                }
                 settings::Action::SaveLog => {
                     let at = stamp();
                     if s.settings.log.is_empty() {
@@ -5459,6 +5481,33 @@ mod tests {
         assert!(!out.join("carnyx-tuner-log-1.txt").exists(), "no file was written");
         let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
         assert!(last.contains("the log is empty"), "and it says why, got {last:?}");
+    }
+
+    /// THE NEW PROBE'S ROW RUNS AND SAYS SOMETHING, on a build where it cannot
+    /// possibly succeed.
+    ///
+    /// The host has no vendor power manager and no class to load, so the report
+    /// is empty — and an empty report must still leave a line. A tap that writes
+    /// nothing reads as a broken row, which is exactly the failure the five
+    /// removed rows had: they wrote "not available without the head unit" into
+    /// the log and looked like a build limitation rather than an unwritten
+    /// function. This one is honest about which it is.
+    #[test]
+    fn the_keep_alive_probe_leaves_a_line_even_where_it_cannot_run() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("keepalive");
+        driver.drain_events();
+        let before = driver.state.borrow().settings.log.lines().len();
+
+        ui.invoke_settings_pick_diag_action(row_index(&driver, "What could keep Carnyx alive through sleep"));
+
+        let lines = driver.state.borrow().settings.log.lines();
+        assert!(lines.len() > before, "the tap wrote something");
+        assert!(
+            lines.last().unwrap().contains("keep-alive probe"),
+            "and it names the probe, got {:?}",
+            lines.last()
+        );
     }
 
     /// Where a labelled diagnostics row currently sits, so a test names the row

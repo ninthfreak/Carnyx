@@ -298,6 +298,10 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // a host build there is no class and `post` answers false forever.
     //
     // SAFETY: same pointers, same lifetime argument as the two above.
+    // The keep-alive probe's class, loaded beside the others and for the same
+    // reason: a DIAGNOSTICS row that cannot load its class has nothing to say,
+    // and a settings panel is a poor place to find that out.
+    let _ = unsafe { android::probe::init(vm, activity) };
     let alerts = unsafe { android::alert::init(vm, activity) }.is_ok();
     _driver.log_platform(if alerts {
         "station pop-up: ready"
