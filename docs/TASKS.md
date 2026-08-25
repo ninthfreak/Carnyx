@@ -1326,19 +1326,24 @@ anything the first one misses.
 "reckless driving" is exactly what a local station's advert copy says. The
 two-word form is safe and also matches the full "The Pretty Reckless".
 
-**AND ONE THAT IS GENUINELY RISKY, shipped knowingly.** "the who" is two of the
-commonest words in English standing next to each other, and #98's six-character
-floor passes it at seven. It WILL fire on prose — "find out the who, what and
-where" normalises to a string containing " the who ". There is no safer
-spelling; that is the band's name, and the matcher has no notion of negative
-context.
+**"the who" CAN FIRE ON PROSE, RAISED AND SETTLED.** It is two of the commonest
+words in English side by side, #98's six-character floor passes it at seven, and
+"find out the who, what and where" normalises to a string containing
+" the who ". There is no safer spelling; that is the band's name.
 
-It ships because THE TIER CHANGES WHAT A FALSE MATCH COSTS. The failure that
-made this hazard famous was an advert repainting CarFM's entire face as AC/DC; a
-false match here swaps the genre line for "Meaty, Beaty, Big, and Bouncy" and
-changes nothing else. `the_basic_bands_match_the_way_a_station_writes_them`
-ASSERTS the false match rather than hoping about it, so the day somebody adds a
-guard, that line fails and says why.
+The owner settled it: RadioText carries station, artist and track copy rather
+than arbitrary English, and that construction does not turn up in it. The tier
+also bounds the damage — the failure that made this hazard famous was an advert
+repainting CarFM's entire face as AC/DC, where a false match here swaps one genre
+line. `the_basic_bands_match_the_way_a_station_writes_them` ASSERTS the prose
+match rather than warning about it, so it records the behaviour and fails the day
+anybody adds a guard.
+
+**IT DOES NOT COLLIDE WITH "The Guess Who"**, which the owner asked about and is
+the near-miss worth naming. The search wants the two tokens ADJACENT, and
+" the guess who " has a word between them; "Guess Who's Back" misses for the same
+reason. Both are pinned in the must-not-match list beside `Claptone` and
+`recklessly`.
 
 **Three shots.** `shots/clapton.png` is the first render of a basic theme, and
 what it is really for is the ordinary case of the tier: a row that states a genre
@@ -1360,12 +1365,26 @@ third, not only a phone), so the portrait shot is kept as the record of where th
 limit falls rather than deleted for being unflattering. Shortening the genre
 string is the owner's call, not this file's.
 
-**Worth knowing:** a basic theme still takes the THEMED genre metrics (33/47 at
-weight 800 against the PTY's 26/33 at 700), because `GenreText` keys that off
-"a theme is showing" rather than off which tier. It reads correctly and is
-consistent with the line being a themed one; it is a judgement call rather than a
-stated rule, and it is the one thing here to revisit if the bigger line is not
-wanted for the small tier.
+**THE THEMED GENRE METRICS, and what they actually change.** `GenreText` picks
+size and weight from "a theme is showing" rather than from which tier, so a basic
+row inherits the advanced treatment: `pty-egg-font` (33dp wide, 47dp tall)
+instead of `pty-font` (26/33), and `Font.heavy` instead of `Font.bold`.
+
+TWO OF THOSE THREE DIFFERENCES ARE INERT, which is worth writing down because
+this was first described here as a live trade-off and it is not one.
+
+- The WEIGHT is a no-op today. `ui/tokens.slint` records that no ExtraBold cut is
+  bundled, so the engine resolves 800 to the 700 already in use. Both tiers draw
+  at 700.
+- The SIZE does not change the elision. The shrink solves for a physical width —
+  `full-size * fit` converges on whatever size makes the string `budget` wide, so
+  the answer is a property of the string and the space, not of where the shrink
+  started. A line long enough to reach `pty-font-min` reaches it from 33dp
+  exactly as it does from 47dp.
+
+So the only live effect is on a line SHORT enough not to shrink at all: "Slowhand"
+is drawn at 33dp where the PTY it replaced would be 26dp. That reads correctly —
+it is a themed line — and it is the whole of the judgement call.
 
 **A filter on the shot harness**, added because answering "what does The Who's
 look like" meant rendering eighty surfaces to see one.

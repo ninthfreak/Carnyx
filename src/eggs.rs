@@ -624,19 +624,21 @@ const BASIC: &[(&Egg, &[&str])] = &[
     // two words and the pair is safe. `pretty reckless` also matches the full
     // "The Pretty Reckless", for the same substring reason as Clapton above.
     (&PRETTY_RECKLESS, &["pretty reckless"]),
-    // ── THE ONE THAT IS GENUINELY RISKY ──────────────────────────────────────
+    // "the who" is two of the commonest words in English side by side and the
+    // six-character floor passes it at seven, so it CAN fire on prose: "find out
+    // the who, what and where" normalises to a string containing " the who ".
+    // There is no safer spelling — that is the band's name.
     //
-    // "the who" is two of the commonest words in English standing next to each
-    // other, and the six-character floor passes it at seven. It WILL fire on
-    // prose: "find out the who, what and where" normalises to a string
-    // containing " the who ". There is no safer spelling — that is the band's
-    // name — and the matcher has no notion of negative context.
+    // RAISED AND SETTLED BY THE OWNER: RadioText is station, artist and track
+    // copy rather than arbitrary English, and that construction does not turn up
+    // in it. The tier also bounds the damage — a false match swaps one genre
+    // line, where the failure that made this hazard famous was an advert
+    // repainting CarFM's ENTIRE FACE as AC/DC.
     //
-    // SHIPPED ANYWAY, and the tier is why. A false match here swaps the genre
-    // line for "Meaty, Beaty, Big, and Bouncy" and changes nothing else; the
-    // failure that made this hazard famous was an advert repainting CarFM's
-    // ENTIRE FACE as AC/DC. A basic theme cannot do that. Worth knowing, worth
-    // reverting if it turns out to be common on this market's stations.
+    // AND IT DOES NOT COLLIDE WITH "The Guess Who", which is the near-miss worth
+    // naming: the search is for the two tokens ADJACENT, and " the guess who "
+    // has a word between them. Pinned by
+    // `the_basic_bands_match_the_way_a_station_writes_them`.
     (&THE_WHO, &["the who"]),
 ];
 
@@ -1161,8 +1163,17 @@ mod tests {
             assert_eq!(match_egg_id(rt).map(|e| e.id), Some(want), "{rt:?}");
         }
 
-        // WHOLE TOKENS, so a longer word containing the name is not the name.
-        for rt in ["Claptone - No Eyes", "recklessly cheap tyres", "whoever calls first"] {
+        // WHOLE TOKENS, so a longer word containing the name is not the name —
+        // and, the near-miss the owner asked about, ANOTHER BAND WHOSE NAME
+        // CONTAINS BOTH OF THE WHO'S WORDS. " the guess who " does not contain
+        // " the who ", because the search wants the two tokens adjacent.
+        for rt in [
+            "Claptone - No Eyes",
+            "recklessly cheap tyres",
+            "whoever calls first",
+            "The Guess Who - American Woman",
+            "Guess Who's Back",
+        ] {
             assert_eq!(match_egg_id(rt), None, "{rt:?} must not match");
         }
 
@@ -1171,14 +1182,15 @@ mod tests {
         // string this would otherwise fire on.
         assert_eq!(match_egg_id("cited for reckless driving"), None);
 
-        // AND THE ONE THAT DOES FIRE ON PROSE, asserted rather than hoped about:
-        // "the who" is two ordinary words and the matcher cannot tell this from
-        // a band. Shipped knowingly — see the registry row — and this is the
-        // line that will fail the day somebody adds a guard for it.
+        // AND THE ONE THAT DOES FIRE ON PROSE, asserted rather than hoped about.
+        // The owner has settled it — RadioText is station, artist and track copy
+        // rather than arbitrary English — so this records the behaviour instead
+        // of warning about it, and is the line that fails the day anybody adds a
+        // guard.
         assert_eq!(
             match_egg_id("find out the who, what and where").map(|e| e.id),
             Some("The Who"),
-            "a false match here is known and accepted, not unnoticed"
+            "the prose match is the accepted behaviour, not an oversight"
         );
     }
 
