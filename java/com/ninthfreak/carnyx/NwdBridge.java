@@ -722,20 +722,69 @@ public final class NwdBridge {
      * implicit-broadcast allowlist), which is no obstacle: this app is alive to
      * register it, and the foreground service is what keeps it that way.
      */
-    public static synchronized void startSleepWatch() {
-        if (sleepReceiver != null || ctx == null) return;
+    /**
+     * The actions this watch listens for.
+     *
+     * <p>TWO SPELLINGS OF THE VENDOR ACTION, because NOBODY KNOWS WHICH IS RIGHT.
+     * The only record of it anywhere is CarFM's BootReceiver comment — "the
+     * vendor service handles {@code ACTION_ACCOFF_UPDATE} going down" — and its
+     * handoff's broadcast list, and BOTH write it UNQUALIFIED where they write
+     * the other two out in full. This ROM uses two prefixes: {@code com.nwd.} for
+     * {@code ACTION_OS_WAKE_UP} and {@code ACTION_ILL_STATE_CHANGE},
+     * {@code com.nwd.action.} for {@code ACTION_KEY_VALUE},
+     * {@code ACTION_REQUEST_CHANGE_SOURCE} and {@code ACTION_APP_IN_OUT}. The
+     * first cut of this file picked {@code com.nwd.} by analogy with the wake
+     * broadcast, which was a COIN FLIP recorded as a fact.
+     *
+     * <p>A filter for an action nothing ever sends registers cleanly and never
+     * fires, so the wrong guess is invisible — which is what "Carnyx does not
+     * shut off the radio audio when the head unit sleeps" would look like. Both
+     * spellings cost one line each, and the action travels with the event, so
+     * ONE ignition cycle names the right one in the diagnostics log.
+     *
+     * <p>SCREEN_OFF is the certain one and its hazard is on the switch that turns
+     * this feature on; see the class note below.
+     */
+    private static final String[] SLEEP_ACTIONS = {
+        "com.nwd.ACTION_ACCOFF_UPDATE",
+        "com.nwd.action.ACTION_ACCOFF_UPDATE",
+        Intent.ACTION_SCREEN_OFF,
+    };
+
+    /**
+     * @return a line for the DIAGNOSTICS LOG saying what happened, never null.
+     *     It used to return void and say so to logcat, which on a unit with no
+     *     adb reaches nobody — so "the receiver never registered" and "the
+     *     broadcast never arrived" looked identical from the driver's seat, and
+     *     they need different fixes.
+     */
+    public static synchronized String startSleepWatch() {
+        if (sleepReceiver != null) {
+            return "already registered";
+        }
+        if (ctx == null) {
+            return "no context — attach() has not run";
+        }
         BroadcastReceiver r = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent i) {
                 safeSleep(i == null || i.getAction() == null ? "" : i.getAction());
             }
         };
         IntentFilter f = new IntentFilter();
-        f.addAction("com.nwd.ACTION_ACCOFF_UPDATE");
-        f.addAction(Intent.ACTION_SCREEN_OFF);
-        if (registerExported(r, f)) {
-            sleepReceiver = r;
-            Log.i(TAG, "sleep watch registered");
+        StringBuilder names = new StringBuilder();
+        for (String a : SLEEP_ACTIONS) {
+            f.addAction(a);
+            if (names.length() > 0) {
+                names.append(", ");
+            }
+            names.append(a);
         }
+        if (!registerExported(r, f)) {
+            return "registerReceiver REFUSED — nothing will be heard";
+        }
+        sleepReceiver = r;
+        Log.i(TAG, "sleep watch registered");
+        return "listening for " + names;
     }
 
     // There is no stopIlluminationWatch, on purpose. See disconnect().

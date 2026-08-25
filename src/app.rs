@@ -161,6 +161,29 @@ fn read_level_current() {
     app.push_meter();
 }
 
+/// How long a probe waits before it runs.
+///
+/// ONE FRAME, not a delay. The only thing that has to happen in between is a
+/// repaint carrying the "reading…" line, and the event loop renders after every
+/// poll — so this is the smallest interval that reliably lands on the far side
+/// of one render rather than a guess at how long the probe takes.
+const PROBE_DEFER_MS: u64 = 16;
+
+/// What a probe calls itself in the log. One place, so the "reading…" line, the
+/// footer and the unavailable line cannot drift apart.
+fn probe_name(action: settings::Action) -> &'static str {
+    match action {
+        settings::Action::ProbeStockRadio => "stock radio probe",
+        _ => "keep-alive probe",
+    }
+}
+
+/// Run whichever probe the last tap asked for. See `State::pending_probe`.
+fn run_pending_probe_current() {
+    let Some(app) = current() else { return };
+    app.run_pending_probe();
+}
+
 /// The 4s correction — and the re-phasing of the periodic watch, which is the
 /// same call.
 ///
@@ -610,6 +633,20 @@ struct State {
     /// rather than a check on the next step, so one press on its own still
     /// reports.
     morph_report: slint::Timer,
+    /// THE PROBE A TAP HAS ASKED FOR BUT NOT YET RUN, and the timer that runs it.
+    ///
+    /// A probe is hundreds of milliseconds of binder work on the UI THREAD — the
+    /// stock-radio one walks every installed package, asks sixteen intent
+    /// queries and hashes two signing certificates. Run inline from the tap it
+    /// froze the face for that whole time with nothing to show for it, which
+    /// from the driver's side is a row that does nothing. Deferring by one frame
+    /// lets the well repaint with "reading…" first, so the tap is visibly
+    /// answered before the freeze rather than after it.
+    ///
+    /// A second tap during the first simply replaces this; the first tap's line
+    /// stays in the log, which is the honest record of what was asked.
+    pending_probe: Option<settings::Action>,
+    probe_run: slint::Timer,
     /// The dial the RDS on screen was RESTORED from, when it came off disk
     /// rather than off the air. See [`crate::session`].
     ///
@@ -1158,6 +1195,8 @@ impl App {
                 morph_frames: 0,
                 morph_since: None,
                 morph_report: slint::Timer::default(),
+                pending_probe: None,
+                probe_run: slint::Timer::default(),
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
                 launches,
                 freq_seq: 0,
@@ -1228,7 +1267,16 @@ impl App {
         // unit go to sleep — and the `sleep:` line is the only evidence of which
         // broadcast fires at all. Same bug as the headlights, one line away from
         // the comment describing it.
-        app.state.borrow().tuner.start_sleep_watch();
+        // AND WHAT IT MANAGED, into the log. The receiver either registered or it
+        // did not, and until now it said so only to logcat — so on a unit with
+        // no adb, "the watch never registered" and "the broadcast never arrived"
+        // looked the same and need different fixes. Empty on the host, so no
+        // screenshot moves.
+        let sleep_watch = app.state.borrow().tuner.start_sleep_watch();
+        if !sleep_watch.is_empty() {
+            let at = stamp();
+            app.state.borrow_mut().settings.log.push(&at, &format!("sleep watch: {sleep_watch}"));
+        }
         // The restored theme has to reach the palette; `Settings` alone only
         // records the choice.
         let theme = app.state.borrow().settings.theme;
@@ -1972,9 +2020,25 @@ impl App {
                     .last_panel
                     .and_then(|(c, at)| (c == code).then(|| at.elapsed().as_millis()));
                 s.last_panel = Some((code, std::time::Instant::now()));
+                // WHICH SIDE OF THE GLASS THE DRIVER WAS ON, appended to a line
+                // that already exists rather than written as a second one. This
+                // is what separates the two ways the station pop-up can fail to
+                // appear, and it costs no ring space:
+                //
+                //   `panel key … [background]` and a `station pop-up:` line
+                //       — the whole path ran; read that line for the outcome
+                //   `panel key … [background]` and NO pop-up line
+                //       — the dial did not move, so there was nothing to say
+                //   `panel key … [face]`
+                //       — THE FLAG NEVER CLEARED, and that is the bug: the
+                //         announce gate is `!is_foreground()`, so a stuck flag
+                //         suppresses every pop-up while the driver is elsewhere
+                //   no `panel key` line at all
+                //       — the press never reached this process
+                let where_ = if crate::android::is_foreground() { "face" } else { "background" };
                 let line = match gap {
-                    Some(ms) => format!("panel key {code} ({named}) {action} +{ms}ms"),
-                    None => format!("panel key {code} ({named}) {action}"),
+                    Some(ms) => format!("panel key {code} ({named}) {action} +{ms}ms [{where_}]"),
+                    None => format!("panel key {code} ({named}) {action} [{where_}]"),
                 };
                 s.settings.log.push(&stamp(), &line);
                 // THE ANCHOR IS READ HERE, NOT WHERE THE ACTION RUNS, and that
@@ -4078,6 +4142,42 @@ impl App {
         }
     }
 
+    /// The deferred half of a probe row: do the binder work, write the report.
+    ///
+    /// PUBLIC FOR THE TESTS, which drive it directly rather than waiting on a
+    /// timer — a test that slept for a frame would be a test of the clock. The
+    /// device path is `run_pending_probe_current`, one tick after the tap.
+    ///
+    /// THE FOOTER IS NOT DECORATION. A probe that hangs or dies inside the
+    /// vendor's binder leaves only the "reading…" line, and a probe that
+    /// finished leaves a count — so the two are distinguishable in a log read
+    /// hours later, which is the only way this unit reports anything.
+    pub fn run_pending_probe(self: &Rc<App>) {
+        let Some(action) = self.state.borrow_mut().pending_probe.take() else { return };
+        let name = probe_name(action);
+        // OUTSIDE THE BORROW. This crosses into Java and walks the package
+        // manager; a `RefCell` held across it would be a lock held over code
+        // that can call back, which is the rule the panel key and the sleep
+        // release already follow.
+        let lines = match action {
+            settings::Action::ProbeStockRadio => crate::android::stock_radio_report(),
+            _ => crate::android::keep_alive_report(),
+        };
+        let count = lines.len();
+        {
+            let mut s = self.state.borrow_mut();
+            Self::log_report(
+                &mut s.settings.log,
+                lines,
+                &format!("{name}: unavailable in this build"),
+            );
+            if count > 0 {
+                s.settings.log.push(&stamp(), &format!("{name}: done, {count} lines"));
+            }
+        }
+        self.push_settings();
+    }
+
     fn run_diag_action(self: &Rc<App>, index: i32) {
         let action = {
             let s = self.state.borrow();
@@ -4101,26 +4201,23 @@ impl App {
                 // class does not exist, and on the unit it means the class never
                 // loaded. Both deserve a line rather than a tap that does
                 // nothing visible.
-                settings::Action::ProbeKeepAlive => {
-                    let lines = crate::android::keep_alive_report();
-                    Self::log_report(
-                        &mut s.settings.log,
-                        lines,
-                        "keep-alive probe: unavailable in this build",
-                    );
-                }
-                // ── WHERE THE STOCK RADIO APP CAN BE INTERCEPTED ──────────────
+                // ── BOTH PROBES ARE DEFERRED BY A FRAME ───────────────────────
                 //
-                // Same channel and the same rule about an empty report. This one
-                // is LONGER — it details a package, its components and an intent
-                // sweep — so the Java side caps every list it prints; the ring
-                // holds 200 lines and this is one of several writers.
-                settings::Action::ProbeStockRadio => {
-                    let lines = crate::android::stock_radio_report();
-                    Self::log_report(
-                        &mut s.settings.log,
-                        lines,
-                        "stock radio probe: unavailable in this build",
+                // The tap writes "reading…" and returns; `probe_run` does the
+                // binder work on the next tick. See `State::pending_probe` for
+                // why, and `run_pending_probe` for what happens then.
+                //
+                // The stock-radio report is the LONGER of the two — a package,
+                // its components and an intent sweep — so the Java side caps
+                // every list it prints; the ring holds 200 lines and this is one
+                // of several writers.
+                settings::Action::ProbeKeepAlive | settings::Action::ProbeStockRadio => {
+                    s.settings.log.push(&stamp(), &format!("{}: reading…", probe_name(action)));
+                    s.pending_probe = Some(action);
+                    s.probe_run.start(
+                        slint::TimerMode::SingleShot,
+                        std::time::Duration::from_millis(PROBE_DEFER_MS),
+                        run_pending_probe_current,
                     );
                 }
                 settings::Action::SaveLog => {
@@ -5701,12 +5798,37 @@ mod tests {
 
         ui.invoke_settings_pick_diag_action(row_index(&driver, "What could keep Carnyx alive through sleep"));
 
+        // THE TAP ANSWERS BEFORE THE WORK. The row defers the binder walk by a
+        // frame so the well can repaint; what the driver sees FIRST is this.
+        let after_tap = driver.state.borrow().settings.log.lines();
+        assert!(after_tap.len() > before, "the tap wrote something immediately");
+        assert_eq!(
+            after_tap.last().unwrap().contains("keep-alive probe: reading"),
+            true,
+            "and it says the probe has started, got {:?}",
+            after_tap.last()
+        );
+
+        // Then the deferred half, driven directly — waiting on a timer here
+        // would be a test of the clock.
+        driver.run_pending_probe();
         let lines = driver.state.borrow().settings.log.lines();
-        assert!(lines.len() > before, "the tap wrote something");
+        assert!(lines.len() > after_tap.len(), "the deferred half wrote too");
         assert!(
             lines.last().unwrap().contains("keep-alive probe"),
             "and it names the probe, got {:?}",
             lines.last()
+        );
+
+        // AND IT ONLY RUNS ONCE. `pending_probe` is taken, so a second tick with
+        // no tap behind it must write nothing — otherwise every frame after a
+        // tap would re-walk the package manager.
+        let settled = driver.state.borrow().settings.log.lines().len();
+        driver.run_pending_probe();
+        assert_eq!(
+            driver.state.borrow().settings.log.lines().len(),
+            settled,
+            "a tick with nothing pending does nothing"
         );
     }
 
@@ -5726,8 +5848,16 @@ mod tests {
             "Where the stock radio app can be intercepted",
         ));
 
+        let after_tap = driver.state.borrow().settings.log.lines();
+        assert!(after_tap.len() > before, "the tap wrote something immediately");
+        assert!(
+            after_tap.last().unwrap().contains("stock radio probe: reading"),
+            "and it says the probe has started, got {:?}",
+            after_tap.last()
+        );
+
+        driver.run_pending_probe();
         let lines = driver.state.borrow().settings.log.lines();
-        assert!(lines.len() > before, "the tap wrote something");
         assert!(
             lines.last().unwrap().contains("stock radio probe"),
             "and it names the probe, got {:?}",

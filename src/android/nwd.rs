@@ -376,11 +376,24 @@ impl Tuner for NwdTuner {
         });
     }
 
-    fn start_sleep_watch(&self) {
-        call_void("startSleepWatch", |env, class| {
-            env.call_static_method(class, jni_str!("startSleepWatch"), jni_sig!("()V"), &[])?;
-            Ok(())
-        });
+    /// The Java answers with a line rather than a void, so the outcome reaches
+    /// the one channel a driver can read. The JNI shape is `write_log`'s — a
+    /// static method returning a String — because `nwd.rs` is the one module
+    /// `tools/check-jni.sh` cannot cover, so nothing here is composed.
+    fn start_sleep_watch(&self) -> String {
+        with_bridge(|env, class| {
+            let out = env
+                .call_static_method(
+                    class,
+                    jni_str!("startSleepWatch"),
+                    jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )?
+                .l()?;
+            let out = JString::cast_local(env, out)?;
+            Ok(text(env, &out))
+        })
+        .unwrap_or_else(|e| format!("unavailable — {e}"))
     }
 
     /// See `Tuner::write_log`. The only call out of here that passes a string IN.

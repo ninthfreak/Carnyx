@@ -1074,6 +1074,28 @@ component DiagLog inherits VerticalLayout {
     /// the well never collapses to its padding.
     property <int> rows: Math.max(1, root.lines.length);
 
+    // ── THE WELL FOLLOWS THE TAIL ────────────────────────────────────────────
+    //
+    // WITHOUT THIS A PROBE ROW LOOKS BROKEN. The log is oldest-first and the well
+    // shows about fourteen rows of a ring that holds two hundred, so a driver who
+    // taps "What could keep Carnyx alive through sleep" and gets forty new lines
+    // sees NOTHING CHANGE: every one of them lands below the visible window, and
+    // the well is still showing the oldest lines it was showing before. The tap
+    // worked; the output was off screen. That is the whole of "the probes need
+    // better visual feedback as to what is going on".
+    //
+    // IMPERATIVE, NOT A BINDING, and the difference is the drag. A binding on
+    // `viewport-y` would be replaced the first time the Flickable wrote its own
+    // value, so following would stop for the rest of the session; and while it
+    // held, it would yank the well back down under a driver trying to scroll up.
+    // A `changed` handler follows every append and leaves a drag alone until the
+    // next one.
+    //
+    // `viewport-y` is NEGATIVE when scrolled down — 0 is the top and
+    // `height - viewport-height` is the bottom — so the floor is the bottom and
+    // 0 is the answer whenever the content fits.
+    changed rows => { well.viewport-y = Math.min(0px, well.height - well.viewport-height); }
+
     // `marginHorizontal: 10, marginTop: 2` — a Slint layout child has no margin,
     // so it becomes this wrapper's padding, as on DiagPanel.
     padding-left: Metrics.s(10);
@@ -1102,7 +1124,7 @@ component DiagLog inherits VerticalLayout {
         // NESTED INSIDE THE BODY'S OWN Flickable, deliberately. That is the TSX's
         // `nestedScrollEnabled` ScrollView, and it has the same consequence: a drag
         // that starts over the log scrolls the log, not the panel.
-        Flickable {
+        well := Flickable {
             x: root.pad;
             y: root.pad;
             width: parent.width - 2 * root.pad;

@@ -1012,7 +1012,15 @@ pub trait Tuner: Send + Sync {
     ///
     /// Defaulted to nothing rather than required: four example probes implement
     /// this trait and none of them has an ignition. Idempotent.
-    fn start_sleep_watch(&self) {}
+    ///
+    /// RETURNS A LINE FOR THE DIAGNOSTICS LOG, empty for "nothing to say". It
+    /// returned nothing at all, and the Java said what it had done to logcat —
+    /// which on a unit with no adb reaches nobody, so "the receiver never
+    /// registered" and "the broadcast never arrived" were indistinguishable from
+    /// the driver's seat and need different fixes.
+    fn start_sleep_watch(&self) -> String {
+        String::new()
+    }
 
     /// Write the diagnostics log to the head unit's public Downloads folder and
     /// return the human-readable path.
@@ -1342,9 +1350,12 @@ impl Tuner for FakeTuner {
         self.lock().ill_watching = true;
     }
 
-    fn start_sleep_watch(&self) {
+    fn start_sleep_watch(&self) -> String {
         // And no ignition. `push_sleep` is how a test drives that path.
         self.lock().sleep_watching = true;
+        // Deliberately silent: a line here would appear in every screenshot of
+        // the settings panel, and there is nothing on a host worth saying.
+        String::new()
     }
 
     /// The same file, somewhere a host can reach.

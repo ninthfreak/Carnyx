@@ -138,6 +138,13 @@ fn android_main(android_app: slint::android::AndroidApp) {
         match main {
             MainEvent::Resume { .. } => {
                 android::set_foreground(true);
+                // THE OTHER EDGE, IN THE LOG. `parting` below records Pause,
+                // Stop and Destroy and returns early for everything else, so a
+                // drive log showed the app going away and never coming back —
+                // and the foreground flag is what the station pop-up is gated
+                // on, so both edges have to be readable to tell a stuck flag
+                // from a press that never arrived.
+                android::ingest_note("lifecycle: resume".into());
                 // The face IS the answer now, so the banner has nothing left to
                 // say. Cleared on the way in rather than left to time out, so a
                 // driver who taps the pop-up does not arrive at the face with it
