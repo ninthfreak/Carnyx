@@ -169,6 +169,16 @@ fn read_level_current() {
 /// of one render rather than a guess at how long the probe takes.
 const PROBE_DEFER_MS: u64 = 16;
 
+/// How long after a sleep release the MCU's source register is still evidence
+/// ABOUT that release rather than about ordinary source arbitration.
+///
+/// Ten seconds because the vendor is slow: `NwdBridge.setAudioEnabled`'s own
+/// note records the MCU acting "a second later", and the poll's cadence is
+/// 1.5s — so a window of one or two turns would miss the reading it exists to
+/// catch. Nothing depends on the exact value; it only decides which of two
+/// sentences a log line uses.
+const SLEEP_RELEASE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// What a probe calls itself in the log. One place, so the "reading…" line, the
 /// footer and the unavailable line cannot drift apart.
 fn probe_name(action: settings::Action) -> &'static str {
@@ -551,6 +561,15 @@ struct State {
     /// button and is meant to survive, this is the ignition going off, which is
     /// nobody's choice and must not come back looking like one.
     sleep_release: bool,
+    /// When the FM source was last handed back for a sleep.
+    ///
+    /// THE POLL NEEDS IT TO TELL TWO OPPOSITE THINGS APART. The self-heal below
+    /// prints "the MCU handed FM back" whenever the source register reads 4
+    /// again, and those words were written for the Android Auto case, where the
+    /// MCU taking FM away and giving it back is good news. Seconds after a sleep
+    /// release the identical reading means the OPPOSITE — the release did not
+    /// take — and it was being reported as a recovery.
+    sleep_released_at: Option<std::time::Instant>,
     /// The post-retune level schedule: read at 1s, correct at 4s, retry a
     /// rejection twice. See [`crate::signal`] for the measurements and
     /// `arm_level_schedule` for the wiring.
@@ -645,6 +664,9 @@ struct State {
     ///
     /// A second tap during the first simply replaces this; the first tap's line
     /// stays in the log, which is the honest record of what was asked.
+    /// The line the settings panel shows above the log well. See
+    /// `SettingsOverlay::diag-status` for why it is not in the well.
+    diag_status: String,
     pending_probe: Option<settings::Action>,
     probe_run: slint::Timer,
     /// The dial the RDS on screen was RESTORED from, when it came off disk
@@ -1153,6 +1175,7 @@ impl App {
                 audio: true,
                 user_powered_off: false,
                 sleep_release: false,
+                sleep_released_at: None,
                 level_first: slint::Timer::default(),
                 level_correction: slint::Timer::default(),
                 level_retry: slint::Timer::default(),
@@ -1195,6 +1218,7 @@ impl App {
                 morph_frames: 0,
                 morph_since: None,
                 morph_report: slint::Timer::default(),
+                diag_status: String::new(),
                 pending_probe: None,
                 probe_run: slint::Timer::default(),
                 warm_dial: warm.as_ref().map(|&(dial, _, _)| dial),
@@ -1272,6 +1296,14 @@ impl App {
         // no adb, "the watch never registered" and "the broadcast never arrived"
         // looked the same and need different fixes. Empty on the host, so no
         // screenshot moves.
+        // THE SWITCH THE RECEIVER READS. It runs on a binder thread and cannot
+        // reach `Settings`, so the restored value is pushed down before the
+        // watch is armed — otherwise the first ignition cycle after a launch
+        // would use Java's default rather than the driver's choice.
+        {
+            let s = app.state.borrow();
+            s.tuner.set_release_on_sleep(s.settings.release_on_sleep);
+        }
         let sleep_watch = app.state.borrow().tuner.start_sleep_watch();
         if !sleep_watch.is_empty() {
             let at = stamp();
@@ -1366,7 +1398,14 @@ impl App {
             tuner.set_audio_enabled(false);
             let mut s = self.state.borrow_mut();
             s.audio = false;
-            s.settings.log.push(&at, "FM source released for sleep");
+            s.sleep_released_at = Some(std::time::Instant::now());
+            // A RE-SEND, AND THE LINE SAYS SO. The release that matters ran on
+            // the receiver's thread before this event was queued; this block
+            // repeats it, which is harmless — the OFF path is two idempotent
+            // calls — and is what the host tests drive. The old wording,
+            // "FM source released for sleep", asserted an outcome this block
+            // never observed.
+            s.settings.log.push(&at, "sleep: FM release re-sent from the drain");
         }
         // The panel key, after the queue is empty and every borrow is gone. Both
         // arms retune, and a retune drains again — which is why this is taken
@@ -1737,14 +1776,21 @@ impl App {
                     if s.audio != playing {
                         s.audio = playing;
                         let at = stamp();
-                        s.settings.log.push(
-                            &at,
-                            if playing {
-                                "poll: the MCU handed FM back"
-                            } else {
-                                "poll: the MCU took FM away"
-                            },
-                        );
+                        // THE SAME READING MEANS TWO OPPOSITE THINGS, and which
+                        // one depends on whether a sleep release just ran. See
+                        // `State::sleep_released_at`: within the window, FM
+                        // coming back is the release FAILING, not the MCU
+                        // relenting, and it needs a different fix.
+                        let since = s.sleep_released_at.map(|at| at.elapsed());
+                        let line = match (playing, since) {
+                            (true, Some(d)) if d < SLEEP_RELEASE_WINDOW => format!(
+                                "poll: mcu source still FM {:.1}s after the sleep release — it did not take",
+                                d.as_secs_f32()
+                            ),
+                            (true, _) => "poll: the MCU handed FM back".to_string(),
+                            (false, _) => "poll: the MCU took FM away".to_string(),
+                        };
+                        s.settings.log.push(&at, &line);
                     }
                 }
 
@@ -2100,16 +2146,25 @@ impl App {
             //
             // The action is logged verbatim because the two triggers are not
             // equally trustworthy, and which one arrives is what a drive settles.
-            TunerEvent::Sleep { action } => {
+            TunerEvent::Sleep { action, release } => {
                 // LOGGED EITHER WAY. Which broadcast arrives, and whether one
                 // arrives at all, is the open question this path exists to
                 // settle — and it is worth answering on a unit where the driver
                 // has turned the release off.
+                //
+                // `release` IS AN OUTCOME, NOT A PLAN. `NwdBridge.releaseSource`
+                // already ran, on the thread that heard the broadcast, before
+                // this event was queued — because the queued path is a thread
+                // hop and a drain taken while the MCU is cutting power to the
+                // SoC, with no wake lock behind it. Empty means no Java did it,
+                // which on the host is every time.
                 let on = s.settings.release_on_sleep;
-                s.settings.log.push(
-                    &stamp(),
-                    &format!("sleep: {action}{}", if on { "" } else { " (release is off)" }),
-                );
+                let tail = if release.is_empty() {
+                    if on { String::new() } else { " (release is off)".to_string() }
+                } else {
+                    format!(" — {release}")
+                };
+                s.settings.log.push(&stamp(), &format!("sleep: {action}{tail}"));
                 s.sleep_release = on;
             }
             TunerEvent::ScanState(_) | TunerEvent::RadioState(_) => {}
@@ -2355,12 +2410,40 @@ impl App {
         // a dial the app itself commanded in 0.1 MHz steps, not a measurement, so
         // two presses never land a float's-breadth apart — and `announced` starts
         // as NaN, which compares unequal to everything including itself.
+        // READ ONCE, USED TWICE. The gate below is a hundred and fifty lines
+        // away and used to call `is_foreground()` again; between the two reads
+        // the flag can flip, and the marker had already moved.
+        let front = crate::android::is_foreground();
         let landed = s.shown();
         #[allow(clippy::float_cmp)]
         let moved = s.announced.get() != landed;
         if moved {
             s.announced.set(landed);
         }
+
+        // ── AN ORDERING RACE THAT WAS LOOKED AT AND LEFT ALONE ────────────────
+        //
+        // Slint's `poll_events` runs `process_event` — which drains
+        // `invoke_from_event_loop`, and so `drain_current` and this function —
+        // BEFORE it calls the lifecycle listener
+        // (i-slint-backend-android-activity-1.17.1/lib.rs:114-123). So on the
+        // poll iteration carrying `Pause`, a queued drain runs here with the
+        // foreground flag still TRUE, and if the dial changed in that same
+        // iteration the edge is consumed with nothing announced.
+        //
+        // MAKING THE TRANSITION ITSELF AN EDGE WAS TRIED AND REVERTED. It
+        // announces every hand-tune the moment the driver switches away, which
+        // is what `the_station_pop_up_speaks_only_for_a_change_the_driver_cannot_see`
+        // forbids in as many words: "an ordinary push must not announce a
+        // station the driver chose themselves a minute ago". The marker cannot
+        // tell "tuned, then switched away" from "tuned WHILE switching away",
+        // and only the second is the race.
+        //
+        // It needs the dial to move in the one poll iteration that carries
+        // Pause — a wheel press landing in the same handful of milliseconds as
+        // the app going to the background — so the cost of the cure is certain
+        // and the disease is not. The `hero:` line below is what would show it
+        // happening at all.
 
         // THE PER-SCHEME CUT. "Back in Black" means nothing on a white page, so a
         // theme states its palette for light and dark separately and the face's
@@ -2506,14 +2589,20 @@ impl App {
         // up a few pixels tall with an empty card beside it. The words are what a
         // driver can read at a glance; the logo identifies the station next to
         // them, and its absence costs nothing.
-        if moved && !crate::android::is_foreground() {
+        // NO LINE FOR THE IN-FRONT CASE, and one was tried. It fires on every
+        // ordinary tune the driver watches — twice in a short host session — and
+        // it can NEVER appear in the background case, which is the reported
+        // fault, so it spent ring space the probe reports need on a sentence
+        // about nothing having gone wrong. `panel key … [face]` already carries
+        // the same fact on a line that exists anyway.
+        if moved && !front {
             let dial = format_mhz(landed);
             // The call sign leads when there is one; the dial is the honest
             // fallback and never an inaccurate "Tuning…", which is the rule the
             // hero lettering follows above.
             let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
             let logo = self.notification_logo(&base);
-            let posted = crate::android::announce_station(&title, &format!("{dial} FM"), &logo);
+            let outcome = crate::android::announce_station(&title, &format!("{dial} FM"), &logo);
             // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
             // wheel press retunes at all depends on the Slint event loop pumping
             // while the activity is stopped, which cannot be tested off the unit
@@ -2521,9 +2610,8 @@ impl App {
             // and whether the platform took it. One drive reads it back out of
             // the settings log.
             crate::android::ingest_note(format!(
-                "station pop-up: {title} at {dial} ({}) — {}",
+                "station pop-up: {title} at {dial} ({}) — {outcome}",
                 if logo.is_empty() { "no logo" } else { "logo" },
-                if posted { "posted" } else { "not posted" }
             ));
         }
     }
@@ -2806,6 +2894,7 @@ impl App {
             ))));
         }
 
+        ui.set_settings_diag_status(s.diag_status.as_str().into());
         ui.set_settings_about(
             settings::about_line(
                 "Carnyx",
@@ -3423,6 +3512,10 @@ impl App {
         });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;
+            // DOWN TO THE RECEIVER TOO. It cannot read `Settings` from a binder
+            // thread, so a switch that only moved here would be a switch the
+            // sleep path never honoured. Taken outside the borrow above.
+            app.state.borrow().tuner.set_release_on_sleep(v);
             app.push_settings();
         });
         on!(on_settings_set_diag, |app, v| {
@@ -4171,9 +4264,13 @@ impl App {
                 lines,
                 &format!("{name}: unavailable in this build"),
             );
-            if count > 0 {
-                s.settings.log.push(&stamp(), &format!("{name}: done, {count} lines"));
-            }
+            let at = stamp();
+            s.diag_status = if count > 0 {
+                s.settings.log.push(&at, &format!("{name}: done, {count} lines"));
+                format!("{name}: {count} lines at {at}")
+            } else {
+                format!("{name}: nothing to report — see the log")
+            };
         }
         self.push_settings();
     }
@@ -4212,6 +4309,7 @@ impl App {
                 // every list it prints; the ring holds 200 lines and this is one
                 // of several writers.
                 settings::Action::ProbeKeepAlive | settings::Action::ProbeStockRadio => {
+                    s.diag_status = format!("{}: reading…", probe_name(action));
                     s.settings.log.push(&stamp(), &format!("{}: reading…", probe_name(action)));
                     s.pending_probe = Some(action);
                     s.probe_run.start(
@@ -5137,7 +5235,7 @@ mod tests {
         );
         assert!(driver.state.borrow().audio);
 
-        crate::android::ingest_sleep("com.nwd.ACTION_ACCOFF_UPDATE".into());
+        crate::android::ingest_sleep("com.nwd.ACTION_ACCOFF_UPDATE".into(), String::new());
         driver.drain_events();
 
         let s = driver.state.borrow();
@@ -5156,8 +5254,12 @@ mod tests {
             lines.iter().any(|l| l.contains("sleep: com.nwd.ACTION_ACCOFF_UPDATE")),
             "the log names the broadcast verbatim, got {lines:?}"
         );
+        // The QUEUED release, which on the host is the only one there is — the
+        // release that matters on the unit runs in `NwdBridge.releaseSource` on
+        // the receiver's own thread and reaches this side as the event's
+        // `release` field, which a fake leaves empty.
         assert!(
-            lines.iter().any(|l| l.contains("FM source released for sleep")),
+            lines.iter().any(|l| l.contains("sleep: FM release re-sent from the drain")),
             "and records that the release ran, got {lines:?}"
         );
         drop(s);
@@ -5172,7 +5274,7 @@ mod tests {
         assert_eq!(driver.state.borrow().tuner.snapshot().unwrap().mcu_source, Some(4));
         driver.state.borrow_mut().settings.release_on_sleep = false;
 
-        crate::android::ingest_sleep("android.intent.action.SCREEN_OFF".into());
+        crate::android::ingest_sleep("android.intent.action.SCREEN_OFF".into(), String::new());
         driver.drain_events();
 
         let s = driver.state.borrow();

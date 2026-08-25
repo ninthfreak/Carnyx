@@ -112,29 +112,37 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// rather than stacking four — the driver wants to know where they landed, not
 /// where they have been.
 ///
-/// Returns false when nothing was posted, which is the ordinary answer on a host
-/// build (no class), and on a device where the driver has notifications off. It
-/// is never a silent no: the Java side logs which.
-pub fn post(title: &str, text: &str, logo: &str) -> bool {
+/// RETURNS WHAT HAPPENED, not whether it worked. Every way of failing used to
+/// come back as `false` with the reason in logcat, which on a unit with no adb
+/// reaches nobody — and the ways differ in what a person has to do about them:
+/// notifications off is a Settings toggle, a downgraded channel needs a new
+/// channel id and cannot be fixed from code, and a clean "posted" with no banner
+/// on screen is SystemUI's.
+pub fn post(title: &str, text: &str, logo: &str) -> String {
     let Some(class) = CLASS_REF.get() else {
-        return false;
+        return "no alert class in this build".into();
     };
     let Ok(jvm) = JavaVM::singleton() else {
-        return false;
+        return "no JVM".into();
     };
-    jvm.attach_current_thread(|env: &mut Env| -> Result<bool, jni::errors::Error> {
+    jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
         let t = env.new_string(title)?;
         let x = env.new_string(text)?;
         let l = env.new_string(logo)?;
-        env.call_static_method(
-            class,
-            jni_str!("post"),
-            jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z"),
-            &[(&t).into(), (&x).into(), (&l).into()],
-        )?
-        .z()
+        let out = env
+            .call_static_method(
+                class,
+                jni_str!("post"),
+                jni_sig!(
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"
+                ),
+                &[(&t).into(), (&x).into(), (&l).into()],
+            )?
+            .l()?;
+        let out = JString::cast_local(env, out)?;
+        out.try_to_string(env)
     })
-    .unwrap_or(false)
+    .unwrap_or_else(|e| format!("JNI failure: {e}"))
 }
 
 /// Take the pop-up down — the driver is back on the face and can see the dial.

@@ -285,6 +285,24 @@ impl Tuner for NwdTuner {
         })
     }
 
+    /// Push the driver's "Release FM on sleep" switch down to the Java side.
+    ///
+    /// The sleep receiver runs on a binder thread and cannot reach `Settings`,
+    /// which lives behind a `RefCell` on the UI thread — so the value is
+    /// mirrored, the same way the foreground flag is mirrored for the wake
+    /// receiver. See `NwdBridge.releaseOnSleep`.
+    fn set_release_on_sleep(&self, on: bool) {
+        call_void("setReleaseOnSleep", |env, class| {
+            env.call_static_method(
+                class,
+                jni_str!("setReleaseOnSleep"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(on)],
+            )?;
+            Ok(())
+        });
+    }
+
     fn set_audio_enabled(&self, on: bool) {
         call_void("setAudioEnabled", |env, class| {
             env.call_static_method(
@@ -529,7 +547,7 @@ fn natives() -> Vec<NativeMethod<'static>> {
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeSleep"),
-                jni_str!("(Ljava/lang/String;)V"),
+                jni_str!("(Ljava/lang/String;Ljava/lang/String;)V"),
                 native_sleep as *mut c_void,
             ),
         ]
@@ -681,9 +699,13 @@ extern "system" fn native_sleep<'a>(
     mut env: EnvUnowned<'a>,
     _class: JClass<'a>,
     action: JString<'a>,
+    release: JString<'a>,
 ) {
     guard(&mut env, |env| {
-        super::ingest_sleep(text(env, &action));
+        // The RELEASE HAS ALREADY HAPPENED, on the receiver's own thread — see
+        // `NwdBridge.releaseSource`. This carries what it managed, so the
+        // diagnostics log records an outcome rather than an attempt.
+        super::ingest_sleep(text(env, &action), text(env, &release));
         Ok(())
     });
 }

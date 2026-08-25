@@ -1306,6 +1306,120 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 102. Three faults reported from the unit
+**PARTLY FIXED, PARTLY MADE DIAGNOSABLE.** Reported by the owner: the probes give
+no feedback and need their functionality checked; the FM source is not released
+when the head unit sleeps; no station pop-up appears when another app is in
+front. Traced by a 39-agent workflow — 34 candidate causes, 14 surviving
+adversarial verification — plus direct reading of the Slint and android-activity
+crate sources.
+
+**WHAT WAS RULED OUT FIRST, mechanically.** `nativeSleep` IS registered in
+`nwd.rs`'s `natives()`. `start_sleep_watch` does NOT depend on the vendor bind —
+`with_bridge` needs only `android::init`. And THE SLINT EVENT LOOP DOES KEEP
+PUMPING while the activity is stopped: `run_event_loop` has no activity-state
+gate, `ALooper_pollOnce` delivers `PollEvent::Wake` or `PollEvent::Timeout` to
+the callback either way (`android-activity-0.6.1/src/native_activity/mod.rs:210-230`),
+`process_event` drains the `invoke_from_event_loop` queue on every one of them
+(`androidwindowadapter.rs:199-206`), and `do_render` no-ops without a native
+window (`:526-537`). That was the leading shared-cause hypothesis for two of the
+three faults and it is false.
+
+**FAULT 1 — THE SLEEP RELEASE NOW RUNS ON THE THREAD THAT HEARD THE BROADCAST.**
+It went `safeSleep` → `nativeSleep` → `ingest_sleep` → `emit` → the event queue →
+`invoke_from_event_loop` → the Slint loop → `drain_events` → the vendor call: a
+thread hop and a queue drain taken at the moment the MCU has announced it is
+cutting power to the SoC, with no wake lock behind it — neither manifest declares
+`WAKE_LOCK`. `NwdBridge.releaseSource` is now split out of `setAudioEnabled`'s
+OFF branch and called from the receiver directly, before the hop. The queued
+release still runs and is harmless: the OFF path is two idempotent calls, and it
+is what the host tests drive.
+
+The driver's switch had to be MIRRORED to reach it. The receiver runs on a binder
+thread and `Settings::release_on_sleep` lives behind a `RefCell` on the UI
+thread, so `Tuner::set_release_on_sleep` pushes the value down at start-up and on
+every toggle — the same shape `CarnyxWake.setForeground` uses. Releasing for a
+driver who turned it off would be exactly the SCREEN_OFF hazard the switch exists
+to let them avoid.
+
+**AND THE ACC-OFF ACTION STRING WAS A COIN FLIP.** The only record of it anywhere
+— CarFM's comment and its handoff's broadcast list — writes
+`ACTION_ACCOFF_UPDATE` UNQUALIFIED where it writes the other two out in full, and
+this ROM uses two prefixes. Both spellings are registered now; the action travels
+with the event.
+
+**AND THE POLL STOPPED CALLING A FAILED RELEASE GOOD NEWS.** The self-heal prints
+"the MCU handed FM back" whenever the source register reads 4 again — words
+written for the Android Auto case, where that is a recovery. Seconds after a
+sleep release the identical reading means the OPPOSITE. `sleep_released_at` and a
+ten-second window now pick the right sentence.
+
+**FAULT 2 — MADE READABLE, NOT FIXED, because no cause is established.**
+`CarnyxAlert.post` returned a bool and told logcat why, which on a unit with no
+adb reaches nobody: every failure printed "not posted", and they need different
+fixes. It returns a reason now, and reads back the channel's ACTUAL importance —
+which is the one failure that looks like success. `createNotificationChannel` is
+a no-op when the channel exists and Android will not let an app RAISE an
+importance the user lowered, so a channel knocked down once can never raise a
+banner again while `notify` keeps returning normally. There is no code that fixes
+that; it needs a new channel id, which is a person's decision, and this is what
+lets them see they have to make it.
+
+**TWO PROPOSED FIXES WERE REJECTED AFTER TRYING THEM**, and both were the
+workflow's, so this is what the verification did not catch:
+
+- Making the foreground TRANSITION an announceable edge — `announced` as a
+  `(dial, was-foreground)` tuple — to close an ordering race in which
+  `process_event` runs before the lifecycle listener. It compiles and it breaks
+  `the_station_pop_up_speaks_only_for_a_change_the_driver_cannot_see`, which
+  forbids exactly the resulting behaviour in as many words: an ordinary push must
+  not announce a station the driver chose themselves. The race is real and needs
+  the dial to move in the ONE poll iteration carrying `Pause`; the cost of the
+  cure is certain and the disease is not. Reverted, with the reasoning left in
+  the code.
+- An un-gated `hero: dial … — face in front, not announced` line. It fires on
+  every ordinary tune the driver watches — twice in a short host session — and
+  can NEVER appear in the background case, which is the reported fault. It spent
+  ring space the probe reports need on a sentence about nothing having gone
+  wrong. Removed; `panel key … [face]` already carries the fact.
+
+**FAULT 3 — THE PROBES.** The log well now follows its tail: it is oldest-first
+and shows about twelve rows of a two-hundred-line ring, so forty new lines landed
+entirely below the visible window and the tap looked like it did nothing. Both
+rows defer by one frame, so "reading…" is painted before the binder work freezes
+the face, and a "done, N lines" footer distinguishes a probe that finished from
+one that died inside the vendor's binder. A `diag-status` line above the well —
+16dp, weight 700, `Pal.blue` — says what is happening and then what happened, and
+survives the ring, which the report itself does not.
+
+**AND THE PROBES STOPPED LYING ABOUT WHY THEY HAD NOTHING.** `report()` returned
+an empty vector for every failure and the caller turned that into "unavailable in
+this build" — TRUE on the host, FALSE on the unit, where `build.rs` puts both
+classes in the embedded dex. `INIT_ERR` records why the class did not load and
+the report says so; a JNI failure names itself instead of vanishing.
+
+**Two comments were wrong against their own source** and are corrected:
+`ui/settings.slint` claimed a 2000-line ring where `settings.rs` says 200.
+
+**Evidence.** 301 tests, clippy clean over lib, bins and examples, the JNI seam
+type-checks, and every Java file that can be compiled here does so with
+`-Xlint:all` and no diagnostic in our sources — `javap` confirms `post`'s new
+descriptor matches what `alert.rs` names. 81 shots: 75 byte-identical, 6
+known-unstable, ZERO unexpected differences.
+
+**NOT VERIFIED, and it is the whole point of the log lines above:** none of this
+has run on the unit. `NwdBridge.java` cannot be compiled here — it needs
+AIDL-generated classes no tool in this container can produce — so
+`releaseSource`, `why`, `setReleaseOnSleep` and the two-argument `nativeSleep`
+are unchecked beyond inspection. And the `diag-status` line is in no shot,
+because no shot taps a probe row.
+
+**What one drive settles:** which ACC-off spelling arrives, whether the receiver
+registered at all, what the release managed on its own thread, whether the MCU
+ignored it, whether a wheel press reaches the process while backgrounded, which
+side of the glass it thought it was on, and whether the pop-up was posted,
+refused, or posted into a downgraded channel.
+
 ### 101. Give the genre metrics to the advanced tier only
 **DONE.** The owner's rule, verbatim: *"Some Advanced Eggs have custom sizes.
 Basic eggs should be default size until I decide otherwise."*

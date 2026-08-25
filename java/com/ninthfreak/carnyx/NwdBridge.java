@@ -387,14 +387,76 @@ public final class NwdBridge {
                 if (am != null) am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0);
             } catch (Throwable ignored) {}
         } else {
-            if (r != null) {
-                try { r.setRadioBackServiceOn(false); } catch (Throwable t) { Log.w(TAG, "backservice off failed", t); }
-            }
-            try {
-                ctx.sendBroadcast(new Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE")
-                        .putExtra("extra_source_id", (byte) 0));
-            } catch (Throwable ignored) {}
+            releaseSource();
         }
+    }
+
+    /**
+     * Hand the FM source back, and say what happened.
+     *
+     * <p>SPLIT OUT OF {@link #setAudioEnabled} SO THE SLEEP RECEIVER CAN CALL IT
+     * ON ITS OWN THREAD. Going through Rust means `ingest_sleep` -> `emit` ->
+     * the event queue -> `invoke_from_event_loop` -> the Slint event loop ->
+     * `drain_events`, which is a thread hop and a drain taken at the exact
+     * moment the MCU has announced it is cutting power to the SoC. This app
+     * holds no wake lock — neither manifest declares WAKE_LOCK — so nothing
+     * guarantees the loop is scheduled again before the suspend. The release has
+     * to be issued on the thread that heard the broadcast.
+     *
+     * <p>The queued release still runs afterwards and is harmless: this is a
+     * re-send of the same two calls, and it is what the host tests drive.
+     *
+     * @return what it managed, for the diagnostics log. Never null.
+     */
+    static synchronized String releaseSource() {
+        if (ctx == null) {
+            return "no context";
+        }
+        RadioFeature r;
+        synchronized (LOCK) { r = radio; }
+        String back = "no binder";
+        if (r != null) {
+            try {
+                r.setRadioBackServiceOn(false);
+                back = "backservice off";
+            } catch (Throwable t) {
+                back = "backservice off failed: " + why(t);
+            }
+        }
+        try {
+            // THE ONLY ONE THE PROBE FOUND THAT STICKS. See the note above
+            // setAudioEnabled: EXIT_ARM_FM and app-OUT both left
+            // mcu_current_source at 4.
+            ctx.sendBroadcast(new Intent("com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE")
+                    .putExtra("extra_source_id", (byte) 0));
+            return "source→0 sent, " + back;
+        } catch (Throwable t) {
+            return "source→0 FAILED: " + why(t) + ", " + back;
+        }
+    }
+
+    /**
+     * A throwable as one short line: the simple name, the message, and the cause
+     * if there is one, truncated so a single failure cannot fill the ring.
+     *
+     * <p>Every catch that reaches a person goes through this. A bare
+     * {@code getSimpleName()} names a class and not a reason —
+     * "(RuntimeException)" is a dead end where
+     * "RuntimeException: ... &lt;- TransactionTooLargeException" names a remedy.
+     */
+    static String why(Throwable t) {
+        if (t == null) {
+            return "unknown";
+        }
+        StringBuilder b = new StringBuilder(t.getClass().getSimpleName());
+        if (t.getMessage() != null && !t.getMessage().isEmpty()) {
+            b.append(": ").append(t.getMessage());
+        }
+        Throwable cause = t.getCause();
+        if (cause != null && cause != t) {
+            b.append(" <- ").append(cause.getClass().getSimpleName());
+        }
+        return b.length() > 120 ? b.substring(0, 120) + "…" : b.toString();
     }
 
     /**
@@ -692,6 +754,28 @@ public final class NwdBridge {
     private static BroadcastReceiver sleepReceiver;
 
     /**
+     * The driver's "Release FM on sleep" switch, MIRRORED FROM RUST.
+     *
+     * <p>The receiver above runs on a binder thread with no route into the app's
+     * state — `Settings::release_on_sleep` lives behind a `RefCell` on the UI
+     * thread — and it has to honour the switch, because releasing for a driver
+     * who turned it off is exactly the SCREEN_OFF hazard the switch exists to
+     * let them avoid. So the value is pushed down the same way
+     * `CarnyxWake.setForeground` pushes the foreground flag.
+     *
+     * <p>Volatile, not synchronized: it is read on a binder thread and written
+     * on the UI thread, and a stale read costs one ignition cycle of the old
+     * behaviour. TRUE by default, matching `Settings::default`, so a build where
+     * the mirror never runs still releases.
+     */
+    private static volatile boolean releaseOnSleep = true;
+
+    /** See {@link #releaseOnSleep}. Called from Rust whenever the switch moves. */
+    public static void setReleaseOnSleep(boolean on) {
+        releaseOnSleep = on;
+    }
+
+    /**
      * Watch for the head unit going to sleep, so the FM source can be handed back
      * before this process stops running.
      *
@@ -767,7 +851,14 @@ public final class NwdBridge {
         }
         BroadcastReceiver r = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent i) {
-                safeSleep(i == null || i.getAction() == null ? "" : i.getAction());
+                String action = i == null || i.getAction() == null ? "" : i.getAction();
+                // RELEASED HERE, ON THIS THREAD, BEFORE THE HOP TO RUST. See
+                // releaseSource: the queued path is a thread hop and a drain
+                // taken while the MCU is cutting power, with no wake lock behind
+                // it. The outcome travels with the event so the diagnostics log
+                // records what this call managed rather than what it attempted.
+                String outcome = releaseOnSleep ? releaseSource() : "skipped, release is off";
+                safeSleep(action, outcome);
             }
         };
         IntentFilter f = new IntentFilter();
@@ -1151,7 +1242,7 @@ public final class NwdBridge {
     private static native void nativeLevel(int level, int asked, int landed, boolean ok, String err);
     private static native void nativePanelKey(int key, String action);
     private static native void nativeIllumination(String action, String extras, String uiMode);
-    private static native void nativeSleep(String action);
+    private static native void nativeSleep(String action, String release);
 
     // Every crossing is wrapped. A callback runs on the VENDOR's binder thread:
     // an exception escaping into it is the vendor service's problem, not ours,
@@ -1192,8 +1283,8 @@ public final class NwdBridge {
     private static void safePanelKey(int key, String action) {
         try { nativePanelKey(key, action); } catch (Throwable t) { jniFailed(t); }
     }
-    private static void safeSleep(String action) {
-        try { nativeSleep(action); } catch (Throwable t) { jniFailed(t); }
+    private static void safeSleep(String action, String release) {
+        try { nativeSleep(action, release); } catch (Throwable t) { jniFailed(t); }
     }
 
     private static void safeIllumination(String action, String extras, String uiMode) {

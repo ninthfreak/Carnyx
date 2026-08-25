@@ -1060,7 +1060,10 @@ component ChevronRow inherits Rectangle {
 /// box, so an 11px line is never drawn into a 12px slot.
 component DiagLog inherits VerticalLayout {
     /// Already stamped and already ordered, oldest first — `diagLines()`,
-    /// diag.ts:49-61. The ring is 2000 lines and Rust owns it.
+    /// diag.ts:49-61. The ring is `settings::DiagLog::CAP` lines and Rust owns
+    /// it. THAT IS 200, not the 2000 this comment claimed — checked against
+    /// `src/settings.rs`, and the difference matters because a probe report is
+    /// tens of lines against a ring ordinary playback already evicts from.
     in property <[string]> lines;
 
     property <length> pad: Metrics.s(10);
@@ -1250,6 +1253,16 @@ export component SettingsOverlay inherits Rectangle {
     /// Whichever wins, the load-bearing part is the shape — two spaces either side
     /// of each U+00B7 — and that belongs in a byte-exact Rust test, not here.
     in property <string> about;
+    /// What the last probe row did, for a person rather than for a log.
+    ///
+    /// THE LOG WELL IS NOT FEEDBACK. Its rows are 12px, weight 400, `Pal.dim`
+    /// and elided, twelve of them over a two-hundred-line ring that ordinary
+    /// playback evicts from — a `tuned` line on every frequency report, an
+    /// `RDS` line on every published change. A driver who taps a probe row and
+    /// looks up gets no signal that anything happened, which is the whole of
+    /// "the probes need better visual feedback". This is one line, at the size
+    /// of a row label, that says what is happening and then what happened.
+    in property <string> diag-status;
 
     // ── What the user can do ──
     callback retry-tuner();
@@ -1533,6 +1546,18 @@ export component SettingsOverlay inherits Rectangle {
                 // Everything below the master switch is nested under it, exactly as
                 // the TSX nests it: the three switches show nothing useful without
                 // capture, and the log shows nothing at all.
+                // THE STATUS LINE, ABOVE THE WELL AND NOT IN IT. See
+                // `diag-status`. It survives the ring, which the report itself
+                // does not, and it is the only thing on this panel that changes
+                // between tapping a probe and its output arriving.
+                if root.diag-on && root.diag-status != "": Text {
+                    text: root.diag-status;
+                    font-size: Math.max(12px, Metrics.s(16));
+                    font-weight: 700;
+                    color: Pal.blue;
+                    wrap: word-wrap;
+                    horizontal-alignment: left;
+                }
                 if root.diag-on: VerticalLayout {
                     // The log is worth capturing on every drive; the on-face tail
                     // only when watching for something specific — an unnamed panel

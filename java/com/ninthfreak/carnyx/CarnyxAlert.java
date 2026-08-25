@@ -126,35 +126,84 @@ public final class CarnyxAlert {
      * @param logoPath the station's saved logo, or empty for none. A path that
      *     does not decode simply leaves the banner as words, which is the whole
      *     message either way.
-     * @return true when the platform was handed the notification. False means it
-     *     could not be posted AND the reason is in the log; it is never a silent
-     *     no.
+     * @return WHAT HAPPENED, for the diagnostics log — "posted, channel
+     *     importance 4", "notifications are off for this app", "notify threw:
+     *     …". It returned a bool and told logcat the reason, which on a unit
+     *     with no adb reaches nobody: every way of failing printed the same
+     *     "not posted", and they need different fixes — one is a driver's
+     *     Settings toggle, one needs a new channel id, one is SystemUI's.
      */
-    public static synchronized boolean post(String title, String text, String logoPath) {
+    public static synchronized String post(String title, String text, String logoPath) {
         if (ctx == null) {
-            Log.i(TAG, "post() before attach()");
-            return false;
+            return "post() before attach()";
         }
         NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         if (nm == null) {
-            Log.w(TAG, "no NotificationManager");
-            return false;
+            return "no NotificationManager";
         }
         // API 33+ only. Below it the method exists and answers for the app as a
         // whole, which is still worth honouring: a driver who turned Carnyx's
         // notifications off in Settings has said what they want.
         if (!nm.areNotificationsEnabled()) {
-            Log.i(TAG, "notifications are off for this app; nothing posted");
-            return false;
+            return "notifications are off for this app";
         }
         ensureChannel(nm);
         try {
             nm.notify(NOTIFICATION_ID, build(title, text, decode(logoPath)));
-            return true;
-        } catch (Exception e) {
-            Log.w(TAG, "notify failed: " + e);
-            return false;
+            return "posted, " + channelState();
+        } catch (Throwable t) {
+            return "notify threw: " + why(t);
         }
+    }
+
+    /**
+     * The channel's importance AS THE PLATFORM HOLDS IT, not as this class asked
+     * for it.
+     *
+     * <p>THE ONE FAILURE THAT LOOKS LIKE SUCCESS. {@code createNotificationChannel}
+     * is a no-op when the channel already exists — the note on
+     * {@link #ensureChannel} says so — and Android does not let an app RAISE an
+     * importance the user has lowered. So a channel knocked down to
+     * {@code IMPORTANCE_LOW} once, by the driver or by the ROM, can never raise
+     * a heads-up banner again, while {@code notify} keeps returning normally and
+     * this class kept reporting "posted". The station pop-up would be posted,
+     * silent, and invisible, for the rest of the app's life on that unit.
+     *
+     * <p>The remedy is not code that fixes it — there is none — it is a NEW
+     * channel id, which is a decision for a person. This exists so the person
+     * can see they have to make it.
+     *
+     * <p>4 is HIGH and what this app asks for; 3 DEFAULT; 2 LOW; 1 MIN; 0 NONE.
+     */
+    private static String channelState() {
+        try {
+            NotificationManager nm = ctx.getSystemService(NotificationManager.class);
+            if (nm == null) {
+                return "channel unreadable";
+            }
+            NotificationChannel c = nm.getNotificationChannel(CHANNEL_ID);
+            if (c == null) {
+                return "channel missing";
+            }
+            int imp = c.getImportance();
+            return imp >= NotificationManager.IMPORTANCE_HIGH
+                    ? "channel importance " + imp
+                    : "channel importance " + imp + " — TOO LOW FOR A BANNER";
+        } catch (Throwable t) {
+            return "channel unreadable: " + why(t);
+        }
+    }
+
+    /** A throwable as one short line. See {@code NwdBridge.why}. */
+    private static String why(Throwable t) {
+        if (t == null) {
+            return "unknown";
+        }
+        StringBuilder b = new StringBuilder(t.getClass().getSimpleName());
+        if (t.getMessage() != null && !t.getMessage().isEmpty()) {
+            b.append(": ").append(t.getMessage());
+        }
+        return b.length() > 120 ? b.substring(0, 120) + "…" : b.toString();
     }
 
     /** Take the pop-up down — the driver is back on the face and can see it. */

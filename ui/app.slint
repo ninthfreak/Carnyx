@@ -196,6 +196,9 @@ export component AppWindow inherits Window {
     in property <[string]> settings-diag-lines;
     in property <[DiagAction]> settings-diag-actions;
     in property <string> settings-about;
+    /// The last probe's outcome, in a line the driver can actually read. Empty
+    /// until one is tapped.
+    in property <string> settings-diag-status;
     callback settings-retry-tuner();
     callback settings-toggle-details();
     callback settings-pick-source(int);
@@ -381,6 +384,7 @@ export component AppWindow inherits Window {
         diag-lines: root.settings-diag-lines;
         diag-actions: root.settings-diag-actions;
         about: root.settings-about;
+        diag-status: root.settings-diag-status;
         retry-tuner => { root.settings-retry-tuner(); }
         toggle-details => { root.settings-toggle-details(); }
         pick-source(i) => { root.settings-pick-source(i); }

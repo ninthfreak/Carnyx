@@ -470,15 +470,22 @@ pub enum TunerEvent {
         extras: String,
         ui_mode: String,
     },
-    /// The head unit is going to sleep, and this app should stop holding the FM
-    /// source before it stops running.
+    /// The head unit is going to sleep, and this app has ALREADY handed the FM
+    /// source back on the thread that heard the broadcast.
     ///
     /// `action` is the broadcast that said so, carried rather than collapsed to a
     /// flag because the two are not equally trustworthy — see
     /// `NwdBridge.startSleepWatch`. `com.nwd.ACTION_ACCOFF_UPDATE` is the real
     /// signal; `android.intent.action.SCREEN_OFF` is a proxy a screen timeout
     /// also trips. Which one arrived is the first thing a drive log has to answer.
-    Sleep { action: String },
+    Sleep {
+        action: String,
+        /// What `NwdBridge.releaseSource` managed on the receiver's own thread,
+        /// or why it did not try. An OUTCOME, not an attempt — the queued
+        /// release that follows is a re-send, and only this ran before the SoC
+        /// was cut. Empty from a caller that has no Java behind it.
+        release: String,
+    },
 }
 
 // ── Shared state and the event sink ──────────────────────────────────────────
@@ -767,14 +774,14 @@ pub fn ingest_panel_key(code: i32, action: String) {
 /// rule on every target, so it is tested on the host like everything else. Only
 /// the posting is platform work, and off Android there is nothing to post to.
 #[cfg(target_os = "android")]
-pub fn announce_station(title: &str, text: &str, logo: &str) -> bool {
+pub fn announce_station(title: &str, text: &str, logo: &str) -> String {
     alert::post(title, text, logo)
 }
 
 /// The host has no notification shade. See the Android arm.
 #[cfg(not(target_os = "android"))]
-pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> bool {
-    false
+pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> String {
+    "no notification shade in this build".into()
 }
 
 /// What could keep this app alive through a sleep. See `probe`.
@@ -865,8 +872,8 @@ pub fn is_foreground() -> bool {
     FOREGROUND.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-pub fn ingest_sleep(action: String) {
-    emit(TunerEvent::Sleep { action });
+pub fn ingest_sleep(action: String, release: String) {
+    emit(TunerEvent::Sleep { action, release });
 }
 
 pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {
@@ -972,6 +979,15 @@ pub trait Tuner: Send + Sync {
     fn snapshot(&self) -> Option<TunerSnapshot>;
 
     fn set_audio_enabled(&self, on: bool);
+
+    /// Mirror the driver's "Release FM on sleep" switch to wherever the sleep
+    /// receiver can read it.
+    ///
+    /// THE RECEIVER CANNOT REACH `Settings`. It runs on a binder thread and the
+    /// switch lives behind a `RefCell` on the UI thread, so the value has to be
+    /// pushed rather than pulled — the same shape the foreground flag takes for
+    /// the wake receiver. Defaulted to nothing: a fake has no receiver to tell.
+    fn set_release_on_sleep(&self, _on: bool) {}
 
     fn set_rds_enabled(&self, on: bool);
 
@@ -1199,7 +1215,10 @@ impl FakeTuner {
     /// reproducible here rather than only on a dashboard.
     pub fn push_sleep(&self, action: &str) {
         if self.lock().sleep_watching {
-            ingest_sleep(action.into());
+            // The fake has no Java receiver, so nothing was released before the
+            // hop and the outcome is empty. The queued release in
+            // `drain_events` is what the host tests exercise.
+            ingest_sleep(action.into(), String::new());
         }
     }
 

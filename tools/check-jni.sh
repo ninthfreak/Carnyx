@@ -92,6 +92,19 @@ impl From<jni::errors::Error> for TunerError {
     fn from(e: jni::errors::Error) -> Self { TunerError::Java(e.to_string()) }
 }
 
+/// The real one implements Display (`src/android/mod.rs`), and the seam modules
+/// format errors with it. Without this the harness rejects correct code.
+impl std::fmt::Display for TunerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TunerError::Unavailable(w) => write!(f, "tuner unavailable: {w}"),
+            TunerError::NotConnected => write!(f, "tuner not connected"),
+            TunerError::NotCalibrated => write!(f, "tuner frequency scale not learned yet"),
+            TunerError::Java(w) => write!(f, "tuner call failed: {w}"),
+        }
+    }
+}
+
 /// Stands in for `android::dex`, which loads the embedded classes.dex. Its
 /// SIGNATURES are what the callers type-check against; its behaviour is not
 /// under test here and could not be, with no JVM.
