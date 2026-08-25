@@ -1340,11 +1340,25 @@ changes nothing else. `the_basic_bands_match_the_way_a_station_writes_them`
 ASSERTS the false match rather than hoping about it, so the day somebody adds a
 guard, that line fails and says why.
 
-**A shot at last.** `shots/clapton.png` — the first render of a basic theme, and
+**Three shots.** `shots/clapton.png` is the first render of a basic theme, and
 what it is really for is the ordinary case of the tier: a row that states a genre
 and no colour. The line reads "Slowhand" in the dim token, at the themed size and
 weight, and everything else on the face is plain — ordinary hero face, ordinary
 tiles, ordinary palette, plain gear, RadioText in Atkinson.
+
+`shots/the-who.png` and `shots/the-who-portrait.png` are the same tier with a
+LONG line: "Meaty, Beaty, Big, and Bouncy" is 29 characters where "Slowhand" is
+8, and a themed genre is set at 33/47 where the PTY it replaces is 26/33.
+
+**AND THE LONG LINE ELIDES ON THE NARROW TRACK.** On the head unit's own
+1024x614 it fits, shrunk, in full. On 360dp it reads "Meaty, Beaty, Big, and
+Bou…". That is not a fault — it is the genre shrink reaching its floor,
+`Metrics.pty-font-min`, which the code states plainly: "Past it the line elides,
+which is the old behaviour and the right one — there is a point below which a
+smaller word is not a legible word." The narrow track is real (a DUDU OS vertical
+third, not only a phone), so the portrait shot is kept as the record of where the
+limit falls rather than deleted for being unflattering. Shortening the genre
+string is the owner's call, not this file's.
 
 **Worth knowing:** a basic theme still takes the THEMED genre metrics (33/47 at
 weight 800 against the PTY's 26/33 at 700), because `GenreText` keys that off
@@ -1353,7 +1367,15 @@ consistent with the line being a themed one; it is a judgement call rather than 
 stated rule, and it is the one thing here to revisit if the bigger line is not
 wanted for the small tier.
 
-**Evidence.** 300 tests, clippy clean over lib, bins and examples. Nothing else
+**A filter on the shot harness**, added because answering "what does The Who's
+look like" meant rendering eighty surfaces to see one.
+`cargo run --example shot -- the-who` renders only the surfaces whose name
+contains an argument, and a filter matching NOTHING is an assertion failure
+rather than a silent empty run — a typo would otherwise finish quietly and read
+as success.
+
+**Evidence.** 300 tests, clippy clean over lib, bins and examples. All 81 shots
+render on the unfiltered path. Nothing else
 could have moved: the only shots that reach the matcher set RadioText naming one
 of the five advanced bands, none of which contains any of the three new names,
 and `long-radiotext` sets the UI property directly without going through the

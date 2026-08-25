@@ -219,6 +219,13 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // in the ordinary dim token, because that is the ordinary case for the tier
     // and it used to render transparent.
     ("clapton", 1024, 614, false, State::Clapton, 0.0),
+    // THE SAME TIER WITH A LONG LINE. "Meaty, Beaty, Big, and Bouncy" is 29
+    // characters where "Slowhand" is 8, and a themed genre is set at 33/47 where
+    // the PTY it replaces is 26/33 — so this is the surface that says whether
+    // the top bar's shrink absorbs a basic theme's line or elides it. Two shots
+    // for one tier, because they answer different questions.
+    ("the-who", 1024, 614, false, State::TheWho, 0.0),
+    ("the-who-portrait", 360, 800, false, State::TheWho, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -264,6 +271,8 @@ enum State {
     Nirvana,
     /// A BASIC theme: a genre line and nothing else. See the surface list.
     Clapton,
+    /// The same tier, with a genre line long enough to test the shrink.
+    TheWho,
     Nin,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
@@ -353,8 +362,25 @@ fn main() {
         .expect("set platform");
     std::fs::create_dir_all("shots").expect("create shots/");
 
+    // OPTIONAL FILTERS: `cargo run --example shot -- clapton the-who` renders
+    // only the surfaces whose name contains one of the arguments. Rendering all
+    // eighty to look at one of them is most of a minute, which is enough
+    // friction to stop anyone looking — and looking is the whole point of this
+    // harness.
+    //
+    // A FILTER THAT MATCHES NOTHING IS AN ERROR rather than an empty run: a typo
+    // would otherwise finish silently and read as success.
+    let filters: Vec<String> = std::env::args().skip(1).collect();
+    let wanted =
+        |name: &str| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()));
+    let mut drawn = 0usize;
+
     let face = SURFACES.iter().map(|&(n, w, h, d, s)| (n, w, h, d, s, 0.0));
     for (name, w, h, dark, state, scroll) in face.chain(OVERLAYS.iter().copied()) {
+        if !wanted(name) {
+            continue;
+        }
+        drawn += 1;
         // A whole application per shot, driven by the real services: the station
         // database is opened and queried, the RDS decoder is fed until its
         // consensus gates clear, the signal maths runs, and the settings panel is
@@ -464,6 +490,7 @@ fn main() {
         ui.hide().expect("hide");
         println!("shots/{name}.png  {w}x{h}");
     }
+    assert!(drawn > 0, "no surface matched {filters:?}");
 }
 
 /// Push one of the states the face has to be able to draw.
@@ -559,6 +586,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         }
         State::Clapton => {
             driver.set_radio_text_for_test("Eric Clapton - Layla");
+            driver.push_all();
+        }
+        State::TheWho => {
+            driver.set_radio_text_for_test("The Who - Baba O'Riley");
             driver.push_all();
         }
         // PROPERTIES, NOT THE STORE, and that is a limit of the host rather than
