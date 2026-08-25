@@ -150,6 +150,13 @@ export struct EggTheme {
     body-face: string,
     hero-face: string,
     genre-face: string,
+    /// Synthetic-bold radius for the genre line, as a FRACTION OF THE FONT SIZE.
+    ///
+    /// An em fraction and not a dp, because the size this line ends up at is not
+    /// known here: `GenreText` shrinks a long line to fit the space it was given,
+    /// so the radius has to be resolved against the size the shrink chose. 0 is
+    /// no synthesis, which is every theme but one.
+    face-bold: float,
     rt-face: string,
     freq-face: string,
     /// Multipliers and tracking. 1.0 and 0 leave the ordinary metrics.

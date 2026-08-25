@@ -572,7 +572,51 @@ component GenreText inherits Rectangle {
         letter-spacing: 0.5px;
         color: Pal.dark ? #000000.with-alpha(0.5) : #FFFFFF.with-alpha(0.95);
     }
+    // ── SYNTHETIC BOLD, FOR A FACE THAT HAS NO BOLD CUT ──────────────────────
+    //
+    // A display face usually ships one weight, and Slint hands that cut back
+    // unchanged when asked for 700 — it does not thicken a glyph the way a
+    // browser does. So a theme that says "in bold" over a single-weight face
+    // gets nothing unless the thickening is drawn.
+    //
+    // BY DILATION, NOT BY A STROKE, for the reason `ui/glitch.slint` records
+    // against the hero lettering: `stroke-width` is inert in this version's
+    // software renderer, so a stroked bold would be invisible in every shot and
+    // unverifiable off the device.
+    //
+    // FIVE COPIES OF AN OPAQUE INK COMPOSITE TO THAT INK however they overlap,
+    // which is why this is safe here: `ink` resolves to `Pal.dim` or a theme's
+    // stated colour, both opaque. It would NOT be safe over a faded one.
+    //
+    // ZERO IS ONE COPY. Every other theme, and every unthemed face, pays nothing.
+    property <length> bold-r: root.egg.face-bold * root.size;
+    property <[{dx: float, dy: float}]> offsets: root.bold-r > 0px
+        ? [{dx: 0, dy: 0}, {dx: -1, dy: -1}, {dx: 1, dy: -1}, {dx: -1, dy: 1}, {dx: 1, dy: 1}]
+        : [{dx: 0, dy: 0}];
+
+    for o[i] in root.offsets: Text {
+        x: o.dx * root.bold-r; width: root.text-w;
+        y: (root.height - self.preferred-height) / 2 + o.dy * root.bold-r;
+        text: root.egg.genre-runes ? "" : root.shown;
+        overflow: elide;
+        horizontal-alignment: root.centered ? center : left;
+        font-family: root.face; font-weight: root.weight;
+        font-size: root.size;
+        letter-spacing: 0.5px;
+        color: root.ink;
+        opacity: root.fade;
+        // The outline belongs to the TRUE copy alone; drawn on all five it would
+        // be five outlines a radius apart rather than one edge.
+        stroke: i == 0 ? root.egg.genre-outline-ink : Colors.transparent;
+        stroke-width: i == 0 ? root.egg.genre-outline-w : 0px;
+        stroke-style: center;
+    }
+
+    // The GAUGE the box measures itself from — the true copy's geometry, with no
+    // offset and nothing drawn. `visible: false` keeps its preferred size and
+    // costs no layer, which is the pattern the hero's own gauges use.
     live := Text {
+        visible: false;
         x: 0; width: root.text-w;
         y: (root.height - self.preferred-height) / 2;
         text: root.egg.genre-runes ? "" : root.shown;
@@ -583,15 +627,8 @@ component GenreText inherits Rectangle {
         letter-spacing: 0.5px;
         color: root.ink;
         opacity: root.fade;
-        // `genreOutline` — the LIGHT cut of AC/DC states one, so the gold has an
-        // edge against a pale ground. Zero width is no outline.
-        //
-        // `center`, for the reason spelt out on the hero's lettering: it is what
-        // a CSS text-stroke does, and it is the only style Slint's software
-        // renderer draws at full colour.
-        stroke: root.egg.genre-outline-ink;
-        stroke-width: root.egg.genre-outline-w;
-        stroke-style: center;
+        // NO STROKE HERE. `genreOutline` is drawn on the true copy in the loop
+        // above; this one is invisible and exists only to be measured.
     }
 }
 

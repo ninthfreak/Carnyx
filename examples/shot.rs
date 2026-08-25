@@ -226,6 +226,11 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // for one tier, because they answer different questions.
     ("the-who", 1024, 614, false, State::TheWho, 0.0),
     ("the-who-portrait", 360, 800, false, State::TheWho, 0.0),
+    // THE FIRST BASIC THEME WITH A FACE, and the first for a song. What this
+    // shot is for is the tier's rule about fonts: one face on the genre line AND
+    // the RadioText, and on nothing else — the hero, the tiles and the dial must
+    // still be Atkinson beside it.
+    ("wayward", 1024, 614, false, State::Wayward, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -273,6 +278,8 @@ enum State {
     Clapton,
     /// The same tier, with a genre line long enough to test the shrink.
     TheWho,
+    /// A basic theme with a FACE — and for a song rather than a band.
+    Wayward,
     Nin,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
@@ -590,6 +597,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         }
         State::TheWho => {
             driver.set_radio_text_for_test("The Who - Baba O'Riley");
+            driver.push_all();
+        }
+        State::Wayward => {
+            driver.set_radio_text_for_test("Kansas - Carry On Wayward Son");
             driver.push_all();
         }
         // PROPERTIES, NOT THE STORE, and that is a limit of the host rather than

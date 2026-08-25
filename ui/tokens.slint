@@ -59,6 +59,24 @@ import "fonts/PermanentMarker.ttf";
 import "fonts/Onyx.ttf";
 import "fonts/Gridnik.otf";
 import "fonts/Singothic.ttf";
+// THE FIRST FACE A BASIC THEME BRINGS, and the first for a SONG rather than a
+// band — "Carry On Wayward Son". Its family is "Supernatural Knight" WITH THE
+// SPACE, read out of the file's own `name` table; the file arrived as
+// `Supernatural_Knight.ttf` and the underscore is not in the family at all,
+// which is the exact mistake the paragraph above records CarFM making five
+// times over.
+//
+// SINGLE WEIGHT. `usWeightClass` is 400 and the subfamily is "Regular", so the
+// 700 a basic theme's genre line asks for resolves to this one cut — see
+// `GenreText`. It is a heavy display face to begin with, which is why that is
+// tolerable rather than a failed build.
+//
+// NO ACCENTED LATIN. 171 cmap entries: ASCII, typographic punctuation and a
+// scattering of symbols, but no á ç è é í ñ ó ú ü and no €. This face reaches
+// the RadioText as well as the genre line, and RadioText is whatever the
+// broadcaster sends — so a Spanish title renders its accents in the fallback
+// face. Mixed type on one line, not tofu, and not worth refusing the font over.
+import "fonts/SupernaturalKnight.ttf";
 
 export global Font {
     out property <string> face: "Atkinson Hyperlegible";
@@ -77,6 +95,8 @@ export global Font {
     /// RadioText and every frequency readout.
     out property <string> egg-nin: "FoundryGridnik";
     out property <string> egg-nin-display: "Singothic";
+    /// "Carry On Wayward Son" — a SONG theme, not a band one.
+    out property <string> egg-wayward: "Supernatural Knight";
     out property <int> regular: 400;
     out property <int> bold: 700;
     /// A band theme's genre line asks for ExtraBold. No 800 cut is bundled, so

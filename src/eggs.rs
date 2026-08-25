@@ -137,6 +137,27 @@ pub struct Egg {
     /// The genre line's own face. NO FALLBACK: `eggGenreFont` reads `genreFont`
     /// alone, which is why AC/DC's gold line is Atkinson and not Squealer.
     pub genre_face: &'static str,
+    /// SYNTHETIC BOLD FOR THIS THEME'S OWN FACE, as a fraction of the font size,
+    /// wherever that face is used — the genre line AND the RadioText. 0 is no
+    /// synthesis and is what every row but one states.
+    ///
+    /// NAMED FOR THE FACE AND NOT THE GENRE LINE, because it reaches both: a
+    /// basic theme's font goes to two places by the tier's own rule, and "in
+    /// bold" is about the font rather than about one of the lines it sets.
+    ///
+    /// A DISPLAY FACE USUALLY SHIPS ONE CUT, and asking the engine for 700 then
+    /// gets that cut back unchanged — Slint does not thicken a glyph the way a
+    /// browser does. `Supernatural Knight` is `usWeightClass` 400 with a
+    /// "Regular" subfamily, so "use the attached font in bold" cannot be
+    /// honoured by a weight at all.
+    ///
+    /// BY DILATION, NOT BY A STROKE, for the reason `ui/glitch.slint` records
+    /// against the hero lettering: `stroke-width` is inert in Slint 1.17.1's
+    /// software renderer, so a stroked bold would be invisible in every shot and
+    /// unverifiable off the device. The line is drawn at the four corners of a
+    /// square of this radius as well as true, which thickens stems, bars and
+    /// diagonals alike by twice the radius.
+    pub face_bold: f32,
     /// The RadioText face and its tracking (`rtFont` / `rtSpacing`).
     pub rt_face: &'static str,
     pub rt_track: f32,
@@ -328,6 +349,7 @@ pub const PLAIN: Egg = Egg {
     hero_track: 0.0,
     hero_lower: false,
     genre_face: "",
+    face_bold: 0.0,
     rt_face: "",
     rt_track: 0.0,
     freq_face: "",
@@ -425,6 +447,14 @@ const FACE_MARKER: &str = "Permanent Marker";
 const FACE_ONYX: &str = "Onyx";
 const FACE_GRIDNIK: &str = "FoundryGridnik";
 const FACE_SINGOTHIC: &str = "Singothic";
+/// "Carry On Wayward Son". THE FAMILY, NOT THE FILE: the file arrived as
+/// `Supernatural_Knight.ttf` and the family its `name` table declares is
+/// "Supernatural Knight", with a space and no underscore. Slint resolves
+/// `font-family` against the declared family, so the filename would have
+/// silently fallen back to Atkinson —
+/// `every_face_a_theme_names_is_bundled_and_imported` is what makes that a red
+/// test rather than a disappointment on a dashboard.
+const FACE_KNIGHT: &str = "Supernatural Knight";
 
 /// THE BEATLES — `motif: submarine`.
 ///
@@ -640,6 +670,16 @@ const BASIC: &[(&Egg, &[&str])] = &[
     // has a word between them. Pinned by
     // `the_basic_bands_match_the_way_a_station_writes_them`.
     (&THE_WHO, &["the who"]),
+    // A SONG, NOT A BAND — the first of those, and the tier did not have to
+    // change to take it: `basic` names a row and a genre, and nothing in the
+    // matcher ever cared whether the name was an artist's.
+    //
+    // `wayward son` rather than the full title, on `clapton`'s logic: the search
+    // wants whole tokens either way and the short form is inside the long one,
+    // so " carry on wayward son " contains " wayward son " and one entry catches
+    // both spellings. Distinctive enough on its own — "wayward" is not a word
+    // that turns up in advert copy.
+    (&WAYWARD_SON, &["wayward son"]),
 ];
 
 /// Eric Clapton. Genre only; the ordinary faces throughout.
@@ -651,6 +691,28 @@ pub const PRETTY_RECKLESS: Egg = basic("The Pretty Reckless", "Cindy-Lou Who?", 
 
 /// The Who. See the note on its registry row.
 pub const THE_WHO: Egg = basic("The Who", "Meaty, Beaty, Big, and Bouncy", "");
+
+/// "Carry On Wayward Son" — a song rather than an artist, and the first basic
+/// row to bring a FACE.
+///
+/// The face reaches the genre line AND the RadioText, which is the tier's rule
+/// and is what `basic` does with its third argument. It does NOT reach the hero,
+/// the preset tiles or the dial; those stay ordinary, which is the line between
+/// a basic theme and an advanced one.
+///
+/// THE FONT HAS NO BOLD CUT. `GenreText` asks a basic row's line for
+/// `Font.bold`, and `SupernaturalKnight.ttf` is `usWeightClass` 400 with a
+/// "Regular" subfamily and no bold bit set — so the engine resolves 700 to the
+/// single cut there is. It is a heavy display face already; see
+/// `ui/tokens.slint` for the reading and `shots/wayward.png` for what it draws.
+pub const WAYWARD_SON: Egg = Egg {
+    // "in bold", and the face has no bold cut to give — see `Egg::face_bold`.
+    // 0.02em: at the wide track's 26dp genre line that is half a pixel each
+    // side, which on a hairline engraved serif is the difference between the
+    // instruction being honoured and being quietly dropped.
+    face_bold: 0.02,
+    ..basic("Carry On Wayward Son", "Season Finale", FACE_KNIGHT)
+};
 
 /// Two basic rows that exist ONLY under `cfg(test)`.
 ///
@@ -750,6 +812,7 @@ pub const BUNDLED_FACES: &[(&str, &str)] = &[
     (FACE_ONYX, "Onyx.ttf"),
     (FACE_GRIDNIK, "Gridnik.otf"),
     (FACE_SINGOTHIC, "Singothic.ttf"),
+    (FACE_KNIGHT, "SupernaturalKnight.ttf"),
 ];
 
 /// Every face `egg` names, in no particular order, skipping the empty ones.
@@ -1194,6 +1257,47 @@ mod tests {
         );
     }
 
+    /// A SONG THEME, AND THE FIRST BASIC ROW WITH A FACE.
+    ///
+    /// Two things worth pinning that no other row exercises. The tier took a
+    /// SONG without changing — nothing in the matcher ever cared whether a name
+    /// was an artist's — and the face lands on the genre line AND the RadioText
+    /// from one argument, which is the tier's whole rule about fonts and had
+    /// until now been asserted only against a `cfg(test)` fixture.
+    #[test]
+    fn the_song_theme_dresses_two_lines_from_one_face() {
+        assert_eq!(match_egg_id("Kansas - Carry On Wayward Son").map(|e| e.id), Some("Carry On Wayward Son"));
+        // The short spelling, which is why the row names the two-word form.
+        assert_eq!(match_egg_id("wayward son").map(|e| e.id), Some("Carry On Wayward Son"));
+        // Whole tokens still.
+        assert_eq!(match_egg_id("waywardson"), None);
+
+        let e = WAYWARD_SON;
+        assert_eq!(e.tier, Tier::Basic, "a song theme is basic, and never listed");
+        assert_eq!(e.genre, "Season Finale");
+        assert_eq!(e.genre_face, FACE_KNIGHT, "the face dresses the genre line");
+        assert_eq!(e.rt_face, FACE_KNIGHT, "and the RadioText, from the same argument");
+        assert_eq!(e.hero_face, "", "and NOT the hero");
+        assert_eq!(e.body_face, "", "nor the preset tiles");
+        assert_eq!(e.freq_face, "", "nor the dial");
+
+        // "IN BOLD", AND THE FONT HAS NO BOLD CUT. `SupernaturalKnight.ttf` is
+        // usWeightClass 400 with a "Regular" subfamily, so asking the engine for
+        // 700 returns that one cut unchanged. The thickening is drawn instead —
+        // see `Egg::face_bold` — and it reaches BOTH lines the face sets, which
+        // is why the field is not called `genre_bold`.
+        assert!(e.face_bold > 0.0, "the row asks for a synthetic bold");
+        assert_eq!(e.face_bold, 0.02);
+
+        // Nothing else at all: the whole row is its id, its genre, its face and
+        // that bold.
+        assert_eq!(
+            Egg { id: "", genre: "", genre_face: "", rt_face: "", face_bold: 0.0, ..e },
+            PLAIN
+        );
+        assert!(!listed().iter().any(|l| l.id == e.id));
+    }
+
     /// THE THREE ARE GENRE-ONLY, and none of them dresses anything else.
     ///
     /// The owner named a genre for each and no font, so every face field must
@@ -1276,6 +1380,21 @@ mod tests {
     /// The negative half is the important half. `hero_face`, `body_face` and
     /// `freq_face` are the three the font must NOT reach, and a row that set
     /// them would be an advanced theme wearing a basic row's paperwork.
+    /// PLAIN STATES NO SYNTHETIC BOLD, and this test exists because it briefly
+    /// did. A stray edit put `face_bold: 0.02` on the BASE every theme diffs
+    /// against rather than on the one row that asked for it, which would have
+    /// thickened the genre line of every theme on the face — and of the
+    /// unthemed PTY, since `EggTheme::default()` is built from the same zeroes.
+    /// Nothing on screen would have named the cause.
+    #[test]
+    fn the_base_theme_synthesises_no_bold() {
+        const { assert!(PLAIN.face_bold == 0.0, "the base states no synthetic bold") };
+        // And exactly one row does.
+        let bolded: Vec<&str> =
+            all().into_iter().filter(|e| e.face_bold > 0.0).map(|e| e.id).collect();
+        assert_eq!(bolded, ["Carry On Wayward Son"]);
+    }
+
     #[test]
     fn a_basic_theme_is_a_genre_a_face_and_nothing_else() {
         let both = basic("Fixture", "Sludge", FACE_ONYX);

@@ -2470,6 +2470,7 @@ impl App {
                 body_face: e.body_face.into(),
                 hero_face: e.hero_face.into(),
                 genre_face: e.genre_face.into(),
+                face_bold: e.face_bold,
                 rt_face: e.rt_face.into(),
                 freq_face: e.freq_face.into(),
                 hero_scale: e.hero_scale,

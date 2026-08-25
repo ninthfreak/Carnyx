@@ -31,6 +31,26 @@ export component RadioTextStrip inherits Rectangle {
     property <string> shown: root.has-text ? root.text : "Waiting for RadioText…";
     property <bool> marquee: root.shown.character-count > 46;
 
+    // ── SYNTHETIC BOLD, THE SAME AS THE GENRE LINE'S ─────────────────────────
+    //
+    // A theme's face carries onto this strip as well as onto the genre line, so
+    // "in bold" has to reach both — a display face with one cut is no bolder
+    // here than it is there. Same dilation, same reason: `stroke-width` is inert
+    // in this version's software renderer, so a stroked bold would be invisible
+    // in every shot.
+    //
+    // NEVER ON THE PLACEHOLDER. "Waiting for RadioText…" is the app talking and
+    // is drawn in the ordinary face; thickening it would be bolding a sentence
+    // no theme wrote.
+    //
+    // ZERO IS ONE COPY, which is every theme but one and every unthemed face —
+    // and that matters most on the MARQUEE, where the copies are redrawn every
+    // frame.
+    property <length> bold-r: root.has-text ? root.egg.face-bold * Metrics.rt-font : 0px;
+    property <[{dx: float, dy: float}]> offsets: root.bold-r > 0px
+        ? [{dx: 0, dy: 0}, {dx: -1, dy: -1}, {dx: 1, dy: -1}, {dx: -1, dy: 1}, {dx: 1, dy: 1}]
+        : [{dx: 0, dy: 0}];
+
     // THE PLATE, which a theme may restate on its own (`rtPlate`) — separately
     // from the hero card above it, and darker: AC/DC's dark cut puts the card at
     // `#0B0B0B` and this at `#070707`. A transparent field means the theme is
@@ -61,8 +81,16 @@ export component RadioTextStrip inherits Rectangle {
     background: root.plate-bg;
     clip: true;
 
-    if !root.marquee: Text {
-        x: 28px;
+    // WRAPPED, because Slint takes an element after `if`, not a `for`. Explicit
+    // geometry filling the plate, so the wrapper is excluded from any layout-info
+    // fold and the line sits exactly where it sat before.
+    if !root.marquee: Rectangle {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        for o in root.offsets: Text {
+        x: 28px + o.dx * root.bold-r;
+        y: o.dy * root.bold-r;
         width: parent.width - 56px;
         height: parent.height;
         text: root.shown;
@@ -81,6 +109,7 @@ export component RadioTextStrip inherits Rectangle {
         // The placeholder's grey stays `Pal.dim` on purpose: `rtPlate` carries a
         // `text` and no `sub`, so the reference leaves this one alone too.
         color: root.has-text ? root.ink : Pal.dim;
+        }
     }
 
     // THE CATALOGUE STAMP, bottom-right of the plate — The Beatles' `rtPlate.serial`
@@ -104,7 +133,12 @@ export component RadioTextStrip inherits Rectangle {
         y: 0;
         width: copy-a.preferred-width * 2 + 100px;
         height: parent.height;
+        // THE GAUGE, which the geometry above and below is measured from.
+        // `visible: false` keeps its preferred width and costs no layer — the
+        // pattern the hero's own gauges use — so the offsets can be drawn
+        // without any of them being the thing everything else is positioned by.
         copy-a := Text {
+            visible: false;
             x: 0;
             width: self.preferred-width;
             height: parent.height;
@@ -115,8 +149,21 @@ export component RadioTextStrip inherits Rectangle {
             font-size: Metrics.rt-font;
             color: root.ink;
         }
-        Text {
-            x: copy-a.preferred-width + 100px;
+        for o in root.offsets: Text {
+            x: o.dx * root.bold-r;
+            y: o.dy * root.bold-r;
+            width: copy-a.preferred-width;
+            height: parent.height;
+            vertical-alignment: center;
+            text: root.shown;
+            font-family: root.face;
+            letter-spacing: root.track;
+            font-size: Metrics.rt-font;
+            color: root.ink;
+        }
+        for o in root.offsets: Text {
+            x: copy-a.preferred-width + 100px + o.dx * root.bold-r;
+            y: o.dy * root.bold-r;
             width: copy-a.preferred-width;
             height: parent.height;
             vertical-alignment: center;

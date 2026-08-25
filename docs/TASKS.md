@@ -1306,6 +1306,70 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 103. "Carry On Wayward Son" — a song theme, and a font with no bold cut
+**DONE.** The owner's fourth basic egg, and the first that is not for a band:
+the SONG "Carry On Wayward Son", genre "Season Finale", set in an attached font
+"in bold".
+
+**THE TIER TOOK A SONG WITHOUT CHANGING.** Nothing in the matcher ever cared
+whether a name was an artist's; `basic` names a row and a genre. Matched on
+`wayward son` rather than the full title, on `clapton`'s logic — the search wants
+whole tokens either way and the short form is inside the long one, so
+" carry on wayward son " contains " wayward son " and one entry catches both.
+
+**THE FAMILY IS "Supernatural Knight", NOT THE FILENAME.** The file arrived as
+`Supernatural_Knight.ttf`; its `name` table declares "Supernatural Knight", with
+a space and no underscore. Slint resolves `font-family` against the declared
+family, so the filename would have fallen back to Atkinson in silence — which is
+exactly the mistake `ui/tokens.slint` records CarFM making five times over, and
+which `every_face_a_theme_names_is_bundled_and_imported` now turns into a red
+test.
+
+**"IN BOLD" COULD NOT BE HONOURED BY A WEIGHT.** Read out of the file:
+`usWeightClass` 400, subfamily "Regular", macStyle bold bit clear — one cut and
+no bold. Slint hands that cut back unchanged when asked for 700; it does not
+thicken a glyph the way a browser does. This is the same shortfall the hero
+lettering hit with Gridnik.
+
+**SO IT IS DRAWN, BY DILATION.** `Egg::face_bold`, an em fraction, 0.02 for this
+row. The line is drawn at the four corners of a square of that radius as well as
+true. BY DILATION AND NOT BY A STROKE for the reason `ui/glitch.slint` already
+records: `stroke-width` is inert in this version's software renderer, so a
+stroked bold would be invisible in every shot and unverifiable off the device.
+Five copies of an OPAQUE ink composite to that ink however they overlap, which is
+what makes it safe here — `Pal.dim` and every theme's stated genre colour are
+opaque.
+
+**IT REACHES BOTH LINES, which is why it is not called `genre_bold`.** A basic
+theme's font goes to the genre line AND the RadioText by the tier's own rule, and
+"in bold" is about the font rather than about one of the lines it sets. So
+`RadioTextStrip` got the same treatment, including both marquee copies — with the
+first kept as an invisible GAUGE, because the strip's geometry is measured from
+it. NEVER on the placeholder: "Waiting for RadioText…" is the app talking, in the
+ordinary face.
+
+**MEASURED, NOT EYEBALLED.** Rendered twice, once with the radius and once
+without, and the dark-pixel count compared over each line's box: the genre line
+2.53x, the RadioText 1.78x. On hairlines that is roughly a doubled stroke.
+
+**A STRAY EDIT PUT THE BOLD ON `PLAIN`**, the base every theme diffs against,
+while clearing it on the row that asked — a toggle during the measurement matched
+the first occurrence rather than the intended one. Every theme on the face, and
+the unthemed PTY, would have had a thickened genre line with nothing on screen
+naming the cause. Caught by the row's own test; `the_base_theme_synthesises_no_bold`
+now pins both halves — the base states none, and exactly one row states one.
+
+**THE FONT'S COVERAGE IS 171 GLYPHS** — ASCII, typographic punctuation and some
+symbols, but no accented Latin (á ç è é í ñ ó ú ü) and no euro. It sets the
+RadioText, which is whatever the broadcaster sends, so a Spanish title renders
+its accents in the fallback face. Mixed type on one line rather than tofu, and
+not worth refusing the font over. Recorded in `ui/tokens.slint`.
+
+**Evidence.** 303 tests, clippy clean over lib, bins and examples. 82 shots: 76
+byte-identical, 5 known-unstable, and ONE moved — `wayward`, the new one. The
+`GenreText` and `RadioTextStrip` restructuring moved nothing else, and
+`long-radiotext` was checked by eye because the marquee was rebuilt under it.
+
 ### 102. Three faults reported from the unit
 **PARTLY FIXED, PARTLY MADE DIAGNOSABLE.** Reported by the owner: the probes give
 no feedback and need their functionality checked; the FM source is not released
