@@ -42,7 +42,6 @@ const NAME: &str = "stock radio probe";
 /// As [`super::service::init`]: `vm` and `activity` must be what `AndroidApp`
 /// handed out, with the activity still alive.
 pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::TunerError> {
-    use super::TunerError;
     let outcome = unsafe { load(vm, activity) };
     if let Err(e) = &outcome {
         // FIRST REASON WINS, and there is only ever one: `init` runs once from

@@ -1306,6 +1306,47 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 105. The JNI harness supplied the names it was built to check
+**FIXED, AND THE HARNESS WAS THE BUG.** The owner's Gradle build failed on
+`alert.rs:142`: *"cannot find type `JString` in this scope"*, with unused-import
+warnings in `probe.rs:44` and `stock.rs:45` beside it. `tools/check-jni.sh` — the
+script written in #98 to make exactly this impossible — had passed on the same
+tree minutes earlier.
+
+**WHY IT PASSED.** It DELETED every `use jni::…` and `use std::…` line out of
+each module and handed all of them one prelude at the crate root —
+`JByteArray, JClass, JIntArray, JObject, JString, JValue` — which each generated
+module then pulled back in with `use super::*`. So a module that used a jni type
+it had never imported compiled there and only there. `alert.rs` imported
+`{JClass, JObject, JValue}` and `post` used `JString`, which is the fourth
+instance of a JNI mistake reaching the owner's machine and the first the harness
+actively concealed. It also carried `#![allow(unused_imports)]`, so the other two
+lines of the same build report were suppressed by name.
+
+**THE THREE SOURCE FIXES.** `JString` added to `alert.rs`'s import list; the
+`use super::TunerError;` dropped from `init` in `probe.rs` and `stock.rs`, where
+the `init`/`load` split of #99 left the name unused — `init` only formats through
+`Display` now.
+
+**THE HARNESS FIX.** The module's own `use` lines are copied in with the rest of
+the body. The crate root imports NOTHING; the `dex` stub keeps its imports inside
+its own scope; the generated `pub mod` wrapper has no `use super::*`, because the
+three stubs are already reached by the `crate::` paths the rewrite produces.
+`#![deny(unused_imports)]` replaces the allow.
+
+**Verified by reintroducing both defects and watching it fail** — `error[E0433]:
+failed to resolve: use of undeclared type `JString`` for the first, `error:
+unused import: `crate::TunerError`` for the second — then restoring them and
+watching it pass.
+
+**WHAT IS STILL NOT COVERED, and it is printed on every run.** `mod`, `dex`,
+`nwd`, `net` and `location` are skipped: the first two are the harness's own
+stubs and the last three have shapes it cannot stand in for. A JNI mistake in
+those three still reaches the owner's machine.
+
+**Evidence.** 304 tests, clippy clean over lib, bins and examples, the seam check
+green over `alert, probe, service, stock, wake`.
+
 ### 104. The pop-up gate, and a diagnosis that was invented
 **RETRACTED AND CORRECTED. THE POP-UP FAULT IS STILL OPEN.** This entry claimed
 the fault was FIXED, on a cause the owner has since said plainly is not the case.

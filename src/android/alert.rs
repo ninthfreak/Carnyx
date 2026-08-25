@@ -43,7 +43,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use jni::objects::{JClass, JObject, JValue};
+use jni::objects::{JClass, JObject, JString, JValue};
 use jni::refs::Global;
 use jni::strings::JNIStr;
 use jni::{jni_sig, jni_str, Env, JavaVM};
