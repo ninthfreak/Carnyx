@@ -1306,6 +1306,61 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 99. Fix the JNI string conversion, and close the hole that let it ship
+**DONE.** `./tools/build-apk-gradle.sh` failed on the owner's machine with three
+copies of one error:
+
+    error[E0277]: the trait bound `JString<'_>: From<JObject<'_>>` is not satisfied
+      --> src/android/probe.rs:77
+      --> src/android/stock.rs:78
+      --> src/android/wake.rs:141
+    warning: use of deprecated method `jni::Env::<'local>::get_string`
+
+**THE MISTAKE.** `let s: JString = s.into(); env.get_string(&s)` — neither half
+exists in this crate's jni. `JString` is a borrowed reference with no
+`From<JObject>`, the cast is `JString::cast_local(env, obj)`, and the conversion
+hangs off the string as `try_to_string(env)` rather than off the env.
+
+**IT WAS ALREADY WRITTEN DOWN TWICE.** `location.rs:88` says "`try_to_string`
+and not `get_string`: … The first cut of this reached for the older
+`Env::get_string(&JString)` API and would not have built for the target — worth
+the note, because this file is `cfg(target_os = "android")` and the HOST BUILD
+NEVER COMPILES IT." `nwd.rs:386` records a second one caught the same way. So
+this is the THIRD time the same mistake reached the owner's machine, and two
+notes did not stop it.
+
+**HOW IT SPREAD.** `probe.rs` was written first and had it. The commits for
+`stock.rs` and `wake.rs` both claimed "every JNI construct is copied verbatim
+from `service.rs` and `probe.rs`" — which was TRUE and was not evidence, because
+`probe.rs` had never been compiled either. Copying from an unverified source and
+reporting the copy as the verification is the actual fault.
+
+**THE FIX IS A TOOL, NOT A THIRD NOTE.** `tools/check-jni.sh` copies the seam
+modules verbatim into a throwaway crate that depends on the same jni version —
+read from `Cargo.lock`, not from the range in `Cargo.toml` — stubs the handful of
+`super::` items they reach, and runs `cargo check` on the HOST. `jni` is ordinary
+Rust; it is a target-specific DEPENDENCY of this crate, not a target-specific
+crate, so it builds here even though skia-bindings cannot.
+
+It covers `alert`, `probe`, `service`, `stock` and `wake`, and PRINTS both the
+list it checked and the list it skipped, because a check that silently stops
+covering something is worse than none. `mod`, `dex`, `nwd`, `net` and `location`
+are skipped — the last three carry `extern "system"` natives with `EnvUnowned`
+that the harness cannot stub, and all three have been compiled for the target by
+a real build.
+
+Verified by reintroducing the defect into `wake.rs` and watching the script
+reproduce the owner's exact error, then restoring and watching it pass.
+
+**WHAT IT DOES NOT CHECK:** that the JNI descriptors match the Java, that the
+classes load, or that any of it behaves. It checks the Rust, which is the half
+that was breaking the build. And it cannot say the Gradle build now SUCCEEDS —
+that build stopped at the library, so everything past it is still unproven here.
+
+**One thing this build settled for free.** `nwd.rs` compiled clean, so #97's
+`start_sleep_watch` — added there and unverifiable in this container — is good
+for the target.
+
 ### 98. Build the framework for basic Easter eggs
 **DONE — THE FRAMEWORK. NO BAND USES IT YET, AND THAT IS DELIBERATE.** Asked for
 directly: *"All currently defined band Easter Eggs are now considered 'advanced'

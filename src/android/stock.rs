@@ -75,8 +75,10 @@ pub fn report() -> Vec<String> {
             let s = env
                 .call_static_method(class, jni_str!("report"), jni_sig!("()Ljava/lang/String;"), &[])?
                 .l()?;
-            let s: JString = s.into();
-            Ok(env.get_string(&s)?.into())
+            // See `probe::report` — `cast_local` + `try_to_string` is the shape
+            // this crate's `JString` has.
+            let s = JString::cast_local(env, s)?;
+            s.try_to_string(env)
         })
         .unwrap_or_default();
     text.lines().map(str::to_string).collect()

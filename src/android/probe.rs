@@ -74,8 +74,16 @@ pub fn report() -> Vec<String> {
             let s = env
                 .call_static_method(class, jni_str!("report"), jni_sig!("()Ljava/lang/String;"), &[])?
                 .l()?;
-            let s: JString = s.into();
-            Ok(env.get_string(&s)?.into())
+            // `cast_local` + `try_to_string`, NOT `.into()` + `Env::get_string`.
+            // This crate's `JString` is a borrowed reference with no
+            // `From<JObject>`, and the conversion hangs off the string rather
+            // than off the env — where `Env::get_string` still exists it is
+            // deprecated. Written the wrong way first because this file is
+            // `cfg(target_os = "android")` and the container it was written in
+            // has no NDK, so nothing here was ever compiled; `location.rs:88`
+            // and `nwd.rs:386` both already carry a note about this exact trap.
+            let s = JString::cast_local(env, s)?;
+            s.try_to_string(env)
         })
         .unwrap_or_default();
     text.lines().map(str::to_string).collect()

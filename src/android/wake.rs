@@ -138,8 +138,12 @@ pub fn take_last_wake() -> String {
                 &[],
             )?
             .l()?;
-        let note: JString = note.into();
-        Ok(env.get_string(&note)?.into())
+        // See `probe::report`. A null comes back as `Error::NullPtr` from
+        // `try_to_string` rather than as an empty string, which the caller's
+        // `unwrap_or_default` turns into the same thing — and `takeLastWake`
+        // returns `""` for "nothing to say" rather than null anyway.
+        let note = JString::cast_local(env, note)?;
+        note.try_to_string(env)
     })
     .unwrap_or_default()
 }
