@@ -1306,6 +1306,43 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 101. Give the genre metrics to the advanced tier only
+**DONE.** The owner's rule, verbatim: *"Some Advanced Eggs have custom sizes.
+Basic eggs should be default size until I decide otherwise."*
+
+`GenreText` sized and weighted the genre line from `egg.on` — from whether ANY
+theme was showing — so a basic row, which replaces the words and nothing else,
+also took `pty-egg-font` (33dp wide, 47dp tall) and `Font.heavy`. Both now read
+`EggTheme.advanced`, so the five keep their sizes and a basic line stays the size
+the broadcaster's PTY was.
+
+**THE TIER HAD TO TRAVEL, and could not be derived at the far end.** `Tier` lived
+only in `src/eggs.rs`; nothing had needed it in Slint. It cannot be worked out
+from the other fields either — a basic row stating a genre is, field for field,
+an advanced row that happens to state only a genre — so `EggTheme` gained an
+`advanced: bool`, mapped in `app.rs` from `e.tier`. The unthemed case comes free:
+`EggTheme::default()` leaves it false, so the ordinary PTY takes the ordinary
+metrics through the same branch rather than a second one.
+
+**WHAT WAS DELIBERATELY LEFT ALONE.** The WIDTH allowance still keys off
+`egg.on`. `Metrics.genre-cap` (240dp) exists to stop a broadcaster's PTY crowding
+the bar; a theme's line is the app's own string and keeps the room. Only the
+starting size moved — which is what "default size" asked for and no more.
+
+**Evidence, and it settles a prediction.** 78 of the 81 shots are byte-identical,
+6 known-unstable, and exactly two moved: `clapton` and `the-who`. NOT ONE
+ADVANCED SHOT MOVED, which is the half that matters — acdc, beatles, zeppelin,
+nirvana and nin all keep their genre lines exactly as rendered.
+
+And `the-who-portrait` did NOT move, which confirms what #100 records about the
+shrink: on the narrow track the line was already driven to the `pty-font-min`
+floor, so where it started made no difference. Predicted from the arithmetic,
+now measured.
+
+301 tests, clippy clean. `the_tier_travels_to_the_face` pins the mapping at the
+face: false with nothing playing, true for Nirvana, false for Clapton with the
+theme still on.
+
 ### 100. Add the first three basic Easter eggs
 **DONE.** The owner named three, all genre-only:
 
@@ -1365,26 +1402,12 @@ third, not only a phone), so the portrait shot is kept as the record of where th
 limit falls rather than deleted for being unflattering. Shortening the genre
 string is the owner's call, not this file's.
 
-**THE THEMED GENRE METRICS, and what they actually change.** `GenreText` picks
-size and weight from "a theme is showing" rather than from which tier, so a basic
-row inherits the advanced treatment: `pty-egg-font` (33dp wide, 47dp tall)
-instead of `pty-font` (26/33), and `Font.heavy` instead of `Font.bold`.
-
-TWO OF THOSE THREE DIFFERENCES ARE INERT, which is worth writing down because
-this was first described here as a live trade-off and it is not one.
-
-- The WEIGHT is a no-op today. `ui/tokens.slint` records that no ExtraBold cut is
-  bundled, so the engine resolves 800 to the 700 already in use. Both tiers draw
-  at 700.
-- The SIZE does not change the elision. The shrink solves for a physical width —
-  `full-size * fit` converges on whatever size makes the string `budget` wide, so
-  the answer is a property of the string and the space, not of where the shrink
-  started. A line long enough to reach `pty-font-min` reaches it from 33dp
-  exactly as it does from 47dp.
-
-So the only live effect is on a line SHORT enough not to shrink at all: "Slowhand"
-is drawn at 33dp where the PTY it replaced would be 26dp. That reads correctly —
-it is a themed line — and it is the whole of the judgement call.
+**THE GENRE METRICS NOW BELONG TO THE ADVANCED TIER (#101).** `GenreText` used to
+pick size and weight from "a theme is showing", so a basic row inherited the
+advanced treatment — `pty-egg-font` (33dp wide, 47dp tall) instead of `pty-font`
+(26/33), and `Font.heavy` instead of `Font.bold`. The owner settled it: an
+advanced theme may state its own sizes, a basic one takes the ordinary ones until
+told otherwise. Both properties read `EggTheme.advanced` now.
 
 **A filter on the shot harness**, added because answering "what does The Who's
 look like" meant rendering eighty surfaces to see one.

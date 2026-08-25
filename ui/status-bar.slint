@@ -348,8 +348,22 @@ component GenreText inherits Rectangle {
     // for the engine to find and it resolves to the nearest, which is the bold
     // already in use. Written as the spec states it rather than silently reduced
     // to 700: the day an ExtraBold cut is bundled, this line is already right.
-    property <length> full-size: root.egg.on ? Metrics.pty-egg-font : Metrics.pty-font;
-    property <int> weight: root.egg.on ? Font.heavy : Font.bold;
+    // ── SIZE AND WEIGHT BELONG TO THE ADVANCED TIER, NOT TO "A THEME" ──
+    //
+    // These read `advanced` rather than `on`, which is the owner's rule: an
+    // advanced theme may state its own sizes, and a BASIC one takes the ordinary
+    // ones until told otherwise. A basic row replaces the words on this line and
+    // nothing else, so the line stays the size the broadcaster's PTY was.
+    //
+    // `advanced` implies `on` — it is mapped from the registry row and is false
+    // whenever no theme is showing — so this is not a second gate.
+    //
+    // WHAT THIS DOES NOT CHANGE is the WIDTH allowance below, which still keys
+    // off `on`. `Metrics.genre-cap` exists to stop a broadcaster's PTY crowding
+    // the bar; a theme's line is the app's own string and keeps the room. Only
+    // the starting size moved.
+    property <length> full-size: root.egg.advanced ? Metrics.pty-egg-font : Metrics.pty-font;
+    property <int> weight: root.egg.advanced ? Font.heavy : Font.bold;
     /// The genre line's own face. NO FALLBACK to the theme's body face —
     /// `eggGenreFont` reads `genreFont` alone — which is why AC/DC's gold line is
     /// Atkinson while its hero is Squealer, and why The Beatles sets Madie Roger

@@ -2307,6 +2307,7 @@ impl App {
         ui.set_egg(match themed {
             Some(e) => EggTheme {
                 on: true,
+                advanced: e.tier == crate::eggs::Tier::Advanced,
                 genre: e.genre.into(),
                 // ZERO IS "THE ORDINARY TOKEN", not black. Three of the five
                 // themes state their genre colour as `pal.dim` — the live token
@@ -5414,6 +5415,37 @@ mod tests {
         driver.push_all();
         assert!(!ui.get_egg().on, "a different track takes the theme away");
         assert_eq!(ui.get_ident_a().to_string(), "", "and the split is put back");
+    }
+
+    /// THE TIER REACHES THE FACE, which is the only thing that reads it.
+    ///
+    /// `EggTheme.advanced` is what `GenreText` sizes the line from: an advanced
+    /// theme may state its own sizes, a basic one takes the ordinary ones. The
+    /// two tiers are NOT distinguishable by looking at the other fields — a
+    /// basic row stating a genre is, field for field, an advanced row that
+    /// happens to state only a genre — so if the flag does not travel, nothing
+    /// downstream can work it out.
+    ///
+    /// AND IT IS FALSE WITH NO THEME SHOWING, so the unthemed PTY keeps the
+    /// ordinary metrics through the same branch rather than through a second one.
+    #[test]
+    fn the_tier_travels_to_the_face() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("egg-tier");
+        driver.push_all();
+        assert!(!ui.get_egg().advanced, "no theme, no claim to the themed metrics");
+
+        driver.set_radio_text_for_test("Nirvana - Smells Like Teen Spirit");
+        driver.push_all();
+        assert!(ui.get_egg().on);
+        assert!(ui.get_egg().advanced, "Nirvana is one of the five");
+
+        driver.set_radio_text_for_test("Eric Clapton - Layla");
+        driver.push_all();
+        let egg = ui.get_egg();
+        assert!(egg.on, "a basic theme is still a theme");
+        assert_eq!(egg.genre.to_string(), "Slowhand");
+        assert!(!egg.advanced, "and it takes the ordinary genre metrics");
     }
 
     /// "BACK IN BLACK" — the dark cut, and the fact that it FOLLOWS THE SCHEME.

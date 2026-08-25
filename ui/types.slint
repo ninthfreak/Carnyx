@@ -112,6 +112,17 @@ export enum Overlay {
 export struct EggTheme {
     /// A theme is showing. Everything else is meaningless when this is false.
     on: bool,
+    /// This is an ADVANCED theme — one of the five the design handoff dresses
+    /// the whole face for — rather than a BASIC one, which states a genre line,
+    /// a face, or both, and nothing else.
+    ///
+    /// ONLY THE GENRE LINE'S METRICS READ THIS, and it is here rather than
+    /// derived from the fields because the two tiers are not distinguishable by
+    /// looking at them: a basic row that states a genre is, field for field, an
+    /// advanced row that happens to state only a genre. The owner's rule is that
+    /// an advanced theme may set its own sizes and a basic one takes the
+    /// ordinary ones, so the tier has to travel.
+    advanced: bool,
     /// Replaces the PTY genre line.
     genre: string,
     /// That line's ink, and the colour it pulses to.
