@@ -5935,6 +5935,52 @@ mod tests {
         );
     }
 
+    /// FOCUS ALONE PUTS THE FACE BEHIND, WITHOUT A PAUSE.
+    ///
+    /// The bug the unit reported: with another app in front the wheel changed
+    /// station correctly — against Carnyx's own presets, not the MCU's bank — and
+    /// no pop-up appeared. Everything upstream of the announce gate worked, which
+    /// leaves the gate, and the gate reads `is_foreground()`.
+    ///
+    /// It read ONE flag, written from `Resume` and `Pause`. Those are not the
+    /// events that move on a unit with a multi-window mode: from Android 9
+    /// multi-resume leaves a visible-but-unfocused activity RESUMED, so the app
+    /// beside Carnyx never produces a `Pause` and the flag never cleared.
+    /// `GainedFocus`/`LostFocus` are separate events and are what move.
+    ///
+    /// Asserted through the ANNOUNCEMENT rather than through the flag, because
+    /// the flag being false is not the feature — the pop-up firing is.
+    #[test]
+    fn losing_focus_without_a_pause_still_lets_the_pop_up_speak() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("popup-focus");
+        let strip = fake::SEED_PRESET_MHZ;
+        let said = |d: &Rc<App>| -> usize {
+            d.state.borrow().settings.log.lines().iter().filter(|l| l.contains("station pop-up:")).count()
+        };
+
+        // In front and focused: a tune says nothing.
+        crate::android::set_resumed(true);
+        crate::android::set_focused(true);
+        driver.tune_for_test(strip[1]);
+        driver.drain_events();
+        assert_eq!(said(&driver), 0, "a tune the driver is watching says nothing");
+
+        // ANOTHER APP TAKES FOCUS AND NOTHING ELSE. No Pause — the activity is
+        // still resumed, which is exactly what multi-resume does.
+        crate::android::set_focused(false);
+        assert!(!crate::android::is_foreground(), "resumed but unfocused is not in front");
+
+        driver.tune_for_test(strip[2]);
+        driver.drain_events();
+        assert_eq!(said(&driver), 1, "and now the wheel's change is announced");
+
+        // Focus back, still no Pause anywhere in this test.
+        crate::android::set_focused(true);
+        assert!(crate::android::is_foreground(), "focus alone brings it back");
+        crate::android::set_foreground(true);
+    }
+
     /// THE SAME BAR FOR THE SECOND PROBE ROW, and it earns its own test rather
     /// than riding on the shared helper: the two rows reach different classes
     /// through different seams, and a row wired to the wrong one would pass any

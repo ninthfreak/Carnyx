@@ -1306,6 +1306,54 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 104. The pop-up gate read lifecycle where it should have read focus
+**FIXED, AND THE OWNER'S OWN OBSERVATION IS WHAT FIXED IT.** #102 left "no
+station pop-up when another app is in front" with no cause established and five
+candidates. One sentence closed four of them: *"stations were changing
+appropriately with a different app in the foreground, it wasn't using the MCU
+stored ones."*
+
+**WHAT THAT RULES OUT.** The station changing at all means the process was alive,
+the MCU broadcast arrived, `nativePanelKey` fired, the event queued, the Slint
+loop drained it, and `push_hero` ran with a new dial — so `moved` was true. It
+changing to CARNYX'S OWN PRESET rather than the vendor's bank means
+`State::reassert` won the race too. Every step upstream of the announce gate
+worked. That leaves the gate, `!is_foreground()`, and the posting behind it.
+
+**THE GATE READ ONE FLAG, WRITTEN FROM `Resume` AND `Pause` ONLY.** Those are not
+the events that move on this unit. `MainEvent::GainedFocus` and
+`MainEvent::LostFocus` are SEPARATE from `Resume`/`Pause` in `android-activity`
+(`0.6.1/src/lib.rs:499,503` against `:520,531`), and from Android 9 MULTI-RESUME
+leaves a visible-but-unfocused activity RESUMED. The face is built to compose
+inside a DUDU OS vertical third — `face.slint` says so in its opening comment —
+so another app coming up beside Carnyx takes FOCUS and never produces a `Pause`.
+The flag stayed true, the gate never opened, and nothing was ever announced.
+
+**THE FIX.** `is_foreground()` is now `RESUMED && FOCUSED`, two atomics fed by
+two edges. Either alone is wrong: a paused activity is certainly not being looked
+at, and a resumed-but-unfocused one is not being looked at either — which on a
+unit with a multi-window mode is the ordinary case rather than an edge. Both
+focus edges are logged, and `GainedFocus` clears a standing banner for the same
+reason `Resume` does.
+
+`set_foreground` survives as a both-at-once helper for tests, which have no
+lifecycle to drive.
+
+**Pinned by `losing_focus_without_a_pause_still_lets_the_pop_up_speak`**, which
+takes focus away WITHOUT a pause anywhere in it and asserts the announcement
+happens — through the pop-up rather than through the flag, because the flag being
+false is not the feature. Verified by reverting `is_foreground` to the resumed
+half alone and watching it fail.
+
+**WHAT THIS DOES NOT SETTLE.** If focus was not the cause, the remaining
+candidate is the one #102 named: the notification posted into a channel whose
+importance was lowered, which no code can raise back. The `station pop-up: … —
+posted, channel importance N` line separates them on the first drive, and
+`lifecycle: focus lost` now says whether the edge arrived at all.
+
+**Evidence.** 304 tests, clippy clean over lib, bins and examples, JNI seam
+checks. No shot moves: nothing here draws.
+
 ### 103. "Carry On Wayward Son" — a song theme, and a font with no bold cut
 **DONE.** The owner's fourth basic egg, and the first that is not for a band:
 the SONG "Carry On Wayward Son", genre "Season Finale", set in an attached font

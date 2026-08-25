@@ -818,12 +818,7 @@ pub fn clear_station_announcement() {
 #[cfg(not(target_os = "android"))]
 pub fn clear_station_announcement() {}
 
-/// Whether the face is the thing the driver is looking at.
-///
-/// WRITTEN BY THE LIFECYCLE LISTENER IN `lib.rs`, which is the only code that
-/// sees `Resume` and `Pause` at all, and read by anything whose behaviour has to
-/// differ when the driver is in another app — today that is the station pop-up,
-/// which must never fire over a face already showing the same change.
+/// Is the activity RESUMED? Half of [`is_foreground`].
 ///
 /// TRUE UNTIL TOLD OTHERWISE, which is the safe default rather than an
 /// assumption. The app is launched into the foreground and `Resume` arrives
@@ -831,18 +826,52 @@ pub fn clear_station_announcement() {}
 /// a notification for the station the driver is watching being tuned. Every host
 /// build — probes, shots, tests — installs no listener at all and stays true,
 /// which is what keeps the pop-up out of them without a `cfg`.
-static FOREGROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static RESUMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// Called from the Android lifecycle listener. See [`FOREGROUND`].
+/// Does the activity's window have INPUT FOCUS? The other half of
+/// [`is_foreground`].
 ///
-/// It also writes the answer OUT OF THE PROCESS, to the shared preferences the
-/// wake receiver reads — see [`wake`]. That is folded in here rather than added
-/// beside the existing call in `lib.rs` on purpose: the value is the same value,
-/// and a second call site is a place for the two to drift apart on some future
-/// lifecycle edge. The atomic above is for this run; the file is for the next
-/// one, after the unit has slept and killed the process in between.
+/// THIS IS THE HALF THAT WAS MISSING, and it is the likeliest reason the station
+/// pop-up never fired. `MainEvent::GainedFocus` and `MainEvent::LostFocus` are
+/// SEPARATE events from `Resume` and `Pause` in `android-activity`
+/// (android-activity-0.6.1/src/lib.rs:499,503 against :520,531), and on this
+/// unit they are the ones that move: the face is built to compose inside a DUDU
+/// OS vertical third, and from Android 9 MULTI-RESUME leaves a
+/// visible-but-unfocused activity RESUMED. So another app comes up beside
+/// Carnyx, `Pause` never arrives, the flag stays true, and the announce gate —
+/// `!is_foreground()` — never opens.
+///
+/// REPORTED FROM THE UNIT IN EXACTLY THAT SHAPE: with another app in front the
+/// wheel changed station correctly, against Carnyx's own presets rather than the
+/// MCU's bank, and no pop-up appeared. Every step upstream of the gate worked,
+/// which is what leaves the gate itself.
+///
+/// TRUE UNTIL TOLD OTHERWISE, for the same reason as [`RESUMED`].
+static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The activity was resumed or paused. See [`RESUMED`].
+///
+/// These also write the answer OUT OF THE PROCESS, to the shared preferences the
+/// wake receiver reads — see [`wake`]. Folded in here rather than added beside
+/// the call sites in `lib.rs`: the value is the same value, and a second call
+/// site is a place for the two to drift apart on some future lifecycle edge. The
+/// atomics are for this run; the file is for the next one, after the unit has
+/// slept and killed the process in between.
+pub fn set_resumed(on: bool) {
+    RESUMED.store(on, std::sync::atomic::Ordering::Relaxed);
+    record_foreground(is_foreground());
+}
+
+/// The activity's window gained or lost input focus. See [`FOCUSED`].
+pub fn set_focused(on: bool) {
+    FOCUSED.store(on, std::sync::atomic::Ordering::Relaxed);
+    record_foreground(is_foreground());
+}
+
+/// Set both at once. FOR TESTS, which have no lifecycle to drive.
 pub fn set_foreground(on: bool) {
-    FOREGROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+    RESUMED.store(on, std::sync::atomic::Ordering::Relaxed);
+    FOCUSED.store(on, std::sync::atomic::Ordering::Relaxed);
     record_foreground(on);
 }
 
@@ -867,9 +896,15 @@ pub fn take_wake_note() -> String {
     String::new()
 }
 
-/// Is the activity in front? See [`FOREGROUND`].
+/// Whether the face is the thing the driver is looking at.
+///
+/// BOTH HALVES, because either alone is wrong. A paused activity is certainly
+/// not being looked at; a RESUMED BUT UNFOCUSED one is not being looked at
+/// either, and on a unit with a multi-window mode that is the ordinary case
+/// rather than an edge — see [`FOCUSED`].
 pub fn is_foreground() -> bool {
-    FOREGROUND.load(std::sync::atomic::Ordering::Relaxed)
+    use std::sync::atomic::Ordering::Relaxed;
+    RESUMED.load(Relaxed) && FOCUSED.load(Relaxed)
 }
 
 pub fn ingest_sleep(action: String, release: String) {

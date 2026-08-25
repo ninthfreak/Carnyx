@@ -135,9 +135,28 @@ fn android_main(android_app: slint::android::AndroidApp) {
         // BEFORE the `parting` match below and not folded into it, because that
         // one returns early for everything it does not recognise — `Resume`
         // included — and this has to see both edges.
+        // TWO SIGNALS, NOT ONE. Focus and lifecycle are separate events here, and
+        // on this unit it is FOCUS that moves: the face composes inside a DUDU OS
+        // vertical third, and from Android 9 multi-resume leaves a
+        // visible-but-unfocused activity RESUMED — so another app coming up
+        // beside Carnyx never produces a `Pause`. See `android::FOCUSED`.
+        match main {
+            MainEvent::GainedFocus => {
+                android::set_focused(true);
+                android::ingest_note("lifecycle: focus gained".into());
+                // The face is answerable again, so the banner has nothing left to
+                // say — same reason as `Resume` below.
+                android::clear_station_announcement();
+            }
+            MainEvent::LostFocus => {
+                android::set_focused(false);
+                android::ingest_note("lifecycle: focus lost".into());
+            }
+            _ => {}
+        }
         match main {
             MainEvent::Resume { .. } => {
-                android::set_foreground(true);
+                android::set_resumed(true);
                 // THE OTHER EDGE, IN THE LOG. `parting` below records Pause,
                 // Stop and Destroy and returns early for everything else, so a
                 // drive log showed the app going away and never coming back —
@@ -152,7 +171,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
                 android::clear_station_announcement();
             }
             MainEvent::Pause | MainEvent::Stop | MainEvent::Destroy => {
-                android::set_foreground(false)
+                android::set_resumed(false)
             }
             _ => {}
         }
