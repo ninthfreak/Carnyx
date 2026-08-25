@@ -94,8 +94,14 @@ export component Face inherits Rectangle {
 
     property <bool> dead: !root.audio-active;
 
-    // The face measures its own container so it composes correctly inside a DUDU
-    // OS vertical third as well as full-screen.
+    // The face measures its own container so it composes correctly at any size
+    // the design handoff targets — the Dudu7 full width, its ⅔ and ⅓ slices, and
+    // two phone surfaces — as well as full-screen on the unit.
+    //
+    // THOSE ARE DESIGN SURFACES, NOT THE DEPLOYMENT. The unit this app runs on is
+    // an NWD/NOWADA head unit running its stock ROM full-screen; it is not a
+    // DuduOS unit and nothing here is windowed. This comment has been read the
+    // other way and a whole diagnosis built on it — see `android::FOCUSED`.
     init => {
         Metrics.avail-w = root.width;
         Metrics.avail-h = root.height;

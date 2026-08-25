@@ -2081,7 +2081,20 @@ impl App {
                 //         suppresses every pop-up while the driver is elsewhere
                 //   no `panel key` line at all
                 //       — the press never reached this process
-                let where_ = if crate::android::is_foreground() { "face" } else { "background" };
+                //
+                // FOCUS RIDES ALONG WHEN IT DISAGREES, and gates nothing — see
+                // `android::FOCUSED`. `[face, unfocused]` says a `LostFocus`
+                // arrived with no `Pause`, which on a unit that switches whole
+                // screens should not happen; if it does, that is the fact this
+                // line exists to catch.
+                let where_ = match (
+                    crate::android::is_foreground(),
+                    crate::android::is_focused(),
+                ) {
+                    (true, true) => "face",
+                    (true, false) => "face, unfocused",
+                    (false, _) => "background",
+                };
                 let line = match gap {
                     Some(ms) => format!("panel key {code} ({named}) {action} +{ms}ms [{where_}]"),
                     None => format!("panel key {code} ({named}) {action} [{where_}]"),
@@ -5935,23 +5948,21 @@ mod tests {
         );
     }
 
-    /// FOCUS ALONE PUTS THE FACE BEHIND, WITHOUT A PAUSE.
+    /// LOSING FOCUS IS NOT LEAVING, AND A PAUSE IS.
     ///
-    /// The bug the unit reported: with another app in front the wheel changed
-    /// station correctly — against Carnyx's own presets, not the MCU's bank — and
-    /// no pop-up appeared. Everything upstream of the announce gate worked, which
-    /// leaves the gate, and the gate reads `is_foreground()`.
+    /// This test asserted the OPPOSITE for one commit. The reasoning was that the
+    /// unit composes apps side by side, so another app takes focus and never
+    /// produces a `Pause`, and that this was why no pop-up appeared with another
+    /// app in front. THE OWNER SAYS OTHERWISE IN AS MANY WORDS: no windowing, no
+    /// side-by-side — Carnyx runs full screen and the driver switches the whole
+    /// screen to another app. That pauses it.
     ///
-    /// It read ONE flag, written from `Resume` and `Pause`. Those are not the
-    /// events that move on a unit with a multi-window mode: from Android 9
-    /// multi-resume leaves a visible-but-unfocused activity RESUMED, so the app
-    /// beside Carnyx never produces a `Pause` and the flag never cleared.
-    /// `GainedFocus`/`LostFocus` are separate events and are what move.
-    ///
-    /// Asserted through the ANNOUNCEMENT rather than through the flag, because
-    /// the flag being false is not the feature — the pop-up firing is.
+    /// So focus is recorded and gates nothing, and this pins both halves of that:
+    /// a shade or a dialog over the face must stay SILENT — the driver is looking
+    /// at the face and would also be told the station over the top of it — and a
+    /// pause must still speak.
     #[test]
-    fn losing_focus_without_a_pause_still_lets_the_pop_up_speak() {
+    fn a_shade_over_the_face_stays_silent_and_a_pause_speaks() {
         let _ui_lock = harness::ui_lock();
         let (_ui, driver) = app_for("popup-focus");
         let strip = fake::SEED_PRESET_MHZ;
@@ -5966,18 +5977,21 @@ mod tests {
         driver.drain_events();
         assert_eq!(said(&driver), 0, "a tune the driver is watching says nothing");
 
-        // ANOTHER APP TAKES FOCUS AND NOTHING ELSE. No Pause — the activity is
-        // still resumed, which is exactly what multi-resume does.
+        // THE SHADE COMES DOWN: focus goes, the activity is still resumed. The
+        // face is still what is behind it and the driver is still in front of it.
         crate::android::set_focused(false);
-        assert!(!crate::android::is_foreground(), "resumed but unfocused is not in front");
-
+        assert!(crate::android::is_foreground(), "a lost focus is not a departure");
         driver.tune_for_test(strip[2]);
+        driver.drain_events();
+        assert_eq!(said(&driver), 0, "and a tune under a shade still says nothing");
+
+        // THE DRIVER LEAVES: the whole screen goes to another app, which pauses.
+        crate::android::set_resumed(false);
+        assert!(!crate::android::is_foreground(), "a pause is a departure");
+        driver.tune_for_test(strip[3]);
         driver.drain_events();
         assert_eq!(said(&driver), 1, "and now the wheel's change is announced");
 
-        // Focus back, still no Pause anywhere in this test.
-        crate::android::set_focused(true);
-        assert!(crate::android::is_foreground(), "focus alone brings it back");
         crate::android::set_foreground(true);
     }
 

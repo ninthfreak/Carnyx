@@ -135,11 +135,13 @@ fn android_main(android_app: slint::android::AndroidApp) {
         // BEFORE the `parting` match below and not folded into it, because that
         // one returns early for everything it does not recognise — `Resume`
         // included — and this has to see both edges.
-        // TWO SIGNALS, NOT ONE. Focus and lifecycle are separate events here, and
-        // on this unit it is FOCUS that moves: the face composes inside a DUDU OS
-        // vertical third, and from Android 9 multi-resume leaves a
-        // visible-but-unfocused activity RESUMED — so another app coming up
-        // beside Carnyx never produces a `Pause`. See `android::FOCUSED`.
+        // FOCUS IS RECORDED AND GATES NOTHING. It is a separate event from
+        // Resume/Pause, so recording it is the only way a drive log can say
+        // which edges this unit actually raises — but the gate reads the
+        // resumed half alone, because on a unit that switches whole screens a
+        // lost focus is a shade or a dialog rather than a departure. See
+        // `android::FOCUSED`, which records the invented premise that briefly
+        // had this gating the pop-up.
         match main {
             MainEvent::GainedFocus => {
                 android::set_focused(true);

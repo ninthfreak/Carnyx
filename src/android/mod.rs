@@ -818,7 +818,8 @@ pub fn clear_station_announcement() {
 #[cfg(not(target_os = "android"))]
 pub fn clear_station_announcement() {}
 
-/// Is the activity RESUMED? Half of [`is_foreground`].
+/// Is the activity RESUMED? THE WHOLE OF [`is_foreground`], and [`FOCUSED`]
+/// records the day it was briefly half.
 ///
 /// TRUE UNTIL TOLD OTHERWISE, which is the safe default rather than an
 /// assumption. The app is launched into the foreground and `Resume` arrives
@@ -828,23 +829,30 @@ pub fn clear_station_announcement() {}
 /// which is what keeps the pop-up out of them without a `cfg`.
 static RESUMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// Does the activity's window have INPUT FOCUS? The other half of
-/// [`is_foreground`].
+/// Does the activity's window have INPUT FOCUS? AN OBSERVATION, GATING NOTHING.
 ///
-/// THIS IS THE HALF THAT WAS MISSING, and it is the likeliest reason the station
-/// pop-up never fired. `MainEvent::GainedFocus` and `MainEvent::LostFocus` are
-/// SEPARATE events from `Resume` and `Pause` in `android-activity`
-/// (android-activity-0.6.1/src/lib.rs:499,503 against :520,531), and on this
-/// unit they are the ones that move: the face is built to compose inside a DUDU
-/// OS vertical third, and from Android 9 MULTI-RESUME leaves a
-/// visible-but-unfocused activity RESUMED. So another app comes up beside
-/// Carnyx, `Pause` never arrives, the flag stays true, and the announce gate —
-/// `!is_foreground()` — never opens.
+/// `MainEvent::GainedFocus` and `MainEvent::LostFocus` are SEPARATE events from
+/// `Resume` and `Pause` in `android-activity`
+/// (android-activity-0.6.1/src/lib.rs:499,503 against :520,531), which is why it
+/// is worth recording separately: the drive log shows which edges this unit
+/// actually raises, and that is a fact nothing else here can supply.
 ///
-/// REPORTED FROM THE UNIT IN EXACTLY THAT SHAPE: with another app in front the
-/// wheel changed station correctly, against Carnyx's own presets rather than the
-/// MCU's bank, and no pop-up appeared. Every step upstream of the gate worked,
-/// which is what leaves the gate itself.
+/// IT WAS BRIEFLY HALF OF [`is_foreground`], AND THAT WAS WRONG. The claim was
+/// that this is why the station pop-up never fired, on the grounds that the unit
+/// resizes apps into vertical thirds and that Android 9's MULTI-RESUME leaves a
+/// visible-but-unfocused activity RESUMED with no `Pause`. THE PREMISE WAS
+/// INVENTED. The owner does not use that OS and does not use windowing at all —
+/// Carnyx runs full screen and the driver switches wholly to another full-screen
+/// app, which pauses it. The DUDU OS references in this tree are the DESIGN
+/// HANDOFF'S TARGET SURFACES and a tuner-source option, not a description of the
+/// unit, and reading them as one is a mistake made three times now.
+///
+/// AND GATING ON IT COSTS SOMETHING REAL, which is why it was not left in "for
+/// breadth". Pulling down the notification shade, raising the volume panel or
+/// any system dialog takes focus WITHOUT a pause. Gated, each of those would
+/// announce a station over a face the driver is looking at — and worse, would
+/// write `was_foreground = false` for [`wake`], so an ignition-off in that
+/// window would tell the receiver not to bring the face back.
 ///
 /// TRUE UNTIL TOLD OTHERWISE, for the same reason as [`RESUMED`].
 static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -863,9 +871,18 @@ pub fn set_resumed(on: bool) {
 }
 
 /// The activity's window gained or lost input focus. See [`FOCUSED`].
+///
+/// STORES AND NOTHING ELSE — no `record_foreground`, deliberately. Focus is not
+/// part of the answer the wake receiver is asked, and a shade pull is not the
+/// driver leaving.
 pub fn set_focused(on: bool) {
     FOCUSED.store(on, std::sync::atomic::Ordering::Relaxed);
-    record_foreground(is_foreground());
+}
+
+/// Does the window have input focus right now? See [`FOCUSED`] for why this is
+/// worth reading and why the pop-up gate does not read it.
+pub fn is_focused() -> bool {
+    FOCUSED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Set both at once. FOR TESTS, which have no lifecycle to drive.
@@ -898,13 +915,12 @@ pub fn take_wake_note() -> String {
 
 /// Whether the face is the thing the driver is looking at.
 ///
-/// BOTH HALVES, because either alone is wrong. A paused activity is certainly
-/// not being looked at; a RESUMED BUT UNFOCUSED one is not being looked at
-/// either, and on a unit with a multi-window mode that is the ordinary case
-/// rather than an edge — see [`FOCUSED`].
+/// THE RESUMED HALF ALONE, and [`FOCUSED`] records why it is not both. The unit
+/// runs one app full screen at a time: switching away pauses Carnyx, so `Pause`
+/// is a complete signal here, while focus goes away for shades and dialogs the
+/// driver raised ON TOP of a face they are still looking at.
 pub fn is_foreground() -> bool {
-    use std::sync::atomic::Ordering::Relaxed;
-    RESUMED.load(Relaxed) && FOCUSED.load(Relaxed)
+    RESUMED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub fn ingest_sleep(action: String, release: String) {

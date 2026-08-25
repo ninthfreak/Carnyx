@@ -1306,53 +1306,67 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
-### 104. The pop-up gate read lifecycle where it should have read focus
-**FIXED, AND THE OWNER'S OWN OBSERVATION IS WHAT FIXED IT.** #102 left "no
-station pop-up when another app is in front" with no cause established and five
-candidates. One sentence closed four of them: *"stations were changing
-appropriately with a different app in the foreground, it wasn't using the MCU
-stored ones."*
+### 104. The pop-up gate, and a diagnosis that was invented
+**RETRACTED AND CORRECTED. THE POP-UP FAULT IS STILL OPEN.** This entry claimed
+the fault was FIXED, on a cause the owner has since said plainly is not the case.
+The claim is withdrawn here rather than edited away, because the mistake is the
+useful part.
 
-**WHAT THAT RULES OUT.** The station changing at all means the process was alive,
-the MCU broadcast arrived, `nativePanelKey` fired, the event queued, the Slint
-loop drained it, and `push_hero` ran with a new dial — so `moved` was true. It
-changing to CARNYX'S OWN PRESET rather than the vendor's bank means
-`State::reassert` won the race too. Every step upstream of the announce gate
-worked. That leaves the gate, `!is_foreground()`, and the posting behind it.
+**WHAT WAS CLAIMED.** That `is_foreground()` read one flag written from `Resume`
+and `Pause`, that those are not the events that move on this unit, that the unit
+composes apps into vertical thirds, and that Android 9's MULTI-RESUME therefore
+leaves Carnyx RESUMED-but-unfocused with no `Pause`, so the gate never opened.
+`is_foreground()` was changed to `RESUMED && FOCUSED` on that reasoning.
 
-**THE GATE READ ONE FLAG, WRITTEN FROM `Resume` AND `Pause` ONLY.** Those are not
-the events that move on this unit. `MainEvent::GainedFocus` and
-`MainEvent::LostFocus` are SEPARATE from `Resume`/`Pause` in `android-activity`
-(`0.6.1/src/lib.rs:499,503` against `:520,531`), and from Android 9 MULTI-RESUME
-leaves a visible-but-unfocused activity RESUMED. The face is built to compose
-inside a DUDU OS vertical third — `face.slint` says so in its opening comment —
-so another app coming up beside Carnyx takes FOCUS and never produces a `Pause`.
-The flag stayed true, the gate never opened, and nothing was ever announced.
+**WHY IT WAS WRONG.** *"I'm not using DuduOS… I'm not using any windowing or
+running apps side-by-side. Carnyx is running, and I switch the entire focus to a
+different full-screen app."* The DUDU OS references in this tree are the DESIGN
+HANDOFF'S TARGET SURFACES — the sizes `face.slint` is built to compose into —
+and a tuner-source option. NEITHER IS A STATEMENT ABOUT WHAT THE UNIT RUNS. It
+was read as one, for the third time, and then written up as an established cause.
+A full-screen switch pauses the activity, so `Pause` DOES arrive, the flag DOES
+clear, and the gate DID open.
 
-**THE FIX.** `is_foreground()` is now `RESUMED && FOCUSED`, two atomics fed by
-two edges. Either alone is wrong: a paused activity is certainly not being looked
-at, and a resumed-but-unfocused one is not being looked at either — which on a
-unit with a multi-window mode is the ordinary case rather than an edge. Both
-focus edges are logged, and `GainedFocus` clears a standing banner for the same
-reason `Resume` does.
+**WHAT THE CHANGE IS REVERTED TO.** `is_foreground()` is the RESUMED half again.
+Focus is still recorded and still logged on both edges — that part earns its keep,
+because a drive log can then say which edges this unit actually raises — but it
+gates nothing. Left in the gate it would cost something real: the shade, the
+volume panel and any system dialog take focus WITHOUT a pause, so each would
+announce a station over a face the driver is looking at, and each would write
+`was_foreground = false` for the wake receiver, so an ignition-off in that window
+would tell the receiver not to bring the face back.
 
-`set_foreground` survives as a both-at-once helper for tests, which have no
-lifecycle to drive.
+**Pinned by `a_shade_over_the_face_stays_silent_and_a_pause_speaks`**, which is
+the previous test with its assertion inverted: focus goes with no pause and the
+tune stays SILENT; then the pause lands and the next tune speaks.
 
-**Pinned by `losing_focus_without_a_pause_still_lets_the_pop_up_speak`**, which
-takes focus away WITHOUT a pause anywhere in it and asserts the announcement
-happens — through the pop-up rather than through the flag, because the flag being
-false is not the feature. Verified by reverting `is_foreground` to the resumed
-half alone and watching it fail.
+**WHERE THE FAULT ACTUALLY IS, as far as the evidence reaches.** Everything
+upstream of the gate worked — the owner's *"stations were changing appropriately…
+it wasn't using the MCU stored ones"* proves the process was alive, the broadcast
+arrived, the event drained and `State::reassert` won its race — and the gate
+opened. So the announcement WAS ATTEMPTED, and what is left is the posting or the
+display of it:
 
-**WHAT THIS DOES NOT SETTLE.** If focus was not the cause, the remaining
-candidate is the one #102 named: the notification posted into a channel whose
-importance was lowered, which no code can raise back. The `station pop-up: … —
-posted, channel importance N` line separates them on the first drive, and
-`lifecycle: focus lost` now says whether the edge arrived at all.
+* `alert::init` failed and the class was never loaded
+* `areNotificationsEnabled()` is false
+* the channel's importance was lowered, which no code can raise back
+* `notify` threw
+* THE ROM RAISES NO HEADS-UP BANNER AT ALL, which on a unit of this class is
+  entirely ordinary and which `notify` returning normally cannot distinguish from
+  success
 
-**Evidence.** 304 tests, clippy clean over lib, bins and examples, JNI seam
-checks. No shot moves: nothing here draws.
+**The one-minute test that separates them** is to pull down the notification
+shade after a wheel press taken with another app in front. The notification
+SITTING THERE means `notify` worked and the ROM simply does not raise banners;
+the notification ABSENT means `post` failed, and the reason string added in #102
+names which of the four it was. `panel key … [background]` on the same drive
+confirms the gate opened.
+
+**And the remedy if it is the ROM.** A Toast needs no channel, no importance and
+no heads-up support, and displays from the background on API 29. Not built:
+which fix is right depends on what the shade shows.
+
+**Evidence.** Tests and clippy below. No shot moves: nothing here draws.
 
 ### 103. "Carry On Wayward Son" — a song theme, and a font with no bold cut
 **DONE.** The owner's fourth basic egg, and the first that is not for a band:
