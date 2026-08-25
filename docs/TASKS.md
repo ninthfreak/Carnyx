@@ -1306,6 +1306,59 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 100. Add the first three basic Easter eggs
+**DONE.** The owner named three, all genre-only:
+
+| Band | Genre | Matches on |
+|---|---|---|
+| Eric Clapton | Slowhand | `clapton` |
+| The Pretty Reckless | Cindy-Lou Who? | `pretty reckless` |
+| The Who | Meaty, Beaty, Big, and Bouncy | `the who` |
+
+**THE MATCH NAMES ARE THE ONLY DECISION HERE, and two of them are deliberate.**
+
+`clapton` alone, not `eric clapton`: the padded search wants whole tokens either
+way, and the surname matches BOTH spellings, because " eric clapton " contains
+" clapton ". The longer form would be a second entry that can never match
+anything the first one misses.
+
+`pretty reckless` and NOT `reckless`: "reckless" is ordinary English and
+"reckless driving" is exactly what a local station's advert copy says. The
+two-word form is safe and also matches the full "The Pretty Reckless".
+
+**AND ONE THAT IS GENUINELY RISKY, shipped knowingly.** "the who" is two of the
+commonest words in English standing next to each other, and #98's six-character
+floor passes it at seven. It WILL fire on prose — "find out the who, what and
+where" normalises to a string containing " the who ". There is no safer
+spelling; that is the band's name, and the matcher has no notion of negative
+context.
+
+It ships because THE TIER CHANGES WHAT A FALSE MATCH COSTS. The failure that
+made this hazard famous was an advert repainting CarFM's entire face as AC/DC; a
+false match here swaps the genre line for "Meaty, Beaty, Big, and Bouncy" and
+changes nothing else. `the_basic_bands_match_the_way_a_station_writes_them`
+ASSERTS the false match rather than hoping about it, so the day somebody adds a
+guard, that line fails and says why.
+
+**A shot at last.** `shots/clapton.png` — the first render of a basic theme, and
+what it is really for is the ordinary case of the tier: a row that states a genre
+and no colour. The line reads "Slowhand" in the dim token, at the themed size and
+weight, and everything else on the face is plain — ordinary hero face, ordinary
+tiles, ordinary palette, plain gear, RadioText in Atkinson.
+
+**Worth knowing:** a basic theme still takes the THEMED genre metrics (33/47 at
+weight 800 against the PTY's 26/33 at 700), because `GenreText` keys that off
+"a theme is showing" rather than off which tier. It reads correctly and is
+consistent with the line being a themed one; it is a judgement call rather than a
+stated rule, and it is the one thing here to revisit if the bigger line is not
+wanted for the small tier.
+
+**Evidence.** 300 tests, clippy clean over lib, bins and examples. Nothing else
+could have moved: the only shots that reach the matcher set RadioText naming one
+of the five advanced bands, none of which contains any of the three new names,
+and `long-radiotext` sets the UI property directly without going through the
+matcher at all.
+
 ### 99. Fix the JNI string conversion, and close the hole that let it ship
 **DONE.** `./tools/build-apk-gradle.sh` failed on the owner's machine with three
 copies of one error:
@@ -1432,12 +1485,13 @@ long names were nearly safe; a long tail is not — "Yes", "Free", "Air", "Bread
 GUARANTEE, and the honest check is a person asking whether a car dealership could
 say it.
 
-**`BASIC` is empty.** The handoff specifies five artists and all five are
-advanced, so any row would be one this project invented. Two `cfg(test)`
-fixtures — one genre-only, one font-only — are APPENDED to the registry so the
-matcher, the picker filter and the two registry rules assert over something
-rather than over nothing; they are a superset, never a substitute, so no existing
-matcher test runs against anything but the real rows.
+**`BASIC` WAS EMPTY WHEN THIS SHIPPED, and is not any more — see #100.** The
+handoff specifies five artists and all five are advanced, so at the time any row
+would have been one this project invented. Two `cfg(test)` fixtures — one
+genre-only, one font-only — are APPENDED to the registry so the matcher, the
+picker filter and the two registry rules assert over something rather than over
+nothing; they are a superset, never a substitute, so no existing matcher test
+runs against anything but the real rows.
 
 **Evidence.** 298 tests, clippy clean. 78 shots rendered and compared byte-wise:
 69 identical, 5 known-unstable, and 4 that moved — `nirvana`,
@@ -1445,9 +1499,10 @@ matcher test runs against anything but the real rows.
 all four in the direction of the reference renders, and `nirvana` checked by eye
 against `egg-nirvana.png`.
 
-**NOT DONE, and neither was asked for:** no band is registered, so nothing
-renders a basic theme; and the six-tap picker is still not built, so "does not
-get a listing" is enforced by a test rather than by a screen.
+**NOT DONE AT THE TIME, and neither was asked for:** no band was registered, so
+nothing rendered a basic theme (closed by #100); and the six-tap picker is still
+not built, so "does not get a listing" is enforced by a test rather than by a
+screen.
 
 ### 97. Bug sweep over one day's work
 **DONE — THREE REAL DEFECTS, ONE FALSE ALARM, ONE WRONG COMMENT.** A review of

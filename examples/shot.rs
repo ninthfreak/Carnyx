@@ -211,6 +211,14 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     // content and has nothing to overflow, and the lettering must still read as
     // a display cut rather than as body type.
     ("nirvana-portrait", 360, 800, false, State::Nirvana, 0.0),
+    // A BASIC THEME, which is a different thing to look at and worth one shot.
+    // The five above are each a whole dress; this one replaces the genre line
+    // and NOTHING ELSE — the hero keeps its ordinary face and its logo, the
+    // preset tiles are untouched, the palette is the plain one. What this shot
+    // is really for is proving that a row stating a genre and no colour renders
+    // in the ordinary dim token, because that is the ordinary case for the tier
+    // and it used to render transparent.
+    ("clapton", 1024, 614, false, State::Clapton, 0.0),
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -254,6 +262,8 @@ enum State {
     Beatles,
     Zeppelin,
     Nirvana,
+    /// A BASIC theme: a genre line and nothing else. See the surface list.
+    Clapton,
     Nin,
     /// Reorder mode, where every tile carries the logo-search badge (§6.4).
     Reordering,
@@ -545,6 +555,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         }
         State::Nin => {
             driver.set_radio_text_for_test("Nine Inch Nails - The Hand That Feeds");
+            driver.push_all();
+        }
+        State::Clapton => {
+            driver.set_radio_text_for_test("Eric Clapton - Layla");
             driver.push_all();
         }
         // PROPERTIES, NOT THE STORE, and that is a limit of the host rather than

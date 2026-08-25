@@ -602,11 +602,6 @@ const ADVANCED: &[(&Egg, &[&str])] = &[
 
 /// The basic themes, in match order among themselves.
 ///
-/// EMPTY, AND THAT IS THE HONEST STATE. The framework is built and no band has
-/// been named for it: the design handoff specifies five artists and all five are
-/// advanced, so any row here would be one this project invented. Add rows with
-/// [`basic`]; nothing else has to change.
-///
 /// ── BEFORE ADDING ONE, READ [`match_egg_id`] ──
 ///
 /// This list is where the false-match hazard gets dangerous. Five long names are
@@ -614,8 +609,46 @@ const ADVANCED: &[(&Egg, &[&str])] = &[
 /// advert copy and a short or ordinary-word band name — "Yes", "Bread", "Free",
 /// "Air" — will fire on prose that has nothing to do with music.
 /// `no_basic_name_is_short_enough_to_fire_on_prose` holds a floor under it, and
-/// a floor is not a substitute for thinking about the name.
-const BASIC: &[(&Egg, &[&str])] = &[];
+/// a floor is not a substitute for thinking about the name. Two of the three
+/// below carry a note about theirs.
+const BASIC: &[(&Egg, &[&str])] = &[
+    // `clapton` alone, not `eric clapton`. The padded search wants whole tokens
+    // either way, and the surname matches BOTH spellings — " eric clapton " has
+    // " clapton " inside it — so the longer form would be a second entry that
+    // can never match anything the first one misses. Distinctive enough on its
+    // own that no advert says it.
+    (&CLAPTON, &["clapton"]),
+    // NOT `reckless` ALONE, which is the trap this row would otherwise walk
+    // into: "reckless" is ordinary English and "reckless driving" is exactly the
+    // sort of thing a local station's advert copy says. The band's own name is
+    // two words and the pair is safe. `pretty reckless` also matches the full
+    // "The Pretty Reckless", for the same substring reason as Clapton above.
+    (&PRETTY_RECKLESS, &["pretty reckless"]),
+    // ── THE ONE THAT IS GENUINELY RISKY ──────────────────────────────────────
+    //
+    // "the who" is two of the commonest words in English standing next to each
+    // other, and the six-character floor passes it at seven. It WILL fire on
+    // prose: "find out the who, what and where" normalises to a string
+    // containing " the who ". There is no safer spelling — that is the band's
+    // name — and the matcher has no notion of negative context.
+    //
+    // SHIPPED ANYWAY, and the tier is why. A false match here swaps the genre
+    // line for "Meaty, Beaty, Big, and Bouncy" and changes nothing else; the
+    // failure that made this hazard famous was an advert repainting CarFM's
+    // ENTIRE FACE as AC/DC. A basic theme cannot do that. Worth knowing, worth
+    // reverting if it turns out to be common on this market's stations.
+    (&THE_WHO, &["the who"]),
+];
+
+/// Eric Clapton. Genre only; the ordinary faces throughout.
+pub const CLAPTON: Egg = basic("Eric Clapton", "Slowhand", "");
+
+/// The Pretty Reckless. The owner named it "Pretty Reckless"; the id is the
+/// band's full name and the match covers both.
+pub const PRETTY_RECKLESS: Egg = basic("The Pretty Reckless", "Cindy-Lou Who?", "");
+
+/// The Who. See the note on its registry row.
+pub const THE_WHO: Egg = basic("The Who", "Meaty, Beaty, Big, and Bouncy", "");
 
 /// Two basic rows that exist ONLY under `cfg(test)`.
 ///
@@ -1106,6 +1139,65 @@ mod tests {
         // no-op for them — which is what the shots show.
         assert_eq!(ACDC.hero_scale, 1.0);
         assert_eq!(BEATLES.hero_scale, 1.0);
+    }
+
+    /// THE THREE BASIC ROWS MATCH THE WAY A STATION WRITES THEM.
+    ///
+    /// Each is checked against the spellings that actually turn up in RadioText
+    /// — surname alone, full name, with and without a leading "The" — and
+    /// against the near-misses that must NOT fire. The last two lines are the
+    /// hazard the registry's own note describes, held here so nobody has to take
+    /// the note on trust.
+    #[test]
+    fn the_basic_bands_match_the_way_a_station_writes_them() {
+        for (rt, want) in [
+            ("Eric Clapton - Layla", "Eric Clapton"),
+            ("CLAPTON / Cocaine", "Eric Clapton"),
+            ("The Pretty Reckless - Death by Rock and Roll", "The Pretty Reckless"),
+            ("Pretty Reckless, Heaven Knows", "The Pretty Reckless"),
+            ("The Who - Baba O'Riley", "The Who"),
+            ("now playing: the who", "The Who"),
+        ] {
+            assert_eq!(match_egg_id(rt).map(|e| e.id), Some(want), "{rt:?}");
+        }
+
+        // WHOLE TOKENS, so a longer word containing the name is not the name.
+        for rt in ["Claptone - No Eyes", "recklessly cheap tyres", "whoever calls first"] {
+            assert_eq!(match_egg_id(rt), None, "{rt:?} must not match");
+        }
+
+        // "reckless" ALONE IS NOT A MATCH, which is the whole reason the row
+        // names two words. Advert copy about reckless driving is the exact
+        // string this would otherwise fire on.
+        assert_eq!(match_egg_id("cited for reckless driving"), None);
+
+        // AND THE ONE THAT DOES FIRE ON PROSE, asserted rather than hoped about:
+        // "the who" is two ordinary words and the matcher cannot tell this from
+        // a band. Shipped knowingly — see the registry row — and this is the
+        // line that will fail the day somebody adds a guard for it.
+        assert_eq!(
+            match_egg_id("find out the who, what and where").map(|e| e.id),
+            Some("The Who"),
+            "a false match here is known and accepted, not unnoticed"
+        );
+    }
+
+    /// THE THREE ARE GENRE-ONLY, and none of them dresses anything else.
+    ///
+    /// The owner named a genre for each and no font, so every face field must
+    /// stay empty — a font arriving later is a deliberate edit, not a drift.
+    #[test]
+    fn the_basic_bands_carry_a_genre_and_no_font() {
+        for e in [&CLAPTON, &PRETTY_RECKLESS, &THE_WHO] {
+            assert_eq!(e.tier, Tier::Basic, "{}", e.id);
+            assert!(!e.genre.is_empty(), "{} has no genre", e.id);
+            assert!(faces_used(e).is_empty(), "{} names a face", e.id);
+            // And nothing else: the whole row is its id and its genre.
+            assert_eq!(Egg { id: "", genre: "", ..*e }, PLAIN, "{}", e.id);
+        }
+        assert_eq!(CLAPTON.genre, "Slowhand");
+        assert_eq!(PRETTY_RECKLESS.genre, "Cindy-Lou Who?");
+        assert_eq!(THE_WHO.genre, "Meaty, Beaty, Big, and Bouncy");
     }
 
     /// Punctuation becomes a separator, never nothing — the difference between
