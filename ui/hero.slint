@@ -8,9 +8,9 @@
 // preset tiles and peek cards).
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot, EggTheme, LogoPlate } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme, LogoPlate, NavStage } from "types.slint";
 import { PeekCard } from "presets.slint";
-import { StarIcon, PowerIcon, BoltIcon } from "icons.slint";
+import { StarIcon, PowerIcon, BoltIcon, TurnArrow } from "icons.slint";
 import { GlitchText } from "glitch.slint";
 
 // RadioText: static and centred when short, a continuous 16s left ticker beyond
@@ -19,6 +19,32 @@ export component RadioTextStrip inherits Rectangle {
     in property <string> text;
     /// The band theme. Its display face carries here as well as onto the hero.
     in property <EggTheme> egg;
+
+    // ── §4.9's STAGE 2: THE STRIP YIELDS ─────────────────────────────────────
+    //
+    // "Arrow + distance + street replace RadioText entirely (RadioText does not
+    // alternate back), with `then` + a small dim arrow + the after-next street
+    // on the right, divided by a hairline rule. The strip keeps its own geometry
+    // exactly — same 64dp height, same zone."
+    //
+    // AND AT STAGE 3 IT STOPS REPEATING ITSELF: "the strip stops repeating the
+    // imminent turn — it shows only the turn after it", because the hero card is
+    // carrying the imminent one and two copies of it would be noise.
+    in property <NavStage> nav-stage: NavStage.idle;
+    in property <string> nav-arrow;
+    in property <string> nav-exit;
+    in property <string> nav-distance;
+    in property <string> nav-street;
+    in property <string> nav-after-arrow;
+    in property <string> nav-after-exit;
+    in property <string> nav-after-street;
+
+    /// The strip is carrying the imminent turn — stage 2 and stage 2 only.
+    property <bool> carrying: root.nav-stage == NavStage.approach && root.nav-arrow != "";
+    /// The strip is showing the after-next turn on its own — stage 3.
+    property <bool> trailing: root.nav-stage == NavStage.turn-now && root.nav-after-arrow != "";
+    /// RadioText is displaced. §4.9: it "does not alternate back".
+    property <bool> yielded: root.carrying || root.trailing;
 
     /// `rtSpacing` travels with the face rather than being a separate decision:
     /// a blackletter sets far too tight for a line meant to be read at a glance,
@@ -71,7 +97,12 @@ export component RadioTextStrip inherits Rectangle {
     // matches the stated intent rather than the shipped arithmetic. Flagged, not
     // silent: if the hitch is wanted, the travel is the one number to change.
     property <float> phase: 0;
-    init => { self.phase = 1; }
+    // ONE `init` PER ELEMENT — Slint rejects a second as a duplicated callback —
+    // so the marquee's travel and the takeover edge's beat are armed together.
+    init => {
+        self.phase = 1;
+        self.edge-beat = 0.32;
+    }
     animate phase { duration: 16s; easing: linear; iteration-count: -1; }
 
     height: Metrics.rt-height;
@@ -84,7 +115,7 @@ export component RadioTextStrip inherits Rectangle {
     // WRAPPED, because Slint takes an element after `if`, not a `for`. Explicit
     // geometry filling the plate, so the wrapper is excluded from any layout-info
     // fold and the line sits exactly where it sat before.
-    if !root.marquee: Rectangle {
+    if !root.marquee && !root.yielded: Rectangle {
         x: 0; y: 0;
         width: parent.width;
         height: parent.height;
@@ -112,11 +143,165 @@ export component RadioTextStrip inherits Rectangle {
         }
     }
 
+    // ── THE MANEUVER, WHERE THE RADIOTEXT WAS ────────────────────────────────
+    //
+    // The strip keeps its own geometry exactly — same height, same plate, same
+    // radius — and only its CONTENTS change. §4.9 is explicit that this is a
+    // borrowed element rather than a new one: "Three stages, each borrowing an
+    // element that already exists — nothing reflows when navigation starts or
+    // ends."
+    if root.carrying: HorizontalLayout {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        padding-left: Metrics.s(22);
+        padding-right: Metrics.s(22);
+        spacing: Metrics.s(14);
+        cross-axis-alignment: center;
+
+        TurnArrow {
+            size: Metrics.s(34);
+            color: Pal.amber;
+            commands: root.nav-arrow;
+            exit: root.nav-exit;
+            // 2.1 at the large sizes, per the mini-handoff's two weights.
+            stroke-w: 2.1;
+        }
+        Text {
+            text: root.nav-distance;
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: Metrics.s(24);
+            color: Pal.amber;
+            vertical-alignment: center;
+        }
+        // THE STREET TAKES THE SLACK, so the `then` block on the right keeps its
+        // place whatever the street is called.
+        Text {
+            horizontal-stretch: 1;
+            text: root.nav-street;
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: Metrics.s(19);
+            color: root.ink;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        // THE HAIRLINE RULE §4.9 asks for, and the `then` block behind it. Both
+        // collapse when there is no turn after this one — a rule with nothing on
+        // the far side of it is a line for its own sake.
+        if root.nav-after-arrow != "": Rectangle {
+            width: 1px;
+            height: parent.height * 0.55;
+            background: root.plate-edge;
+        }
+        // PACKED, NOT SPREAD. Without `alignment: start` the inner row shares
+        // out whatever width the elided street left it, and "then" drifts a
+        // hundred dp from its own arrow.
+        if root.nav-after-arrow != "": HorizontalLayout {
+            spacing: Metrics.s(8);
+            alignment: start;
+            cross-axis-alignment: center;
+            Text {
+                text: "then";
+                font-family: Font.face;
+                font-size: Metrics.s(14);
+                color: Pal.dim;
+                vertical-alignment: center;
+            }
+            TurnArrow {
+                size: Metrics.s(20);
+                color: Pal.dim;
+                commands: root.nav-after-arrow;
+                exit: root.nav-after-exit;
+                stroke-w: 2.4;
+            }
+            if root.nav-after-street != "": Text {
+                text: root.nav-after-street;
+                font-family: Font.face;
+                font-size: Metrics.s(15);
+                color: Pal.dim;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // STAGE 3: only the turn AFTER the one the hero card is carrying.
+    if root.trailing: HorizontalLayout {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        padding-left: Metrics.s(22);
+        padding-right: Metrics.s(22);
+        spacing: Metrics.s(12);
+        alignment: center;
+        cross-axis-alignment: center;
+
+        Text {
+            text: "then";
+            font-family: Font.face;
+            font-size: Metrics.s(17);
+            color: Pal.dim;
+            vertical-alignment: center;
+        }
+        TurnArrow {
+            size: Metrics.s(28);
+            color: Pal.dim;
+            commands: root.nav-after-arrow;
+            exit: root.nav-after-exit;
+            stroke-w: 2.4;
+        }
+        if root.nav-after-street != "": Text {
+            text: root.nav-after-street;
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: Metrics.s(19);
+            color: Pal.dim;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    // ── THE TAKEOVER EDGE (§4.9) ─────────────────────────────────────────────
+    //
+    // "Whichever element is carrying the maneuver — strip at stage 2, hero card
+    // at stage 3 — wears a thick amber border that pulses on the vehicle-in-
+    // motion tell's exact beat (6dp on the hero, 5dp on the strip; 2.6s
+    // ease-in-out, amber → amber at 32%). Drawn as an inset ring rather than by
+    // thickening the real border, so the card's own geometry and content never
+    // shift."
+    //
+    // A RING OVER THE PLATE AND NOT A THICKER `border-width` ON IT: the plate's
+    // own border is 1px and part of its geometry, and growing it to 5 would pull
+    // every child in by four. This is a child drawn on top at the same bounds,
+    // so nothing under it moves.
+    //
+    // THE SAME BEAT AS THE MOTION TELL, which is the point of the sentence: 2.6s
+    // round trip is 1300ms each way on an alternating ease-in-out, the exact
+    // animation `DrivingStatus` runs. Two marks pulsing at almost the same rate
+    // would read as a fault; at the same rate they read as one system.
+    //
+    // ONLY WHILE THE STRIP CARRIES THE IMMINENT TURN. At stage 3 the ring moves
+    // to the hero card and the strip is showing the turn after — the edge marks
+    // what is urgent, not what is navigational.
+    property <float> edge-beat: 1.0;
+    animate edge-beat {
+        duration: 1300ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+    if root.carrying: Rectangle {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        border-radius: parent.border-radius;
+        border-width: 5px;
+        border-color: Pal.amber.with-alpha(root.edge-beat);
+        background: transparent;
+    }
+
     // THE CATALOGUE STAMP, bottom-right of the plate — The Beatles' `rtPlate.serial`
     // and the only theme that has one. Absolutely placed and drawn LAST so it
     // sits over a marquee that scrolls underneath it, exactly as the reference
     // places it (`position: absolute, right: 14, bottom: 6`).
-    if root.egg.rt-serial != "": Text {
+    if root.egg.rt-serial != "" && !root.yielded: Text {
         x: parent.width - self.preferred-width - 14px;
         y: parent.height - self.preferred-height - 6px;
         text: root.egg.rt-serial;
@@ -128,7 +313,7 @@ export component RadioTextStrip inherits Rectangle {
 
     // Two copies with a fixed gap, translating left by half the track so the
     // second copy lands where the first began.
-    if root.marquee: Rectangle {
+    if root.marquee && !root.yielded: Rectangle {
         x: 28px - root.phase * (copy-a.preferred-width + 100px);
         y: 0;
         width: copy-a.preferred-width * 2 + 100px;
@@ -445,6 +630,28 @@ export component HeroCard inherits Rectangle {
     /// pre-scaled, so the ratio they produce is the same at every size.
     in property <float> scale: 1.0;
 
+    // ── §4.9's STAGE 3: THE HERO CARD TAKES OVER ─────────────────────────────
+    //
+    // "Big arrow, distance, street. Only the hero card changes: the peek cards
+    // and the preset shelf stay exactly where they are… The frequency readout is
+    // absent for those seconds, but the station logo moves to the card's
+    // upper-right corner (101dp, 115dp on the tall track, transparent — no plate
+    // or border behind it; the call sign in `dim` when a station has no logo),
+    // so the driver still knows what is playing."
+    in property <NavStage> nav-stage: NavStage.idle;
+    in property <string> nav-arrow;
+    in property <string> nav-exit;
+    in property <string> nav-distance;
+    in property <string> nav-street;
+    /// The card is carrying the maneuver instead of the station.
+    ///
+    /// AN ARROW IS REQUIRED, not just the stage: a turn type this build does not
+    /// recognise reaches here as an empty path, and a card that had given up its
+    /// call sign for a blank space would be worse than one that never yielded.
+    property <bool> taking-over: root.nav-stage == NavStage.turn-now
+        && root.nav-arrow != ""
+        && !root.inert;
+
     /// Drawn, but it takes no taps.
     ///
     /// For the OUTGOING card in the step morph, which spends the first stretch
@@ -581,211 +788,354 @@ export component HeroCard inherits Rectangle {
     drop-shadow-offset-y: root.dead ? 0px : 14px * root.scale;
     drop-shadow-color: #0000002E;
 
+    // ── THE TAKEOVER EDGE (§4.9) ─────────────────────────────────────────────
+    //
+    // "Whichever element is carrying the maneuver — strip at stage 2, hero card
+    // at stage 3 — wears a thick amber border that pulses on the vehicle-in-
+    // motion tell's exact beat (6dp on the hero, 5dp on the strip; 2.6s
+    // ease-in-out, amber → amber at 32%). Drawn as an inset ring rather than by
+    // thickening the real border, so the card's own geometry and content never
+    // shift."
+    //
+    // A CHILD RING AND NOT A THICKER `border-width`, exactly as the strip does
+    // it: this card's border is part of its scale arithmetic and growing it to 6
+    // would pull every child in by five and change what `fit` measures against.
+    //
+    // THE SAME BEAT AS THE MOTION TELL AND THE STRIP — 1300ms each way on an
+    // alternating ease-in-out. Three marks pulsing at three nearly-equal rates
+    // would read as a fault; at one rate they read as one system.
+    property <float> edge-beat: 1.0;
+    init => { self.edge-beat = 0.32; }
+    animate edge-beat {
+        duration: 1300ms; easing: ease-in-out;
+        iteration-count: -1; direction: alternate;
+    }
+    if root.taking-over: Rectangle {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        border-radius: parent.border-radius;
+        border-width: 6px * root.scale;
+        border-color: Pal.amber.with-alpha(root.edge-beat);
+        background: transparent;
+    }
+
+    // ── THE MANEUVER, IN PLACE OF THE STATION ────────────────────────────────
+    //
+    // The card keeps its own geometry exactly — same rect, same radius, same
+    // shadow, same scale arithmetic — and only its CONTENTS change, which is
+    // what "only the hero card changes" means and what keeps the peek cards and
+    // the preset shelf where they are.
+    // ── ONE LAYOUT, TWO ARMS, AND THE WRAPPER IS LOAD-BEARING ────────────────
+    //
+    // Both arms have to live inside a single UNCONDITIONAL layout, and finding
+    // out why cost a broken render. A plain `Rectangle` takes its preferred size
+    // from a single layout child by the compiler folding that layout's
+    // constraints into it — the same fold this file already warns about keeping
+    // gauges out of. An `if` around the layout BREAKS the fold: the card's
+    // `preferred-height` went to nothing, and on the tall track, where
+    // `resolved-card-h` and `min-height` are both read off exactly that, the
+    // whole card vanished and its contents spilled over the RadioText strip.
+    // `shots/nav-turn-now-portrait.png` is what showed it.
+    //
+    // Conditionals INSIDE a layout are fine and this file is full of them; it is
+    // the one around the layout that does the damage.
     VerticalLayout {
-        padding-top: root.pad-v;
-        padding-bottom: root.pad-v;
-        padding-left: root.pad-h;
-        padding-right: root.pad-h;
-        spacing: Metrics.s(14) * root.scale;
-        alignment: center;
-
-        if root.scanning: Text {
-            text: "Scanning…";
-            horizontal-alignment: center;
-            font-family: Font.face; font-weight: Font.bold;
-            font-italic: true;
-            font-size: Metrics.call-size * root.scale;
-            letter-spacing: root.call-track;
-            color: Pal.dim;
-        }
-
-        // Real logo REPLACES the big call sign; the call sign becomes a small
-        // label beneath it.
-        // THE THEME CAN HIDE A REAL LOGO, and must be able to: AC/DC's whole
-        // card is the lettering, and a station that has art would otherwise never
-        // show a call sign for the bolt to split. CarFM's `suppressLogos`.
-        if !root.scanning && root.has-logo && !root.egg.suppress-logo: VerticalLayout {
-            spacing: 8px * root.scale;
+        if root.taking-over: VerticalLayout {
+            padding-top: root.pad-v;
+            padding-bottom: root.pad-v;
+            padding-left: root.pad-h;
+            padding-right: root.pad-h;
+            spacing: Metrics.s(6) * root.scale;
             alignment: center;
+
             HorizontalLayout {
                 alignment: center;
-                HeroLogo {
-                    logo: root.logo;
-                    logo-h: root.logo-h;
-                    max-w: root.logo-max-w;
-                    scale: root.scale;
-                    plate: root.logo-plate;
+                TurnArrow {
+                    size: Metrics.s(root.tall ? 84 : 100) * root.scale;
+                    color: Pal.amber;
+                    commands: root.nav-arrow;
+                    exit: root.nav-exit;
+                    // 2.1 at the large sizes (the mini-handoff's two weights).
+                    stroke-w: 2.1;
                 }
             }
-            if root.show-call && root.ident != "": Text {
-                text: root.ident;
+            Text {
+                text: root.nav-distance;
+                horizontal-alignment: center;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.s(root.tall ? 40 : 46) * root.scale;
+                color: Pal.amber;
+            }
+            // THE STREET COLLAPSES WHEN IT IS MISSING, which is the handoff's rule
+            // for every field the poll may not carry.
+            if root.nav-street != "": Text {
+                text: root.nav-street;
                 horizontal-alignment: center;
                 overflow: elide;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
-                letter-spacing: 0.5px * root.scale;
+                font-size: Metrics.s(root.tall ? 20 : 24) * root.scale;
+                color: root.ink;
+            }
+        }
+
+        if !root.taking-over: VerticalLayout {
+            padding-top: root.pad-v;
+            padding-bottom: root.pad-v;
+            padding-left: root.pad-h;
+            padding-right: root.pad-h;
+            spacing: Metrics.s(14) * root.scale;
+            alignment: center;
+
+            if root.scanning: Text {
+                text: "Scanning…";
+                horizontal-alignment: center;
+                font-family: Font.face; font-weight: Font.bold;
+                font-italic: true;
+                font-size: Metrics.call-size * root.scale;
+                letter-spacing: root.call-track;
                 color: Pal.dim;
             }
-        }
 
-        // No real logo: the big call sign, no monogram tile. When nothing has
-        // resolved (built-in tuner with no GPS lock yet) this is empty and the
-        // frequency below stands as the identity — never an inaccurate "Tuning…".
-        //
-        // A BOX AROUND ONE LINE OF TEXT, and the box is what `nameGhost` needs.
-        // The ghost is a second impression of the identity printed off register
-        // beneath the first — Nirvana 3/3 down in 20% black, Nine Inch Nails 2/0
-        // in 16%: a photocopy that did not quite line up, and a machine that did
-        // not quite lock. It has to be OFFSET, and a child of a VerticalLayout
-        // cannot set its own `y`, so both impressions live in one slot here and
-        // position themselves inside it. The box takes its height from the live
-        // line, so the ghost can never grow the card.
-        if root.lettering && !root.egg.call-bolt: Rectangle {
-            height: live-call.line-h;
-
-            if root.egg.ghost-ink.alpha > 0: Text {
-                x: root.egg.ghost-dx * root.scale;
-                y: root.egg.ghost-dy * root.scale;
-                width: parent.width;
-                text: root.ident;
-                horizontal-alignment: center;
-                overflow: elide;
-                font-family: root.call-face; font-weight: Font.bold;
-                font-size: root.call-size;
-                letter-spacing: root.call-track;
-                color: root.egg.ghost-ink;
-            }
-
-            live-call := GlitchText {
-            x: 0; y: 0; width: parent.width; height: self.line-h;
-            text: root.ident;
-            elide: true;
-            face: root.call-face; weight: Font.bold;
-            font-size: root.call-size;
-            tracking: root.call-track;
-            ink: root.lettering-ink;
-            ground: root.surface;
-            /// `heroGlitch` — the call sign rebuilt as three horizontal bands.
-            /// See `ui/glitch.slint`; Nine Inch Nails is the only theme that
-            /// asks for it, and every other face draws one ordinary line here.
-            on: root.egg.hero-glitch;
-            /// THE BOLD THE DISPLAY FACES DO NOT HAVE. `stationStyle` sets the
-            /// hero at weight 700 and every themed hero face ships ONE weight,
-            /// so the design's own rendering is a browser fake-bold. Applied
-            /// only where a theme names a hero face: an unthemed hero is
-            /// Atkinson, which has a real bold cut and needs no help, and so is
-            /// The Beatles' — §4 vetoes its SgtPeppers and leaves it on the
-            /// ordinary face. See `GlitchText::bold` for the measurement.
-            bold: root.egg.hero-face != "" ? root.call-size * 0.0125 : 0px;
-            // ── `nameOutline`, AND WHY THIS IS `center` ──
-            //
-            // CENTRED IS WHAT THE REFERENCE DOES. `-webkit-text-stroke` straddles
-            // the glyph edge — half the width inside, half outside — so a centred
-            // stroke is the faithful one, and `outside` was a guess dressed up as
-            // a reason ("so the letterform keeps its own weight").
-            //
-            // IT IS ALSO THE ONLY ONE SLINT 1.17.1's SOFTWARE RENDERER DRAWS.
-            // Measured: with `outside`, the peak coverage over a `#0B0B0B` ground
-            // is 57/201 — a quarter — and it does not change between width 0 and
-            // width 4. With `center` the same text reaches the full 201. The
-            // outlined call sign had been shipping as a hairline ghost because of
-            // it, and it was misread twice as a missing typeface.
-            //
-            // `stroke-width` IS IGNORED by that renderer either way — 0, 0.5, 1.1,
-            // 2 and 8 all ink exactly 4234 pixels. It is kept because it is the
-            // design's value, because a zero width still has to mean "no outline",
-            // and because the device renders with SKIA, which this container
-            // cannot run. What the shots show for stroke WEIGHT is therefore not
-            // evidence about the unit; what they show for stroke PRESENCE is.
-            stroke-ink: root.egg.outline-ink;
-            stroke-w: root.egg.outline-w * root.scale;
-            }
-        }
-
-        // WI⚡BA — the bolt splits the call sign at its midpoint.
-        //
-        // A ROW OF THREE, not a glyph inside the string. The bolt is traced art
-        // and there is no character for it; drawing it as an element between two
-        // halves is also what keeps it scaling with the card during a morph,
-        // since everything here multiplies by `root.scale`.
-        if root.lettering && root.egg.call-bolt: HorizontalLayout {
-            alignment: center;
-            spacing: 0px;
-            Text {
-                text: root.ident-a;
-                vertical-alignment: center;
-                font-family: root.call-face; font-weight: Font.bold;
-                font-size: root.call-size;
-                letter-spacing: root.call-track;
-                color: root.lettering-ink;
-                stroke: root.egg.outline-ink;
-                stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: center;
-            }
-            Rectangle {
-                width: root.call-size * 0.74;
-                height: root.call-size * 1.05;
-                BoltIcon {
-                    size: root.call-size * 0.74;
-                    color: root.bolt;
+            // Real logo REPLACES the big call sign; the call sign becomes a small
+            // label beneath it.
+            // THE THEME CAN HIDE A REAL LOGO, and must be able to: AC/DC's whole
+            // card is the lettering, and a station that has art would otherwise never
+            // show a call sign for the bolt to split. CarFM's `suppressLogos`.
+            if !root.scanning && root.has-logo && !root.egg.suppress-logo: VerticalLayout {
+                spacing: 8px * root.scale;
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    HeroLogo {
+                        logo: root.logo;
+                        logo-h: root.logo-h;
+                        max-w: root.logo-max-w;
+                        scale: root.scale;
+                        plate: root.logo-plate;
+                    }
+                }
+                if root.show-call && root.ident != "": Text {
+                    text: root.ident;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    font-family: Font.face; font-weight: Font.bold;
+                    font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
+                    letter-spacing: 0.5px * root.scale;
+                    color: Pal.dim;
                 }
             }
-            Text {
-                text: root.ident-b;
-                vertical-alignment: center;
-                font-family: root.call-face; font-weight: Font.bold;
-                font-size: root.call-size;
-                letter-spacing: root.call-track;
-                color: root.lettering-ink;
-                stroke: root.egg.outline-ink;
-                stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: center;
-            }
-        }
 
-        // Always show the frequency when there is no name, even if the user turned
-        // the frequency line off — otherwise the hero would be blank.
-        if root.freq-shown: Rectangle {
-            height: freq.preferred-height + 6px * root.scale;
-            freq := Text {
-                y: 6px * root.scale;
-                width: parent.width;
-                text: root.freq-label;
-                horizontal-alignment: center;
-                // THE THEME'S FACE REACHES THE FREQUENCY. The prototype's
-                // `freqStyle` falls through `eggFreqFont || eggHeroFont ||
-                // eggFont`, so a theme with no frequency face of its own still
-                // lands its general one — Squealer here, which is why
-                // `screenshots/egg-acdc-dark.png` sets 88.7 in blackletter.
+            // No real logo: the big call sign, no monogram tile. When nothing has
+            // resolved (built-in tuner with no GPS lock yet) this is empty and the
+            // frequency below stands as the identity — never an inaccurate "Tuning…".
+            //
+            // A BOX AROUND ONE LINE OF TEXT, and the box is what `nameGhost` needs.
+            // The ghost is a second impression of the identity printed off register
+            // beneath the first — Nirvana 3/3 down in 20% black, Nine Inch Nails 2/0
+            // in 16%: a photocopy that did not quite line up, and a machine that did
+            // not quite lock. It has to be OFFSET, and a child of a VerticalLayout
+            // cannot set its own `y`, so both impressions live in one slot here and
+            // position themselves inside it. The box takes its height from the live
+            // line, so the ghost can never grow the card.
+            if root.lettering && !root.egg.call-bolt: Rectangle {
+                height: live-call.line-h;
+
+                if root.egg.ghost-ink.alpha > 0: Text {
+                    x: root.egg.ghost-dx * root.scale;
+                    y: root.egg.ghost-dy * root.scale;
+                    width: parent.width;
+                    text: root.ident;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    font-family: root.call-face; font-weight: Font.bold;
+                    font-size: root.call-size;
+                    letter-spacing: root.call-track;
+                    color: root.egg.ghost-ink;
+                }
+
+                live-call := GlitchText {
+                x: 0; y: 0; width: parent.width; height: self.line-h;
+                text: root.ident;
+                elide: true;
+                face: root.call-face; weight: Font.bold;
+                font-size: root.call-size;
+                tracking: root.call-track;
+                ink: root.lettering-ink;
+                ground: root.surface;
+                /// `heroGlitch` — the call sign rebuilt as three horizontal bands.
+                /// See `ui/glitch.slint`; Nine Inch Nails is the only theme that
+                /// asks for it, and every other face draws one ordinary line here.
+                on: root.egg.hero-glitch;
+                /// THE BOLD THE DISPLAY FACES DO NOT HAVE. `stationStyle` sets the
+                /// hero at weight 700 and every themed hero face ships ONE weight,
+                /// so the design's own rendering is a browser fake-bold. Applied
+                /// only where a theme names a hero face: an unthemed hero is
+                /// Atkinson, which has a real bold cut and needs no help, and so is
+                /// The Beatles' — §4 vetoes its SgtPeppers and leaves it on the
+                /// ordinary face. See `GlitchText::bold` for the measurement.
+                bold: root.egg.hero-face != "" ? root.call-size * 0.0125 : 0px;
+                // ── `nameOutline`, AND WHY THIS IS `center` ──
                 //
-                // THIS WAS BLAMED ON THE FONT AND IT WAS NEVER THE FONT. Squealer
-                // maps all of ASCII, digits and full stop included (201
-                // codepoints, checked against its own `cmap`), and it was
-                // rendering here all along. The outline was faint for the reason
-                // given on the call sign above, which is the same reason it was
-                // faint there — and the call sign's own outline reading as solid
-                // was the BOLT being measured, not the stroke.
-                // `freqFont` / `freqScale`. Nine Inch Nails is the only theme
-                // that names a frequency face — Singothic at 0.95 — but the
-                // reference falls through `eggFreqFont || eggHeroFont || eggFont`,
-                // so a theme with none still lands its hero face here. That is
-                // why AC/DC's 88.7 is Squealer in `egg-acdc-dark.png`.
-                font-family: root.egg.freq-face != "" ? root.egg.freq-face : root.call-face;
-                font-weight: Font.bold;
-                font-size: root.freq-size;
-                letter-spacing: root.egg.on ? 1px * root.scale : 0px;
-                color: root.freq-ink;
-                stroke: root.egg.outline-ink;
-                stroke-width: root.egg.outline-w * root.scale;
-                stroke-style: center;
+                // CENTRED IS WHAT THE REFERENCE DOES. `-webkit-text-stroke` straddles
+                // the glyph edge — half the width inside, half outside — so a centred
+                // stroke is the faithful one, and `outside` was a guess dressed up as
+                // a reason ("so the letterform keeps its own weight").
+                //
+                // IT IS ALSO THE ONLY ONE SLINT 1.17.1's SOFTWARE RENDERER DRAWS.
+                // Measured: with `outside`, the peak coverage over a `#0B0B0B` ground
+                // is 57/201 — a quarter — and it does not change between width 0 and
+                // width 4. With `center` the same text reaches the full 201. The
+                // outlined call sign had been shipping as a hairline ghost because of
+                // it, and it was misread twice as a missing typeface.
+                //
+                // `stroke-width` IS IGNORED by that renderer either way — 0, 0.5, 1.1,
+                // 2 and 8 all ink exactly 4234 pixels. It is kept because it is the
+                // design's value, because a zero width still has to mean "no outline",
+                // and because the device renders with SKIA, which this container
+                // cannot run. What the shots show for stroke WEIGHT is therefore not
+                // evidence about the unit; what they show for stroke PRESENCE is.
+                stroke-ink: root.egg.outline-ink;
+                stroke-w: root.egg.outline-w * root.scale;
+                }
             }
-            // NO TOUCH AREA. The frequency used to open a standalone keypad modal;
-            // the mini-handoff (§2, §7) removes that entry point outright — the
-            // keypad is a tab inside the tune overlay now, reached from the status
-            // bar's nearby button, and this line is display-only text with no
-            // pressed state and no pointer affordance.
+
+            // WI⚡BA — the bolt splits the call sign at its midpoint.
+            //
+            // A ROW OF THREE, not a glyph inside the string. The bolt is traced art
+            // and there is no character for it; drawing it as an element between two
+            // halves is also what keeps it scaling with the card during a morph,
+            // since everything here multiplies by `root.scale`.
+            if root.lettering && root.egg.call-bolt: HorizontalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text {
+                    text: root.ident-a;
+                    vertical-alignment: center;
+                    font-family: root.call-face; font-weight: Font.bold;
+                    font-size: root.call-size;
+                    letter-spacing: root.call-track;
+                    color: root.lettering-ink;
+                    stroke: root.egg.outline-ink;
+                    stroke-width: root.egg.outline-w * root.scale;
+                    stroke-style: center;
+                }
+                Rectangle {
+                    width: root.call-size * 0.74;
+                    height: root.call-size * 1.05;
+                    BoltIcon {
+                        size: root.call-size * 0.74;
+                        color: root.bolt;
+                    }
+                }
+                Text {
+                    text: root.ident-b;
+                    vertical-alignment: center;
+                    font-family: root.call-face; font-weight: Font.bold;
+                    font-size: root.call-size;
+                    letter-spacing: root.call-track;
+                    color: root.lettering-ink;
+                    stroke: root.egg.outline-ink;
+                    stroke-width: root.egg.outline-w * root.scale;
+                    stroke-style: center;
+                }
+            }
+
+            // Always show the frequency when there is no name, even if the user turned
+            // the frequency line off — otherwise the hero would be blank.
+            if root.freq-shown: Rectangle {
+                height: freq.preferred-height + 6px * root.scale;
+                freq := Text {
+                    y: 6px * root.scale;
+                    width: parent.width;
+                    text: root.freq-label;
+                    horizontal-alignment: center;
+                    // THE THEME'S FACE REACHES THE FREQUENCY. The prototype's
+                    // `freqStyle` falls through `eggFreqFont || eggHeroFont ||
+                    // eggFont`, so a theme with no frequency face of its own still
+                    // lands its general one — Squealer here, which is why
+                    // `screenshots/egg-acdc-dark.png` sets 88.7 in blackletter.
+                    //
+                    // THIS WAS BLAMED ON THE FONT AND IT WAS NEVER THE FONT. Squealer
+                    // maps all of ASCII, digits and full stop included (201
+                    // codepoints, checked against its own `cmap`), and it was
+                    // rendering here all along. The outline was faint for the reason
+                    // given on the call sign above, which is the same reason it was
+                    // faint there — and the call sign's own outline reading as solid
+                    // was the BOLT being measured, not the stroke.
+                    // `freqFont` / `freqScale`. Nine Inch Nails is the only theme
+                    // that names a frequency face — Singothic at 0.95 — but the
+                    // reference falls through `eggFreqFont || eggHeroFont || eggFont`,
+                    // so a theme with none still lands its hero face here. That is
+                    // why AC/DC's 88.7 is Squealer in `egg-acdc-dark.png`.
+                    font-family: root.egg.freq-face != "" ? root.egg.freq-face : root.call-face;
+                    font-weight: Font.bold;
+                    font-size: root.freq-size;
+                    letter-spacing: root.egg.on ? 1px * root.scale : 0px;
+                    color: root.freq-ink;
+                    stroke: root.egg.outline-ink;
+                    stroke-width: root.egg.outline-w * root.scale;
+                    stroke-style: center;
+                }
+                // NO TOUCH AREA. The frequency used to open a standalone keypad modal;
+                // the mini-handoff (§2, §7) removes that entry point outright — the
+                // keypad is a tab inside the tune overlay now, reached from the status
+                // bar's nearby button, and this line is display-only text with no
+                // pressed state and no pointer affordance.
+            }
         }
     }
+
+
+    // THE STATION MOVES TO THE CORNER so the driver still knows what is playing.
+    //
+    // TRANSPARENT, WITH NO PLATE, which is why this is a bare `Image` and not the
+    // `HeroLogo` used below — that one draws the light or dark plate a hero logo
+    // sits on, and §4.9 asks for none here.
+    //
+    // ABSOLUTELY PLACED rather than in the layout above: it must not push the
+    // arrow off centre, and the card's own padding is what sets its inset.
+    // ── LEFT OF THE STAR, NOT UNDER IT ───────────────────────────────────────
+    //
+    // §4.9 puts the station mark in "the card's upper-right corner" and does not
+    // mention what is already there: the save star has held that exact corner on
+    // both tracks since the card was built. The first render put the call sign
+    // straight through it. So the mark sits one star-width further in, on the
+    // star's own line — the corner is shared rather than taken, and the driver
+    // keeps a control they can still reach.
+    property <length> corner-mark-w: Metrics.s(root.tall ? 115 : 101) * root.scale;
+    property <length> corner-mark-x:
+        root.width - root.corner - Metrics.star * root.scale
+        - Metrics.s(10) * root.scale - root.corner-mark-w;
+
+    if root.taking-over && root.has-logo && !root.egg.suppress-logo: Image {
+        source: root.logo;
+        // CONTAIN, AND NO PLATE BEHIND IT. §4.9: "transparent — no plate or
+        // border behind it", which is why this is a bare `Image` rather than the
+        // `HeroLogo` the card uses everywhere else; that one draws the light or
+        // dark plate a hero logo normally sits on.
+        image-fit: contain;
+        width: root.corner-mark-w;
+        height: Metrics.star * root.scale;
+        x: root.corner-mark-x;
+        y: root.corner;
+    }
+    if root.taking-over && (!root.has-logo || root.egg.suppress-logo) && root.ident != "": Text {
+        text: root.ident;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.s(root.tall ? 20 : 24) * root.scale;
+        // "the call sign in `dim` when a station has no logo" (§4.9).
+        color: Pal.dim;
+        width: root.corner-mark-w;
+        height: Metrics.star * root.scale;
+        x: root.corner-mark-x;
+        y: root.corner;
+    }
+
+
 
     // The star ALWAYS sits in the card's top-right corner, on both tracks — never
     // inline with the station identity. It is not part of the centred group.
@@ -882,6 +1232,12 @@ export component HeroCard inherits Rectangle {
 export component HeroRow inherits Rectangle {
     /// The band theme, handed to every card this row can build.
     in property <EggTheme> egg;
+    /// §4.9's stage 3 — handed to the LIVE card only. See `HeroCard`.
+    in property <NavStage> nav-stage: NavStage.idle;
+    in property <string> nav-arrow;
+    in property <string> nav-exit;
+    in property <string> nav-distance;
+    in property <string> nav-street;
     in property <string> ident-a;
     in property <string> ident-b;
     in property <Preset> prev-preset;
@@ -1359,6 +1715,14 @@ export component HeroRow inherits Rectangle {
         saved: root.saved;
         dead: root.dead;
         scanning: root.scanning;
+        // §4.9's stage 3. Only the LIVE card takes over: the two morph cards are
+        // `inert`, and `taking-over` refuses on that — a station flying into or
+        // out of the hero slot must not turn into a maneuver mid-flight.
+        nav-stage: root.nav-stage;
+        nav-arrow: root.nav-arrow;
+        nav-exit: root.nav-exit;
+        nav-distance: root.nav-distance;
+        nav-street: root.nav-street;
         toggle-save => { root.toggle-save(); }
         toggle-audio => { root.toggle-audio(); }
     }

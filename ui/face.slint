@@ -70,6 +70,11 @@ export component Face inherits Rectangle {
     in property <string> nav-exit;
     in property <string> nav-distance;
     in property <string> nav-street;
+    /// The turn AFTER the next one — §4.9's `then` block, and the only maneuver
+    /// the strip shows once the hero card has taken over.
+    in property <string> nav-after-arrow;
+    in property <string> nav-after-exit;
+    in property <string> nav-after-street;
 
     // ── Presets ──
     in property <[Preset]> presets;
@@ -499,6 +504,12 @@ export component Face inherits Rectangle {
         if !Metrics.tall: VerticalLayout {
             spacing: 16px;
             HeroRow {
+                // §4.9's stage 3 — the hero card carries the maneuver.
+                nav-stage: root.nav-stage;
+                nav-arrow: root.nav-arrow;
+                nav-exit: root.nav-exit;
+                nav-distance: root.nav-distance;
+                nav-street: root.nav-street;
                 vertical-stretch: 1;
                 card-w: Metrics.hero-card-w;
                 card-fill: true;
@@ -542,6 +553,16 @@ export component Face inherits Rectangle {
                     text: root.radio-text;
                     egg: root.egg;
                     opacity: root.dead ? 0 : 1;
+                    // §4.9's stages 2 and 3 — the strip carries the maneuver,
+                    // then the turn after it once the hero card takes over.
+                    nav-stage: root.nav-stage;
+                    nav-arrow: root.nav-arrow;
+                    nav-exit: root.nav-exit;
+                    nav-distance: root.nav-distance;
+                    nav-street: root.nav-street;
+                    nav-after-arrow: root.nav-after-arrow;
+                    nav-after-exit: root.nav-after-exit;
+                    nav-after-street: root.nav-after-street;
                 }
             }
         }
@@ -555,6 +576,12 @@ export component Face inherits Rectangle {
             spacing: 0px;
             Rectangle { vertical-stretch: 1; }
             HeroRow {
+                // §4.9's stage 3 — the hero card carries the maneuver.
+                nav-stage: root.nav-stage;
+                nav-arrow: root.nav-arrow;
+                nav-exit: root.nav-exit;
+                nav-distance: root.nav-distance;
+                nav-street: root.nav-street;
                 vertical-stretch: 0;
                 card-w: Metrics.tall-hero-w;
                 card-fill: false;
@@ -607,6 +634,16 @@ export component Face inherits Rectangle {
                     text: root.radio-text;
                     egg: root.egg;
                     opacity: root.dead ? 0 : 1;
+                    // §4.9's stages 2 and 3 — the strip carries the maneuver,
+                    // then the turn after it once the hero card takes over.
+                    nav-stage: root.nav-stage;
+                    nav-arrow: root.nav-arrow;
+                    nav-exit: root.nav-exit;
+                    nav-distance: root.nav-distance;
+                    nav-street: root.nav-street;
+                    nav-after-arrow: root.nav-after-arrow;
+                    nav-after-exit: root.nav-after-exit;
+                    nav-after-street: root.nav-after-street;
                 }
             }
             Rectangle { vertical-stretch: 1; }
