@@ -63,6 +63,14 @@ curl -sS --fail --max-time 45 \
     "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/helpers/ExternalApiHelper.java" \
     -o "$TMP/ext.java" 2>/dev/null || true
 
+# `next_turn_imminent` is the only trigger 4.9 permits for escalating the
+# maneuver display, and its three values are NOT a rising scale: zero is the
+# most urgent. `crate::nav::Stage` reads them; this is where that reading is
+# held against the function that produces them.
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/routing/data/AnnounceTimeDistances.java" \
+    -o "$TMP/atd.java" 2>/dev/null || true
+
 python3 - "$TMP" "$OURS" <<'PY'
 import os, re, sys
 
@@ -159,6 +167,41 @@ if os.path.exists(ext) and os.path.getsize(ext):
     if not [f for f in fail if "prefix" in f or "turnInfo key" in f]:
         print("  turnInfo: keys and both prefixes unchanged "
               "(after-next still has no trailing underscore)")
+
+# ── `imminent`: three values, and zero is the loudest ────────────────────────
+#
+# `crate::nav::Stage::from_imminent` maps 0 -> TurnNow, 1 -> Approach, anything
+# else -> Cruise. That ordering is the trap: a reader who assumed the integer
+# rose with urgency would put the hero takeover on the cruise state. The body of
+# `getImminentTurnStatus` is four lines and this checks all of them.
+atd = os.path.join(tmp, "atd.java")
+if os.path.exists(atd):
+    text = open(atd, encoding="utf-8", errors="replace").read()
+    body = re.search(r"getImminentTurnStatus\s*\([^)]*\)\s*\{(.*?)\n\t\}", text, re.S)
+    if not body:
+        fail.append("AnnounceTimeDistances.getImminentTurnStatus is gone or reshaped — "
+                    "nav::Stage reads its return values.")
+    else:
+        b = re.sub(r"//.*", "", body.group(1))
+        want = [
+            (r"isTurnStateActive\([^)]*STATE_TURN_NOW\)[^{]*\{\s*return\s+0\s*;",
+             "STATE_TURN_NOW no longer returns 0 — Stage::TurnNow reads 0."),
+            (r"isTurnStateActive\([^)]*STATE_PREPARE_TURN\)[^{]*\{\s*return\s+1\s*;",
+             "STATE_PREPARE_TURN no longer returns 1 — Stage::Approach reads 1."),
+            (r"else\s*\{\s*return\s+-1\s*;",
+             "the cruising fall-through no longer returns -1 — Stage::Cruise reads it."),
+        ]
+        bad = [msg for pat, msg in want if not re.search(pat, b, re.S)]
+        fail.extend(bad)
+        # And nothing else may return from it: a fourth value would be a rung
+        # this ladder does not have, and `from_imminent` would read it as Cruise.
+        returns = sorted(set(re.findall(r"return\s+(-?\d+)\s*;", b)))
+        if returns and returns != ["-1", "0", "1"]:
+            fail.append(f"getImminentTurnStatus now returns {returns} — nav::Stage "
+                        "knows only -1, 0 and 1.")
+        if not bad:
+            print("  imminent: still -1 cruise / 1 prepare / 0 turn-now "
+                  "(zero is the most urgent)")
 
 if fail:
     print()

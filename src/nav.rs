@@ -192,6 +192,75 @@ pub enum NavState {
     Unknown { code: i32, metres: i32 },
 }
 
+/// How loudly the face should say the next maneuver (§4.9's three stages).
+///
+/// ── THE TRIGGER IS OSMAND'S, AND ITS SCALE WAS NOT OBVIOUS ──────────────────
+///
+/// §4.9: *"Escalation follows `next_turn_imminent` (and the voice router
+/// firing), so the radio changes at the same moment OsmAnd speaks — never on
+/// distance thresholds of our own, which would disagree with the voice at
+/// highway speeds."*
+///
+/// This shipped once with the integer carried and LOGGED raw and nothing
+/// branching on it, because what its values meant could not be read: the class
+/// that computes it is not in OsmAnd's `OsmAnd-java` tree. It is in the Android
+/// module — `OsmAnd/src/net/osmand/plus/routing/data/AnnounceTimeDistances.java`
+/// — reached through `RoutingHelper` → `VoiceRouter.calculateImminent` →
+/// `AnnounceTimeDistances.getImminentTurnStatus`, whose whole body is:
+///
+/// ```java
+/// float speed = getSpeed(loc);
+/// if (isTurnStateActive(speed, dist, STATE_TURN_NOW)) {
+///     return 0;
+/// } else if (isTurnStateActive(speed, dist, STATE_PREPARE_TURN)) {
+///     // STATE_TURN_IN included
+///     return 1;
+/// } else {
+///     return -1;
+/// }
+/// ```
+///
+/// THREE VALUES, AND ZERO IS THE MOST URGENT OF THEM — which is exactly the
+/// trap that was worth not guessing at. A reader who assumed a rising scale
+/// would have put the hero takeover on the cruise state and left the turn itself
+/// unannounced.
+///
+/// The thresholds behind those two booleans are OsmAnd's, and they are
+/// SPEED-SCALED rather than fixed distances: `PREPARE_DISTANCE = DEFAULT_SPEED *
+/// 115` and `TURN_IN_DISTANCE = DEFAULT_SPEED * 22`, with a low-speed adjustment
+/// on TURN_NOW. That is the whole reason §4.9 forbids thresholds of our own —
+/// ours would be in metres and OsmAnd's are in seconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    /// Not navigating, or suppressed.
+    #[default]
+    Idle,
+    /// `-1` — a route is running and the turn is far off. §4.9's stage 1: the
+    /// hairline, the ETA under the clock, the cruise countdown.
+    Cruise,
+    /// `1` — `STATE_PREPARE_TURN`, `STATE_TURN_IN` included. §4.9's stage 2:
+    /// the RadioText strip yields.
+    Approach,
+    /// `0` — `STATE_TURN_NOW`. §4.9's stage 3: the hero card takes over.
+    TurnNow,
+}
+
+impl Stage {
+    /// `next_turn_imminent`, read as OsmAnd's own three values.
+    ///
+    /// ANYTHING ELSE IS `Cruise` — not a panic, and not the loudest state. A
+    /// value this table does not know is a newer OsmAnd, and the safe reading of
+    /// an unknown urgency is the quiet one: escalating on it would hand the hero
+    /// card to a turn that may be ten kilometres away.
+    pub fn from_imminent(imminent: Option<i32>) -> Stage {
+        match imminent {
+            Some(0) => Stage::TurnNow,
+            Some(1) => Stage::Approach,
+            _ => Stage::Cruise,
+        }
+    }
+}
+
 /// What the POLL adds — everything with words in it.
 ///
 /// THE PUSH CALLBACK HAS NO TEXT AT ALL. `ADirectionInfo` is three integers, so
@@ -227,15 +296,12 @@ pub struct Route {
     pub turn_xml: Option<String>,
     /// Metres to the next turn, from the poll's own reading.
     pub turn_metres: Option<i32>,
-    /// OsmAnd's `nextInfo.imminent`.
+    /// OsmAnd's `nextInfo.imminent` — `-1` cruise, `1` approach, `0` turn now.
     ///
-    /// AN INTEGER WHOSE SCALE IS NOT ESTABLISHED. The handoff escalates the
-    /// display on it — *"Escalate on `next_turn_imminent` … never on distance
-    /// thresholds of our own"* — and the class that computes it,
-    /// `AnnounceTimeDistances.getImminentTurnStatus`, is not in OsmAnd's Java
-    /// sources any more, so what its values mean could not be read. It is carried
-    /// raw and LOGGED raw; one drive with a route running settles it, and until
-    /// then nothing branches on it.
+    /// THE SCALE IS SETTLED AND IT IS NOT A RISING ONE. See [`Stage`], which
+    /// holds the source it was read out of and why zero being the loudest value
+    /// is the trap. Carried raw here and still LOGGED raw, so a drive can show
+    /// what actually arrived rather than what this build made of it.
     pub imminent: Option<i32>,
     /// The turn after the next one, for the handoff's `THEN` block.
     pub after_street: Option<String>,
@@ -370,6 +436,30 @@ impl Nav {
         }
     }
 
+    /// Which of §4.9's three stages the face should be in, at `now`.
+    ///
+    /// `showing` IS THE CALLER'S SUPPRESSION — the settings switch and OsmAnd's
+    /// own map being in front. Taken as an argument rather than read here
+    /// because this module holds no settings, and folding it in would make a
+    /// hidden layer indistinguishable from a finished route.
+    ///
+    /// NO ROUTE MEANS `Idle` WHATEVER THE POLL LAST SAID. A stale `imminent`
+    /// outliving its turn is exactly the case `EXPIRY` exists for, and reading
+    /// the two independently would leave the hero card taken over by a junction
+    /// the driver passed a minute ago.
+    pub fn stage(&self, now: u64, showing: bool) -> Stage {
+        if !showing || matches!(self.state(now), NavState::Idle) {
+            return Stage::Idle;
+        }
+        match self.route(now) {
+            Some(r) => Stage::from_imminent(r.imminent),
+            // PUSHING WITHOUT A POLL IS STILL CRUISING. The push callback is the
+            // one that keeps arriving on a slow route; a face that fell back to
+            // `Idle` because the poll was a second late would blink.
+            None => Stage::Cruise,
+        }
+    }
+
     /// The last announcement, if it is still fresh.
     pub fn spoken(&self, now: u64) -> Option<&str> {
         self.spoken
@@ -412,10 +502,10 @@ impl Nav {
         };
         let mut out = head;
         if let Some(r) = self.route(now) {
-            // THE STREET AND THE RAW `imminent`, which is the whole reason this
-            // line exists in this shape: the handoff escalates on that integer
-            // and nothing in this tree could establish its scale, so one drive
-            // with a route running is what settles it.
+            // THE STREET AND THE RAW `imminent`, still raw now that `Stage`
+            // knows what it means: the log's job is to say what ARRIVED, and a
+            // line printing "Approach" could not tell a wrong reading of the
+            // integer from a wrong integer.
             if let Some(street) = &r.street {
                 out.push_str(&format!(" onto {street}"));
             }
@@ -834,6 +924,52 @@ mod tests {
         assert_eq!(Nav::distance_label(240, Units::Imperial), "790 ft");
         assert_eq!(Nav::distance_label(4000, Units::Metric), "4.0 km");
         assert_eq!(Nav::distance_label(4000, Units::Imperial), "2.5 mi");
+    }
+
+    /// OSMAND'S THREE IMMINENT VALUES, AND ZERO IS THE LOUDEST.
+    ///
+    /// Transcribed from `AnnounceTimeDistances.getImminentTurnStatus`, whose
+    /// body returns 0 for `STATE_TURN_NOW`, 1 for `STATE_PREPARE_TURN` (with
+    /// `STATE_TURN_IN` folded in) and -1 otherwise. The ordering is the whole
+    /// point: a rising-scale reading would put the hero takeover on the cruise
+    /// state and leave the turn itself unannounced.
+    #[test]
+    fn the_stage_ladder_is_osmands_own_and_zero_is_the_loudest_rung() {
+        assert_eq!(Stage::from_imminent(Some(0)), Stage::TurnNow, "0 is STATE_TURN_NOW");
+        assert_eq!(Stage::from_imminent(Some(1)), Stage::Approach, "1 is STATE_PREPARE_TURN");
+        assert_eq!(Stage::from_imminent(Some(-1)), Stage::Cruise, "-1 is neither");
+        // AN UNKNOWN VALUE IS THE QUIET STATE. A newer OsmAnd returning 2 must
+        // not be read as more urgent than 1 — the scale does not rise.
+        for v in [2, 3, 42, -7] {
+            assert_eq!(Stage::from_imminent(Some(v)), Stage::Cruise, "{v}");
+        }
+        assert_eq!(Stage::from_imminent(None), Stage::Cruise, "a poll with no key");
+        // AND THE ORDERING IS BY URGENCY, not by the integer.
+        assert!(Stage::Idle < Stage::Cruise);
+        assert!(Stage::Cruise < Stage::Approach);
+        assert!(Stage::Approach < Stage::TurnNow);
+    }
+
+    /// THE STAGE NEEDS A LIVE ROUTE AND PERMISSION TO DRAW.
+    #[test]
+    fn the_stage_is_idle_without_a_route_or_without_permission() {
+        let mut nav = Nav::new();
+        assert_eq!(nav.stage(0, true), Stage::Idle, "nothing received");
+
+        nav.update(240, 5, 100);
+        assert_eq!(nav.stage(100, true), Stage::Cruise, "pushing, no poll yet");
+        // SUPPRESSED IS IDLE, which is what the map-visible switch turns into.
+        assert_eq!(nav.stage(100, false), Stage::Idle, "hidden behind OsmAnd's map");
+
+        nav.poll(Route { imminent: Some(1), ..Route::default() }, 100);
+        assert_eq!(nav.stage(100, true), Stage::Approach);
+        nav.poll(Route { imminent: Some(0), ..Route::default() }, 100);
+        assert_eq!(nav.stage(100, true), Stage::TurnNow);
+
+        // AND A STALE `imminent` DOES NOT OUTLIVE ITS TURN. Both halves age on
+        // one clock; without that the hero card would stay taken over by a
+        // junction the driver passed a minute ago.
+        assert_eq!(nav.stage(100 + Nav::EXPIRY, true), Stage::Idle);
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.
