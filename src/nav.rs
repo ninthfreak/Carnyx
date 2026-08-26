@@ -440,21 +440,74 @@ impl Nav {
     }
 }
 
+/// Everything the settings sub-line needs to answer "why is nothing showing".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Link<'a> {
+    /// Whatever `CarnyxNav.installedPackage` found, or empty.
+    pub package: &'a str,
+    /// The switch itself.
+    pub on: bool,
+    /// The poll is answering. See `App::push_nav`.
+    pub linked: bool,
+    /// OsmAnd has a route running.
+    pub navigating: bool,
+    /// OsmAnd's own map is in front.
+    pub map_visible: bool,
+    /// Settings ▸ NAVIGATION ▸ Hide when the map is showing.
+    pub hide_on_map: bool,
+}
+
 /// The settings row's sub-line.
 ///
-/// THE ROW HAS TO ANSWER "is OsmAnd even here" WITHOUT BEING TURNED ON. A switch
-/// whose only failure report arrives after you flip it makes the driver run an
-/// experiment to learn something the package manager already knows — and on a
-/// dashboard that is the difference between a feature and a puzzle.
+/// ── IT ANSWERS ONE QUESTION: WHY IS NOTHING SHOWING? ────────────────────────
 ///
-/// `package` is whatever `CarnyxNav.installedPackage` found, or empty.
-pub fn sub_line(package: &str) -> String {
-    if package.is_empty() {
-        // NOT WORDED AS A FAULT. A driver without OsmAnd has not broken
-        // anything; they have a switch for an app they do not have.
-        return "Show OsmAnd's next turn on the face. OsmAnd is not installed.".to_string();
+/// §4.9: *"its sub-line reports the link state and why nothing is showing —
+/// OsmAnd idle, off here, or hidden behind the map"*. Those three are the
+/// reasons a driver actually hits, and each of them looks identical on the face
+/// — a blank strip — so the row is the only place they can be told apart.
+///
+/// THE ROW ALSO HAS TO ANSWER "is OsmAnd even here" WITHOUT BEING TURNED ON,
+/// which is why the not-installed case is first and does not depend on `on`. A
+/// switch whose only failure report arrives after you flip it makes the driver
+/// run an experiment to learn something the package manager already knows.
+///
+/// NOT ONE OF THESE READS AS A FAULT. A driver without OsmAnd, or with it
+/// closed, has not broken anything, and `the_sub_line_never_reads_as_a_fault`
+/// holds that line across every branch.
+pub fn sub_line(link: &Link) -> String {
+    const WHAT: &str = "Show OsmAnd's next turn on the face.";
+    if link.package.is_empty() {
+        return format!("{WHAT} OsmAnd is not installed.");
     }
-    format!("Show OsmAnd's next turn on the face. Found {package}.")
+    if !link.on {
+        // THE SWITCH'S OWN POSITION ALREADY SAYS "off", so this says the thing
+        // the switch cannot: which OsmAnd it would talk to if it were on.
+        return format!("{WHAT} Off. Found {}.", link.package);
+    }
+    if !link.linked {
+        // ON, INSTALLED, AND NOTHING ANSWERING — OsmAnd is not running. Worded
+        // as waiting rather than failing, because it is: the bind stands and
+        // the first poll after OsmAnd starts lights it with nothing to press.
+        return format!("{WHAT} Waiting for {} to start.", link.package);
+    }
+    if !link.navigating {
+        // "OsmAnd idle" — connected, no route. The single most common reason
+        // for a blank strip, and the one most likely to be read as broken.
+        return format!("{WHAT} Connected to {}, with no route running.", link.package);
+    }
+    if link.map_visible && link.hide_on_map {
+        // "hidden behind the map" — and it names the switch that changes it,
+        // because a driver reading this sentence is asking how to turn it off.
+        return format!("{WHAT} Hidden while OsmAnd's map is in front — see below.");
+    }
+    format!("{WHAT} Showing the next turn from {}.", link.package)
+}
+
+/// The sub-line under "Hide when the map is showing".
+pub fn hide_sub_line() -> String {
+    "While OsmAnd's own map is on screen the radio leaves the turn to it, \
+     because you are already looking at one."
+        .to_string()
 }
 
 #[cfg(test)]
@@ -621,16 +674,88 @@ mod tests {
         const { assert!(Nav::SPOKEN_EXPIRY > Nav::EXPIRY) };
     }
 
+    /// A link with OsmAnd found, the switch on, and nothing else claimed.
+    fn linked_to(package: &str) -> Link<'_> {
+        Link { package, on: true, hide_on_map: true, ..Link::default() }
+    }
+
     /// THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO, BEFORE IT IS TAPPED.
     #[test]
     fn the_settings_sub_line_names_the_osmand_it_found() {
-        assert!(sub_line("net.osmand.plus").contains("net.osmand.plus"));
-        assert!(sub_line("").contains("not installed"));
-        // AND IT NEVER READS AS A FAULT. "Error", "failed" and "unavailable" are
-        // what a driver reads as "something is broken"; not having an app is not.
-        for word in ["rror", "ailed", "navailable"] {
-            assert!(!sub_line("").contains(word), "{word} reads as a fault");
+        assert!(sub_line(&linked_to("net.osmand.plus")).contains("net.osmand.plus"));
+        assert!(sub_line(&Link::default()).contains("not installed"));
+        // NOT INSTALLED IS ANSWERED WITH THE SWITCH OFF TOO — the question is
+        // about the phone, not about the setting.
+        let off_and_absent = Link { on: false, ..Link::default() };
+        assert!(sub_line(&off_and_absent).contains("not installed"));
+    }
+
+    /// EVERY REASON THE STRIP CAN BE BLANK IS A DIFFERENT SENTENCE.
+    ///
+    /// §4.9 names three — "OsmAnd idle, off here, or hidden behind the map" —
+    /// and they look identical on the face. If two of them ever collapse into
+    /// one sentence, the row has stopped doing the only job it has.
+    #[test]
+    fn each_reason_for_a_blank_strip_says_which_one_it_is() {
+        let pkg = "net.osmand.plus";
+        let off = Link { on: false, ..linked_to(pkg) };
+        let waiting = linked_to(pkg);
+        let idle = Link { linked: true, ..linked_to(pkg) };
+        let behind_map = Link {
+            linked: true,
+            navigating: true,
+            map_visible: true,
+            ..linked_to(pkg)
+        };
+        let showing = Link { linked: true, navigating: true, ..linked_to(pkg) };
+
+        assert!(sub_line(&off).contains("Off"), "{}", sub_line(&off));
+        assert!(sub_line(&waiting).contains("Waiting"), "{}", sub_line(&waiting));
+        assert!(sub_line(&idle).contains("no route"), "{}", sub_line(&idle));
+        assert!(sub_line(&behind_map).contains("map is in front"), "{}", sub_line(&behind_map));
+        assert!(sub_line(&showing).contains("Showing"), "{}", sub_line(&showing));
+
+        // AND NO TWO OF THEM ARE THE SAME STRING.
+        let all = [&off, &waiting, &idle, &behind_map, &showing].map(|l| sub_line(l));
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                assert_ne!(all[i], all[j], "two states share one sentence");
+            }
         }
+
+        // THE SUPPRESSION IS ONLY REPORTED WHEN IT IS SWITCHED ON. With the
+        // hide switch off, a visible map changes nothing and the row must not
+        // claim the strip is hidden.
+        let map_but_not_hiding = Link { hide_on_map: false, ..behind_map.clone() };
+        assert_eq!(sub_line(&map_but_not_hiding), sub_line(&showing));
+    }
+
+    /// IT NEVER READS AS A FAULT, in any state.
+    ///
+    /// "Error", "failed" and "unavailable" are what a driver reads as "something
+    /// is broken". Not having an app is not broken, and neither is having it
+    /// closed — which is the state this row will show most often.
+    #[test]
+    fn the_sub_line_never_reads_as_a_fault() {
+        let pkg = "net.osmand.plus";
+        let every_state = [
+            Link::default(),
+            Link { on: false, ..linked_to(pkg) },
+            linked_to(pkg),
+            Link { linked: true, ..linked_to(pkg) },
+            Link { linked: true, navigating: true, map_visible: true, ..linked_to(pkg) },
+            Link { linked: true, navigating: true, ..linked_to(pkg) },
+        ];
+        for link in &every_state {
+            let line = sub_line(link);
+            for word in ["rror", "ailed", "navailable", "annot", "roblem"] {
+                assert!(!line.contains(word), "{word:?} reads as a fault in {line:?}");
+            }
+            // And every one of them says what the switch is FOR, so the row
+            // still explains itself when it is also explaining a state.
+            assert!(line.starts_with("Show OsmAnd's next turn"), "{line}");
+        }
+        assert!(!hide_sub_line().is_empty());
     }
 
     /// THE POLL CARRIES EVERY WORD, AND IT AGES ON THE SAME CLOCK.

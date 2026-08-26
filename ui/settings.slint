@@ -1278,10 +1278,14 @@ export component SettingsOverlay inherits Rectangle {
     /// The Clock row's sub-line, which REPORTS the system's 12/24 format rather
     /// than offering it. Decided in Rust.
     in property <string> clock-sub;
-    in property <bool> nav-on: false;
-    /// The navigation row's sub-line, which says which OsmAnd was found. Decided
-    /// in Rust like every other string here.
+    // ── NAVIGATION (§4.9) ──
+    in property <bool> nav-on: true;
+    /// Why nothing is showing — no OsmAnd, off here, OsmAnd closed, OsmAnd open
+    /// with no route, or hidden behind its map. Decided in Rust like every other
+    /// string here; see `crate::nav::sub_line`.
     in property <string> nav-sub;
+    in property <bool> nav-hide-on-map: true;
+    in property <string> nav-hide-sub;
 
     // ── APPEARANCE ──
     /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in Rust.
@@ -1386,6 +1390,7 @@ export component SettingsOverlay inherits Rectangle {
     callback set-release-on-sleep(bool);
     callback set-clock-on(bool);
     callback set-nav-on(bool);
+    callback set-nav-hide-on-map(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
     callback set-theme(string);
@@ -1526,20 +1531,35 @@ export component SettingsOverlay inherits Rectangle {
                     on: root.release-on-sleep;
                     toggled(v) => { root.set-release-on-sleep(v); }
                 }
+            }
 
-                RowDivider { }
-
-                // TURN-BY-TURN. In the TUNER group rather than a group of its
-                // own: it is a thing the radio shows while it is driving, and a
-                // section for one switch would read as a feature area this is
-                // not yet. The sub-line is Rust's and says which OsmAnd was
-                // found — "not installed" is the answer a driver most needs and
-                // the one a bare switch cannot give.
+            // ── NAVIGATION ──
+            //
+            // ITS OWN SECTION NOW, AND IT WAS A ROW IN TUNER. That was the right
+            // call for one switch and §4.9 asks for two: "NAVIGATION section:
+            // OsmAnd integration (default on; its sub-line reports the link
+            // state and why nothing is showing — OsmAnd idle, off here, or
+            // hidden behind the map) and Hide when the map is showing."
+            SectionLabel { label: "NAVIGATION"; }
+            GroupCard {
+                pad: Metrics.s(card.narrow ? 8 : 10);
                 SwitchRow {
-                    title: "Turn-by-turn directions";
+                    title: "OsmAnd integration";
                     sub: root.nav-sub;
                     on: root.nav-on;
                     toggled(v) => { root.set-nav-on(v); }
+                }
+
+                RowDivider { }
+
+                // SECOND ROW STAYS PUT WHEN THE FIRST IS OFF, rather than
+                // disappearing: a driver who has just switched the integration
+                // off should not watch the panel reflow underneath their finger.
+                SwitchRow {
+                    title: "Hide when the map is showing";
+                    sub: root.nav-hide-sub;
+                    on: root.nav-hide-on-map;
+                    toggled(v) => { root.set-nav-hide-on-map(v); }
                 }
             }
 

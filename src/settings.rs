@@ -422,12 +422,30 @@ pub struct Settings {
     pub clock_on: bool,
     /// Turn-by-turn directions from OsmAnd. See `crate::nav`.
     ///
-    /// DEFAULTS OFF, unlike every other switch in this panel, and the reason is
-    /// what it does rather than what it costs: turning it on BINDS ANOTHER APP
-    /// and, with `BIND_AUTO_CREATE`, starts it if it is not running. A radio
-    /// that launched a maps application on first run because a default said so
-    /// would be doing something nobody asked for.
+    /// ── DEFAULT ON, AND IT WAS OFF UNTIL §4.9 SAID OTHERWISE ────────────────
+    ///
+    /// The handoff is explicit — *"`NAVIGATION` section: **OsmAnd integration**
+    /// (default on …)"* — so on it is. The reason it was off is not wrong and
+    /// is worth keeping written down rather than quietly dropping: turning this
+    /// on BINDS ANOTHER APP, and the bind uses `BIND_AUTO_CREATE`, so it STARTS
+    /// OsmAnd's service if it is not already running. On by default means a
+    /// radio that brings up a maps app's process at every boot for a driver who
+    /// has OsmAnd installed and never navigates with it.
+    ///
+    /// What makes that defensible rather than merely instructed: it starts a
+    /// SERVICE and not an activity — nothing appears on screen — and a driver
+    /// with no OsmAnd installed binds nothing at all, because
+    /// `CarnyxNav.installedPackage` finds none of the four ids and `start()`
+    /// returns without a bind. The cost falls only on someone who chose to
+    /// install it.
     pub nav_on: bool,
+    /// Hide the maneuver layer while OsmAnd's own map is in front (§4.9).
+    ///
+    /// DEFAULT ON, which the spec states and which is also the only default
+    /// that makes sense: `AppInfoParams.mapVisible` says the driver is already
+    /// looking at the turn on OsmAnd's own screen, and repeating it on the
+    /// radio behind it is a second copy of one instruction.
+    pub nav_hide_on_map: bool,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
     /// testing mode — were CarFM's investigation tools and are gone.
@@ -446,7 +464,8 @@ impl Default for Settings {
             details_open: false,
             release_on_sleep: true,
             clock_on: true,
-            nav_on: false,
+            nav_on: true,
+            nav_hide_on_map: true,
             diag_on: false,
             log: DiagLog::new(),
         }

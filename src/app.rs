@@ -3076,10 +3076,27 @@ impl App {
         ui.set_settings_release_on_sleep(cfg.release_on_sleep);
         ui.set_settings_clock_on(cfg.clock_on);
         ui.set_settings_nav_on(cfg.nav_on);
-        // THE SUB-LINE SAYS WHETHER THERE IS ANYTHING TO TALK TO. A switch that
-        // only reports failure after it is turned on makes the driver perform an
-        // experiment to read a fact the package manager already knows.
-        ui.set_settings_nav_sub(crate::nav::sub_line(&s.nav_package).into());
+        ui.set_settings_nav_hide_on_map(cfg.nav_hide_on_map);
+        // ── THE SUB-LINE SAYS WHY NOTHING IS SHOWING (§4.9) ──────────────────
+        //
+        // Every reason the maneuver layer can be blank — no OsmAnd, the switch
+        // off, OsmAnd closed, OsmAnd open with no route, or the layer hidden
+        // behind OsmAnd's own map — looks the same on the face, so this row is
+        // the only place they can be told apart. `crate::nav::sub_line` holds
+        // the wording and the ordering; this only gathers the facts.
+        let route = s.nav.route(crate::session::now_unix());
+        ui.set_settings_nav_sub(
+            crate::nav::sub_line(&crate::nav::Link {
+                package: &s.nav_package,
+                on: cfg.nav_on,
+                linked: route.is_some(),
+                navigating: route.is_some_and(crate::nav::Route::navigating),
+                map_visible: route.is_some_and(|r| r.map_visible),
+                hide_on_map: cfg.nav_hide_on_map,
+            })
+            .into(),
+        );
+        ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
         // again, and it matters most here: the diagnostics overlay is the one a
@@ -3369,9 +3386,22 @@ impl App {
         ui.set_nav_turn_xml(r.turn_xml.clone().unwrap_or_default().into());
         ui.set_nav_after_turn_xml(r.after_turn_xml.clone().unwrap_or_default().into());
         // OSMAND'S MAP IS IN FRONT — the driver is already looking at the turn.
-        // Published rather than acted on here: the handoff makes the suppression
-        // a SETTING, and the face is what honours it.
         ui.set_nav_map_visible(r.map_visible);
+
+        // ── THE ONE GATE THE MANEUVER LAYER BINDS TO (§4.9) ──────────────────
+        //
+        // "`AppInfoParams.mapVisible` reports whether OsmAnd's own map is on
+        // screen; while it is, the maneuver layer is hidden — the driver is
+        // already looking at the turn. Driver-overridable (Settings ▸
+        // NAVIGATION ▸ Hide when the map is showing, default on)."
+        //
+        // SEPARATE FROM `nav-active`, WHICH STAYS RAW. Three surfaces ask
+        // different questions of the same state: the maneuver layer asks "may I
+        // draw", the settings sub-line asks "why am I not drawing", and the
+        // diagnostics log asks "what arrived". Folding the suppression into
+        // `nav-active` would answer the first by lying to the other two.
+        let suppressed = r.map_visible && self.state.borrow().settings.nav_hide_on_map;
+        ui.set_nav_showing(active && !suppressed);
 
         // ON A CHANGE ONLY. See `State::nav_said`.
         let line = line.unwrap_or_default();
@@ -4010,6 +4040,16 @@ impl App {
             app.push_nav();
             app.push_settings();
         });
+        on!(on_settings_set_nav_hide_on_map, |app, v| {
+            app.state.borrow_mut().settings.nav_hide_on_map = v;
+            // NOTHING TO BIND OR UNBIND. This is a DISPLAY rule and not a link
+            // rule: the poll keeps answering either way, and the face decides
+            // whether to draw what it says. `push_nav` republishes so the
+            // maneuver layer appears or goes the moment the switch moves rather
+            // than at the next OsmAnd update.
+            app.push_nav();
+            app.push_settings();
+        });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;
             // DOWN TO THE RECEIVER TOO. It cannot read `Settings` from a binder
@@ -4302,6 +4342,7 @@ impl App {
             release_on_sleep: s.settings.release_on_sleep,
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
+            nav_hide_on_map: s.settings.nav_hide_on_map,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -6443,7 +6484,13 @@ mod tests {
         let (ui, driver) = app_for("nav");
 
         assert!(!ui.get_nav_active(), "nothing received, nothing shown");
-        assert!(!ui.get_settings_nav_on(), "and the switch defaults OFF — it starts another app");
+        // BOTH SWITCHES DEFAULT ON, which §4.9 states outright: "OsmAnd
+        // integration (default on …)" and "Hide when the map is showing,
+        // default on". The integration was off here until the handoff said
+        // otherwise — see `settings::Settings::nav_on` for what turning it on
+        // by default actually costs and why it is defensible.
+        assert!(ui.get_settings_nav_on(), "§4.9: the integration defaults on");
+        assert!(ui.get_settings_nav_hide_on_map(), "§4.9: the map suppression defaults on");
         // THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO before it is tapped.
         assert!(
             ui.get_settings_nav_sub().to_string().contains("not installed"),
@@ -6500,6 +6547,81 @@ mod tests {
         assert!(!ui.get_nav_active(), "off means off, now");
         assert_eq!(ui.get_nav_turn().to_string(), "");
         assert!(!crate::prefs::load(&driver.state.borrow().prefs_dir).nav_on);
+    }
+
+    /// OSMAND'S MAP IN FRONT HIDES THE LAYER, AND THE DRIVER CAN SAY OTHERWISE.
+    ///
+    /// §4.9: "`AppInfoParams.mapVisible` reports whether OsmAnd's own map is on
+    /// screen; while it is, the maneuver layer is hidden — the driver is already
+    /// looking at the turn. Driver-overridable (Settings ▸ NAVIGATION ▸ Hide
+    /// when the map is showing, default on)."
+    ///
+    /// THROUGH `nav-showing` AND NOT `nav-active`, which is the distinction the
+    /// property exists for: three surfaces ask different questions of one state,
+    /// and a suppression folded into `nav-active` would have the settings row
+    /// reporting "not navigating" while OsmAnd is mid-route.
+    #[test]
+    fn osmands_own_map_hides_the_maneuver_layer_unless_the_driver_says_not_to() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-map");
+
+        // A route, with OsmAnd's map NOT in front.
+        crate::android::ingest_nav(240, 5, false);
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: false,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(ui.get_nav_active(), "navigating");
+        assert!(ui.get_nav_showing(), "and nothing is hiding it");
+        assert!(!ui.get_nav_map_visible());
+
+        // THE MAP COMES TO THE FRONT. The route is unchanged — only the layer goes.
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: true,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(ui.get_nav_map_visible(), "OsmAnd says its map is up");
+        assert!(ui.get_nav_active(), "STILL navigating — the route did not end");
+        assert!(!ui.get_nav_showing(), "and the layer is hidden");
+
+        // AND THE ROW SAYS WHICH OF THE FIVE REASONS THIS IS. A blank strip with
+        // no explanation is the failure the sub-line exists to prevent.
+        //
+        // THE PACKAGE IS PLANTED, because the host has no OsmAnd and "not
+        // installed" is answered FIRST — correctly, since it is the truest thing
+        // to say about this machine. The wording of all five branches is
+        // `nav::each_reason_for_a_blank_strip_says_which_one_it_is`'s; what this
+        // is checking is that `push_settings` gathers the right FACTS, which is
+        // the half a unit test on `sub_line` cannot see.
+        driver.state.borrow_mut().nav_package = "net.osmand.plus".to_string();
+        driver.push_settings();
+        assert!(
+            ui.get_settings_nav_sub().to_string().contains("map is in front"),
+            "got {}",
+            ui.get_settings_nav_sub()
+        );
+
+        // THE DRIVER OVERRIDES IT, and the layer comes back with no new update
+        // from OsmAnd — the switch republishes rather than waiting for one.
+        ui.invoke_settings_set_nav_hide_on_map(false);
+        assert!(ui.get_nav_showing(), "the override puts the layer back");
+        assert!(ui.get_nav_map_visible(), "the fact is unchanged; only the rule moved");
+        assert!(
+            !crate::prefs::load(&driver.state.borrow().prefs_dir).nav_hide_on_map,
+            "and it persists"
+        );
+
+        // Back on, and it hides again.
+        ui.invoke_settings_set_nav_hide_on_map(true);
+        assert!(!ui.get_nav_showing());
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.

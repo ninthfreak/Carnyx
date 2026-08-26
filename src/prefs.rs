@@ -77,8 +77,10 @@ pub struct Prefs {
     pub release_on_sleep: bool,
     /// See `settings::Settings::clock_on`. Defaults ON.
     pub clock_on: bool,
-    /// See `settings::Settings::nav_on`. Defaults OFF.
+    /// See `settings::Settings::nav_on`. Defaults ON.
     pub nav_on: bool,
+    /// See `settings::Settings::nav_hide_on_map`. Defaults ON.
+    pub nav_hide_on_map: bool,
     pub diag_on: bool,
 }
 
@@ -96,6 +98,7 @@ impl Default for Prefs {
             release_on_sleep: s.release_on_sleep,
             clock_on: s.clock_on,
             nav_on: s.nav_on,
+            nav_hide_on_map: s.nav_hide_on_map,
             diag_on: s.diag_on,
         }
     }
@@ -217,6 +220,7 @@ fn from_json(text: &str) -> Option<Prefs> {
     p.release_on_sleep = flag("releaseOnSleep", p.release_on_sleep);
     p.clock_on = flag("clockOn", p.clock_on);
     p.nav_on = flag("navOn", p.nav_on);
+    p.nav_hide_on_map = flag("navHideOnMap", p.nav_hide_on_map);
     p.diag_on = flag("diagOn", p.diag_on);
     // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
     // They were CarFM's diagnostics and are gone; a file written by an older
@@ -242,7 +246,8 @@ pub fn to_json(p: &Prefs) -> String {
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
-            "\"logosOn\":{},\"releaseOnSleep\":{},\"clockOn\":{},\"navOn\":{},\"diagOn\":{}}}"
+            "\"logosOn\":{},\"releaseOnSleep\":{},\"clockOn\":{},\"navOn\":{},",
+            "\"navHideOnMap\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
@@ -251,6 +256,7 @@ pub fn to_json(p: &Prefs) -> String {
         p.release_on_sleep,
         p.clock_on,
         p.nav_on,
+        p.nav_hide_on_map,
         p.diag_on,
     )
 }
@@ -343,6 +349,7 @@ mod tests {
             release_on_sleep: false,
             clock_on: false,
             nav_on: true,
+            nav_hide_on_map: false,
             diag_on: true,
         };
         save(&d, &p);

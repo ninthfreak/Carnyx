@@ -87,6 +87,11 @@ export component AppWindow inherits Window {
     /// OsmAnd's own map is in front. The handoff hides the whole layer here,
     /// driver-overridable — so this is published and not obeyed in Rust.
     in property <bool> nav-map-visible: false;
+    /// MAY THE MANEUVER LAYER DRAW? (§4.9) — `nav-active` and not suppressed by
+    /// OsmAnd's own map being in front. This is the ONE gate the layer binds to;
+    /// `nav-active` stays raw so the settings sub-line can still say WHY nothing
+    /// is showing. Decided in `App::push_nav`.
+    in property <bool> nav-showing: false;
     /// The AIDL service is bound AND answering — the OsmAnd tell's lit state
     /// (§4.9). Derived from the poll's freshness rather than from `bindService`
     /// having returned true; see `App::push_nav`.
@@ -228,7 +233,11 @@ export component AppWindow inherits Window {
     /// What the Clock row says underneath — it REPORTS the 12/24 format that
     /// Android is in, it does not offer it. See `crate::clock::sub_line`.
     in property <string> settings-clock-sub;
-    in property <bool> settings-nav-on: false;
+    in property <bool> settings-nav-on: true;
+    /// Settings ▸ NAVIGATION ▸ Hide when the map is showing (§4.9). Default on.
+    in property <bool> settings-nav-hide-on-map: true;
+    /// That row's own sub-line. See `crate::nav::hide_sub_line`.
+    in property <string> settings-nav-hide-sub;
     /// Which OsmAnd the switch found, or empty. Drawn in the row's sub-line so a
     /// driver can see whether it has anything to talk to WITHOUT turning it on.
     in property <string> settings-nav-sub;
@@ -266,6 +275,7 @@ export component AppWindow inherits Window {
     callback settings-set-release-on-sleep(bool);
     callback settings-set-clock-on(bool);
     callback settings-set-nav-on(bool);
+    callback settings-set-nav-hide-on-map(bool);
     callback settings-set-theme(string);
     callback settings-fix-battery();
     callback settings-set-logos(bool);
@@ -448,6 +458,8 @@ export component AppWindow inherits Window {
         clock-sub: root.settings-clock-sub;
         nav-on: root.settings-nav-on;
         nav-sub: root.settings-nav-sub;
+        nav-hide-on-map: root.settings-nav-hide-on-map;
+        nav-hide-sub: root.settings-nav-hide-sub;
         theme-chips: root.settings-theme-chips;
         theme: root.settings-theme;
         battery: root.settings-battery;
@@ -467,6 +479,7 @@ export component AppWindow inherits Window {
         set-release-on-sleep(v) => { root.settings-set-release-on-sleep(v); }
         set-clock-on(v) => { root.settings-set-clock-on(v); }
         set-nav-on(v) => { root.settings-set-nav-on(v); }
+        set-nav-hide-on-map(v) => { root.settings-set-nav-hide-on-map(v); }
         set-theme(t) => { root.settings-set-theme(t); }
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }
