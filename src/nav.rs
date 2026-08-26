@@ -5,9 +5,10 @@
 //! OsmAnd's AIDL API hands an outside app THREE INTEGERS per update —
 //! `distanceTo`, `turnType`, `isLeftSide` — and separately, on a different
 //! callback, the voice router's announcement as a list of strings. There is no
-//! street name in the structured half, no exit number, no ETA, no distance to
-//! the destination. Everything this module does is make those two thin streams
-//! into one thing a face can draw.
+//! street name in that structured half, no exit number, no ETA, no distance to
+//! the destination: all of those live in the POLLED `getAppInfo` and only if
+//! something asks. Everything this module does is make those streams into one
+//! thing a face can draw.
 //!
 //! ## Why all of it is on this side of the wire
 //!
@@ -20,20 +21,24 @@
 //!
 //! ## What is NOT here
 //!
-//! Presentation. The design handoff for the navigation strip is still in
-//! progress, so this module publishes a [`Nav`] and stops: a turn, a distance in
-//! metres, and the words. How that is drawn — glyph, colour, size, where it sits
-//! on the face — is the handoff's, and guessing at it now would be building
-//! something to throw away.
+//! Presentation. This module publishes a [`Nav`] and stops: a turn, a distance
+//! in metres, and the words. The SHAPE of a maneuver arrow is
+//! [`crate::arrow`]'s, and where any of it sits on the face is §4.9's.
 
 /// Which way the next turn goes.
 ///
 /// THE INTEGERS ARE OSMAND'S, read out of `OsmAnd-java/.../router/TurnType.java`
-/// where each is a `public static final int`. They cross the AIDL boundary bare:
-/// `OsmandAidlApi` sets `directionInfo.setTurnType(ndi.directionInfo.getTurnType()
-/// .getValue())`, with nothing packed alongside — so a roundabout says RNDB and
-/// the EXIT NUMBER, which `TurnType.getExitOut()` has on the other side of the
-/// wire, does not travel.
+/// where each is a `public static final int`.
+///
+/// THE TWO CHANNELS CARRY DIFFERENT AMOUNTS OF IT, which is worth stating here
+/// because the difference is a roundabout's exit number:
+///
+/// * The PUSH callback crosses the boundary bare — `OsmandAidlApi` sets
+///   `directionInfo.setTurnType(ndi.directionInfo.getTurnType().getValue())`
+///   with nothing packed alongside, so a roundabout says 13 and no more.
+/// * The POLL carries `TurnType.toXmlString()`, and that method ends
+///   `case RNDB: return "RNDB" + exitOut;` — so the exit number DOES travel,
+///   inside the string. [`Turn::from_xml`] is where it is read out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Turn {
     /// `C = 1` — carry on.
@@ -52,7 +57,8 @@ pub enum Turn {
     /// `TU = 10`, `TRU = 11`.
     UTurn,
     RightUTurn,
-    /// `RNDB = 13`, `RNLB = 14`. Which exit is NOT on the wire; see the type note.
+    /// `RNDB = 13`, `RNLB = 14`. Which exit rides in the POLL's string only —
+    /// see the type note and [`Turn::from_xml`].
     Roundabout,
     RoundaboutLeft,
 }
@@ -85,6 +91,59 @@ impl Turn {
             14 => Turn::RoundaboutLeft,
             _ => return None,
         })
+    }
+
+    /// The turn, and a roundabout's exit number, out of a TurnType XML string.
+    ///
+    /// THIS IS THE POLL'S ENCODING AND NOT THE PUSH'S — see the type note. The
+    /// strings are `TurnType.toXmlString()`'s own output, and the roundabouts
+    /// are the only ones with anything appended.
+    ///
+    /// UNRECOGNISED IS `None`, WHICH IS WHERE THIS DELIBERATELY DIFFERS FROM
+    /// OSMAND. Its own `TurnType.fromString` ends `if (t == null) { t =
+    /// TurnType.straight(); }` — a sensible default for a router that is about
+    /// to recompute, and a wrong instruction given confidently for a face that
+    /// is about to draw an arrow. Same rule as [`Turn::from_osmand`].
+    pub fn from_xml(s: &str) -> Option<(Turn, Option<u32>)> {
+        let plain = |t: Turn| Some((t, None));
+        match s {
+            "C" => plain(Turn::Straight),
+            "TL" => plain(Turn::Left),
+            "TSLL" => plain(Turn::SlightLeft),
+            "TSHL" => plain(Turn::SharpLeft),
+            "TR" => plain(Turn::Right),
+            "TSLR" => plain(Turn::SlightRight),
+            "TSHR" => plain(Turn::SharpRight),
+            "KL" => plain(Turn::KeepLeft),
+            "KR" => plain(Turn::KeepRight),
+            "TU" => plain(Turn::UTurn),
+            "TRU" => plain(Turn::RightUTurn),
+            // `OFFR` IS NOT A TURN, exactly as `from_osmand(12)` is not. Off-route
+            // arrives on the push channel where there is a state for it; nothing
+            // on the face draws an arrow for it.
+            _ => {
+                // `RNDB3`, `RNLB1`. OsmAnd's own parser also accepts `EXIT3`
+                // here — `s.startsWith("EXIT") || s.startsWith("RNDB") ||
+                // s.startsWith("RNLB")`, all four characters long — even though
+                // `toXmlString` never emits it. Accepted for the same reason:
+                // the wire is whatever OsmAnd will parse back.
+                let turn = match s.get(..4)? {
+                    "RNDB" | "EXIT" => Turn::Roundabout,
+                    "RNLB" => Turn::RoundaboutLeft,
+                    _ => return None,
+                };
+                let rest = &s[4..];
+                if rest.is_empty() {
+                    return Some((turn, None));
+                }
+                // THERE IS NO EXIT ZERO. `exitOut` is a plain `int` field that
+                // stays 0 unless `getExitTurn` set it, and `toXmlString`
+                // concatenates it either way — so `RNDB0` is a roundabout whose
+                // exit OsmAnd did not name, not the zeroth exit.
+                let exit = rest.parse::<u32>().ok()?;
+                Some((turn, (exit > 0).then_some(exit)))
+            }
+        }
     }
 
     /// A short name, for the diagnostics log and for a face with no glyph yet.
@@ -439,6 +498,52 @@ mod tests {
         }
     }
 
+    /// THE POLL'S ENCODING IS A STRING, AND THE ROUNDABOUTS CARRY A NUMBER IN IT.
+    ///
+    /// Transcribed against `TurnType.toXmlString()`, which is a switch returning
+    /// the bare name for every type but the two roundabouts, where it returns
+    /// `"RNDB" + exitOut`. Every name here appears in that switch.
+    #[test]
+    fn the_xml_names_are_osmands_own_and_the_exit_rides_in_them() {
+        let expected = [
+            ("C", Turn::Straight),
+            ("TL", Turn::Left),
+            ("TSLL", Turn::SlightLeft),
+            ("TSHL", Turn::SharpLeft),
+            ("TR", Turn::Right),
+            ("TSLR", Turn::SlightRight),
+            ("TSHR", Turn::SharpRight),
+            ("KL", Turn::KeepLeft),
+            ("KR", Turn::KeepRight),
+            ("TU", Turn::UTurn),
+            ("TRU", Turn::RightUTurn),
+        ];
+        for (xml, turn) in expected {
+            assert_eq!(Turn::from_xml(xml), Some((turn, None)), "{xml}");
+        }
+        // THE EXIT NUMBER, which is the whole reason this parser exists rather
+        // than a name match.
+        assert_eq!(Turn::from_xml("RNDB3"), Some((Turn::Roundabout, Some(3))));
+        assert_eq!(Turn::from_xml("RNLB1"), Some((Turn::RoundaboutLeft, Some(1))));
+        assert_eq!(Turn::from_xml("RNDB12"), Some((Turn::Roundabout, Some(12))));
+        // `EXIT3` is accepted because OsmAnd's own `fromString` accepts it.
+        assert_eq!(Turn::from_xml("EXIT3"), Some((Turn::Roundabout, Some(3))));
+
+        // AND THERE IS NO EXIT ZERO: `exitOut` defaults to 0 and is concatenated
+        // unconditionally, so `RNDB0` is a roundabout with no exit named.
+        assert_eq!(Turn::from_xml("RNDB0"), Some((Turn::Roundabout, None)));
+        assert_eq!(Turn::from_xml("RNDB"), Some((Turn::Roundabout, None)));
+
+        // OFF-ROUTE IS NOT A TURN, the same as `from_osmand(12)`.
+        assert_eq!(Turn::from_xml("OFFR"), None);
+
+        // AND AN UNKNOWN NAME IS `None` RATHER THAN "STRAIGHT ON", which is
+        // where this differs from OsmAnd's own parser on purpose.
+        for junk in ["", "X", "TLL", "RNDBx", "RNDB-1", "rndb3", "STRAIGHT"] {
+            assert_eq!(Turn::from_xml(junk), None, "{junk:?} must not become a turn");
+        }
+    }
+
     /// A ROUTE THAT ENDS JUST STOPS SENDING, WHICH IS WHY THERE IS A CLOCK.
     ///
     /// The API has no "navigation finished" message on this callback. Without an
@@ -513,7 +618,7 @@ mod tests {
         // And the words age out FASTER than the turn, because they are an
         // announcement rather than a state.
         assert_eq!(nav.spoken(100 + Nav::SPOKEN_EXPIRY), None);
-        assert!(Nav::SPOKEN_EXPIRY > Nav::EXPIRY, "the words must not outlive the turn's clock by accident");
+        const { assert!(Nav::SPOKEN_EXPIRY > Nav::EXPIRY) };
     }
 
     /// THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO, BEFORE IT IS TAPPED.

@@ -6822,9 +6822,8 @@ mod tests {
         // frame so the well can repaint; what the driver sees FIRST is this.
         let after_tap = driver.state.borrow().settings.log.lines();
         assert!(after_tap.len() > before, "the tap wrote something immediately");
-        assert_eq!(
+        assert!(
             after_tap.last().unwrap().contains("keep-alive probe: reading"),
-            true,
             "and it says the probe has started, got {:?}",
             after_tap.last()
         );
