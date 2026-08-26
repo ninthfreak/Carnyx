@@ -1306,6 +1306,86 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 111. The v3.0.0 handoff, and the half of the OsmAnd feed I had missed
+**THE POLL IS IN; THE LAYOUT IS NOT.** The design bundle arrived (v3.0.0,
+`docs/design/v3/`) and its `NAVIGATION-HANDOFF.md` §3.1 names an API surface #110
+did not build: **everything with words in it comes from a POLL**, not from the
+push callback.
+
+> *"**ETA, street name, distance-left and the turn-after-next only exist if you
+> poll.**"* … *"Poll and push are not interchangeable. A street name from the
+> push callback does not exist."*
+
+That is correct and #110 was incomplete. `registerForNavigationUpdates` gives
+three integers; `getAppInfo` → `AppInfoParams` gives `arrivalTime`, `leftTime`,
+`leftDistance`, `mapVisible` and a nested `turnInfo` bundle carrying the street,
+the turn type, the imminence and the turn after next. Verified against upstream
+and now asserted by `tools/check-osmand-aidl.sh`.
+
+**SLOT 78 STOPPED BEING A RESERVED STUB.** `getAppInfo` was one of the
+ninety-seven placeholders holding the numbering; it now carries its real
+signature, and `AppInfoParams` joins the reconstructed parcelables.
+
+**THE RECONSTRUCTION IS DELIBERATELY PARTIAL — SIX FIELDS OF TWELVE.** The three
+`ALatLon` positions, `versionsInfo`, `osmAndVersion`, `releaseDate` and
+`routingData` are left in the bundle unread. THAT IS ONLY SAFE BECAUSE THE WIRE
+IS A BUNDLE: an unread key costs nothing and an unread PARCELABLE is never
+unmarshalled, which is what lets this skip `ALatLon` without vendoring it. A
+positional format could not be read partially at all.
+
+**THE AFTER-NEXT PREFIX HAS NO TRAILING UNDERSCORE, AND THAT IS UPSTREAM'S.**
+`ExternalApiHelper` calls `updateTurnInfo("next_", …)` and
+`updateTurnInfo("after_next", …)`, and the keys are built by concatenation — so
+the real keys are `next_turn_name` and **`after_nextturn_name`**. Spelling the
+second one tidily reads back null and empties the handoff's `THEN` block with
+nothing to say why. The checker asserts both prefixes.
+
+**`turn_imminent` IS AN INTEGER WHOSE SCALE COULD NOT BE ESTABLISHED, AND
+NOTHING BRANCHES ON IT YET.** The handoff escalates the display on it and forbids
+distance thresholds of our own — *"a screen that contradicts the voice is worse
+than no screen"* — which is right. But `AnnounceTimeDistances.getImminentTurnStatus`,
+which computes it, is no longer in OsmAnd's Java sources; four fetches and a code
+search found nothing. So it crosses RAW and the diagnostics line prints it
+(`[imminent=2]`), and one drive with a route running settles the scale. Guessing
+it would have shipped a wrong stage trigger on a safety surface.
+
+**THE POLL RUNS ON ITS OWN THREAD, at 1 Hz while bound.** A `HandlerThread`, not
+the main looper: `getAppInfo` is a synchronous round trip into another app and
+another app's slow frame must not become our dropped frame. `CarnyxLocation`
+posts to the main looper for the opposite reason — it registers listeners, which
+needs a looper and does not block.
+
+**`tools/check-jni.sh` CAUGHT A REAL BUG, which is the second time it has paid
+for itself.** `jboolean` is `bool` in this crate's jni — `jni-0.22.4` writes
+`let mut is_copy: jboolean = true;` in its own source — not the `u8` the C header
+has. Both `ingest_nav` and the new poll seam had `!= 0` on one, and the harness
+rejected both. `ingest_nav`'s had already SHIPPED in #110 and would have failed
+the device build.
+
+**WHAT WAS VENDORED.** `docs/design/v3/` takes `NAVIGATION-HANDOFF.md`,
+`IMPLEMENTATION-SPEC.md`, `CARNYX-SLINT.md`, `CHANGELOG.md` and `VERSION`, and
+`ui/fonts/DSEG7ClassicMini-Regular.ttf` is in the tree for the clock. Same rule
+as `EASTER-EGGS-BUILD.md`: a citation must point at a file this repo carries.
+
+**WHAT IS PUBLISHED NOW.** `nav-street`, `nav-after-street`, `nav-turn-xml`,
+`nav-after-turn-xml`, `nav-map-visible` join the four from #110 — finished values,
+empty meaning COLLAPSE THE ELEMENT, which is the handoff's own rule for every
+poll field. `nav-turn-xml` is the TurnType XML string the arrow generator reads
+and is NOT `nav-turn`: the two channels encode the same turn two ways, which is
+exactly the kind of thing that gets crossed.
+
+**NOT BUILT, and it is the whole visible feature:** the clock (§4.8), the arrow
+generator (§4.9), the three stages, the takeover edge, the corner logo, the
+status-bar tell, the NAVIGATION settings section, `mapVisible` suppression, and
+the locale units. The handoff's build order in §1 is the plan; nothing here
+contradicts it.
+
+**Evidence.** 321 tests, clippy clean over lib, bins and examples, both seam
+checks green — the AIDL checker now asserts slot 78, `AppInfoParams`' five keys,
+the four `turnInfo` key constants and both prefixes. No Java compiled and no AIDL
+generated: still no `android.jar` and no `aidl` here. `javac`'s parse phase is
+clean over both trees.
+
 ### 110. OsmAnd turn-by-turn: the integration, not the interface
 **DONE, AND UNTRIED.** The owner asked for the integration half of an OsmAnd
 turn-by-turn feature — *"the visual elements will come from a hand-off from

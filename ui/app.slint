@@ -72,6 +72,21 @@ export component AppWindow inherits Window {
     /// What the voice router last said — the only place a STREET NAME comes
     /// from, since the structured half carries no text at all.
     in property <string> nav-instruction;
+    /// The next turn's street, already formatted by OsmAnd with its ref and
+    /// destination. EMPTY MEANS COLLAPSE THE ELEMENT — the handoff's rule for
+    /// every poll field — never a placeholder.
+    in property <string> nav-street;
+    /// The turn after the next one, for the handoff's `THEN` block.
+    in property <string> nav-after-street;
+    /// The next turn as OsmAnd's TurnType XML STRING — "TR", "TSLL", "C",
+    /// "RNDB". The arrow generator reads this, NOT `nav-turn`: the push callback
+    /// and the poll encode the same turn two different ways and crossing them is
+    /// the obvious mistake.
+    in property <string> nav-turn-xml;
+    in property <string> nav-after-turn-xml;
+    /// OsmAnd's own map is in front. The handoff hides the whole layer here,
+    /// driver-overridable — so this is published and not obeyed in Rust.
+    in property <bool> nav-map-visible: false;
 
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;

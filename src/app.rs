@@ -1820,6 +1820,12 @@ impl App {
                 drop(s);
                 self.push_nav();
             }
+            TunerEvent::NavInfo(route) => {
+                let now = crate::session::now_unix();
+                s.nav.poll(route, now);
+                drop(s);
+                self.push_nav();
+            }
             TunerEvent::Connected(c) => {
                 if let Some(mhz) = c.mhz {
                     s.dial = mhz;
@@ -3292,6 +3298,27 @@ impl App {
         ui.set_nav_turn(turn.into());
         ui.set_nav_distance(distance.into());
         ui.set_nav_instruction(spoken.into());
+
+        // ── THE POLL'S HALF, which is everything with words in it ────────────
+        //
+        // EMPTY MEANS COLLAPSE, which is the handoff's own rule: "Treat every
+        // field as optional — a missing one collapses its element; it never
+        // leaves a gap or a placeholder." So a missing street is `""` and the
+        // strip draws nothing there, rather than a dash or a spinner.
+        let route = self.state.borrow().nav.route(now).cloned();
+        let r = route.unwrap_or_default();
+        ui.set_nav_street(r.street.clone().unwrap_or_default().into());
+        ui.set_nav_after_street(r.after_street.clone().unwrap_or_default().into());
+        // THE POLL'S OWN TURN, as a TurnType XML string — "TR", "TSLL", "RNDB".
+        // NOT the integer the push sends: the arrow generator the handoff
+        // specifies reads the XML string, and the two encodings of the same turn
+        // are exactly the kind of thing that gets crossed.
+        ui.set_nav_turn_xml(r.turn_xml.clone().unwrap_or_default().into());
+        ui.set_nav_after_turn_xml(r.after_turn_xml.clone().unwrap_or_default().into());
+        // OSMAND'S MAP IS IN FRONT — the driver is already looking at the turn.
+        // Published rather than acted on here: the handoff makes the suppression
+        // a SETTING, and the face is what honours it.
+        ui.set_nav_map_visible(r.map_visible);
 
         // ON A CHANGE ONLY. See `State::nav_said`.
         let line = line.unwrap_or_default();

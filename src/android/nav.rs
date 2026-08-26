@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use jni::errors::Error;
 use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::refs::Global;
-use jni::sys::{jboolean, jint};
+use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM, NativeMethod};
 
 use super::TunerError;
@@ -69,6 +69,61 @@ extern "system" fn native_nav_voice<'a>(
         super::ingest_nav_voice(cmds, played);
         Ok(())
     });
+}
+
+/// Java → Rust: one poll answer, field by field.
+///
+/// A NULL STRING IS A REAL ANSWER — "this route has no street name" and "the poll
+/// has not landed" are both `None` and both collapse the element, which is the
+/// handoff's rule. `JString::try_to_string` on a null throws, so each is read
+/// through `opt_string`, which turns null into `None` rather than an exception.
+#[allow(clippy::too_many_arguments)]
+extern "system" fn native_nav_info<'a>(
+    mut env: EnvUnowned<'a>,
+    _class: JClass<'a>,
+    arrival_ms: jlong,
+    left_seconds: jint,
+    left_metres: jint,
+    map_visible: jboolean,
+    turn_name: JString<'a>,
+    turn_type: JString<'a>,
+    turn_metres: jint,
+    imminent: jint,
+    after_name: JString<'a>,
+    after_type: JString<'a>,
+) {
+    guard(&mut env, |env| {
+        // ZERO IS "NOT NAVIGATING" AND NOT A VALUE. OsmAnd answers `getAppInfo`
+        // whether or not a route is running and zeroes these when it is not, so
+        // the zero is filtered here — at the seam, where the encoding is known —
+        // rather than in `crate::nav`, which would then have to know it too.
+        let route = super::NavRoute {
+            arrival_ms: (arrival_ms > 0).then_some(arrival_ms),
+            left_seconds: (left_seconds > 0).then_some(left_seconds),
+            left_metres: (left_metres > 0).then_some(left_metres),
+            // NO `!= 0`: `jboolean` is `bool` in this crate's jni. See
+            // `super::ingest_nav`, where the same mistake was made and caught.
+            map_visible,
+            street: opt_string(env, &turn_name),
+            turn_xml: opt_string(env, &turn_type),
+            turn_metres: (turn_metres > 0).then_some(turn_metres),
+            // NOT FILTERED, because its scale is unknown and a filter would be a
+            // guess about it. See `crate::nav::Route::imminent`.
+            imminent: Some(imminent),
+            after_street: opt_string(env, &after_name),
+            after_turn_xml: opt_string(env, &after_type),
+        };
+        super::ingest_nav_info(route);
+        Ok(())
+    });
+}
+
+/// A Java string that may be null, and an empty one counts as absent.
+fn opt_string(env: &mut Env, s: &JString) -> Option<String> {
+    if s.is_null() {
+        return None;
+    }
+    s.try_to_string(env).ok().filter(|t| !t.trim().is_empty())
 }
 
 /// One line into the diagnostics log, from the bind and the subscribe.
@@ -128,6 +183,11 @@ fn natives() -> Vec<NativeMethod<'static>> {
                 jni_str!("nativeNavVoice"),
                 jni_str!("([Ljava/lang/String;[Ljava/lang/String;)V"),
                 native_nav_voice as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeNavInfo"),
+                jni_str!("(JIIZLjava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V"),
+                native_nav_info as *mut c_void,
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeNavNote"),

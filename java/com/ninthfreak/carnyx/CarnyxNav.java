@@ -5,6 +5,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Log;
@@ -12,6 +15,7 @@ import android.util.Log;
 import net.osmand.aidlapi.IOsmAndAidlCallback;
 import net.osmand.aidlapi.IOsmAndAidlInterface;
 import net.osmand.aidlapi.gpx.AGpxBitmap;
+import net.osmand.aidlapi.info.AppInfoParams;
 import net.osmand.aidlapi.logcat.OnLogcatMessageParams;
 import net.osmand.aidlapi.navigation.ADirectionInfo;
 import net.osmand.aidlapi.navigation.ANavigationUpdateParams;
@@ -138,8 +142,45 @@ public final class CarnyxNav {
      */
     private static native void nativeNavVoice(String[] cmds, String[] played);
 
+    /**
+     * The POLL's answer, field by field. See {@code AppInfoParams}.
+     *
+     * <p>TEN ARGUMENTS AND NO OBJECT, because an object would need a shape and a
+     * shape is a decision. Every one of these is passed exactly as OsmAnd gave
+     * it — including the zeros that mean "not navigating" and the nulls that mean
+     * "this route has no street name" — and `crate::nav` decides what any of it
+     * means.
+     */
+    private static native void nativeNavInfo(
+        long arrivalTime, int leftTime, int leftDistance, boolean mapVisible,
+        String turnName, String turnType, int turnDistance, int turnImminent,
+        String afterName, String afterType);
+
     /** One line into the diagnostics panel; the unit has no adb. */
     private static native void nativeNavNote(String line);
+
+    /**
+     * How often to poll, in milliseconds.
+     *
+     * <p>ONE SECOND, which is the handoff's "~1 Hz while navigating". The poll is
+     * ONE binder round trip returning a small bundle; the push callback already
+     * arrives at about this rate off OsmAnd's routing updates, so this adds a
+     * comparable cost and no more. Faster would buy nothing — OsmAnd recomputes
+     * on location fixes, which are 1 Hz on this hardware.
+     */
+    private static final long POLL_MS = 1000L;
+
+    /**
+     * The poll's own thread, because a binder call must not run on the UI thread.
+     *
+     * <p>A `HandlerThread` rather than a timer on the main looper: `getAppInfo` is
+     * a synchronous round trip into another app, and another app's slow frame
+     * would become our dropped frame. `CarnyxLocation` posts to the main looper
+     * for the opposite reason — it REGISTERS listeners, which needs a looper and
+     * does not block.
+     */
+    private static HandlerThread pollThread;
+    private static Handler pollHandler;
 
     /** Hand the class the app context, as {@link CarnyxProcess#attach} does. */
     public static synchronized void attach(Context context) {
@@ -246,6 +287,7 @@ public final class CarnyxNav {
                 outcome = "unsubscribe failed: " + why(t);
             }
         }
+        stopPoll();
         navCallbackId = -1L;
         voiceCallbackId = -1L;
         osmand = null;
@@ -257,6 +299,74 @@ public final class CarnyxNav {
             // Unbinding a connection that was never bound is not a fault.
         }
         return outcome;
+    }
+
+    /**
+     * One poll, then schedule the next.
+     *
+     * <p>RESCHEDULES ITSELF EVEN WHEN THE CALL FAILS. A `DeadObjectException`
+     * means OsmAnd went away, and `onServiceDisconnected` handles that — this
+     * must not also decide to stop, or a transient failure would silence the
+     * poll for the rest of the run with nothing recorded.
+     */
+    private static final Runnable POLL = new Runnable() {
+        @Override
+        public void run() {
+            IOsmAndAidlInterface api;
+            synchronized (CarnyxNav.class) {
+                api = osmand;
+            }
+            if (api != null) {
+                try {
+                    pollOnce(api);
+                } catch (Throwable t) {
+                    // Not logged per failure: this runs once a second and a
+                    // persistent fault would fill the ring. The link state is
+                    // already reported by the connection callbacks.
+                    Log.w(TAG, "getAppInfo failed", t);
+                }
+            }
+            Handler h = pollHandler;
+            if (h != null) {
+                h.postDelayed(this, POLL_MS);
+            }
+        }
+    };
+
+    /** Ask once and hand every field across. */
+    private static void pollOnce(IOsmAndAidlInterface api) throws RemoteException {
+        AppInfoParams info = api.getAppInfo();
+        if (info == null) {
+            return;
+        }
+        Bundle turn = info.getTurnInfo();
+        nativeNavInfo(
+            info.getArrivalTime(),
+            info.getLeftTime(),
+            info.getLeftDistance(),
+            info.isMapVisible(),
+            str(turn, "next_turn_name"),
+            str(turn, "next_turn_type"),
+            turn == null ? 0 : turn.getInt("next_turn_distance"),
+            // NOT A BOOLEAN. OsmAnd writes `nextInfo.imminent`, an int, and what
+            // its values mean is not established anywhere this tree could read —
+            // the class that computes it has moved out of the Java sources. It
+            // crosses raw and `crate::nav` logs it, so one drive settles the
+            // scale instead of a guess shipping.
+            turn == null ? -1 : turn.getInt("next_turn_imminent", -1),
+            // THE AFTER-NEXT PREFIX HAS NO UNDERSCORE, and that is upstream's,
+            // not a typo here. `ExternalApiHelper` calls
+            // `updateTurnInfo("after_next", bundle, ni)` where the next turn uses
+            // `"next_"`, and the keys are built by concatenation — so the key is
+            // literally `after_nextturn_name`. Spelling it the tidy way would
+            // read back null and collapse the THEN block with nothing to say why.
+            str(turn, "after_nextturn_name"),
+            str(turn, "after_nextturn_type"));
+    }
+
+    /** A bundle string, or null. Null is "this route has none", not an error. */
+    private static String str(Bundle b, String key) {
+        return b == null ? null : b.getString(key);
     }
 
     private static final ServiceConnection CONN = new ServiceConnection() {
@@ -274,6 +384,7 @@ public final class CarnyxNav {
         @Override
         public void onServiceDisconnected(ComponentName name) {
             synchronized (CarnyxNav.class) {
+                stopPoll();
                 osmand = null;
                 navCallbackId = -1L;
                 voiceCallbackId = -1L;
@@ -315,6 +426,7 @@ public final class CarnyxNav {
         } catch (Throwable t) {
             out.append(", VOICE FAILED: ").append(why(t));
         }
+        startPoll();
         return out.toString();
     }
 
@@ -385,6 +497,31 @@ public final class CarnyxNav {
             out[i] = s == null ? "" : s;
         }
         return out;
+    }
+
+    /** Start the 1 Hz poll. Idempotent. */
+    private static synchronized void startPoll() {
+        if (pollHandler != null) {
+            return;
+        }
+        pollThread = new HandlerThread("carnyx-osmand-poll");
+        pollThread.start();
+        pollHandler = new Handler(pollThread.getLooper());
+        pollHandler.post(POLL);
+    }
+
+    /** Stop it and let the thread go. Safe when it was never started. */
+    private static synchronized void stopPoll() {
+        Handler h = pollHandler;
+        pollHandler = null;
+        if (h != null) {
+            h.removeCallbacksAndMessages(null);
+        }
+        HandlerThread t = pollThread;
+        pollThread = null;
+        if (t != null) {
+            t.quit();
+        }
     }
 
     /** A note that cannot itself break the caller. See {@code NwdBridge.safe*}. */

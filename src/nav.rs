@@ -131,6 +131,68 @@ pub enum NavState {
     Unknown { code: i32, metres: i32 },
 }
 
+/// What the POLL adds — everything with words in it.
+///
+/// THE PUSH CALLBACK HAS NO TEXT AT ALL. `ADirectionInfo` is three integers, so
+/// the street name, the turn after next, the ETA and the distance left exist
+/// only in `getAppInfo`'s answer and only if something asks for it. The design
+/// handoff states the split in as many words: *"Poll and push are not
+/// interchangeable. A street name from the push callback does not exist; if the
+/// poll has not landed yet, the street collapses."*
+///
+/// EVERY FIELD IS OPTIONAL AND A MISSING ONE COLLAPSES ITS ELEMENT. That is the
+/// handoff's rule and it is why these are `Option` rather than empty strings
+/// with a convention: "no street on this route" and "the poll has not answered
+/// yet" are the same to a face and neither is a gap to fill with a placeholder.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Route {
+    /// Unix millis at the destination. `None` when not navigating.
+    pub arrival_ms: Option<i64>,
+    /// Seconds to the destination.
+    pub left_seconds: Option<i32>,
+    /// Metres to the destination — NOT to the next turn.
+    pub left_metres: Option<i32>,
+    /// OsmAnd's own map is in front. The handoff hides the whole layer here:
+    /// the driver is already looking at the turn.
+    pub map_visible: bool,
+    /// The next turn's street, already formatted by OsmAnd with its ref and
+    /// destination — `RoutingHelperUtils.formatStreetName(street, ref, dest, "")`.
+    pub street: Option<String>,
+    /// The next turn as a TurnType XML STRING — "TR", "TSLL", "C", "RNDB"…
+    ///
+    /// NOT THE INTEGER THE PUSH SENDS. The two channels describe the same turn in
+    /// two encodings, which is a trap worth naming: `ADirectionInfo.turnType` is
+    /// `TurnType.getValue()` and this is `TurnType.toXmlString()`.
+    pub turn_xml: Option<String>,
+    /// Metres to the next turn, from the poll's own reading.
+    pub turn_metres: Option<i32>,
+    /// OsmAnd's `nextInfo.imminent`.
+    ///
+    /// AN INTEGER WHOSE SCALE IS NOT ESTABLISHED. The handoff escalates the
+    /// display on it — *"Escalate on `next_turn_imminent` … never on distance
+    /// thresholds of our own"* — and the class that computes it,
+    /// `AnnounceTimeDistances.getImminentTurnStatus`, is not in OsmAnd's Java
+    /// sources any more, so what its values mean could not be read. It is carried
+    /// raw and LOGGED raw; one drive with a route running settles it, and until
+    /// then nothing branches on it.
+    pub imminent: Option<i32>,
+    /// The turn after the next one, for the handoff's `THEN` block.
+    pub after_street: Option<String>,
+    pub after_turn_xml: Option<String>,
+}
+
+impl Route {
+    /// Is there a route at all?
+    ///
+    /// THE DESTINATION IS THE TEST, not the turn: OsmAnd answers `getAppInfo`
+    /// whether or not it is navigating and zeroes the route fields when it is
+    /// not, so a zero arrival AND a zero distance is "no route" rather than a
+    /// route that has arrived.
+    pub fn navigating(&self) -> bool {
+        self.arrival_ms.is_some() || self.left_metres.is_some() || self.turn_xml.is_some()
+    }
+}
+
 /// The navigation state the face draws, and the clock that ages it.
 #[derive(Clone, Debug, Default)]
 pub struct Nav {
@@ -138,6 +200,9 @@ pub struct Nav {
     last: Option<(i32, i32, u64)>,
     /// The last spoken instruction, and when it was said.
     spoken: Option<(String, u64)>,
+    /// The last poll's answer, and when it landed. Aged on the same clock as the
+    /// push: a poll that has stopped answering is a route that has ended.
+    route: Option<(Route, u64)>,
 }
 
 impl Nav {
@@ -198,10 +263,24 @@ impl Nav {
         }
     }
 
+    /// One poll answer from `getAppInfo`.
+    pub fn poll(&mut self, route: Route, now: u64) {
+        self.route = Some((route, now));
+    }
+
+    /// The last poll, if it is still fresh. See [`Nav::EXPIRY`].
+    pub fn route(&self, now: u64) -> Option<&Route> {
+        self.route
+            .as_ref()
+            .filter(|(_, at)| now.saturating_sub(*at) < Self::EXPIRY)
+            .map(|(r, _)| r)
+    }
+
     /// Forget everything. The switch went off, or OsmAnd went away.
     pub fn clear(&mut self) {
         self.last = None;
         self.spoken = None;
+        self.route = None;
     }
 
     /// What to draw, at `now`.
@@ -279,10 +358,26 @@ impl Nav {
                 format!("turn type {code} (unknown to this build) in {}", Self::distance_label(metres))
             }
         };
-        Some(match self.spoken(now) {
-            Some(words) => format!("{head} — \"{words}\""),
-            None => head,
-        })
+        let mut out = head;
+        if let Some(r) = self.route(now) {
+            // THE STREET AND THE RAW `imminent`, which is the whole reason this
+            // line exists in this shape: the handoff escalates on that integer
+            // and nothing in this tree could establish its scale, so one drive
+            // with a route running is what settles it.
+            if let Some(street) = &r.street {
+                out.push_str(&format!(" onto {street}"));
+            }
+            if let Some(i) = r.imminent {
+                out.push_str(&format!(" [imminent={i}]"));
+            }
+            if r.map_visible {
+                out.push_str(" [OsmAnd map in front]");
+            }
+        }
+        if let Some(words) = self.spoken(now) {
+            out.push_str(&format!(" — \"{words}\""));
+        }
+        Some(out)
     }
 }
 
@@ -431,6 +526,76 @@ mod tests {
         for word in ["rror", "ailed", "navailable"] {
             assert!(!sub_line("").contains(word), "{word} reads as a fault");
         }
+    }
+
+    /// THE POLL CARRIES EVERY WORD, AND IT AGES ON THE SAME CLOCK.
+    ///
+    /// The push callback has no text at all, so a face that shows a street name
+    /// is showing the poll's answer — and a poll that has stopped answering is a
+    /// route that has ended, which must clear rather than freeze.
+    #[test]
+    fn the_poll_carries_the_words_and_expires_with_the_route() {
+        let mut nav = Nav::new();
+        assert!(nav.route(0).is_none(), "nothing polled yet");
+
+        let route = Route {
+            arrival_ms: Some(1_700_000_000_000),
+            left_seconds: Some(840),
+            left_metres: Some(9_400),
+            map_visible: false,
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            imminent: Some(1),
+            after_street: Some("Odana Rd".into()),
+            after_turn_xml: Some("TSLL".into()),
+        };
+        nav.poll(route.clone(), 100);
+        assert_eq!(nav.route(100).unwrap().street.as_deref(), Some("Whitney Way"));
+        assert!(nav.route(100).unwrap().navigating());
+
+        // THE SAME CLOCK AS THE PUSH. A poll that stops is a route that ended.
+        assert!(nav.route(100 + Nav::EXPIRY - 1).is_some());
+        assert!(nav.route(100 + Nav::EXPIRY).is_none(), "a stale poll is no route");
+
+        // AN EMPTY ANSWER IS NOT A ROUTE. OsmAnd answers `getAppInfo` whether or
+        // not it is navigating and zeroes the route fields when it is not, which
+        // the seam turns into `None` — so this is what "idle" looks like here.
+        nav.poll(Route::default(), 200);
+        assert!(!nav.route(200).unwrap().navigating(), "zeros are not a route");
+
+        // AND CLEARING TAKES IT, with everything else.
+        nav.poll(route, 300);
+        nav.clear();
+        assert!(nav.route(300).is_none());
+    }
+
+    /// THE LOG CARRIES THE RAW `imminent`, WHICH IS THE POINT OF THE LINE.
+    ///
+    /// The handoff escalates the display on that integer and forbids distance
+    /// thresholds of our own — and its scale could not be read from OsmAnd's
+    /// sources, because the class that computes it has moved out of the Java
+    /// tree. So nothing branches on it yet and one drive with a route running is
+    /// what settles it. This test exists so that line cannot quietly be dropped.
+    #[test]
+    fn the_log_line_prints_the_unexplained_imminent_integer() {
+        let mut nav = Nav::new();
+        nav.update(240, 5, 100);
+        nav.poll(
+            Route {
+                street: Some("Whitney Way".into()),
+                turn_xml: Some("TR".into()),
+                imminent: Some(2),
+                map_visible: true,
+                ..Route::default()
+            },
+            100,
+        );
+        let line = nav.log_line(100).unwrap();
+        assert!(line.contains("right in 240 m"), "{line}");
+        assert!(line.contains("onto Whitney Way"), "{line}");
+        assert!(line.contains("[imminent=2]"), "the raw integer, so a drive settles it: {line}");
+        assert!(line.contains("map in front"), "{line}");
     }
 
     #[test]

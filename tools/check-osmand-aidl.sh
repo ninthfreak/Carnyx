@@ -56,6 +56,12 @@ fi
 fetch "$BASE/IOsmAndAidlCallback.aidl" "$TMP/cb.aidl" || true
 fetch "$BASE/navigation/ADirectionInfo.java" "$TMP/dir.java" || true
 fetch "$BASE/navigation/OnVoiceNavigationParams.java" "$TMP/voice.java" || true
+fetch "$BASE/info/AppInfoParams.java" "$TMP/appinfo.java" || true
+# The turnInfo bundle's keys are built by string concatenation in OsmAnd's own
+# writer, not declared in the api module — so they are checked against that file.
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/helpers/ExternalApiHelper.java" \
+    -o "$TMP/ext.java" 2>/dev/null || true
 
 python3 - "$TMP" "$OURS" <<'PY'
 import os, re, sys
@@ -84,7 +90,7 @@ if len(up) != len(mine):
 else:
     print(f"  interface: {len(mine)} slots, same as upstream")
 
-for name in ("registerForNavigationUpdates", "registerForVoiceRouterMessages"):
+for name in ("registerForNavigationUpdates", "registerForVoiceRouterMessages", "getAppInfo"):
     try:
         u = up.index(name)
     except ValueError:
@@ -118,6 +124,8 @@ if os.path.exists(cb) and os.path.getsize(cb):
 KEYS = {
     "dir.java": ("ADirectionInfo", ["distanceTo", "turnType", "isLeftSide"]),
     "voice.java": ("OnVoiceNavigationParams", ["cmds", "played"]),
+    "appinfo.java": ("AppInfoParams", ["arrivalTime", "leftTime", "leftDistance",
+                                       "mapVisible", "turnInfo"]),
 }
 for fname, (cls, keys) in KEYS.items():
     path = os.path.join(tmp, fname)
@@ -129,6 +137,28 @@ for fname, (cls, keys) in KEYS.items():
         fail.append(f"{cls} no longer carries bundle key(s) {missing} — we read them.")
     else:
         print(f"  {cls}: bundle keys {keys} all present")
+
+# ── 6: the turnInfo keys, and the prefix that is not what it looks like ──────
+ext = os.path.join(tmp, "ext.java")
+if os.path.exists(ext) and os.path.getsize(ext):
+    text = open(ext).read()
+    for const, value in [("PARAM_NT_DISTANCE", "turn_distance"),
+                         ("PARAM_NT_IMMINENT", "turn_imminent"),
+                         ("PARAM_NT_DIRECTION_NAME", "turn_name"),
+                         ("PARAM_NT_DIRECTION_TURN", "turn_type")]:
+        if f'{const} = "{value}"' not in text:
+            fail.append(f"turnInfo key {const} is no longer \"{value}\" — CarnyxNav reads it by name.")
+    # THE AFTER-NEXT PREFIX HAS NO TRAILING UNDERSCORE and the next one does, so
+    # the real keys are `next_turn_name` and `after_nextturn_name`. If upstream
+    # ever tidies that, our reads go null and the THEN block silently empties.
+    if 'updateTurnInfo("next_"' not in text:
+        fail.append('the next-turn prefix is no longer "next_".')
+    if 'updateTurnInfo("after_next"' not in text:
+        fail.append('the after-next prefix is no longer "after_next" (no trailing '
+                    'underscore) — CarnyxNav reads `after_nextturn_name`.')
+    if not [f for f in fail if "prefix" in f or "turnInfo key" in f]:
+        print("  turnInfo: keys and both prefixes unchanged "
+              "(after-next still has no trailing underscore)")
 
 if fail:
     print()

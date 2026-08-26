@@ -80,6 +80,7 @@ const JAVA_SOURCES: &[&str] = &[
     "net/osmand/aidlapi/search/SearchResult.java",
     "net/osmand/aidlapi/gpx/AGpxBitmap.java",
     "net/osmand/aidlapi/logcat/OnLogcatMessageParams.java",
+    "net/osmand/aidlapi/info/AppInfoParams.java",
 ];
 
 /// The AIDL interfaces to generate Java from. The two `parcelable` declarations

@@ -46,6 +46,7 @@ package net.osmand.aidlapi;
 import net.osmand.aidlapi.navigation.ANavigationUpdateParams;
 import net.osmand.aidlapi.navigation.ANavigationVoiceRouterMessageParams;
 import net.osmand.aidlapi.IOsmAndAidlCallback;
+import net.osmand.aidlapi.info.AppInfoParams;
 
 interface IOsmAndAidlInterface {
 
@@ -129,7 +130,11 @@ interface IOsmAndAidlInterface {
     void reserved75();  // upstream `getQuickActionsInfo`
     void reserved76();  // upstream `setLockState`
     void reserved77();  // upstream `registerForKeyEvents`
-    void reserved78();  // upstream `getAppInfo`
+    // slot 78 — upstream `getAppInfo`. THE THIRD OF THE THREE WE CALL, and the
+    // only one that is a POLL. Everything with words in it — the street name, the
+    // turn after next, the ETA and the distance left — exists here and NOWHERE in
+    // the push callback; `ADirectionInfo` is three integers.
+    AppInfoParams getAppInfo();
     void reserved79();  // upstream `setMapMargins`
     void reserved80();  // upstream `exportProfile`
     void reserved81();  // upstream `isFragmentOpen`
