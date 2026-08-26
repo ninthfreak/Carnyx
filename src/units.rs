@@ -48,9 +48,13 @@ impl Units {
     /// ISO 3166-1 alpha-2, upper case:
     ///
     /// * `US` and its territories `PR` `VI` `GU` `AS` `MP`
-    /// * `GB` — miles on every road sign, metric elsewhere
+    /// * `GB` — miles on every road sign, metric elsewhere — and the Crown
+    ///   dependencies `IM` `JE` `GG`, which sign the same way and are their own
+    ///   ISO codes, not part of `GB`. Left off the first cut of this list,
+    ///   which is exactly the mistake a "which countries use miles" list makes
+    ///   when it is really a "which locales exist" question.
     /// * `LR` `MM` — the other two countries that never adopted metric
-    /// * `AG` `BS` `BZ` `DM` `FK` `GD` `KN` `KY` `LC` `MS` `SH` `TC` `VC` `VG` `WS`
+    /// * `AG` `AI` `BS` `BZ` `DM` `FK` `GD` `KN` `KY` `LC` `MS` `SH` `TC` `VC` `VG` `WS`
     ///   — Caribbean and South Atlantic states signing in miles
     ///
     /// EVERYWHERE ELSE IS METRIC, including the whole of Europe bar Britain,
@@ -59,8 +63,8 @@ impl Units {
     /// "1300 ft" for the same distance is being told a number nothing on the
     /// road will confirm.
     const MILES: &'static [&'static str] = &[
-        "AG", "AS", "BS", "BZ", "DM", "FK", "GB", "GD", "GU", "KN", "KY", "LC", "LR", "MM", "MP",
-        "MS", "PR", "SH", "TC", "US", "VC", "VG", "VI", "WS",
+        "AG", "AI", "AS", "BS", "BZ", "DM", "FK", "GB", "GD", "GG", "GU", "IM", "JE", "KN", "KY",
+        "LC", "LR", "MM", "MP", "MS", "PR", "SH", "TC", "US", "VC", "VG", "VI", "WS",
     ];
 
     /// What a country signs its roads in.
@@ -190,6 +194,11 @@ mod tests {
     fn the_country_table_asks_what_the_road_signs_say() {
         for code in ["US", "GB", "PR", "LR", "MM", "KY", "VG"] {
             assert_eq!(Units::for_country(code), Units::Imperial, "{code} signs in miles");
+        }
+        // THE CROWN DEPENDENCIES ARE NOT `GB` — each has its own ISO code and
+        // the same road signs. A phone bought on the Isle of Man says `IM`.
+        for code in ["IM", "JE", "GG"] {
+            assert_eq!(Units::for_country(code), Units::Imperial, "{code} signs like Britain");
         }
         for code in ["DE", "FR", "IE", "CA", "AU", "NZ", "ZA", "JP", "IN", "MX"] {
             assert_eq!(Units::for_country(code), Units::Metric, "{code} signs in km");

@@ -731,11 +731,19 @@ export component TurnArrow {
         stroke-line-cap: round;
         stroke-line-join: round;
     }
-    // The ring's centre is not the box's — the circulation arrowhead pushes the
-    // ink to one side and `crate::arrow` then centres the whole glyph on that.
-    // The offset is that shift: half the head's own barb spread, in box units.
+    // ── THE NUMBER SITS AT THE RING'S CENTRE, WHICH IS NOT THE BOX'S ─────────
+    //
+    // `crate::arrow` centres the whole INK in the box, and the circulation
+    // barbs reach 1.8 units past the ring's top — so the ring's centre lands
+    // 1.4 units ABOVE the box's, from the generator's own constants: the ink
+    // runs −8.4 (barb tip) to +11.2 (stem tail) about the ring's centre, whose
+    // midpoint is +1.4. The same 1.4 for both roundabouts, since only the
+    // mirror differs. At the hero's 100dp that is 6px — a digit that reads as
+    // a misprint. (An earlier comment here described this offset without the
+    // code applying it, which is the worse half of a fix.)
     if root.exit != "": Text {
-        x: 0; y: 0;
+        x: 0;
+        y: -root.size * 1.4 / 24;
         width: root.size; height: root.size;
         text: root.exit;
         horizontal-alignment: center;

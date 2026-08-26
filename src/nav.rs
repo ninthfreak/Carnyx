@@ -394,7 +394,21 @@ impl Nav {
     }
 
     /// One poll answer from `getAppInfo`.
+    ///
+    /// A GAP IS A NEW JOURNEY. The previous poll's age is checked before the
+    /// leg baseline is updated: if it had already expired, the baseline is
+    /// dropped rather than carried. The same turn onto the same street can open
+    /// a LATER route — cancel a run, drive off, navigate the same way home —
+    /// and `note_leg` matches legs by id alone, so without this the dead
+    /// route's baseline would survive and the hairline would start part-full,
+    /// claiming progress nobody watched. Which is the one thing `progress`
+    /// promises it never does.
     pub fn poll(&mut self, route: Route, now: u64) {
+        if let Some((_, at)) = &self.route {
+            if now.saturating_sub(*at) >= Self::EXPIRY {
+                self.leg = None;
+            }
+        }
         self.note_leg(&route);
         self.route = Some((route, now));
     }
@@ -514,15 +528,30 @@ impl Nav {
     /// the two independently would leave the hero card taken over by a junction
     /// the driver passed a minute ago.
     pub fn stage(&self, now: u64, showing: bool) -> Stage {
-        if !showing || matches!(self.state(now), NavState::Idle) {
+        if !showing {
             return Stage::Idle;
         }
-        match self.route(now) {
-            Some(r) => Stage::from_imminent(r.imminent),
-            // PUSHING WITHOUT A POLL IS STILL CRUISING. The push callback is the
-            // one that keeps arriving on a slow route; a face that fell back to
-            // `Idle` because the poll was a second late would blink.
-            None => Stage::Cruise,
+        match self.state(now) {
+            NavState::Idle => Stage::Idle,
+            // ── OFF-ROUTE HAS NO MANEUVER, AND THE POLL'S LEFTOVERS MUST NOT
+            //    DRESS ONE UP ──────────────────────────────────────────────────
+            //
+            // During a deviation `nav-distance` is the DEVIATION — OsmAnd
+            // overloads the one field — and the route can still be carrying the
+            // last turn's arrow and street while the recalculation runs. Mapped
+            // to a stage, the cruise line would read "in 75 m ↱ Whitney Way"
+            // for a driver who is 75 m OFF the route: wrong three ways in one
+            // sentence. The layer goes quiet until OsmAnd has recalculated —
+            // a beat or two — and the diagnostics log still says OFF ROUTE.
+            NavState::OffRoute { .. } => Stage::Idle,
+            _ => match self.route(now) {
+                Some(r) => Stage::from_imminent(r.imminent),
+                // PUSHING WITHOUT A POLL IS STILL CRUISING. The push callback
+                // is the one that keeps arriving on a slow route; a face that
+                // fell back to `Idle` because the poll was a second late would
+                // blink.
+                None => Stage::Cruise,
+            },
         }
     }
 
@@ -1091,6 +1120,72 @@ mod tests {
         assert_eq!(nav.progress(109 + Nav::EXPIRY), 0.0);
         nav.clear();
         assert_eq!(nav.progress(109), 0.0, "clearing takes the leg too");
+    }
+
+    /// A GAP BETWEEN ROUTES DOES NOT CARRY THE OLD BASELINE.
+    ///
+    /// `note_leg` matches legs by turn + street alone, and the same first leg
+    /// can open a LATER route — the drive home along the road just driven out.
+    /// Found in review: without the reset in `poll`, this test's bar started at
+    /// 0.7 for a turn nobody had watched the approach to.
+    #[test]
+    fn a_gap_between_routes_does_not_carry_the_old_baseline() {
+        let mut nav = Nav::new();
+        let leg = |m: i32| Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(m),
+            ..Route::default()
+        };
+        nav.poll(leg(800), 100);
+        nav.poll(leg(400), 101);
+        assert!((nav.progress(101) - 0.5).abs() < 0.001, "half way on the first journey");
+
+        // THE POLL STOPS — the route ended — and the SAME leg opens a new one.
+        let later = 101 + Nav::EXPIRY + 30;
+        nav.poll(leg(240), later);
+        assert_eq!(nav.progress(later), 0.0, "a new journey starts an empty bar");
+        nav.poll(leg(120), later + 1);
+        assert!((nav.progress(later + 1) - 0.5).abs() < 0.001, "and fills from its own baseline");
+
+        // A gap SHORTER than the expiry is the same journey: a tunnel must not
+        // reset the bar.
+        nav.poll(leg(60), later + 1 + Nav::EXPIRY - 1);
+        assert!((nav.progress(later + Nav::EXPIRY) - 0.75).abs() < 0.001, "a tunnel keeps the baseline");
+    }
+
+    /// OFF-ROUTE SILENCES THE MANEUVER LAYER RATHER THAN MISLABELLING IT.
+    ///
+    /// During a deviation the push's distance is the deviation and the poll can
+    /// still hold the LAST turn's arrow and street. Found in review: mapped to
+    /// `Cruise`, the countdown read "in 75 m" of deviation with a stale arrow
+    /// beside it.
+    #[test]
+    fn off_route_is_idle_to_the_maneuver_layer_and_off_route_to_the_log() {
+        let mut nav = Nav::new();
+        nav.update(240, 5, 100);
+        nav.poll(
+            Route {
+                turn_xml: Some("TR".into()),
+                street: Some("Whitney Way".into()),
+                turn_metres: Some(240),
+                imminent: Some(1),
+                ..Route::default()
+            },
+            100,
+        );
+        assert_eq!(nav.stage(100, true), Stage::Approach, "on route, approaching");
+
+        // The driver misses the turn. The poll's leftovers are still there.
+        nav.update(75, 12, 101);
+        assert_eq!(nav.state(101), NavState::OffRoute { metres: 75 });
+        assert_eq!(nav.stage(101, true), Stage::Idle, "no maneuver to draw");
+        // AND THE LOG STILL SAYS WHAT HAPPENED — quiet is for the face alone.
+        assert!(nav.log_line(101, Units::Metric).unwrap().starts_with("OFF ROUTE"));
+
+        // Recalculated: the push carries a turn again and the stage returns.
+        nav.update(120, 2, 103);
+        assert_eq!(nav.stage(103, true), Stage::Approach, "back the moment there is a turn");
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.

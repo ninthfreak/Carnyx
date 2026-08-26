@@ -40,9 +40,25 @@ export component RadioTextStrip inherits Rectangle {
     in property <string> nav-after-street;
 
     /// The strip is carrying the imminent turn — stage 2 and stage 2 only.
-    property <bool> carrying: root.nav-stage == NavStage.approach && root.nav-arrow != "";
+    /// There is a maneuver line worth yielding for.
+    ///
+    /// THE ARROW ALONE USED TO BE THE GATE, AND THAT LOST TURNS. A turn type
+    /// this build does not recognise arrives as an EMPTY path — deliberately,
+    /// because a wrong arrow is worse than none — but `NavState::Unknown`'s own
+    /// rule is that the distance is still good. Gating the whole strip on the
+    /// arrow threw the distance and the street out with the glyph.
+    property <bool> nav-has-line: root.nav-distance != "" || root.nav-arrow != "";
+    /// The strip is carrying the imminent turn — stage 2, and one fallback:
+    /// at stage 3 with an UNKNOWN glyph the hero card refuses its takeover
+    /// (rightly — see `HeroCard`), and without this the imminent turn would be
+    /// shown nowhere at its loudest moment. Not a repeat when it fires: the
+    /// hero is not carrying it.
+    property <bool> carrying: root.nav-has-line
+        && (root.nav-stage == NavStage.approach
+            || (root.nav-stage == NavStage.turn-now && root.nav-arrow == ""));
     /// The strip is showing the after-next turn on its own — stage 3.
-    property <bool> trailing: root.nav-stage == NavStage.turn-now && root.nav-after-arrow != "";
+    property <bool> trailing: root.nav-stage == NavStage.turn-now && !root.carrying
+        && root.nav-after-arrow != "";
     /// RadioText is displaced. §4.9: it "does not alternate back".
     property <bool> yielded: root.carrying || root.trailing;
 
@@ -159,7 +175,9 @@ export component RadioTextStrip inherits Rectangle {
         spacing: Metrics.s(14);
         cross-axis-alignment: center;
 
-        TurnArrow {
+        // Gated on the path, like the countdown's: an empty TurnArrow is a
+        // 34dp hole at the head of the line, not an absence.
+        if root.nav-arrow != "": TurnArrow {
             size: Metrics.s(34);
             color: Pal.amber;
             commands: root.nav-arrow;

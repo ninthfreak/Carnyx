@@ -355,6 +355,11 @@ export component Face inherits Rectangle {
     // THE UI FACE AND NOT DSEG7, which §4.9 states and which also matters
     // mechanically: `crate::clock::eta` pads nothing, because the segment font's
     // blank is a literal `!` in Atkinson.
+    // NO FIT GUARD, AND ONE WAS TRIED: `clock-gap-bottom` is the hero SLOT's
+    // top, the ETA hangs past it BY DESIGN — §4.8's own verification puts it
+    // "in the empty space right of the hero card", which is inside the slot —
+    // and a guard demanding it stay above the slot hid it on the head unit
+    // itself. The clock takes the same liberty with the same anchor.
     property <bool> eta-showing:
         root.nav-eta != "" && root.nav-stage != NavStage.idle && root.clock-measured;
     property <length> eta-line-h: Metrics.tall ? Metrics.s(17) * 1.4 : Metrics.s(15) * 1.4;
@@ -415,17 +420,44 @@ export component Face inherits Rectangle {
     // column) pushing the line up over the genre or down over the hero card.
     property <length> countdown-top: status.genre-bottom;
     property <length> countdown-bottom: hero-slot.absolute-position.y;
+    property <length> countdown-line-h: Metrics.tall ? Metrics.s(26) * 1.35 : Metrics.s(24) * 1.35;
+    // MEASURED MEANS THE ANCHORS EXIST, NOT THAT THE LINE FITS BETWEEN THEM —
+    // and the difference emptied the face once. `countdown-bottom` is the hero
+    // SLOT's top, and the hero CARD hangs centred well below it: on the wide
+    // track the band between the genre and the slot is a few pixels, the line
+    // has always overhung the slot's empty top region, and §4.8 places the ETA
+    // "in the empty space right of the hero card" the same way. A guard that
+    // demanded the line fit above the slot hid the countdown on exactly the
+    // track it was built for. The y below is order-safe instead.
     property <bool> countdown-measured: root.countdown-bottom > root.countdown-top;
     if root.nav-stage == NavStage.cruise && root.nav-distance != "" && root.countdown-measured:
     Rectangle {
-        property <length> line-h: Metrics.tall ? Metrics.s(26) * 1.35 : Metrics.s(24) * 1.35;
-        x: 0;
-        width: root.width;
-        height: self.line-h;
-        y: Math.clamp(
-            (root.countdown-top + root.countdown-bottom) / 2 - self.line-h / 2,
+        // ── THE RECTANGLE IS THE BUDGET *AND* THE CLIP ───────────────────────
+        //
+        // The budget used to sit on the layout inside, and that only bounded
+        // where the row STARTED. Slint's box layouts in alignment mode hand
+        // every child its preferred size — nothing shrinks — so a long street
+        // ("onto US-151 N, Dubuque" is what `formatStreetName` produces) grew
+        // the row straight past the budget and back under the clock: the exact
+        // collision the budget exists to prevent, returning for long names.
+        // The bound lives on this Rectangle now and `clip: true` enforces it,
+        // which is the RadioText strip's own precedent — "the references show
+        // edge-clipped text".
+        x: Metrics.tall ? Metrics.pad-h : 0;
+        width: Metrics.tall ? root.width * 0.62 - Metrics.pad-h : root.width;
+        height: root.countdown-line-h;
+        // `max(min(…))` RATHER THAN `clamp`, because the bounds can cross: a
+        // band shorter than the line makes `bottom - height` sit above `top`,
+        // and what clamp does with an inverted range is not something to build
+        // on. This order resolves the crossing toward `top` — the line stays
+        // under the genre and overhangs the slot's empty top instead, which is
+        // where the room actually is.
+        y: Math.max(
             root.countdown-top,
-            root.countdown-bottom - self.line-h);
+            Math.min(
+                (root.countdown-top + root.countdown-bottom) / 2 - self.height / 2,
+                root.countdown-bottom - self.height));
+        clip: true;
 
         // ── IT SHARES THE BAND WITH THE CLOCK, AND ON A NARROW FACE THAT
         //    MEANS GIVING WAY ─────────────────────────────────────────────────
@@ -448,8 +480,6 @@ export component Face inherits Rectangle {
         // between the ETA and the hero card is 8dp at that surface, and the line
         // disappeared entirely.
         HorizontalLayout {
-            x: Metrics.tall ? Metrics.pad-h : 0;
-            width: Metrics.tall ? root.width * 0.62 - Metrics.pad-h : root.width;
             alignment: Metrics.tall ? LayoutAlignment.start : LayoutAlignment.center;
             spacing: Metrics.s(9);
             cross-axis-alignment: center;
@@ -467,7 +497,12 @@ export component Face inherits Rectangle {
                 // AMBER, THE FIXED SAFETY FAMILY — never a band theme's palette.
                 color: Pal.amber;
             }
-            TurnArrow {
+            // GATED ON THE PATH: an unknown turn type arrives as an empty
+            // string, and an empty TurnArrow is not nothing — it is a 26dp
+            // hole in the middle of the line. The distance and street still
+            // show, which is `NavState::Unknown`'s own rule: the distance is
+            // good and the glyph is not.
+            if root.nav-arrow != "": TurnArrow {
                 size: Metrics.s(26);
                 color: Pal.amber;
                 commands: root.nav-arrow;

@@ -3105,18 +3105,7 @@ impl App {
         // behind OsmAnd's own map — looks the same on the face, so this row is
         // the only place they can be told apart. `crate::nav::sub_line` holds
         // the wording and the ordering; this only gathers the facts.
-        let route = s.nav.route(crate::session::now_unix());
-        ui.set_settings_nav_sub(
-            crate::nav::sub_line(&crate::nav::Link {
-                package: &s.nav_package,
-                on: cfg.nav_on,
-                linked: route.is_some(),
-                navigating: route.is_some_and(crate::nav::Route::navigating),
-                map_visible: route.is_some_and(|r| r.map_visible),
-                hide_on_map: cfg.nav_hide_on_map,
-            })
-            .into(),
-        );
+        ui.set_settings_nav_sub(self.nav_sub_line().into());
         ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
@@ -3311,20 +3300,33 @@ impl App {
         }
     }
 
-    /// Publish the navigation state, and log it when it changes.
+    /// The NAVIGATION row's sub-line, from the live link state.
     ///
-    /// FINISHED STRINGS, as every other surface gets: the Slint side is handed
-    /// a distance already formatted and a turn already named, because the panel
-    /// decides nothing. The design handoff for the strip is still in progress,
-    /// so what is published is deliberately the DATA and not a layout — a glyph
-    /// id, a label and the words, which is what any drawing of this will bind
-    /// to whatever it ends up looking like.
-    /// Bind or unbind OsmAnd. Returns a line for the diagnostics log.
-    ///
-    /// THE HOST HAS NO OSMAND AND SAYS SO BY SAYING NOTHING. An empty answer is
-    /// "there was nothing to do", which is the honest one for every build that
-    /// is not the device — and it keeps the log line out of every screenshot.
+    /// ONE BUILDER, TWO WRITERS. `push_settings` paints the whole panel, and
+    /// `push_nav` repaints this one row — because the row reports facts that
+    /// move with the DRIVE, not with the settings: OsmAnd starts answering, a
+    /// route begins or ends, its map comes to the front. Written only from
+    /// `push_settings`, the row froze on whatever was true when the panel was
+    /// last painted, which for a panel open during a drive is exactly when it
+    /// is being read.
+    fn nav_sub_line(&self) -> String {
+        let s = self.state.borrow();
+        let route = s.nav.route(crate::session::now_unix());
+        crate::nav::sub_line(&crate::nav::Link {
+            package: &s.nav_package,
+            on: s.settings.nav_on,
+            linked: route.is_some(),
+            navigating: route.is_some_and(crate::nav::Route::navigating),
+            map_visible: route.is_some_and(|r| r.map_visible),
+            hide_on_map: s.settings.nav_hide_on_map,
+        })
+    }
+
     /// Which OsmAnd is installed, or `""`. See `CarnyxNav.installedPackage`.
+    ///
+    /// THE HOST HAS NO OSMAND AND SAYS SO BY SAYING NOTHING — an empty answer
+    /// keeps the "not installed" wording honest on every build that is not the
+    /// device, and the log line out of every screenshot.
     #[cfg(target_os = "android")]
     fn nav_installed_package(&self) -> String {
         crate::android::nav::installed_package()
@@ -3484,6 +3486,15 @@ impl App {
                 .unwrap_or_default()
                 .into(),
         );
+
+        // THE SETTINGS ROW FOLLOWS THE DRIVE. Its sub-line reports link state
+        // that moves with nav events, not with settings — see `nav_sub_line`.
+        // Compared before writing so the once-a-second tick does not repaint a
+        // row that has not changed.
+        let sub = self.nav_sub_line();
+        if ui.get_settings_nav_sub() != sub.as_str() {
+            ui.set_settings_nav_sub(sub.as_str().into());
+        }
 
         // ON A CHANGE ONLY. See `State::nav_said`.
         let line = line.unwrap_or_default();
@@ -6721,6 +6732,26 @@ mod tests {
         // Back on, and it hides again.
         ui.invoke_settings_set_nav_hide_on_map(true);
         assert!(!ui.get_nav_showing());
+
+        // ── AND THE ROW FOLLOWS THE DRIVE, NOT THE PANEL ─────────────────────
+        //
+        // A nav event ALONE must update the sub-line — no `push_settings`, no
+        // switch touched. Found in review: the row was written only by
+        // `push_settings`, so a panel open during a drive froze on whatever
+        // was true when it was painted.
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: false,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(
+            ui.get_settings_nav_sub().to_string().contains("Showing"),
+            "the map went away and the row must say so by itself: {}",
+            ui.get_settings_nav_sub()
+        );
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.
