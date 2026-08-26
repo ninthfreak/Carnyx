@@ -50,6 +50,9 @@ export component Face inherits Rectangle {
 
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
+    /// The OsmAnd tell (§4.9): the switch, and whether the service is answering.
+    in property <bool> osmand-on: false;
+    in property <bool> osmand-linked: false;
 
     // ── Presets ──
     in property <[Preset]> presets;
@@ -162,6 +165,8 @@ export component Face inherits Rectangle {
             dead: root.dead;
             gps-fix: root.gps-fix;
             in-motion: root.in-motion;
+            osmand-on: root.osmand-on;
+            osmand-linked: root.osmand-linked;
             reordering: root.reordering;
             open-settings => { root.open-settings(); }
             open-nearby => { root.open-nearby(); }

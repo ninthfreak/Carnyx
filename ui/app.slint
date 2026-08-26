@@ -87,6 +87,10 @@ export component AppWindow inherits Window {
     /// OsmAnd's own map is in front. The handoff hides the whole layer here,
     /// driver-overridable — so this is published and not obeyed in Rust.
     in property <bool> nav-map-visible: false;
+    /// The AIDL service is bound AND answering — the OsmAnd tell's lit state
+    /// (§4.9). Derived from the poll's freshness rather than from `bindService`
+    /// having returned true; see `App::push_nav`.
+    in property <bool> nav-linked: false;
 
     /// §4.8's clock, already formatted by Rust. EMPTY DRAWS NOTHING.
     in property <string> clock-time;
@@ -346,6 +350,8 @@ export component AppWindow inherits Window {
         clock-meridiem: root.clock-meridiem;
         gps-fix: root.gps-fix;
         in-motion: root.in-motion;
+        osmand-on: root.settings-nav-on;
+        osmand-linked: root.nav-linked;
         presets: root.presets;
         active-index: root.active-index;
         prev-preset: root.prev-preset;

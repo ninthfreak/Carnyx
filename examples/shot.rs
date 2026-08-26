@@ -553,6 +553,13 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
             ui.set_tp(true);
             ui.set_ta(true);
+            // THE OSMAND TELL IN ITS LIT STATE (§4.9). Pushed rather than driven
+            // through the nav seam, because the host has no OsmAnd to bind to —
+            // and this is the state worth holding a picture of: the mark in
+            // their own orange between the car and the satellite, with the car
+            // moved one slot left to make room for it.
+            ui.set_settings_nav_on(true);
+            ui.set_nav_linked(true);
         }
         State::WeakAndLossy => {
             ui.set_full_pairs(3);

@@ -3342,6 +3342,23 @@ impl App {
         // leaves a gap or a placeholder." So a missing street is `""` and the
         // strip draws nothing there, rather than a dash or a spinner.
         let route = self.state.borrow().nav.route(now).cloned();
+
+        // ── IS THE LINK UP? (§4.9's status-bar tell) ─────────────────────────
+        //
+        // A FRESH POLL IS THE ANSWER, AND IT IS A BETTER ONE THAN THE BIND.
+        // `bindService` returning true means the request was ACCEPTED, not that
+        // anything is on the other end: `onServiceConnected` may not have run
+        // yet, and a binder that has since died still leaves the bind looking
+        // good until Android gets round to saying otherwise.
+        //
+        // `CarnyxNav.pollOnce` calls `nativeNavInfo` on every answered
+        // `getAppInfo`, and OsmAnd answers that whether or not it is navigating
+        // — so a poll inside `Nav::EXPIRY` means the service is bound AND
+        // talking, which is what a lit tell should claim. An idle OsmAnd still
+        // lights it; one that has gone away goes dim within twelve seconds, on
+        // the same clock that ages the turn.
+        ui.set_nav_linked(route.is_some());
+
         let r = route.unwrap_or_default();
         ui.set_nav_street(r.street.clone().unwrap_or_default().into());
         ui.set_nav_after_street(r.after_street.clone().unwrap_or_default().into());
