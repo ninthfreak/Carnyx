@@ -188,6 +188,29 @@ const SLEEP_RELEASE_WINDOW: std::time::Duration = std::time::Duration::from_secs
 /// taps the row above it rather than hunting for a different control.
 const EGG_MENU_OFF: &str = "Off (auto-detect)";
 
+/// The dark-logo picker's state, from the assign that opens it to the answer.
+///
+/// WHY IT EXISTS AT ALL, in the reference's own words: *"A human glance caught
+/// five errors the metric scored as successes across five logos, so the pick is
+/// a default, never a verdict."* The pipeline routes, gates and chooses, and it
+/// is right most of the time; this is the screen where a person disagrees.
+///
+/// `items` EMPTY MEANS THE ADAPTATION IS STILL RUNNING, which is a real state
+/// and not a placeholder — building four treatments is seconds of pixel work on
+/// this unit, taken on the worker while the driver watches. The reference spins
+/// an `ActivityIndicator` over exactly this wait.
+struct DarkPick {
+    /// The store key. Held here rather than read back from the search model,
+    /// which `close_logo_search` clears out from under this.
+    base: String,
+    /// Every treatment the master can build, in the pipeline's order.
+    items: Vec<(crate::logos::dark::stages::Treatment, crate::logos::Raster)>,
+    /// The one the pipeline chose on its own, drawn AUTO.
+    pick: crate::logos::dark::stages::Treatment,
+    /// Which row is selected, as an index into `items`.
+    selected: usize,
+}
+
 /// What a probe calls itself in the log. One place, so the "reading…" line, the
 /// footer and the unavailable line cannot drift apart.
 fn probe_name(action: settings::Action) -> &'static str {
@@ -767,6 +790,10 @@ struct State {
     /// `request_dark_adaptation` — without it a master that will not decode
     /// re-queues on every republish.
     adapt_tried: HashSet<String>,
+    /// The dark-logo picker, from the moment a logo is assigned until the driver
+    /// answers it. `None` at every other time, which is what keeps the logo
+    /// window in its ordinary states.
+    dark_pick: Option<DarkPick>,
     /// The open logo window's own art, at full size.
     ///
     /// A `Raster` rather than an `Image` because `logos::ui::apply` wants one,
@@ -1260,6 +1287,7 @@ impl App {
                 worker,
                 art: HashMap::new(),
                 adapt_tried: HashSet::new(),
+                dark_pick: None,
                 logo_art: None,
                 picker_at: None,
                 numpad: String::new(),
@@ -1570,7 +1598,7 @@ impl App {
                     self.push_logo_search();
                 }
             }
-            service::Event::Saved { base } => {
+            service::Event::Saved { base, assigned } => {
                 {
                     let mut s = self.state.borrow_mut();
                     s.logo.saved();
@@ -1592,6 +1620,45 @@ impl App {
                     s.adapt_tried.remove(&key);
                     s.settings.log.push(&stamp(), &format!("logo saved: {key}"));
                 }
+                // A NEW MASTER OPENS THE DARK PICKER RATHER THAN CLOSING THE
+                // WINDOW. The reference does the same and at the same moment —
+                // `setDarkPick` on the save's answer, with the picker's own close
+                // then closing the search behind it — because this is the one
+                // instant the driver is already looking at that logo and thinking
+                // about it. Asking later would be asking about a picture they
+                // have stopped caring about.
+                //
+                // ONLY FOR AN ASSIGN. `SavePrefs` answers the same event and
+                // moves no picture; there is nothing new to adapt when the driver
+                // has toggled "Display Call Sign".
+                if assigned {
+                    self.state.borrow_mut().dark_pick =
+                        Some(DarkPick {
+                            base,
+                            items: Vec::new(),
+                            // The plate FLOOR until the pipeline answers. Every
+                            // master can build it, so the AUTO badge lands on a
+                            // real row even in the instant before the choices
+                            // arrive — and no row is drawn in that instant anyway.
+                            pick: crate::logos::dark::stages::Treatment::Plate,
+                            selected: 0,
+                        });
+                    // The base is read back out rather than kept from above: it
+                    // was moved into `DarkPick`, and one owner of that string is
+                    // one place it can go stale.
+                    let want = self.state.borrow().dark_pick.as_ref().map(|d| d.base.clone());
+                    if let (Some(w), Some(base)) = (self.state.borrow().worker.as_ref(), want) {
+                        w.offer_dark(&base);
+                    }
+                    // The window stays up, in its waiting state, and the face
+                    // behind it is already repainted — `art` was invalidated
+                    // above, so the new logo is on the hero before the picker
+                    // asks about its dark cut.
+                    self.push_logo_search();
+                    self.push_hero();
+                    self.push_presets();
+                    return;
+                }
                 // Dismiss and tear down, in that order — `close_logo_search`
                 // reads the target, which `close` then clears.
                 self.ui().set_overlay(Overlay::None);
@@ -1599,6 +1666,32 @@ impl App {
                 self.push_hero();
                 self.push_presets();
                 self.push_settings();
+            }
+            // THE PICKER'S FOUR TREATMENTS ARRIVED.
+            //
+            // Dropped when the driver has already moved on — closing the window
+            // clears `dark_pick`, and a base that no longer matches is an answer
+            // to a question about a different station.
+            service::Event::DarkChoices { base, items, pick, open_on } => {
+                {
+                    let mut s = self.state.borrow_mut();
+                    let Some(d) = s.dark_pick.as_mut().filter(|d| d.base == base) else {
+                        return;
+                    };
+                    d.selected = items.iter().position(|(t, _)| *t == open_on).unwrap_or(0);
+                    d.pick = pick;
+                    d.items = items;
+                }
+                self.push_logo_search();
+            }
+            // NOTHING TO OFFER — no master, or one that will not decode. The
+            // window closes as an ordinary save would have, because there is no
+            // question to put and a picker with no answers is worse than none.
+            service::Event::NoDarkChoices { base } => {
+                if self.state.borrow().dark_pick.as_ref().is_none_or(|d| d.base != base) {
+                    return;
+                }
+                self.close_dark_pick();
             }
             // A BACKGROUND PASS FINISHED. It repaints one station's art and
             // touches nothing else — no overlay is dismissed, no search state is
@@ -3063,6 +3156,48 @@ impl App {
         let view = s.logo.view();
         let brand = brand_color(&s.logo.target().map(|t| t.base.clone()).unwrap_or_default());
         crate::logos::ui::apply(&ui, &view, s.logo.cells(), s.logo_art.as_ref(), brand);
+
+        // ── THE DARK PICKER, WHICH OVERRIDES THE VIEW ABOVE ──────────────────
+        //
+        // Written after `apply` and not folded into it, because `search::View`
+        // is the SEARCH's model and this is a step that happens after a search
+        // has already finished. Folding it in would put a second question's
+        // state inside the answer to the first, and `close_logo_search` would
+        // have to know about both.
+        //
+        // The five properties it takes over are the ones a state owns: the body,
+        // the selection, the two button labels and whether Confirm is live.
+        let Some(d) = s.dark_pick.as_ref() else {
+            // EVERY PROPERTY THE PICKER TOOK OVER GOES BACK, and the left button
+            // is the one that would otherwise stay wrong: `apply` above writes
+            // the state, the selection, the hint and the confirm label on every
+            // push, but nothing else writes `cancel-label` — so a window reopened
+            // after a picker would have said "Skip" over the results grid.
+            ui.set_logo_search_dark_choices(Default::default());
+            ui.set_logo_search_cancel_label("Cancel".into());
+            return;
+        };
+        let rows: Vec<crate::DarkChoice> = d
+            .items
+            .iter()
+            .map(|(t, art)| crate::logos::ui::to_dark_choice(*t, art, *t == d.pick))
+            .collect();
+        crate::logos::ui::set_dark_choices(&ui, &rows);
+        ui.set_logo_search_state(crate::LogoSearchState::DarkPick);
+        ui.set_logo_search_selected_index(d.selected as i32);
+        // SKIP, NOT CANCEL. The logo is already saved by the time this opens and
+        // the auto-pick already stands; what the left button declines is the
+        // question, not the save. `LogoDarkPicker.tsx` words it the same way.
+        ui.set_logo_search_cancel_label("Skip".into());
+        ui.set_logo_search_confirm_label("Use this".into());
+        // NOTHING TO CONFIRM WHILE THE ADAPTATION RUNS, which is also the frame
+        // where `selected` points at a row that does not exist yet.
+        ui.set_logo_search_can_confirm(!d.items.is_empty());
+        ui.set_logo_search_hint(if d.items.is_empty() {
+            Default::default()
+        } else {
+            "Shown on the real dark background".into()
+        });
     }
 
     // ── Stored art ───────────────────────────────────────────────────────────
@@ -3641,10 +3776,53 @@ impl App {
             app.run_logo_search();
         });
         on!(on_logo_search_pick, |app, i| {
-            app.state.borrow_mut().logo.pick(i);
+            // THE PICKER OWNS THE SELECTION WHILE IT IS UP. Both bodies report a
+            // tap through this one callback — the results grid and the dark
+            // swatches — and the index means a different list in each, so the
+            // branch is here rather than in two callbacks the panel would have
+            // to choose between.
+            {
+                let mut s = app.state.borrow_mut();
+                if let Some(d) = s.dark_pick.as_mut() {
+                    if let Ok(i) = usize::try_from(i) {
+                        if i < d.items.len() {
+                            d.selected = i;
+                        }
+                    }
+                    drop(s);
+                    app.push_logo_search();
+                    return;
+                }
+                s.logo.pick(i);
+            }
             app.push_logo_search();
         });
         on!(on_logo_search_confirm, |app| {
+            // "USE THIS" WHILE THE PICKER IS UP, and it is a different verb from
+            // Confirm: the logo is already saved, so this stores WHICH RENDITION
+            // of it the dark face draws, with `chosen = true` so every later
+            // regeneration honours it.
+            let chosen = {
+                let s = app.state.borrow();
+                s.dark_pick.as_ref().and_then(|d| {
+                    d.items.get(d.selected).map(|(t, _)| (d.base.clone(), *t))
+                })
+            };
+            if let Some((base, treatment)) = chosen {
+                if let Some(w) = app.state.borrow().worker.as_ref() {
+                    w.set_dark(&base, treatment);
+                }
+                app.state.borrow_mut().settings.log.push(
+                    &stamp(),
+                    &format!(
+                        "dark logo: {} set to {}",
+                        base.to_uppercase(),
+                        crate::logos::ui::treatment_label(treatment)
+                    ),
+                );
+                app.close_dark_pick();
+                return;
+            }
             app.confirm_logo();
         });
     }
@@ -3671,6 +3849,17 @@ impl App {
     /// one to set up a test would prove nothing about a driver who tuned.
     pub fn tune_for_test(self: &Rc<App>, mhz: f32) {
         self.tune(mhz);
+    }
+
+    /// Hand the app one logo-worker event, for the screenshot harness.
+    ///
+    /// THE SEAM THE WORKER SPEAKS THROUGH, and the only way a shot can reach the
+    /// dark picker: that screen is opened by a save the host cannot perform —
+    /// there is no image codec here to decode a master with, so the pipeline it
+    /// would run has nothing to run on. Driving the seam renders the real screen
+    /// from real state; faking the properties would render a picture of one.
+    pub fn push_logo_event_for_test(self: &Rc<App>, event: service::Event) {
+        self.apply_logo_event(event);
     }
 
     /// Put a track in the RadioText, for tests and shots of the band themes.
@@ -4624,8 +4813,38 @@ impl App {
     /// Called on EVERY overlay close, so it starts by checking there was a logo
     /// window at all: bumping the generation for a numpad dismissal would be
     /// harmless but untrue.
+    /// Put the dark picker away and close the window behind it.
+    ///
+    /// BOTH BUTTONS END HERE and so does the ✕ — Skip, Use this, and a dismissal
+    /// all leave a logo that is saved and a dark variant that exists, differing
+    /// only in whether `chosen` is set. The reference's picker does the same:
+    /// its `onClose` closes the search overlay behind it, whichever way it was
+    /// answered.
+    fn close_dark_pick(&self) {
+        // THE CLEAR IS `close_logo_search`'s, NOT THIS FUNCTION'S. It republishes
+        // only when it finds a picker to put away, so clearing the field here
+        // first would make it think there was nothing to undo — and the left
+        // button would stay saying "Skip" over the next window's results grid.
+        self.ui().set_overlay(Overlay::None);
+        self.close_logo_search();
+        self.push_settings();
+    }
+
     fn close_logo_search(&self) {
+        // THE PICKER GOES FIRST, WHATEVER CLOSED THE WINDOW. The ✕ and the scrim
+        // reach `close_overlay`, which calls this directly and knows nothing
+        // about the picker; a `dark_pick` left standing would put the window
+        // straight back into the picker's body the next time it opened.
+        let had_pick = self.state.borrow_mut().dark_pick.take().is_some();
         if self.state.borrow().logo.target().is_none() {
+            // A REPUBLISH IS STILL OWED IF A PICKER WAS UP. The early return is
+            // for a window that was never open; a picker that WAS open has left
+            // five properties on the window pointing at itself — the state, the
+            // rows, the selection and both button labels — and nothing else
+            // writes the left one.
+            if had_pick {
+                self.push_logo_search();
+            }
             return;
         }
         let mut s = self.state.borrow_mut();
@@ -5793,6 +6012,123 @@ mod tests {
         assert!(egg.on, "a basic theme is still a theme");
         assert_eq!(egg.genre.to_string(), "Slowhand");
         assert!(!egg.advanced, "and it takes the ordinary genre metrics");
+    }
+
+    /// THE DARK-LOGO PICKER, FROM THE ASSIGN THAT OPENS IT TO THE ANSWER.
+    ///
+    /// The engine has shipped since #76 — `offer_dark`, `set_dark_treatment` and
+    /// `choose_treatment` are all built and tested — and until now nothing could
+    /// reach any of it. This asserts the SCREEN: that a new master opens the
+    /// picker instead of closing the window, that the rows and the two labels
+    /// arrive finished, that a tap moves the selection, and that every way out
+    /// closes the window.
+    ///
+    /// DRIVEN THROUGH `apply_logo_event`, which is the seam the worker speaks
+    /// through. The worker itself cannot run here — the host has no image codec,
+    /// so `offer_dark` would have nothing to decode — and pretending otherwise
+    /// would be testing a fake pipeline rather than the wiring that was missing.
+    #[test]
+    fn the_dark_picker_opens_on_a_new_logo_and_every_button_closes_it() {
+        use crate::logos::dark::stages::Treatment;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("dark-picker");
+        let art = || crate::logos::Raster::empty(4, 4);
+
+        // A PREFS SAVE CLOSES THE WINDOW, as it always has. Nothing was
+        // downloaded, so there is nothing to ask about.
+        ui.set_overlay(Overlay::LogoSearch);
+        driver.apply_logo_event(service::Event::Saved {
+            base: "WMGN".into(),
+            assigned: false,
+        });
+        assert_eq!(ui.get_overlay(), Overlay::None, "a flag toggle just saves");
+        assert!(driver.state.borrow().dark_pick.is_none());
+
+        // A NEW MASTER KEEPS IT OPEN, waiting on the adaptation.
+        ui.set_overlay(Overlay::LogoSearch);
+        driver.apply_logo_event(service::Event::Saved {
+            base: "WMGN".into(),
+            assigned: true,
+        });
+        assert_eq!(ui.get_overlay(), Overlay::LogoSearch, "the window stays up");
+        assert_eq!(ui.get_logo_search_state(), crate::LogoSearchState::DarkPick);
+        assert!(!ui.get_logo_search_can_confirm(), "nothing to confirm while it adapts");
+
+        // THE TREATMENTS ARRIVE. The badge follows `pick`, the selection follows
+        // `open_on`, and they are deliberately different rows here.
+        driver.apply_logo_event(service::Event::DarkChoices {
+            base: "WMGN".into(),
+            items: vec![(Treatment::Remap, art()), (Treatment::Halo, art()), (Treatment::Plate, art())],
+            pick: Treatment::Remap,
+            open_on: Treatment::Halo,
+        });
+        use slint::Model;
+        let rows = ui.get_logo_search_dark_choices();
+        assert_eq!(rows.row_count(), 3);
+        assert_eq!(rows.row_data(0).unwrap().label.to_string(), "Recolor", "words, not stage names");
+        assert!(rows.row_data(0).unwrap().auto, "the pipeline's pick is badged");
+        assert!(!rows.row_data(1).unwrap().auto);
+        assert!(rows.row_data(2).unwrap().plated, "only the plate asks for its slab");
+        assert!(!rows.row_data(0).unwrap().plated);
+        assert_eq!(ui.get_logo_search_selected_index(), 1, "it opens on the stored row");
+        assert_eq!(ui.get_logo_search_cancel_label().to_string(), "Skip");
+        assert_eq!(ui.get_logo_search_confirm_label().to_string(), "Use this");
+        assert!(ui.get_logo_search_can_confirm());
+
+        // A TAP MOVES THE SELECTION, through the same callback the results grid
+        // uses — the index means a different list in each.
+        ui.invoke_logo_search_pick(2);
+        assert_eq!(ui.get_logo_search_selected_index(), 2);
+        assert_eq!(driver.state.borrow().dark_pick.as_ref().unwrap().selected, 2);
+
+        // "USE THIS" CLOSES, and says which treatment in the log.
+        ui.invoke_logo_search_confirm();
+        assert_eq!(ui.get_overlay(), Overlay::None);
+        assert!(driver.state.borrow().dark_pick.is_none());
+        assert!(
+            driver
+                .state
+                .borrow()
+                .settings
+                .log
+                .lines()
+                .iter()
+                .any(|l| l.contains("dark logo: WMGN set to Plate")),
+            "the choice is recorded"
+        );
+
+        // THE LEFT BUTTON GOES BACK TO "Cancel" when the picker does. Nothing
+        // else writes that label, so a window reopened after a picker would
+        // otherwise say "Skip" over the results grid.
+        ui.invoke_close_overlay();
+        ui.set_overlay(Overlay::LogoSearch);
+        driver.apply_logo_event(service::Event::Saved {
+            base: "WMGN".into(),
+            assigned: false,
+        });
+        assert_eq!(ui.get_logo_search_cancel_label().to_string(), "Cancel");
+
+        // AND SO DOES THE ✕. Skip is not cancel — the logo is already saved and
+        // the auto-pick already stands — but both leave by the same door.
+        ui.set_overlay(Overlay::LogoSearch);
+        driver.apply_logo_event(service::Event::Saved {
+            base: "WMGN".into(),
+            assigned: true,
+        });
+        assert_eq!(ui.get_logo_search_state(), crate::LogoSearchState::DarkPick);
+        ui.invoke_close_overlay();
+        assert!(driver.state.borrow().dark_pick.is_none(), "the ✕ puts the picker away too");
+
+        // AN OFFER WITH NOTHING IN IT CLOSES THE WINDOW rather than showing an
+        // empty picker: no master, or one that will not decode.
+        ui.set_overlay(Overlay::LogoSearch);
+        driver.apply_logo_event(service::Event::Saved {
+            base: "WMGN".into(),
+            assigned: true,
+        });
+        driver.apply_logo_event(service::Event::NoDarkChoices { base: "WMGN".into() });
+        assert_eq!(ui.get_overlay(), Overlay::None);
+        assert!(driver.state.borrow().dark_pick.is_none());
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.

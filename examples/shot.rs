@@ -50,6 +50,7 @@ use slint::{
 
 use carnyx::app::App;
 use carnyx::fake::FakeLocation;
+use carnyx::logos::dark::stages::Treatment;
 use carnyx::{GenreColumn, LogoPlate, LogoSearchState, NearbyState, NearbyTab, Overlay};
 
 /// The five first-class surfaces of ANDROID §2, plus the states worth a second
@@ -140,6 +141,14 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-band-themes-dark", 1024, 614, true, State::SettingsEggs, -11.0),
     ("settings-band-themes-portrait", 360, 800, false, State::SettingsEggs, -14.0),
     // §6.4 logo search: both landing views, the grid, and the two dead ends.
+    // The dark picker, which no other shot can reach: it opens only on a save,
+    // and its swatches are drawn on the real dark ground whatever the face is —
+    // which is the whole point of the control and the one thing only a render
+    // checks. Both schemes, because the CARD follows the face and the SWATCHES
+    // do not.
+    ("logo-dark-picker", 1024, 614, false, State::LogoDarkPick, 0.0),
+    ("logo-dark-picker-dark", 1024, 614, true, State::LogoDarkPick, 0.0),
+    ("logo-dark-picker-portrait", 360, 800, false, State::LogoDarkPick, 0.0),
     ("logo-search-landing", 1024, 614, false, State::LogoLanding, 0.0),
     ("logo-search-landing-with-logo", 1024, 614, false, State::LogoLandingHasLogo, 0.0),
     ("logo-search-results", 1024, 614, false, State::LogoResults, 0.0),
@@ -341,6 +350,8 @@ enum State {
     /// the about line unlocks, with one theme forced so the tick has somewhere
     /// to be. The only render of a group that breaks the panel's two-tone rule.
     SettingsEggs,
+    /// §6.4's dark-mode logo picker, the step after a logo is assigned.
+    LogoDarkPick,
     LogoLanding,
     /// §6.4 landing on a station that already has one.
     LogoLandingHasLogo,
@@ -768,6 +779,34 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_settings_egg_taps(6);
             ui.invoke_settings_force_egg(2);
             ui.set_overlay(Overlay::Settings);
+        }
+        State::LogoDarkPick => {
+            // THROUGH THE REAL DOOR, so the header carries a real station: the
+            // window is opened for a preset the way the reorder badge opens it,
+            // and only then is the save it is answering pushed in.
+            ui.invoke_open_logo_search(0);
+            // THROUGH THE REAL EVENT SEAM, which is how the worker reaches this
+            // screen on the unit: a save that assigned a master, then the four
+            // treatments. The rasters here are the fake search's art rather than
+            // pipeline output — the host has no codec to run the pipeline with —
+            // so what this shot proves is the LAYOUT, the labels, the badge, the
+            // slab and the selection, and not the adaptation.
+            driver.push_logo_event_for_test(carnyx::logos::service::Event::Saved {
+                base: "WMGN".into(),
+                assigned: true,
+            });
+            driver.push_logo_event_for_test(carnyx::logos::service::Event::DarkChoices {
+                base: "WMGN".into(),
+                items: vec![
+                    (Treatment::Remap, carnyx::fake::FakeLogoSearch::art(0, 192)),
+                    (Treatment::Halo, carnyx::fake::FakeLogoSearch::art(1, 192)),
+                    (Treatment::AsIs, carnyx::fake::FakeLogoSearch::art(2, 192)),
+                    (Treatment::Plate, carnyx::fake::FakeLogoSearch::art(3, 192)),
+                ],
+                pick: Treatment::Halo,
+                open_on: Treatment::Halo,
+            });
+            ui.set_overlay(Overlay::LogoSearch);
         }
         State::LogoLanding => ui.set_overlay(Overlay::LogoSearch),
         State::LogoLandingHasLogo => {

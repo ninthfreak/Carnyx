@@ -1306,6 +1306,98 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 109. Build the dark-logo treatment picker
+**DONE.** The engine shipped in #76 and nothing could reach it. Assigning a logo
+now opens the picker: four treatments rendered ON THE REAL DARK SURFACE, the
+pipeline's own choice badged AUTO, Skip and Use this.
+
+**WHY A PICKER EXISTS AT ALL**, in `LogoDarkPicker.tsx`'s own words: *"A human
+glance caught five errors the metric scored as successes across five logos, so
+the pick is a default, never a verdict."* The pipeline routes, gates and chooses,
+and it is right most of the time. This is the screen where a person disagrees,
+and the `chosen` bit — already built, already honoured by
+`pipeline::choose_treatment` through every later regeneration — is what makes
+their disagreement stick.
+
+**`offer_dark` IS THE NEW HALF, AND IT IS TWO FACTS.** `dark_choices` answers
+what can be built, which is enough to draw four swatches and not enough to draw
+the screen. The picker also needs to know which row is the AUTO one and which row
+to OPEN ON — and those are not the same row once a driver has chosen. A picker
+that re-opened on the auto-pick would be quietly proposing to undo their choice,
+and a driver tapping "Use this" without looking would take the undo. `stored` is
+matched against the BUILT candidates rather than trusted from the meta, so a
+treatment this master can no longer produce falls back to the auto-pick instead
+of selecting nothing.
+
+**ONE PIPELINE PASS FOR ALL FOUR**, which is what makes the feature affordable:
+`adapt_logo_for_dark` builds every candidate on the way to choosing one, so
+showing them costs what deciding automatically already cost. Four runs would not
+have been shippable — it is seconds of pixel work on this unit, which is also why
+the picker has a WAITING state at all. `dark-choices` empty in that state IS the
+wait; the reference spins the same spinner over it.
+
+**`Saved` GREW A BOOLEAN, and it is not bookkeeping.** Two jobs answer a Confirm:
+one downloads and stores a NEW MASTER, the other only moves the hero flags. The
+picker follows the first and not the second — there is nothing new to adapt when
+the driver has toggled "Display Call Sign" — and the event could not tell them
+apart.
+
+**ONE MODAL, NOT TWO.** The reference mounts `LogoDarkPicker` as its own Modal
+over the search window; this app has ONE overlay at a time. Since that picker is
+only ever opened from here, closes this window when it closes and wears the same
+card, it is folded in as a sixth `LogoSearchState`. What it DRAWS is the
+reference's: the title, the line of copy, a swatch per treatment, AUTO on the
+pipeline's pick, a 2dp blue edge on the selected one.
+
+**THE PLATE DRAWS ITS SLAB AND THE OTHER THREE DO NOT.** That treatment's raster
+is a KEYED MARK meant to sit on the grey `#E6E6E6` rounded rectangle — drawn bare
+on the dark ground it is a dark logo on a dark card, which is the exact failure it
+exists to fix. The reference sizes the slab at 78% of the well with 8dp inside;
+the other three get 12dp of well padding.
+
+**THE GROUND IS HANDED OVER, NOT READ FROM `Pal`.** These candidates were built
+and gated against `dark::LOGO_DARK_BG`, and this window can be open while the FACE
+IS LIGHT — a swatch on the light panel would be a preview of nothing. The two
+`logo-dark-picker` shots are the same swatches under both schemes for exactly
+that reason: the card follows the face, the wells do not.
+
+**TWO COLUMNS ALWAYS, arrived at by measuring rather than by wrapping.** The
+reference lays 150dp cards in a wrapping row; four of those need 636dp with the
+gaps and the phone track's band is about 300, so it wraps to two rows there
+anyway. This computes the column from the band and places the swatches by hand,
+the way the results grid does.
+
+**THREE SMALL THINGS THE SCREEN NEEDED.** The query chip is hidden — what was
+searched for is finished business by then, and the chip over this screen reads as
+a stale answer. The body is top-aligned, because the wrapper centres its child and
+a grid taller than the band would be clipped at BOTH ends. And the left button
+says "Skip" rather than "Cancel", which is the reference's wording and is right:
+the logo is already saved and the auto-pick already stands, so what the button
+declines is the question.
+
+**THAT LABEL FOUND A REAL BUG IN THE CLOSE PATH.** Nothing but the picker writes
+`cancel-label`, so it had to be put back — and `close_dark_pick` was clearing
+`dark_pick` before calling `close_logo_search`, which then saw nothing to undo and
+skipped the republish. A window reopened after a picker said "Skip" over the
+results grid. The clear belongs to `close_logo_search`, which now republishes
+whenever it finds a picker to put away, even for a window that had no target.
+
+**Pinned by two tests.** `the_dark_offer_opens_on_the_stored_treatment_and_badges_the_automatic_one`
+takes the pure half — and picks its override by asking the offer which row is NOT
+the auto-pick, rather than naming a treatment, because which one a fixture routes
+to is the pipeline's business. `the_dark_picker_opens_on_a_new_logo_and_every_button_closes_it`
+takes the screen, driven through `apply_logo_event`, which is the seam the worker
+speaks through: the worker cannot run here — the host has no image codec — and
+faking one would test a fake pipeline rather than the wiring that was missing.
+
+**Three shots**, through the real door: the window is opened for a preset the way
+the reorder badge opens it, then the save and the treatments are pushed in.
+
+**Evidence.** 311 tests, clippy clean over lib, bins and examples. Nine
+logo-search shots against a stashed baseline: eight byte-identical, one moved and
+it is `logo-search-loading`, which the harness's own header lists as
+non-deterministic (the spinner).
+
 ### 108. Build the six-tap band-theme picker
 **DONE.** The hidden fifth section is back, reading `eggs::listed()`. Six taps on
 the about line reveal BAND THEMES; picking a row forces that theme regardless of

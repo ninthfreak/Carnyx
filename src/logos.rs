@@ -3199,13 +3199,55 @@ pub mod assign {
         base: &str,
         gate_bg: [f64; 3],
     ) -> Vec<(Treatment, Raster)> {
-        let Some(bytes) = store.read_master(base) else { return Vec::new() };
-        let Some(master) = codec.decode(&bytes) else { return Vec::new() };
-        pipeline::adapt_logo_for_dark(&master, gate_bg)
-            .candidates
-            .into_iter()
-            .map(|c| (c.treatment, c.raster))
-            .collect()
+        offer_dark(store, codec, base, gate_bg).map(|o| o.items).unwrap_or_default()
+    }
+
+    /// What the picker actually needs: the choices, WHICH ONE THE PIPELINE PICKED,
+    /// and which one is already on disk.
+    ///
+    /// [`dark_choices`] answers the first alone, which is enough to draw four
+    /// swatches and not enough to draw the screen. The reference marks the
+    /// auto-pick "AUTO" and opens with it selected, for the reason
+    /// `LogoDarkPicker.tsx` states in its own header: *"a human glance caught five
+    /// errors the metric scored as successes across five logos, so the pick is a
+    /// default, never a verdict"*. A picker that opened on nothing would make the
+    /// driver choose where the machine has already chosen adequately.
+    ///
+    /// `stored` is NOT always `pick`. A driver who has chosen once has
+    /// `chosen = true` on disk and `pipeline::choose_treatment` honours it through
+    /// every later regeneration; opening on the auto-pick there would quietly
+    /// propose undoing their choice.
+    pub fn offer_dark(
+        store: &LogoStore,
+        codec: &dyn ImageCodec,
+        base: &str,
+        gate_bg: [f64; 3],
+    ) -> Option<DarkOffer> {
+        let bytes = store.read_master(base)?;
+        let master = codec.decode(&bytes)?;
+        let res = pipeline::adapt_logo_for_dark(&master, gate_bg);
+        // Matched against the BUILT candidates rather than trusted from the meta:
+        // a treatment on disk that this master can no longer produce is not a row
+        // the picker can open on, and the auto-pick is the honest fallback.
+        let stored = store.dark_info(base).and_then(|d| {
+            res.candidates.iter().find(|c| c.treatment.as_enum() == d.treatment).map(|c| c.treatment)
+        });
+        Some(DarkOffer {
+            pick: res.pick,
+            stored,
+            items: res.candidates.into_iter().map(|c| (c.treatment, c.raster)).collect(),
+        })
+    }
+
+    /// See [`offer_dark`].
+    #[derive(Debug)]
+    pub struct DarkOffer {
+        /// Every treatment this master can build: routed ones first, plate last.
+        pub items: Vec<(Treatment, Raster)>,
+        /// What the pipeline would choose on its own — the row marked AUTO.
+        pub pick: Treatment,
+        /// What is on disk now, when it is still buildable. The row to open on.
+        pub stored: Option<Treatment>,
     }
 
     /// Fix this station's dark treatment to `t`, as the DRIVER's choice.
@@ -4308,8 +4350,32 @@ pub mod service {
         SearchFailed { generation: u64 },
         /// A logo landed. The caller invalidates that station's tiles and the
         /// hero's display flags.
-        Saved { base: String },
+        ///
+        /// `assigned` separates the two jobs that answer a Confirm: a NEW MASTER
+        /// was downloaded and stored, or only the hero flags moved. The dark
+        /// picker follows the first and not the second — there is nothing new to
+        /// adapt when the driver has only toggled "Display Call Sign".
+        Saved { base: String, assigned: bool },
         SaveFailed { reason: String },
+        /// The dark treatments a station's master can produce, for the picker.
+        ///
+        /// Carries the RASTERS rather than a promise of them: the pipeline builds
+        /// every candidate on the way to choosing one, so the four images already
+        /// exist by the time this is sent, and a second pass to fetch them would
+        /// be seconds of pixel work on this unit for nothing.
+        ///
+        /// `pick` is the auto-pick, drawn as AUTO; `open_on` is the row to select,
+        /// which is the stored treatment when there is one and the auto-pick
+        /// otherwise. See `assign::offer_dark`.
+        DarkChoices {
+            base: String,
+            items: Vec<(super::dark::stages::Treatment, Raster)>,
+            pick: super::dark::stages::Treatment,
+            open_on: super::dark::stages::Treatment,
+        },
+        /// The picker had nothing to offer — no master, or one that will not
+        /// decode. A different outcome from "the driver skipped".
+        NoDarkChoices { base: String },
         /// A dark variant was built for a station that already had a logo.
         ///
         /// SEPARATE FROM `Saved` ON PURPOSE. `Saved` is the answer to a Confirm:
@@ -4327,6 +4393,11 @@ pub mod service {
         SavePrefs { base: String, flags: HeroFlags },
         /// Build the dark variant for a station that has a logo and no cache.
         Adapt { base: String },
+        /// Build every dark variant, for the picker to show. See `offer_dark`.
+        Offer { base: String },
+        /// Fix the driver's choice. `set_dark_treatment` writes `chosen = true`,
+        /// which every later regeneration then honours.
+        SetDark { base: String, treatment: super::dark::stages::Treatment },
         Stop,
     }
 
@@ -4377,14 +4448,14 @@ pub mod service {
                                 ) {
                                     Ok(()) => {
                                         store.set_prefs(&base, flags);
-                                        sink(Event::Saved { base });
+                                        sink(Event::Saved { base, assigned: true });
                                     }
                                     Err(reason) => sink(Event::SaveFailed { reason }),
                                 }
                             }
                             Job::SavePrefs { base, flags } => {
                                 store.set_prefs(&base, flags);
-                                sink(Event::Saved { base });
+                                sink(Event::Saved { base, assigned: false });
                             }
                             // SILENT ON FAILURE, unlike every job above it.
                             // `regenerate_dark` returns `None` for a master that
@@ -4401,6 +4472,42 @@ pub mod service {
                                 )
                                 .is_some()
                                 {
+                                    sink(Event::Adapted { base });
+                                }
+                            }
+                            // NOT SILENT ON FAILURE, unlike `Adapt` above it, and
+                            // that is the difference between a cache fill and a
+                            // screen the driver is waiting on. An empty offer has
+                            // to close the picker rather than leave it spinning.
+                            Job::Offer { base } => {
+                                match assign::offer_dark(
+                                    &store,
+                                    &*codec,
+                                    &base,
+                                    super::dark::LOGO_DARK_BG,
+                                ) {
+                                    Some(o) if !o.items.is_empty() => sink(Event::DarkChoices {
+                                        base,
+                                        pick: o.pick,
+                                        open_on: o.stored.unwrap_or(o.pick),
+                                        items: o.items,
+                                    }),
+                                    _ => sink(Event::NoDarkChoices { base }),
+                                }
+                            }
+                            // `Adapted` AND NOT `Saved`: the logo itself did not
+                            // change, only which rendition of it the dark face
+                            // draws, so this must repaint the tiles and nothing
+                            // else. A `Saved` here would clear the search and
+                            // close a window the driver may have moved on in.
+                            Job::SetDark { base, treatment } => {
+                                if assign::set_dark_treatment(
+                                    &store,
+                                    &*codec,
+                                    &base,
+                                    treatment,
+                                    super::dark::LOGO_DARK_BG,
+                                ) {
                                     sink(Event::Adapted { base });
                                 }
                             }
@@ -4444,6 +4551,21 @@ pub mod service {
         /// noticed is pending.
         pub fn adapt(&self, base: &str) {
             let _ = self.tx.send(Job::Adapt { base: base.to_string() });
+        }
+
+        /// Build every dark variant for the picker. See `assign::offer_dark`.
+        ///
+        /// QUEUED LIKE EVERYTHING ELSE, which is why the picker has a waiting
+        /// state at all: this is the same seconds of pixel work `Adapt` is, taken
+        /// while a driver watches. The reference spins an `ActivityIndicator` over
+        /// the same wait.
+        pub fn offer_dark(&self, base: &str) {
+            let _ = self.tx.send(Job::Offer { base: base.to_string() });
+        }
+
+        /// Store the driver's choice. See `assign::set_dark_treatment`.
+        pub fn set_dark(&self, base: &str, treatment: super::dark::stages::Treatment) {
+            let _ = self.tx.send(Job::SetDark { base: base.to_string(), treatment });
         }
 
         /// Abandon anything in flight — the window closed.
@@ -4542,6 +4664,63 @@ pub mod ui {
             State::NoResults => crate::LogoSearchState::NoResults,
             State::Error => crate::LogoSearchState::Error,
         }
+    }
+
+    /// What a treatment is called ON SCREEN — `LogoDarkPicker.tsx`'s `LABELS`.
+    ///
+    /// PLAIN WORDS, NOT THE PIPELINE'S NAMES. "remap" and "halo" are what the
+    /// stages are called in the code and mean nothing to a driver; "Recolor" and
+    /// "Glow" say what they will see. The reference's own spelling of the first
+    /// one is American and is kept, because changing it would be inventing copy.
+    pub fn treatment_label(t: super::dark::stages::Treatment) -> &'static str {
+        use super::dark::stages::Treatment;
+        match t {
+            Treatment::Remap => "Recolor",
+            Treatment::Halo => "Glow",
+            Treatment::AsIs => "As-is",
+            Treatment::Plate => "Plate",
+        }
+    }
+
+    /// One dark-treatment swatch.
+    ///
+    /// `plated` is the whole reason this is not just an image and a caption: the
+    /// plate treatment's raster is a KEYED MARK, and drawn on the dark ground
+    /// without its grey slab it is a dark logo on a dark card — the exact failure
+    /// the treatment exists to fix. The UI draws the slab; the pixels never
+    /// carry it, for the same reason `pipeline::build` records.
+    pub fn to_dark_choice(
+        t: super::dark::stages::Treatment,
+        art: &Raster,
+        auto: bool,
+    ) -> crate::DarkChoice {
+        crate::DarkChoice {
+            art: to_image(art),
+            label: SharedString::from(treatment_label(t)),
+            auto,
+            plated: t == super::dark::stages::Treatment::Plate,
+        }
+    }
+
+    /// The picker's rows, and the ground they are judged on.
+    ///
+    /// THE GROUND IS THE GATE'S OWN, read from `dark::LOGO_DARK_BG` rather than
+    /// from `Pal`: these candidates were built and scored against that colour,
+    /// and this window can be open while the FACE is light. A swatch drawn on the
+    /// light panel would be a preview of nothing.
+    pub fn set_dark_choices(
+        window: &crate::AppWindow,
+        rows: &[crate::DarkChoice],
+    ) {
+        window.set_logo_search_dark_choices(ModelRc::from(Rc::new(VecModel::from(
+            rows.to_vec(),
+        ))));
+        let bg = super::dark::LOGO_DARK_BG;
+        window.set_logo_search_dark_bg(Color::from_rgb_u8(
+            (bg[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (bg[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (bg[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        ));
     }
 
     /// One result cell. A cell whose thumbnail has not landed yet gets an empty
@@ -5275,6 +5454,58 @@ mod tests {
         assert_eq!(ext_for("IMAGE/JPEG"), "jpg");
         assert_eq!(ext_for("image/webp"), "webp");
         assert_eq!(ext_for("application/octet-stream"), "png");
+    }
+
+    /// THE PICKER OPENS ON THE ROW THE DRIVER WOULD EXPECT.
+    ///
+    /// `dark_choices` answers what can be built. `offer_dark` answers what the
+    /// SCREEN needs, and the two extra facts are the ones a picker is wrong
+    /// without: which row is badged AUTO, and which row opens selected.
+    ///
+    /// THOSE ARE NOT THE SAME ROW once a driver has chosen. `chosen = true`
+    /// survives every regeneration through `pipeline::choose_treatment`, so a
+    /// picker that re-opened on the auto-pick would be quietly proposing to undo
+    /// their choice — and a driver who tapped "Use this" without looking would
+    /// take the undo.
+    #[test]
+    fn the_dark_offer_opens_on_the_stored_treatment_and_badges_the_automatic_one() {
+        let tmp = TempDir::new("dark-offer");
+        let s = store::LogoStore::new(tmp.path());
+        let codec = RawCodec;
+        let mut master = field(24, 24, [255, 255, 255, 255]);
+        block(&mut master, 6, 6, 12, 12, [20, 40, 200, 255]);
+        s.put_original("WMGN", &encoded(&master), "image/png", "manual").unwrap();
+
+        // NOTHING STORED YET: open on the auto-pick, because there is nothing
+        // better to open on and an unselected picker asks the driver to do work
+        // the pipeline has already done adequately.
+        let fresh = assign::offer_dark(&s, &codec, "WMGN", dark::LOGO_DARK_BG).unwrap();
+        assert!(fresh.items.len() > 1, "a picker needs something to pick between");
+        assert_eq!(fresh.stored, None, "nothing on disk yet");
+        assert!(
+            fresh.items.iter().any(|(t, _)| *t == fresh.pick),
+            "the auto-pick is one of the rows offered"
+        );
+
+        // THE DRIVER DISAGREES. Whichever row is NOT the auto-pick — chosen from
+        // the offer rather than named, because which treatment a given fixture
+        // routes to is the pipeline's business and this test is about the picker.
+        let other = fresh
+            .items
+            .iter()
+            .map(|(t, _)| *t)
+            .find(|t| *t != fresh.pick)
+            .expect("more than one treatment to choose between");
+        assert!(assign::set_dark_treatment(&s, &codec, "WMGN", other, dark::LOGO_DARK_BG));
+
+        let again = assign::offer_dark(&s, &codec, "WMGN", dark::LOGO_DARK_BG).unwrap();
+        assert_eq!(again.stored, Some(other), "it re-opens on what the driver chose");
+        assert_ne!(again.stored, Some(again.pick), "which is not the auto-pick");
+        assert_eq!(again.pick, fresh.pick, "and the badge has not moved");
+
+        // NO MASTER, NO OFFER — and `None` rather than an empty list, because the
+        // window has to close rather than show an empty picker.
+        assert!(assign::offer_dark(&s, &codec, "WQLF", dark::LOGO_DARK_BG).is_none());
     }
 
     /// THE DRIVER'S OWN DARK TREATMENT, AND THAT IT STICKS.
@@ -6247,7 +6478,13 @@ mod tests {
         m.toggle_freq();
         worker.submit(m.begin_confirm());
         match rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap() {
-            service::Event::Saved { base } => assert_eq!(base, "WMGN"),
+            service::Event::Saved { base, assigned } => {
+                assert_eq!(base, "WMGN");
+                // A PREFS SAVE, NOT AN ASSIGN. The dark picker follows the
+                // second and not the first: nothing new was downloaded, so
+                // there is nothing new to adapt.
+                assert!(!assigned, "toggling a hero flag is not a new master");
+            }
             other => panic!("{other:?}"),
         }
         assert_eq!(

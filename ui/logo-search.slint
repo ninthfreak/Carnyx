@@ -66,6 +66,44 @@ export enum LogoSearchState {
     /// The search threw, or a save failed. `error-title` / `error-body` carry
     /// which of the two, already worded.
     error,
+    /// A logo has just been assigned, and this asks how it should look on the
+    /// DARK face — the reference's `LogoDarkPicker`, which it mounts as its own
+    /// modal over this window and which is folded into this one here.
+    ///
+    /// ONE MODAL AND NOT TWO, which is an architecture difference rather than a
+    /// design one: this app has ONE overlay at a time (`Overlay` in app.slint),
+    /// and the reference's picker is only ever opened from here, closes this
+    /// window when it closes, and wears the same card. What it draws is the
+    /// reference's: a swatch per treatment on the REAL dark surface, the
+    /// pipeline's own choice badged AUTO, Skip and Use this in the footer.
+    ///
+    /// `dark-choices` EMPTY IN THIS STATE IS THE WAIT, not an empty answer.
+    /// Building four treatments is seconds of pixel work on the logo worker; the
+    /// reference spins an `ActivityIndicator` over the same pause, and this draws
+    /// the same spinner `loading` does. An offer that comes back with nothing
+    /// never reaches this state at all — Rust closes the window instead, because
+    /// a picker with no answers is worse than none.
+    dark-pick,
+}
+
+/// One dark treatment, already rendered, for the picker's swatch row.
+///
+/// THE ART IS ALREADY THE TREATMENT — recoloured, haloed, or left alone — and
+/// composited by the swatch onto the same dark colour the face uses. `plated` is
+/// the one that is not a finished picture: the `plate` treatment's PNG is a KEYED
+/// MARK meant to sit on the grey `#E6E6E6` slab, and drawn without it that swatch
+/// is a dark logo on a dark ground, which is the exact failure the treatment
+/// exists to fix.
+export struct DarkChoice {
+    /// The rendered candidate, on transparency.
+    art: image,
+    /// "Recolor" / "Glow" / "As-is" / "Plate", worded in Rust.
+    label: string,
+    /// The pipeline's own choice. Badged, never auto-selected here — Rust decides
+    /// which row opens selected, and it is the STORED one when there is one.
+    auto: bool,
+    /// Needs the grey slab behind it. See the struct note.
+    plated: bool,
 }
 
 /// One image candidate, already fetched, already filtered, already formatted.
@@ -503,6 +541,110 @@ component AccentButton inherits Rectangle {
     }
 }
 
+/// One dark-treatment swatch — the reference's `CandidateCard`.
+///
+/// THE WELL IS THE REAL DARK SURFACE, which is the whole idea of the control:
+/// four thumbnails composited onto the colour the face actually uses, so a glance
+/// answers a question a metric got wrong. `dark-bg` is handed down rather than
+/// taken from `Pal`, because this can be open while the face is light.
+///
+/// THE PLATE TREATMENT DRAWS ITS SLAB, and only that one. Its PNG is a keyed mark
+/// meant to sit on the grey `#E6E6E6` rounded rectangle the hero gives it; drawn
+/// bare it is a dark logo on a dark ground, which is the failure the treatment
+/// exists to fix. The reference sizes that slab at 78% of the well with 8dp of
+/// inner padding, and the other three get 12dp of well padding instead.
+///
+/// SELECTED IS A 2dp BLUE EDGE, the same language `ResultCell` uses two
+/// components up. AUTO is a separate mark from selected and they are often on
+/// different rows — the picker opens on the STORED treatment, which is the
+/// driver's own choice when they have made one.
+component DarkSwatch inherits Rectangle {
+    in property <DarkChoice> choice;
+    in property <bool> selected: false;
+    in property <color> dark-bg;
+    in property <length> well-h;
+    in property <length> caption-font;
+
+    callback clicked();
+
+    border-radius: Metrics.s(14);
+    border-width: 2px;
+    border-color: root.selected ? Pal.blue : Pal.border;
+    clip: true;
+    opacity: touch.pressed ? 0.85 : 1.0;
+
+    accessible-role: button;
+    accessible-label: root.choice.label + (root.choice.auto ? ", suggested" : "");
+
+    touch := TouchArea { clicked => { root.clicked(); } }
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: root.well-h;
+            background: root.dark-bg;
+
+            if !root.choice.plated: Image {
+                x: Metrics.s(12);
+                y: Metrics.s(12);
+                width: parent.width - 2 * Metrics.s(12);
+                height: parent.height - 2 * Metrics.s(12);
+                source: root.choice.art;
+                image-fit: contain;
+            }
+
+            if root.choice.plated: Rectangle {
+                width: parent.width * 0.78;
+                height: parent.height * 0.78;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: Metrics.s(12);
+                // The hero's own slab, and the one `LogoPlate.plate` draws.
+                background: Pal.logo-plate;
+
+                Image {
+                    x: Metrics.s(8);
+                    y: Metrics.s(8);
+                    width: parent.width - 2 * Metrics.s(8);
+                    height: parent.height - 2 * Metrics.s(8);
+                    source: root.choice.art;
+                    image-fit: contain;
+                }
+            }
+        }
+
+        Rectangle {
+            background: Pal.raised;
+
+            HorizontalLayout {
+                padding: Metrics.s(8);
+                spacing: Metrics.s(6);
+                alignment: center;
+
+                Text {
+                    text: root.choice.label;
+                    font-size: root.caption-font;
+                    font-weight: 700;
+                    color: Pal.text;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "AUTO";
+                    font-size: Math.max(9px, root.caption-font * 0.8);
+                    font-weight: 700;
+                    color: Pal.blue;
+                    vertical-alignment: center;
+                    // A GAUGE at zero opacity, so the label stays centred whether
+                    // or not this row is the pipeline's pick.
+                    opacity: root.choice.auto ? 1.0 : 0.0;
+                }
+            }
+        }
+    }
+}
+
 /// One result cell (dc.html `cellStyle`:220 / `imgWrapStyle`:221 / `metaStyle`:224).
 ///
 /// Single-select: tapping selects and deselects any other, and selecting is what
@@ -795,6 +937,21 @@ export component LogoSearchOverlay inherits Rectangle {
     /// reference, the TSX's wording matches §6.4's own name for the surface. It is
     /// one string either way, so the choice stays with Rust.
     in property <string> hint;
+    /// The left footer button's label. "Cancel" everywhere but the dark picker,
+    /// where the reference calls it "Skip" — and calls it that for a reason worth
+    /// keeping: skipping is not cancelling. The logo is already saved by then and
+    /// the auto-pick already stands; what the button declines is the question.
+    in property <string> cancel-label: "Cancel";
+
+    // ── The dark picker ──
+    /// The treatments to choose between, already rendered. Empty in the
+    /// `dark-pick` state means the adaptation is still running.
+    in property <[DarkChoice]> dark-choices;
+    /// The REAL dark surface the variants will sit on, handed over rather than
+    /// read from `Pal`: this picker can be open while the face is LIGHT, and a
+    /// swatch drawn on the light panel would be a preview of nothing. Rust reads
+    /// it from the same constant the gate judged the candidates against.
+    in property <color> dark-bg;
 
     // ── What the user can do ──
     /// A display row was tapped. Rust owns the flag and does the toggle.
@@ -999,7 +1156,13 @@ export component LogoSearchOverlay inherits Rectangle {
             // (dc.html `queryRowStyle` carries `flexShrink: 0` and sits outside
             // `bodyStyle`), so the searched string never scrolls away with the
             // results. No rule and no fill of its own.
-            if root.state != LogoSearchState.landing: Rectangle {
+            //
+            // AND NOT IN THE DARK PICKER, which is not a search state. What was
+            // searched for is finished business by then — the logo is chosen and
+            // saved — and the chip over that screen reads as a stale answer to a
+            // question the driver has stopped being asked.
+            if root.state != LogoSearchState.landing
+                && root.state != LogoSearchState.dark-pick: Rectangle {
                 vertical-stretch: 0;
 
                 HorizontalLayout {
@@ -1268,6 +1431,120 @@ export component LogoSearchOverlay inherits Rectangle {
                             }
                         }
 
+                        // ── Dark picker: still adapting ──
+                        //
+                        // The same spinner `loading` draws, over a different
+                        // wait: four treatments off one master, on the logo
+                        // worker. `dark-choices` empty in this state IS the
+                        // wait — an offer with nothing in it never reaches
+                        // here, because Rust closes the window instead.
+                        if root.state == LogoSearchState.dark-pick && root.dark-choices.length == 0: VerticalLayout {
+                            spacing: Metrics.s(14);
+                            padding-left: root.center-pad-h;
+                            padding-right: root.center-pad-h;
+
+                            HorizontalLayout {
+                                alignment: center;
+                                SpinnerRing {
+                                    size: Metrics.s(46);
+                                    ring: Metrics.s(4);
+                                    track: Pal.border;
+                                    arc: Pal.blue;
+                                }
+                            }
+                            Text {
+                                text: "Adapting…";
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                                horizontal-alignment: center;
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                Text {
+                                    width: root.center-sub-w;
+                                    text: "Working out how this logo should look on the dark theme.";
+                                    font-size: Math.max(12px, Metrics.s(15));
+                                    font-weight: 400;
+                                    color: Pal.dim;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        // ── Dark picker: the treatments ──
+                        //
+                        // `LogoDarkPicker.tsx`: a title, one line of copy, then
+                        // the candidates as a wrapping row of 150dp cards. The
+                        // row wraps here too — four cards at 150 will not fit
+                        // 360dp of phone — and the swatches are laid out by hand
+                        // in a two-column grid on the narrow track for the same
+                        // reason the results grid is.
+                        if root.state == LogoSearchState.dark-pick && root.dark-choices.length > 0: VerticalLayout {
+                            spacing: Metrics.s(6);
+                            padding-left: root.center-pad-h;
+                            padding-right: root.center-pad-h;
+                            // TOP, NOT CENTRE. The wrapper this sits in centres
+                            // its child, which is right for the four one-message
+                            // bodies beside it and wrong for a list: a grid taller
+                            // than the band would be centred and clipped at BOTH
+                            // ends, losing the first row as well as the last.
+                            alignment: start;
+
+                            Text {
+                                text: "Dark-mode logo";
+                                font-size: Metrics.s(22);
+                                font-weight: 700;
+                                color: Pal.text;
+                            }
+                            Text {
+                                text: "Pick how this logo looks on the dark theme. The suggested option is marked AUTO.";
+                                font-size: Math.max(12px, Metrics.s(14));
+                                font-weight: 400;
+                                color: Pal.dim;
+                                wrap: word-wrap;
+                            }
+
+                            grid := Rectangle {
+                                // TWO COLUMNS ALWAYS, and the swatch takes what
+                                // half the band gives it rather than the
+                                // reference's fixed 150dp. Four fixed cards need
+                                // 636dp with the gaps; the phone track's band is
+                                // about 300. The reference wraps to two rows at
+                                // that width anyway, so this is the same layout
+                                // arrived at by measuring instead of by wrapping.
+                                property <length> gap: Metrics.s(12);
+                                // NOT `col`: Slint reserves `row`/`col`/`rowspan`/`colspan` on
+                                // every element for GridLayout placement, and declaring
+                                // one is 'Cannot override property'.
+                                property <length> col-w: (self.width - self.gap) / 2;
+                                property <length> well: Metrics.s(88);
+                                property <length> cap: Metrics.s(30);
+                                property <length> cell: self.well + self.cap;
+
+                                // The swatches are placed by hand, so this is a
+                                // plain Rectangle and not a layout — hence a
+                                // measured height rather than padding, which has
+                                // no effect on one.
+                                property <length> lead: Metrics.s(10);
+                                height: 2 * self.cell + self.gap + self.lead;
+
+                                for c[i] in root.dark-choices: DarkSwatch {
+                                    x: Math.mod(i, 2) * (grid.col-w + grid.gap);
+                                    y: Math.floor(i / 2) * (grid.cell + grid.gap) + grid.lead;
+                                    width: grid.col-w;
+                                    height: grid.cell;
+                                    choice: c;
+                                    selected: i == root.selected-index;
+                                    dark-bg: root.dark-bg;
+                                    well-h: grid.well;
+                                    caption-font: Math.max(11px, Metrics.s(14));
+                                    clicked => { if (!root.saving) { root.pick(i); } }
+                                }
+                            }
+                        }
+
                         // ── No results ──
                         if root.state == LogoSearchState.no-results: VerticalLayout {
                             spacing: Metrics.s(14);
@@ -1425,8 +1702,8 @@ export component LogoSearchOverlay inherits Rectangle {
                         spacing: Metrics.s(12);
 
                         FooterButton {
-                            label: "Cancel";
-                            a11y-label: "Cancel";
+                            label: root.cancel-label;
+                            a11y-label: root.cancel-label;
                             min-w: Metrics.s(card.narrow ? 96 : 120);
                             button-height: Metrics.s(card.narrow ? 50 : 56);
                             clicked => { root.close(); }
