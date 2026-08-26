@@ -562,6 +562,13 @@ struct State {
     /// The line is written when it CHANGES, which is the only time it carries
     /// anything a reader did not already have.
     nav_said: String,
+    /// Feet and miles, or metres and kilometres (§4.9).
+    ///
+    /// READ ONCE AT START-UP from the device's locale, because OsmAnd does not
+    /// expose its own unit setting over the API. A driver does not cross a
+    /// border mid-drive often enough to poll for it, and units changing under a
+    /// live countdown would be worse than being one launch behind.
+    units: crate::units::Units,
     /// Which OsmAnd `CarnyxNav` found, or empty. Read once at start-up: an app
     /// is not installed and uninstalled while a driver is looking at a switch,
     /// and asking the package manager on every republish would put a binder call
@@ -1224,6 +1231,7 @@ impl App {
                 rds: RdsDecoder::new(),
                 announced: std::cell::Cell::new(f32::NAN),
                 nav: crate::nav::Nav::new(),
+                units: crate::units::Units::default(),
                 nav_said: String::new(),
                 nav_package: String::new(),
                 // The DECODER is not seeded, only the published state. A decoder
@@ -1392,8 +1400,13 @@ impl App {
         // something nobody asked for on a screen nobody is looking at.
         {
             let found = app.nav_installed_package();
+            // AND WHICH UNITS THE ROADS AROUND THIS DRIVER ARE SIGNED IN
+            // (§4.9). Same one-shot read, and for a stronger reason: this one
+            // must not change while a countdown is running.
+            let units = crate::units::Units::for_country(&crate::android::country_code());
             let mut s = app.state.borrow_mut();
             s.nav_package = found;
+            s.units = units;
         }
         if app.state.borrow().settings.nav_on {
             let outcome = app.set_nav_running(true);
@@ -3326,9 +3339,14 @@ impl App {
         let now = crate::session::now_unix();
         let (state, spoken, line) = {
             let s = self.state.borrow();
-            (s.nav.state(now), s.nav.spoken(now).unwrap_or_default().to_string(), s.nav.log_line(now))
+            (
+                s.nav.state(now),
+                s.nav.spoken(now).unwrap_or_default().to_string(),
+                s.nav.log_line(now, s.units),
+            )
         };
         let ui = self.ui();
+        let units = self.state.borrow().units;
         use crate::nav::NavState;
         let (active, turn, distance) = match state {
             NavState::Idle => (false, String::new(), String::new()),
@@ -3336,15 +3354,15 @@ impl App {
             NavState::OffRoute { metres } => (
                 true,
                 "off route".to_string(),
-                crate::nav::Nav::distance_label(metres),
+                crate::nav::Nav::distance_label(metres, units),
             ),
             NavState::Turn { turn, metres } => (
                 true,
                 turn.name().to_string(),
-                crate::nav::Nav::distance_label(metres),
+                crate::nav::Nav::distance_label(metres, units),
             ),
             NavState::Unknown { metres, .. } => {
-                (true, String::new(), crate::nav::Nav::distance_label(metres))
+                (true, String::new(), crate::nav::Nav::distance_label(metres, units))
             }
         };
         ui.set_nav_active(active);

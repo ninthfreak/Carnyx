@@ -167,4 +167,41 @@ public final class CarnyxProcess {
             return false;
         }
     }
+
+    /**
+     * The device's ISO 3166-1 alpha-2 country, or {@code ""}.
+     *
+     * <p>ONE FACT, AND NO DECISION. Whether that country signs its roads in
+     * miles is {@code crate::units::Units::for_country}'s, for the rule this
+     * tree states everywhere: a table written here could not be tested on a
+     * machine with no head unit, and the one there is tested against the cases
+     * that actually catch it (Britain signs in miles, Ireland does not).
+     *
+     * <p>THE CONFIGURATION'S LOCALE AND NOT {@code Locale.getDefault()}, which
+     * is the process-wide default and does not follow a locale change until
+     * something re-reads it. The resources' configuration is what the rest of
+     * the system is using right now, so a driver who switches the phone to a US
+     * locale gets feet at the next poll rather than at the next cold start.
+     *
+     * <p>Empty is a real answer: a locale can carry a language and no region
+     * ({@code "en"}), and {@code getCountry()} returns {@code ""} for it. Metric
+     * is what that becomes, which is the safer of the two guesses.
+     */
+    public static String countryCode() {
+        try {
+            if (ctx == null) {
+                return "";
+            }
+            java.util.Locale l;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                l = ctx.getResources().getConfiguration().getLocales().get(0);
+            } else {
+                l = ctx.getResources().getConfiguration().locale;
+            }
+            return l == null ? "" : l.getCountry();
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the locale", t);
+            return "";
+        }
+    }
 }

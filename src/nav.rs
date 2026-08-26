@@ -25,6 +25,8 @@
 //! in metres, and the words. The SHAPE of a maneuver arrow is
 //! [`crate::arrow`]'s, and where any of it sits on the face is §4.9's.
 
+use crate::units::Units;
+
 /// Which way the next turn goes.
 ///
 /// THE INTEGERS ARE OSMAND'S, read out of `OsmAnd-java/.../router/TurnType.java`
@@ -376,45 +378,36 @@ impl Nav {
             .map(|(text, _)| text.as_str())
     }
 
-    /// `240 m` / `1.4 km`, the reference's own break.
+    /// `240 m` / `1.4 km` / `790 ft` / `1.4 mi` (§4.9).
     ///
-    /// METRIC ONLY, and that is a gap rather than a choice: OsmAnd sends metres
-    /// and honours its own units setting for the SPOKEN text, so a driver with
-    /// OsmAnd set to miles will hear miles and read metres here until the design
-    /// handoff says what this should do. Recorded so it is a known difference and
-    /// not a surprise.
+    /// THE UNITS ARE THE DRIVER'S AND NOT THIS MODULE'S. They come from the
+    /// device's locale because OsmAnd does not expose its own setting over the
+    /// API — [`crate::units`] holds the breaks, the country table and the
+    /// reason that is a guess at all.
     ///
-    /// The break is at a kilometre and the tenth is dropped past ten, which is
-    /// how every turn-by-turn display reads: `950 m`, `1.4 km`, `12 km`.
-    pub fn distance_label(metres: i32) -> String {
-        let m = metres.max(0);
-        if m < 1000 {
-            return format!("{m} m");
-        }
-        let km = f64::from(m) / 1000.0;
-        if km < 10.0 {
-            format!("{km:.1} km")
-        } else {
-            format!("{:.0} km", km.round())
-        }
+    /// This used to be metric-only with the gap written down beside it; the
+    /// gap is now closed and the caveat has moved to `units`, which is the file
+    /// that can actually do something about it.
+    pub fn distance_label(metres: i32, units: Units) -> String {
+        crate::units::distance(metres, units)
     }
 
     /// One line for the diagnostics log, or `None` when there is nothing to say.
     ///
     /// The unit has no adb, so this is the only way a drive can report what the
     /// integration actually received.
-    pub fn log_line(&self, now: u64) -> Option<String> {
+    pub fn log_line(&self, now: u64, units: Units) -> Option<String> {
         let head = match self.state(now) {
             NavState::Idle => return None,
             NavState::Waiting => "navigating, no turn yet".to_string(),
             NavState::OffRoute { metres } => {
-                format!("OFF ROUTE by {}", Self::distance_label(metres))
+                format!("OFF ROUTE by {}", Self::distance_label(metres, units))
             }
             NavState::Turn { turn, metres } => {
-                format!("{} in {}", turn.name(), Self::distance_label(metres))
+                format!("{} in {}", turn.name(), Self::distance_label(metres, units))
             }
             NavState::Unknown { code, metres } => {
-                format!("turn type {code} (unknown to this build) in {}", Self::distance_label(metres))
+                format!("turn type {code} (unknown to this build) in {}", Self::distance_label(metres, units))
             }
         };
         let mut out = head;
@@ -821,47 +814,51 @@ mod tests {
             },
             100,
         );
-        let line = nav.log_line(100).unwrap();
+        let line = nav.log_line(100, Units::Metric).unwrap();
         assert!(line.contains("right in 240 m"), "{line}");
         assert!(line.contains("onto Whitney Way"), "{line}");
         assert!(line.contains("[imminent=2]"), "the raw integer, so a drive settles it: {line}");
         assert!(line.contains("map in front"), "{line}");
     }
 
+    /// THE UNITS REACH THE LINE, WHICH IS ALL THIS FILE OWES THEM.
+    ///
+    /// The breaks, the country table and the reason any of it is a guess are
+    /// `crate::units`'s and tested there. What could still go wrong HERE is a
+    /// `Units` that is accepted and then dropped — a signature that takes it and
+    /// a body that formats metres anyway — so this checks one distance in both
+    /// families rather than restating the table.
     #[test]
-    fn the_distance_reads_the_way_a_turn_by_turn_display_does() {
-        assert_eq!(Nav::distance_label(0), "0 m");
-        assert_eq!(Nav::distance_label(240), "240 m");
-        assert_eq!(Nav::distance_label(999), "999 m");
-        assert_eq!(Nav::distance_label(1000), "1.0 km");
-        assert_eq!(Nav::distance_label(1449), "1.4 km");
-        assert_eq!(Nav::distance_label(9949), "9.9 km");
-        assert_eq!(Nav::distance_label(10000), "10 km");
-        assert_eq!(Nav::distance_label(12400), "12 km");
-        // A negative never reaches here through `state`, which floors it — but
-        // this is a `pub fn` and a caller could.
-        assert_eq!(Nav::distance_label(-5), "0 m");
+    fn the_distance_is_the_drivers_own() {
+        assert_eq!(Nav::distance_label(240, Units::Metric), "240 m");
+        assert_eq!(Nav::distance_label(240, Units::Imperial), "790 ft");
+        assert_eq!(Nav::distance_label(4000, Units::Metric), "4.0 km");
+        assert_eq!(Nav::distance_label(4000, Units::Imperial), "2.5 mi");
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.
     #[test]
     fn the_log_line_says_what_arrived_or_says_nothing() {
         let mut nav = Nav::new();
-        assert_eq!(nav.log_line(0), None, "nothing received, nothing to log");
+        let m = Units::Metric;
+        assert_eq!(nav.log_line(0, m), None, "nothing received, nothing to log");
 
         nav.update(240, 5, 100);
-        assert_eq!(nav.log_line(100).as_deref(), Some("right in 240 m"));
+        assert_eq!(nav.log_line(100, m).as_deref(), Some("right in 240 m"));
+        // AND THE LOG READS IN THE DRIVER'S UNITS TOO, because the line exists
+        // for a driver to quote back: "it said 790 ft" has to be findable.
+        assert_eq!(nav.log_line(100, Units::Imperial).as_deref(), Some("right in 790 ft"));
 
         nav.speak(&[], &["Turn right onto Main Street".to_string()], 100);
         assert_eq!(
-            nav.log_line(100).as_deref(),
+            nav.log_line(100, m).as_deref(),
             Some("right in 240 m — \"Turn right onto Main Street\"")
         );
 
         nav.update(60, 12, 110);
-        assert!(nav.log_line(110).unwrap().starts_with("OFF ROUTE by 60 m"));
+        assert!(nav.log_line(110, m).unwrap().starts_with("OFF ROUTE by 60 m"));
 
         nav.clear();
-        assert_eq!(nav.log_line(110), None, "clearing leaves nothing to say");
+        assert_eq!(nav.log_line(110, m), None, "clearing leaves nothing to say");
     }
 }

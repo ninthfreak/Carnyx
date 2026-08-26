@@ -925,6 +925,19 @@ pub fn clock_now() -> Option<(u32, u32, bool)> {
     None
 }
 
+/// The device's ISO country, for §4.9's units. See [`service::country_code`].
+#[cfg(target_os = "android")]
+pub fn country_code() -> String {
+    service::country_code()
+}
+
+/// The host has no locale worth asking about — every shot must render the same
+/// distances wherever it is taken. Empty becomes `Units::Metric`.
+#[cfg(not(target_os = "android"))]
+pub fn country_code() -> String {
+    String::new()
+}
+
 /// What the wake receiver did on the way up, and forget it. See [`wake`].
 #[cfg(target_os = "android")]
 pub fn take_wake_note() -> String {

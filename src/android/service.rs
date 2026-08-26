@@ -73,7 +73,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use jni::objects::{JClass, JObject, JValue};
+use jni::objects::{JClass, JObject, JString, JValue};
 use jni::refs::Global;
 use jni::strings::JNIStr;
 use jni::{jni_sig, jni_str, Env, JavaVM};
@@ -187,4 +187,25 @@ pub fn clock_now() -> Option<(u32, u32, bool)> {
     })
     .ok()
     .flatten()
+}
+
+/// The device's ISO 3166-1 alpha-2 country, or `""` (§4.9's units).
+///
+/// READ ONCE AT START-UP by the caller, unlike the clock beside it. A driver
+/// does not cross a border mid-drive often enough to poll for it, and the units
+/// changing under a countdown would be worse than being a launch behind.
+pub fn country_code() -> String {
+    let Some(class) = CLASS_REF.get() else {
+        return String::new();
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return String::new();
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
+        let out = env
+            .call_static_method(class, jni_str!("countryCode"), jni_sig!("()Ljava/lang/String;"), &[])?
+            .l()?;
+        JString::cast_local(env, out)?.try_to_string(env)
+    })
+    .unwrap_or_default()
 }
