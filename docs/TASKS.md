@@ -1306,6 +1306,90 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 107. A toast worth reading, and a log that keeps its own head
+**THE TOAST LANDED AND WAS THE WRONG SIZE IN THE WRONG PLACE.** *"While in
+another app, I did get a tiny pop-up at the bottom of the screen when I changed
+stations."* — so #106's diagnosis was right and the platform's default text
+toast is what a text toast is: small, grey, bottom-centred, which is correct for
+"copied to clipboard" and wrong for the one thing the driver looked away from the
+road to find out.
+
+**BIG, AND IN THE UPPER QUARTER.** 28sp instead of the platform's 14, on a
+rounded near-black card edged in `Pal.blue`, placed `TOP | CENTER_HORIZONTAL` one
+sixteenth of the screen down — which leaves room for a box three sixteenths tall
+before it leaves the upper quarter, and the box is about a fifth of that. The
+duration went from `LENGTH_SHORT` to `LENGTH_LONG` with it.
+
+**BOTH LEVERS ARE API 29 CAPABILITIES AND THAT IS WHY THIS UNIT CAN HAVE THEM.**
+API 30 deprecated `setView`, blocked custom toasts from the background, and made
+`setGravity` a no-op for text toasts. The unit is Android 10. The branch is on
+`Build.VERSION.SDK_INT`, a newer unit gets the plain toast, and the log line says
+which was used.
+
+**DRAWN IN CODE, BECAUSE THERE IS NO LAYOUT TO INFLATE.** This class is in the
+runtime dex, compiled against `android.jar` alone, with no `R` — and under
+cargo-apk the package has no resources at all. A `TextView` and a
+`GradientDrawable` need nothing from a resource table. Sizes in dp and sp so the
+unit and the handoff's phone surfaces are not two different boxes, and so a
+raised system font size raises this too.
+
+**THE SLEEP IS STILL NOT RELEASING, AND THE EVIDENCE WAS EVICTED.** The drive log
+opens MID-PROBE, at `12:45:14`, and holds 53 seconds. `last sleep:` was written —
+#106 put it there — and then pushed out of the ring by the probe output the
+driver generated while looking for it. The two probes write 57 and 47 lines
+between them.
+
+**SO THE LOG HAS A HEAD NOW.** `DiagLog::push_head` writes into a `Vec` in front
+of the ring that nothing evicts, and every `log_platform` caller uses it, along
+with the `session:` and `sleep watch:` lines. Those are the facts a run
+establishes ONCE and cannot establish again — how the last run ended, what the
+wake receiver did, what the last sleep managed — and being written in the first
+second of a launch is exactly what made them the first casualties.
+
+RAISING THE CAP ALONE WOULD NOT HAVE FIXED IT, which is why the head exists as
+well: a long drive turns over a ring of any size. The cap went to 600 anyway, on
+the same evidence — a session that cannot survive its own diagnostics is not a
+useful session — and `HEAD_CAP` is 24, past which lines fall back into the ring
+rather than growing something unbounded.
+
+**AND THE PROBE NOW ASKS ABOUT BOTH ACC-OFF SPELLINGS.** The log's
+`com.nwd.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx` proves `SleepReceiver`
+is installed and registered for the unqualified one. It proved NOTHING about
+`com.nwd.action.ACTION_ACCOFF_UPDATE`, which is also in the manifest — because
+the sweep never named it. It does now.
+
+**GPS: THE WAIT IS MEASURED RATHER THAN SHORTENED.** *"GPS still seems to take
+forever to indicate that it's locked."* Nothing here can make the sky arrive
+sooner, and there is no artificial delay to remove — `MIN_INTERVAL_MS` is 2000,
+`MIN_DISTANCE_M` is 0, both providers are registered whether or not they are up,
+and last-known is already used as a seed. What was missing was any way to say
+whether "forever" is twenty seconds or three minutes:
+
+* `first fix from gps after 47s` — once per run, measured from the moment
+  registration completed rather than from `start()`, on `elapsedRealtime` so an
+  MCU clock correction cannot produce a negative answer.
+* `acquiring — 12 satellites in view, 0 used` — a `GnssStatus.Callback`, one line
+  per CHANGE in the used count and not per callback, removed at the first fix.
+  Twelve seen and none used is an almanac still downloading; none seen is an
+  antenna.
+* `seeded from gps's last known fix, 8400s old — not a lock` — because the glyph
+  lights for a last-known position exactly as it does for a real one, and one of
+  those can be hours old and a hundred miles away.
+
+**Pinned by `the_head_survives_a_ring_that_has_turned_over_completely`**, which
+turns the ring over twice and asserts the head is still first, that the ring
+picks up at its own oldest line, and that past `HEAD_CAP` the overflow lands in
+the ring. `saving_the_log_writes_every_line_the_ring_holds` now subtracts the
+head it measures rather than assuming the file starts at the ring.
+
+**WHAT IS NOT VERIFIED.** No Java compiled — no real `android.jar` here. `javac`
+reached attribution over every file in both trees and reported no syntax errors,
+which covers the shape and nothing about the names. The toast's size and place,
+the satellite callback and the ACC-off receiver are all untried on the unit.
+
+**Evidence.** 306 tests, clippy clean over lib, bins and examples, the JNI seam
+check green. No shot moves: nothing here draws on the face.
+
 ### 106. The drive log answers the pop-up, and the sleep gets a witness
 **THE FIRST REAL DRIVE LOG OFF THE UNIT SINCE #102**, and it settles one of the
 two faults outright.

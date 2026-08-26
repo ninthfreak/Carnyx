@@ -8,9 +8,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.RemoteViews;
 import android.widget.Toast;
@@ -94,6 +96,22 @@ public final class CarnyxAlert {
      * a decode step; the platform does the final scaling either way.
      */
     private static final float ICON_DP = 64f;
+
+    /**
+     * The toast's type size, in sp.
+     *
+     * <p>28 rather than the platform's 14, because the first one on the unit came
+     * back as <i>"a tiny pop-up at the bottom of the screen"</i>. This is read
+     * from the driver's seat, at a glance, on a dashboard — the same brief as the
+     * face's own dial, which is far larger still. sp and not dp so a raised
+     * system font size raises this too.
+     */
+    private static final float TOAST_SP = 28f;
+
+    /** The toast's padding and corner, in dp. See {@link #toastView}. */
+    private static final float TOAST_PAD_X_DP = 28f;
+    private static final float TOAST_PAD_Y_DP = 18f;
+    private static final float TOAST_RADIUS_DP = 18f;
 
     /**
      * The custom banner's layout, looked up by NAME rather than through {@code R}.
@@ -218,6 +236,22 @@ public final class CarnyxAlert {
      * not called Looper.prepare()". {@code Looper.getMainLooper()} is always
      * there and is where a toast belongs.
      *
+     * <h2>BIG, AND IN THE UPPER QUARTER</h2>
+     *
+     * <p>The first drive with this in it got one: <i>"a tiny pop-up at the bottom
+     * of the screen"</i>. A platform text toast is small, grey and bottom-centred,
+     * which is right for "copied to clipboard" and wrong for the one thing the
+     * driver looked away from the road to find out.
+     *
+     * <p>So it is drawn rather than defaulted — see {@link #toastView} — and
+     * placed with {@code setGravity}. BOTH OF THOSE ARE API 29 CAPABILITIES AND
+     * THAT IS WHY THIS UNIT CAN HAVE THEM: API 30 deprecated {@code setView},
+     * blocked custom toasts from the background, and made {@code setGravity} a
+     * no-op for text toasts. The unit is Android 10. A newer one falls back to a
+     * plain text toast, which is small and at the bottom but still says the
+     * station — the branch is on {@code Build.VERSION.SDK_INT} and the log line
+     * says which was used.
+     *
      * @return one clause for the diagnostics log, so the drive after this one
      *     says which of the two the driver was actually shown.
      */
@@ -231,6 +265,7 @@ public final class CarnyxAlert {
         if (message.isEmpty()) {
             return "no toast: nothing to say";
         }
+        final boolean custom = Build.VERSION.SDK_INT < Build.VERSION_CODES.R;
         try {
             Looper main = Looper.getMainLooper();
             if (main == null) {
@@ -239,7 +274,18 @@ public final class CarnyxAlert {
             boolean queued = new Handler(main).post(new Runnable() {
                 @Override public void run() {
                     try {
-                        Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show();
+                        Toast t = Toast.makeText(ctx, message, Toast.LENGTH_LONG);
+                        if (custom) {
+                            t.setView(toastView(message));
+                            // TOP AND CENTRED, one sixteenth of the screen down.
+                            // With TOP gravity the offset is from the screen's top
+                            // edge to the toast's, so a sixteenth leaves room for a
+                            // box three sixteenths tall before it leaves the upper
+                            // quarter — and the box is about a fifth of that.
+                            t.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL, 0,
+                                    ctx.getResources().getDisplayMetrics().heightPixels / 16);
+                        }
+                        t.show();
                     } catch (Throwable t) {
                         // Nothing to recover and nobody to tell: this runs a
                         // moment later, on another thread, after `post` has
@@ -248,10 +294,58 @@ public final class CarnyxAlert {
                     }
                 }
             });
-            return queued ? "toast queued" : "toast REFUSED by the main looper";
+            if (!queued) {
+                return "toast REFUSED by the main looper";
+            }
+            return custom ? "toast queued" : "toast queued, platform default (API 30+)";
         } catch (Throwable t) {
             return "toast threw: " + why(t);
         }
+    }
+
+    /**
+     * The toast's own view, BUILT IN CODE BECAUSE THERE IS NO LAYOUT TO INFLATE.
+     *
+     * <p>This class is in the RUNTIME DEX, compiled by {@code build.rs} against
+     * {@code android.jar} alone — it has no {@code R} and, under cargo-apk, the
+     * package has no resources at all. {@link #ensureLayout} solves the same
+     * problem for the notification by asking the package manager for a layout by
+     * name and doing without when there is none; a toast has no platform
+     * template worth falling back to, so this one is assembled from a
+     * {@code TextView} and a {@code GradientDrawable}, which need nothing from a
+     * resource table.
+     *
+     * <p>THE SIZES ARE IN dp AND sp, NOT PIXELS. The unit is 1024x614 at its own
+     * density and the phone surfaces in the handoff are not, so a box measured in
+     * pixels would be a different size on each. {@code COMPLEX_UNIT_SP} on the
+     * text also means a driver who has raised the system font size gets a bigger
+     * one here, which is the whole reason that unit exists.
+     *
+     * <p>The colours are the face's own: {@code Pal.blue}'s dark value for the
+     * edge, near-black for the ground, white for the words. Deliberately NOT the
+     * theme's egg accent — this draws while another app is in front, where a
+     * band's colours would be unexplained.
+     */
+    private static android.view.View toastView(String message) {
+        float density = ctx.getResources().getDisplayMetrics().density;
+        android.widget.TextView tv = new android.widget.TextView(ctx);
+        tv.setText(message);
+        tv.setTextColor(0xFFFFFFFF);
+        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, TOAST_SP);
+        tv.setGravity(Gravity.CENTER);
+        tv.setMaxLines(2);
+        int padX = Math.round(TOAST_PAD_X_DP * density);
+        int padY = Math.round(TOAST_PAD_Y_DP * density);
+        tv.setPadding(padX, padY, padX, padY);
+
+        android.graphics.drawable.GradientDrawable bg =
+                new android.graphics.drawable.GradientDrawable();
+        bg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+        bg.setCornerRadius(TOAST_RADIUS_DP * density);
+        bg.setColor(0xF00E0E10);
+        bg.setStroke(Math.max(1, Math.round(2f * density)), 0xFF4A9EFF);
+        tv.setBackground(bg);
+        return tv;
     }
 
     /**

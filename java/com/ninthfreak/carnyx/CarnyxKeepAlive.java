@@ -80,7 +80,7 @@ public final class CarnyxKeepAlive {
         "acc", "sleep", "wake", "boot",
     };
 
-    /** The ring holds 200 lines and this is one of several writers. */
+    /** The ring holds 600 lines and this is one of several writers. */
     private static final int MAX_SETTINGS = 40;
     private static final int MAX_PACKAGES = 25;
 

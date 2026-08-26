@@ -53,7 +53,7 @@ import com.nwd.radio.service.data.RadioPoint;
  * was not a judgement to make here. `writeLog` below is the first of them back,
  * and it is the one that mattered most — without it the diagnostics log could
  * only leave this unit as a screenshot of its last few lines, on a unit with no
- * adb, while the log ring holds 200. The rest are owed, and docs/TASKS.md #87
+ * adb, while the log ring holds 600. The rest are owed, and docs/TASKS.md #87
  * carries them with what each one needs.
  *
  * THREADING. Vendor callbacks arrive on binder threads; the RDS pump and level

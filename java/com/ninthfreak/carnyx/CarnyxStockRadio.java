@@ -113,7 +113,15 @@ public final class CarnyxStockRadio {
      */
     private static final String[] ACTIONS = {
         "com.nwd.ACTION_OS_WAKE_UP",
+        // BOTH ACC-OFF SPELLINGS, because this sweep is now the only thing that
+        // can say whether `SleepReceiver` registered for each. It is declared for
+        // the two in the manifest — the vendor writes this action unqualified
+        // where it writes the others in full, and nobody knows which the ROM
+        // sends — and a drive log showed only the unqualified one resolving,
+        // which proved nothing about the other because only the other was never
+        // asked about.
         "com.nwd.ACTION_ACCOFF_UPDATE",
+        "com.nwd.action.ACTION_ACCOFF_UPDATE",
         "com.nwd.ACTION_ILL_STATE_CHANGE",
         "com.nwd.action.ACTION_KEY_VALUE",
         "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
@@ -134,7 +142,7 @@ public final class CarnyxStockRadio {
         Intent.CATEGORY_APP_MUSIC,
     };
 
-    /** The ring holds 200 lines and this is one of several writers. */
+    /** The ring holds 600 lines and this is one of several writers. */
     private static final int MAX_ACTIVITIES = 18;
     private static final int MAX_RECEIVERS = 12;
     private static final int MAX_SERVICES = 8;

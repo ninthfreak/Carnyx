@@ -101,6 +101,43 @@ public final class CarnyxLocation {
     private static boolean asked;
 
     /**
+     * When the providers were registered, and whether anything has come back.
+     *
+     * <h2>Why time-to-first-fix is written down</h2>
+     *
+     * <p>The report was <i>"GPS still seems to take forever to indicate that it's
+     * locked"</i>, and nothing in this app could say whether "forever" was twenty
+     * seconds or three minutes. The log had ONE line — {@code location:
+     * listening} — and then silence until a fix arrived, at which point it said
+     * nothing either. A cold GNSS fix legitimately takes 30 to 90 seconds and no
+     * code here makes the sky arrive sooner; what there was no excuse for is not
+     * knowing which of those it was.
+     *
+     * <p>So the wait is measured and reported once, and while it runs the
+     * satellite count is reported as it CHANGES. A unit seeing twelve satellites
+     * and using none is a different fault from one seeing none at all — the first
+     * is an almanac still downloading, the second is an antenna.
+     */
+    private static long startedAtMs;
+    private static boolean firstFixNoted;
+
+    /** The last used-in-fix count reported, so a 1 Hz callback writes one line
+     *  per CHANGE rather than one per second. */
+    private static int lastUsedReported = -1;
+
+    /**
+     * The GNSS status callback, as {@code Object} because its type is API 24+.
+     *
+     * <p>The field's TYPE is resolved when this class is loaded, and this dex is
+     * built against android.jar 34 and runs on 29 — declaring it as
+     * {@code GnssStatus.Callback} would be fine here, but the registration is
+     * already inside a try/catch for the units that refuse it and an
+     * {@code Object} keeps the whole feature in one guarded place. Null until
+     * registered and after the first fix, which is when it is removed.
+     */
+    private static Object gnssCallback;
+
+    /**
      * Registered from Rust; see src/android/location.rs.
      *
      * The RAW speed crosses, not a verdict about it. Deciding what counts as
@@ -130,6 +167,7 @@ public final class CarnyxLocation {
         return new LocationListener() {
         @Override public void onLocationChanged(Location loc) {
             if (loc == null) return;
+            noteFirstFix(loc);
             // Every judgement about these numbers lives in Rust
             // (`ingest_position`) — the (0, 0) a provider with nothing hands
             // back, and the speed hysteresis. Java's job is to pass on what it
@@ -152,6 +190,99 @@ public final class CarnyxLocation {
             }
         }
         };
+    }
+
+    /**
+     * Say how long the first fix took, once, and stop counting satellites.
+     *
+     * <p>ONCE PER RUN, not per provider: the question is when the app could first
+     * answer "where am I", and the second provider arriving later answers nothing
+     * new. The provider that won is named because it matters — a NETWORK fix on a
+     * unit with no sky is a different situation from a GNSS one, and the picker's
+     * distances are only as good as whichever it was.
+     *
+     * <p>Called from the listener, which runs on the main thread, so the flags
+     * need no lock of their own.
+     */
+    private static void noteFirstFix(Location loc) {
+        if (firstFixNoted) {
+            return;
+        }
+        firstFixNoted = true;
+        long waited = startedAtMs == 0 ? -1 : android.os.SystemClock.elapsedRealtime() - startedAtMs;
+        String from = loc.getProvider() == null ? "an unnamed provider" : loc.getProvider();
+        try {
+            nativeNote(waited < 0
+                    ? "first fix from " + from
+                    : "first fix from " + from + " after " + (waited / 1000) + "s");
+        } catch (Throwable ignored) {
+            // The note is the whole point but it is not worth a crash.
+        }
+        stopSatelliteWatch();
+    }
+
+    /**
+     * Count satellites while there is no fix, so a long wait says WHY.
+     *
+     * <p>API 24+, and the unit is 29. FINE location is required — a build granted
+     * COARSE only throws {@code SecurityException} here, which is an ordinary
+     * outcome rather than a fault, so it is caught and noted and nothing else
+     * changes. The whole feature is diagnostic: no fix depends on it and removing
+     * it would cost nothing but the answer.
+     *
+     * <p>ONE LINE PER CHANGE IN THE USED COUNT. The callback fires about once a
+     * second and the interesting number moves rarely; writing every tick would
+     * push the rest of the drive out of the ring, which is the failure the log's
+     * head was added to stop repeating.
+     */
+    private static void startSatelliteWatch(LocationManager mgr) {
+        if (gnssCallback != null || android.os.Build.VERSION.SDK_INT < 24) {
+            return;
+        }
+        try {
+            android.location.GnssStatus.Callback cb = new android.location.GnssStatus.Callback() {
+                @Override public void onSatelliteStatusChanged(android.location.GnssStatus status) {
+                    if (firstFixNoted || status == null) {
+                        return;
+                    }
+                    int seen = status.getSatelliteCount();
+                    int used = 0;
+                    for (int i = 0; i < seen; i++) {
+                        if (status.usedInFix(i)) {
+                            used++;
+                        }
+                    }
+                    if (used == lastUsedReported) {
+                        return;
+                    }
+                    lastUsedReported = used;
+                    try {
+                        nativeNote("acquiring — " + seen + " satellites in view, " + used + " used");
+                    } catch (Throwable ignored) {
+                    }
+                }
+            };
+            mgr.registerGnssStatusCallback(cb);
+            gnssCallback = cb;
+        } catch (SecurityException e) {
+            try { nativeNote("no satellite count: fine location not granted"); } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            try { nativeNote("no satellite count: " + t.getClass().getSimpleName()); } catch (Throwable ignored) {}
+        }
+    }
+
+    /** Remove the satellite callback. Safe when there is none. */
+    private static void stopSatelliteWatch() {
+        Object cb = gnssCallback;
+        gnssCallback = null;
+        if (cb == null || manager == null) {
+            return;
+        }
+        try {
+            manager.unregisterGnssStatusCallback((android.location.GnssStatus.Callback) cb);
+        } catch (Throwable ignored) {
+            // Unregistering something already gone is not a fault.
+        }
     }
 
     public static void attach(Context context) {
@@ -290,10 +421,25 @@ public final class CarnyxLocation {
                         // A last-known fix is worth more than nothing while the
                         // first real one is still being acquired: a cold GPS can
                         // take a minute, and the picker is unusable until then.
+                        //
+                        // AND IT IS SAID OUT LOUD, because it is not the same
+                        // thing as a fix. A last-known position can be hours old
+                        // and a hundred miles away — the unit was parked at an
+                        // airport — and the face's glyph lights for it just the
+                        // same. A driver reading "locked" needs to be able to tell
+                        // this from the real one, and `first fix from …` below is
+                        // the line that arrives when the sky answers.
                         Location last = mgr.getLastKnownLocation(p);
                         if (last != null) {
                             nativePosition(last.getLatitude(), last.getLongitude(), true,
                                 last.hasSpeed() ? last.getSpeed() : 0f, last.hasSpeed());
+                            try {
+                                long age = android.os.SystemClock.elapsedRealtime()
+                                        - last.getElapsedRealtimeNanos() / 1_000_000L;
+                                nativeNote("seeded from " + p + "'s last known fix, "
+                                        + (age / 1000) + "s old — not a lock");
+                            } catch (Throwable ignored) {
+                            }
                         }
                     } catch (SecurityException e) {
                         // Permission revoked between the check and here.
@@ -305,6 +451,15 @@ public final class CarnyxLocation {
                     }
                 }
                 synchronized (LOCK) { listening = any; }
+                if (any) {
+                    // THE CLOCK STARTS HERE, not at `start()`: everything above
+                    // is posted to the main thread and the wait being measured is
+                    // the sky's, not the queue's. `elapsedRealtime` rather than
+                    // wall time, so a clock the MCU corrects mid-acquisition
+                    // cannot produce a negative answer.
+                    startedAtMs = android.os.SystemClock.elapsedRealtime();
+                    startSatelliteWatch(mgr);
+                }
                 try {
                     nativeNote(any ? "listening on " + live : "no provider would register");
                 } catch (Throwable ignored) {}
@@ -365,5 +520,8 @@ public final class CarnyxLocation {
                 Log.w(TAG, "removeUpdates failed", t);
             }
         }
+        // The satellite watch goes with them. It normally removes itself at the
+        // first fix; this is the path where there never was one.
+        stopSatelliteWatch();
     }
 }

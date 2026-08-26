@@ -196,12 +196,14 @@ pub fn diag_actions() -> Vec<DiagAction> {
     ]
 }
 
-/// The tuner log: a bounded ring of already-stamped lines, oldest first.
+/// The tuner log: a HEAD that never scrolls, then a bounded ring of
+/// already-stamped lines, oldest first.
 ///
 /// The stamp is passed in rather than read from a clock, because a log whose
 /// content depends on when the test ran is a log that cannot be pinned.
 #[derive(Debug, Default)]
 pub struct DiagLog {
+    head: Vec<String>,
     lines: VecDeque<String>,
 }
 
@@ -209,7 +211,20 @@ impl DiagLog {
     /// CarFM keeps 200. The face shows a handful and the file export takes the
     /// lot, so the only thing the bound protects is memory on a unit that runs
     /// for days.
-    pub const CAP: usize = 200;
+    ///
+    /// RAISED FROM CarFM's 200, ON EVIDENCE. A drive log arrived holding 53
+    /// SECONDS: the two diagnostics probes write 57 and 47 lines between them, so
+    /// tapping both evicts everything before them and most of what follows. 600
+    /// short strings is under 50 KB and buys a session that survives its own
+    /// diagnostics.
+    pub const CAP: usize = 600;
+
+    /// How many lines the head will hold before it stops taking them.
+    ///
+    /// A BOUND ON A THING THAT CANNOT BE EVICTED, which is the only reason it
+    /// exists — there is no path today that pushes more than about eight. If one
+    /// ever does, the ring is where it belongs.
+    pub const HEAD_CAP: usize = 24;
 
     pub fn new() -> DiagLog {
         DiagLog::default()
@@ -224,16 +239,51 @@ impl DiagLog {
         self.lines.push_back(format!("{stamp}  {text}"));
     }
 
+    /// The same, into the part of the log that NEVER SCROLLS AWAY.
+    ///
+    /// FOR THE FACTS A RUN ESTABLISHES ONCE AND CANNOT ESTABLISH AGAIN: how the
+    /// last run ended, what the wake receiver did, what the last sleep managed,
+    /// whether the service started, whether the sleep watch registered. They are
+    /// all written in the first second of a launch, which in a plain ring makes
+    /// them the FIRST THINGS EVICTED — and they are the ones a drive is being
+    /// read for.
+    ///
+    /// That is not a hypothetical. The drive log that was to settle "Carnyx does
+    /// not release the radio at sleep" arrived starting mid-probe: `last sleep:`
+    /// had been written, and then pushed out by the probe output the driver
+    /// generated while looking for it. Raising [`CAP`](Self::CAP) alone would not
+    /// fix that — a long drive evicts the head of any ring — so these lines leave
+    /// the ring instead.
+    pub fn push_head(&mut self, stamp: &str, text: &str) {
+        if self.head.len() >= Self::HEAD_CAP {
+            self.push(stamp, text);
+            return;
+        }
+        self.head.push(format!("{stamp}  {text}"));
+    }
+
     pub fn clear(&mut self) {
+        self.head.clear();
         self.lines.clear();
     }
 
+    /// The head first, then the ring — which is also chronological, because the
+    /// head is only ever written at start-up.
     pub fn lines(&self) -> Vec<String> {
-        self.lines.iter().cloned().collect()
+        self.head.iter().chain(self.lines.iter()).cloned().collect()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.head.is_empty() && self.lines.is_empty()
+    }
+
+    /// How many lines are beyond the ring's reach.
+    ///
+    /// For tests that assert on the ring's own behaviour and have to subtract
+    /// the launch block a real `App` has already written. Nothing on the face
+    /// reads it: the head and the ring are one list everywhere else.
+    pub fn head_len(&self) -> usize {
+        self.head.len()
     }
 }
 
@@ -515,10 +565,61 @@ mod tests {
         }
         assert_eq!(log.lines().len(), DiagLog::CAP);
         // The oldest went, not the newest.
-        assert_eq!(log.lines()[DiagLog::CAP - 1], "12:00:02  line 199");
+        assert_eq!(
+            log.lines()[DiagLog::CAP - 1],
+            format!("12:00:02  line {}", DiagLog::CAP - 1)
+        );
         assert!(!log.lines().iter().any(|l| l.ends_with("connect ok")));
         log.clear();
         assert!(log.is_empty());
+    }
+
+    /// THE HEAD DOES NOT SCROLL, WHICH IS THE ONLY REASON IT EXISTS.
+    ///
+    /// The launch block is written in the first second of a run and is what a
+    /// drive log is read for — how the last run ended, what the last sleep
+    /// managed. In a plain ring it is the first thing evicted, and a drive log
+    /// arrived proving it: `last sleep:` had been written and was gone, pushed
+    /// out by the probe output the driver generated while looking for it.
+    #[test]
+    fn the_head_survives_a_ring_that_has_turned_over_completely() {
+        let mut log = DiagLog::new();
+        log.push_head("12:00:00", "session: launch #29");
+        log.push_head("12:00:00", "last sleep: nothing recorded");
+
+        // Twice the ring, so nothing pushed the ordinary way can have survived.
+        for i in 0..DiagLog::CAP * 2 {
+            log.push("12:00:02", &format!("line {i}"));
+        }
+
+        let lines = log.lines();
+        assert_eq!(lines.len(), DiagLog::CAP + 2, "the head, plus a full ring");
+        assert_eq!(lines[0], "12:00:00  session: launch #29", "the head comes first");
+        assert_eq!(lines[1], "12:00:00  last sleep: nothing recorded");
+        assert_eq!(
+            lines[2],
+            format!("12:00:02  line {}", DiagLog::CAP),
+            "and the ring picks up at the oldest line it still holds"
+        );
+
+        // AND IT IS NOT A LEAK. Past its cap the head stops taking lines and they
+        // go into the ring like anything else.
+        let mut full = DiagLog::new();
+        for i in 0..DiagLog::HEAD_CAP + 5 {
+            full.push_head("12:00:00", &format!("head {i}"));
+        }
+        assert_eq!(full.lines().len(), DiagLog::HEAD_CAP + 5, "all of them are kept");
+        for i in 0..DiagLog::CAP {
+            full.push("12:00:02", &format!("line {i}"));
+        }
+        assert_eq!(
+            full.lines().len(),
+            DiagLog::HEAD_CAP + DiagLog::CAP,
+            "but only HEAD_CAP of them are beyond the ring's reach"
+        );
+
+        log.clear();
+        assert!(log.is_empty(), "clearing takes the head too");
     }
 
     /// THE LOG SWITCH HAS NO DEPENDANTS ANY MORE, which is the point of the

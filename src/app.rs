@@ -1274,7 +1274,9 @@ impl App {
                 None => "cold RDS".to_string(),
             };
             let at = stamp();
-            s.settings.log.push(
+            // INTO THE HEAD: this is the line that says which run the rest of the
+            // log belongs to, and in a plain ring it is the first one evicted.
+            s.settings.log.push_head(
                 &at,
                 &format!("session: launch #{launches}, app #{here} in this process, {last}, {restored}"),
             );
@@ -1307,7 +1309,10 @@ impl App {
         let sleep_watch = app.state.borrow().tuner.start_sleep_watch();
         if !sleep_watch.is_empty() {
             let at = stamp();
-            app.state.borrow_mut().settings.log.push(&at, &format!("sleep watch: {sleep_watch}"));
+            // INTO THE HEAD, with the rest of the launch block: whether the watch
+            // registered at all is half of what a sleep report needs, and it is
+            // written in the first second of a run.
+            app.state.borrow_mut().settings.log.push_head(&at, &format!("sleep watch: {sleep_watch}"));
         }
         // The restored theme has to reach the palette; `Settings` alone only
         // records the choice.
@@ -4320,7 +4325,7 @@ impl App {
                 //
                 // The stock-radio report is the LONGER of the two — a package,
                 // its components and an intent sweep — so the Java side caps
-                // every list it prints; the ring holds 200 lines and this is one
+                // every list it prints; the ring holds 600 lines and this is one
                 // of several writers.
                 settings::Action::ProbeKeepAlive | settings::Action::ProbeStockRadio => {
                     s.diag_status = format!("{}: reading…", probe_name(action));
@@ -4378,8 +4383,19 @@ impl App {
     /// is the one channel a driver can actually read, and whether the service
     /// started is exactly the kind of thing that has to be readable there when
     /// the answer turns out to be "it didn't".
+    /// INTO THE HEAD, WHICH NEVER SCROLLS AWAY. Every caller is in
+    /// `android_main`'s start-up block and every line it writes is a fact the run
+    /// establishes once and cannot establish again — how the last run ended, what
+    /// the wake receiver did, what the last sleep managed. In a plain ring those
+    /// are the first lines evicted, and they are the ones a drive log is read
+    /// for; see `DiagLog::push_head` for the drive that proved it.
     pub fn log_platform(self: &Rc<App>, line: &str) {
-        self.log_unavailable(line);
+        {
+            let mut s = self.state.borrow_mut();
+            let at = stamp();
+            s.settings.log.push_head(&at, line);
+        }
+        self.push_settings();
     }
 
     fn log_unavailable(self: &Rc<App>, why: &str) {
@@ -5874,9 +5890,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
         driver.set_log_dir_for_test(out.clone());
 
+        // THE LAUNCH BLOCK IS ALREADY THERE, in the head, and it does not scroll.
+        // Measured rather than assumed: `App::with_tuner` writes the `session:`
+        // line and this test is about the RING, so the head's size is subtracted
+        // from what the file should hold rather than guessed at.
+        let head = driver.state.borrow().settings.log.head_len();
+        assert!(head > 0, "the launch block put something in the head");
+
         // MORE LINES THAN THE RING HOLDS, so what is asserted is "everything the
         // app still has", not "everything that ever happened" — the ring drops
-        // the oldest and the file must contain exactly what survived.
+        // the oldest and the file must contain exactly what survived, with the
+        // head in front of it.
         let over = settings::DiagLog::CAP + 10;
         {
             let mut s = driver.state.borrow_mut();
@@ -5891,11 +5915,15 @@ mod tests {
         let written = std::fs::read_to_string(out.join("carnyx-tuner-log-1.txt"))
             .expect("the save wrote a file");
         let lines: Vec<&str> = written.lines().collect();
-        assert_eq!(lines.len(), settings::DiagLog::CAP, "the whole ring, and no more");
         assert_eq!(
-            lines.first().map(|l| l.trim()),
+            lines.len(),
+            head + settings::DiagLog::CAP,
+            "the head and the whole ring, and no more"
+        );
+        assert_eq!(
+            lines.get(head).map(|l| l.trim()),
             Some(format!("00:00:00  line {}", over - settings::DiagLog::CAP).trim()),
-            "starting at the oldest line the ring still holds"
+            "the ring starts at the oldest line it still holds"
         );
         assert_eq!(
             lines.last().map(|l| l.trim()),
