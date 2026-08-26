@@ -134,6 +134,11 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-diagnostics-portrait", 360, 800, false, State::SettingsDiag, -11.0),
     ("settings-phone-portrait", 360, 800, false, State::Settings, 0.0),
     ("settings-phone-portrait-scrolled", 360, 800, false, State::Settings, -8.0),
+    // The hidden fifth section, which no other shot can reach: it sits BELOW the
+    // about line, so it needs the end scroll and then some.
+    ("settings-band-themes", 1024, 614, false, State::SettingsEggs, -11.0),
+    ("settings-band-themes-dark", 1024, 614, true, State::SettingsEggs, -11.0),
+    ("settings-band-themes-portrait", 360, 800, false, State::SettingsEggs, -14.0),
     // §6.4 logo search: both landing views, the grid, and the two dead ends.
     ("logo-search-landing", 1024, 614, false, State::LogoLanding, 0.0),
     ("logo-search-landing-with-logo", 1024, 614, false, State::LogoLandingHasLogo, 0.0),
@@ -332,6 +337,10 @@ enum State {
     /// is the only way to see a second action row at all without a head unit.
     SettingsDiagFull,
     /// §6.4 landing on a station with no logo.
+    /// The settings panel with BAND THEMES revealed — the section six taps on
+    /// the about line unlocks, with one theme forced so the tick has somewhere
+    /// to be. The only render of a group that breaks the panel's two-tone rule.
+    SettingsEggs,
     LogoLanding,
     /// §6.4 landing on a station that already has one.
     LogoLandingHasLogo,
@@ -749,6 +758,15 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
             driver.settle_meter_for_test();
+            ui.set_overlay(Overlay::Settings);
+        }
+        State::SettingsEggs => {
+            // THROUGH THE REAL CALLBACK, so the list, the label and the lit row
+            // all come from `eggs::listed()` deciding rather than from a literal
+            // written here. The taps are set rather than clicked: there is no
+            // pointer in a screenshot.
+            ui.set_settings_egg_taps(6);
+            ui.invoke_settings_force_egg(2);
             ui.set_overlay(Overlay::Settings);
         }
         State::LogoLanding => ui.set_overlay(Overlay::LogoSearch),

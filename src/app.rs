@@ -179,6 +179,15 @@ const PROBE_DEFER_MS: u64 = 16;
 /// sentences a log line uses.
 const SLEEP_RELEASE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// The hidden band-theme picker's first row — SettingsPanel.tsx:628's
+/// `{ id: null, label: 'Off (auto-detect)' }`.
+///
+/// A ROW LIKE THE OTHERS, not a "clear" affordance beside them. It is what the
+/// reference draws, and it is also the only way out of a forced theme that reads
+/// as part of the same list: a driver who forced AC/DC and wants their radio back
+/// taps the row above it rather than hunting for a different control.
+const EGG_MENU_OFF: &str = "Off (auto-detect)";
+
 /// What a probe calls itself in the log. One place, so the "reading…" line, the
 /// footer and the unavailable line cannot drift apart.
 fn probe_name(action: settings::Action) -> &'static str {
@@ -519,6 +528,20 @@ struct State {
     /// How many re-commands the LIVE hold has left. Re-armed when a step takes a
     /// hold, so a budget one press spent is not inherited by the next.
     reasserts_left: u8,
+    /// The band theme the hidden picker is forcing, or `None` for auto-detect.
+    ///
+    /// NOT PERSISTED, WHICH IS THE REFERENCE'S CHOICE AND ALSO THE SAFE ONE.
+    /// CarFM holds it in a `useState` beside `eggTaps` (`SettingsPanel.tsx:88`),
+    /// so it dies with the screen. This is a control for LOOKING at the five
+    /// themes without waiting for the right track; a forced theme surviving a
+    /// restart would be a face wearing someone else's colours with no visible
+    /// reason and six taps between the driver and the way back.
+    ///
+    /// A `String` rather than `&'static Egg` because the picker names an ID —
+    /// the same value that crosses to Slint and comes back as an index — and
+    /// `eggs::by_id` is where a name becomes a row. Storing the row here would
+    /// put a second resolver in the state.
+    forced_egg: Option<String>,
     /// The last panel key and when it arrived, for the diagnostics line only.
     ///
     /// INSTRUMENTATION, NOT A GUARD, and the distinction is the point.
@@ -1227,6 +1250,7 @@ impl App {
                 hold: None,
                 reassert: None,
                 reasserts_left: 0,
+                forced_egg: None,
                 last_panel: None,
                 busy: false,
                 panel_action: None,
@@ -2385,7 +2409,7 @@ impl App {
         // which changes the STRING rather than how it is drawn, and a case rule
         // has to be applied where the string is. Everything else a theme does is
         // a colour, a face or a mark, and none of those needs to happen here.
-        let themed = crate::eggs::resolve(&shown_rt, !s.audio);
+        let themed = crate::eggs::resolve(&shown_rt, !s.audio, s.forced_egg.as_deref());
         let ident = if themed.is_some_and(|e| e.hero_lower) {
             ident.to_lowercase()
         } else {
@@ -2914,6 +2938,38 @@ impl App {
         }
 
         ui.set_settings_diag_status(s.diag_status.as_str().into());
+
+        // ── THE HIDDEN BAND-THEME PICKER ─────────────────────────────────────
+        //
+        // The whole list, finished, with the off row already in it — the panel's
+        // index is an index into THIS list, and a list the two sides build
+        // differently is an off-by-one waiting to happen.
+        //
+        // LABELS, NEVER IDS. `Egg::menu` is a pun and `Egg::id` is the key the
+        // matcher and the face switch on, and the reference keeps them apart in
+        // as many words. Nothing that crosses this seam is an id.
+        //
+        // `listed()` AND NO SECOND FILTER. The owner's rule is that basic themes
+        // get no listing, and `eggs::listed` is the one place it is enforced.
+        let listed = crate::eggs::listed();
+        let mut menu: Vec<slint::SharedString> = Vec::with_capacity(listed.len() + 1);
+        menu.push(EGG_MENU_OFF.into());
+        menu.extend(listed.iter().map(|e| slint::SharedString::from(e.menu)));
+        ui.set_settings_egg_menu(slint::ModelRc::from(std::rc::Rc::new(
+            slint::VecModel::from(menu),
+        )));
+        // ZERO WHEN NOTHING IS FORCED, and zero when the stored id names a row
+        // that is no longer listed — the picker cannot show a choice it cannot
+        // offer, and lighting nothing while a theme is forced would be worse than
+        // lighting the off row, which is at least a way back.
+        let choice = s
+            .forced_egg
+            .as_deref()
+            .and_then(|id| listed.iter().position(|e| e.id == id))
+            .map(|i| i as i32 + 1)
+            .unwrap_or(0);
+        ui.set_settings_egg_choice(choice);
+
         ui.set_settings_about(
             settings::about_line(
                 "Carnyx",
@@ -3513,6 +3569,29 @@ impl App {
             // Activity. There is none here, so it says so in the log rather than
             // flipping a flag it cannot honour.
             app.log_unavailable("battery exemption needs the Android settings activity");
+        });
+        on!(on_settings_force_egg, |app, i| {
+            // THE INDEX COMES BACK, AND THE ID IS LOOKED UP HERE. The panel was
+            // handed labels; turning one back into a theme is this side's job,
+            // and `listed()` is asked again rather than cached so the mapping
+            // cannot drift from the one that built the list.
+            //
+            // ROW 0 IS OFF. Anything past the end is also off — a stale index
+            // from a list that has since shrunk should stop forcing rather than
+            // force whatever now sits at that position.
+            let listed = crate::eggs::listed();
+            let forced = usize::try_from(i)
+                .ok()
+                .filter(|i| *i > 0)
+                .and_then(|i| listed.get(i - 1))
+                .map(|e| e.id.to_string());
+            app.state.borrow_mut().forced_egg = forced;
+            // THE FACE, THEN THE PANEL. `push_hero` is what resolves the theme
+            // and republishes the palette, the faces and the marks; without it
+            // the tick moves and nothing else does, which is precisely the
+            // half-built control this picker was removed for being once already.
+            app.push_hero();
+            app.push_settings();
         });
         on!(on_settings_set_logos, |app, v| {
             // AUTO-DOWNLOAD, not "show logos" — see `art_for`. Nothing on the
@@ -5714,6 +5793,74 @@ mod tests {
         assert!(egg.on, "a basic theme is still a theme");
         assert_eq!(egg.genre.to_string(), "Slowhand");
         assert!(!egg.advanced, "and it takes the ordinary genre metrics");
+    }
+
+    /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.
+    ///
+    /// It was ported once and removed, and the note in `ui/settings.slint` says
+    /// exactly why: the themes did not exist yet, so six taps "moved a radio
+    /// button and changed nothing on the face". So this asserts through the FACE
+    /// and not through the tick — the tick moving is not the feature.
+    ///
+    /// DRIVEN THROUGH THE UI CALLBACK, so the index the panel would send is the
+    /// index this test sends. A test that set `forced_egg` directly would pass
+    /// with the list and the lookup disagreeing, which is the one mistake the
+    /// two-list design makes possible.
+    #[test]
+    fn the_hidden_picker_dresses_the_face_and_undresses_it() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("egg-picker");
+        driver.set_radio_text_for_test("Traffic and weather together on the eights");
+        driver.push_all();
+        assert!(!ui.get_egg().on, "nothing playing that matches, so no theme");
+
+        // The list the panel is handed: the off row, then the advanced ones.
+        use slint::Model;
+        let menu = ui.get_settings_egg_menu();
+        let listed = crate::eggs::listed();
+        assert_eq!(menu.row_count(), listed.len() + 1, "every listed theme, plus off");
+        assert_eq!(menu.row_data(0).unwrap().to_string(), EGG_MENU_OFF);
+        assert_eq!(
+            menu.row_data(1).unwrap().to_string(),
+            listed[0].menu,
+            "the rows are labels, never ids"
+        );
+        assert_eq!(ui.get_settings_egg_choice(), 0, "auto-detect until something is picked");
+
+        // FORCE THE FIRST THEME. The RadioText still names nothing.
+        ui.invoke_settings_force_egg(1);
+        let egg = ui.get_egg();
+        assert!(egg.on, "the forced theme is showing");
+        assert!(egg.advanced, "and it is one of the five");
+        assert_eq!(egg.genre.to_string(), crate::eggs::ACDC.genre);
+        assert_eq!(ui.get_settings_egg_choice(), 1, "and the row is lit");
+
+        // A TUNE DOES NOT TAKE IT BACK. The picker outranks the text until the
+        // driver says otherwise, which is what makes it usable for looking at a
+        // theme while an advert is playing.
+        driver.set_radio_text_for_test("Nirvana - Lithium");
+        driver.push_all();
+        assert_eq!(
+            ui.get_egg().genre.to_string(),
+            crate::eggs::ACDC.genre,
+            "the forced theme outlasts a matching track"
+        );
+
+        // OFF, and the text is back in charge.
+        ui.invoke_settings_force_egg(0);
+        assert_eq!(ui.get_settings_egg_choice(), 0);
+        assert_eq!(
+            ui.get_egg().genre.to_string(),
+            crate::eggs::NIRVANA.genre,
+            "auto-detect resumes on the track that is actually playing"
+        );
+
+        // AN INDEX PAST THE END IS OFF, not the last row. A stale index from a
+        // list that has shrunk must stop forcing rather than force something else.
+        ui.invoke_settings_force_egg(1);
+        assert!(ui.get_egg().advanced);
+        ui.invoke_settings_force_egg(listed.len() as i32 + 5);
+        assert_eq!(ui.get_settings_egg_choice(), 0, "out of range is off");
     }
 
     /// "BACK IN BLACK" — the dark cut, and the fact that it FOLLOWS THE SCHEME.

@@ -199,6 +199,16 @@ export component AppWindow inherits Window {
     /// The last probe's outcome, in a line the driver can actually read. Empty
     /// until one is tapped.
     in property <string> settings-diag-status;
+    /// The hidden band-theme picker's rows and its lit one. See `settings.slint`.
+    in property <[string]> settings-egg-menu;
+    in property <int> settings-egg-choice;
+    callback settings-force-egg(int);
+    /// How many times the about line has been tapped; six reveals BAND THEMES.
+    ///
+    /// Surfaced here so `examples/shot.rs` can render the section — it is the
+    /// only way that group's layout is ever checked. Nothing in the app writes
+    /// it; the taps do, inside the panel.
+    in-out property <int> settings-egg-taps;
     callback settings-retry-tuner();
     callback settings-toggle-details();
     callback settings-pick-source(int);
@@ -395,6 +405,10 @@ export component AppWindow inherits Window {
         clear-logos => { root.settings-clear-logos(); }
         set-diag(v) => { root.settings-set-diag(v); }
         pick-diag-action(i) => { root.settings-pick-diag-action(i); }
+        egg-menu: root.settings-egg-menu;
+        egg-choice: root.settings-egg-choice;
+        egg-taps <=> root.settings-egg-taps;
+        force-egg(i) => { root.settings-force-egg(i); }
         close => { root.dismiss(); }
     }
 

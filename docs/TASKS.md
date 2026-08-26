@@ -1306,6 +1306,80 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 108. Build the six-tap band-theme picker
+**DONE.** The hidden fifth section is back, reading `eggs::listed()`. Six taps on
+the about line reveal BAND THEMES; picking a row forces that theme regardless of
+what is playing; "Off (auto-detect)" hands the face back to the RadioText.
+
+**IT WAS REMOVED, AND THE REASON IT WAS REMOVED IS GONE.** `ui/settings.slint`
+carried the note: it had been ported against themes that did not exist, so six
+taps "moved a radio button and changed nothing on the face". All five themes ship
+now — palettes, marks, faces, the lot — so the control has something to control.
+`listed()` was written for this and has been sitting unread since #98; it is now
+what the picker draws and there is still exactly one place the tier rule is
+enforced.
+
+**LABELS ARE PUNS, IDS ARE KEYS, AND NOTHING THAT CROSSES THE SEAM IS AN ID.**
+`Egg::menu` joins the registry — Powerage, The Walrus was Paul, Hammer of the
+Gods, Smells Like Gen X, Now I'm Nothing, from `bandThemes.ts:215`, which says it
+in as many words: *"labels are puns — matching still uses the real id"*. Rust
+hands the panel finished strings and takes back an INDEX; `by_id` is where a name
+becomes a row. Re-wording a label cannot change what a row does.
+
+Empty on every basic row, and structurally so: `basic` builds from `PLAIN`, which
+states `""`, so an unlisted row cannot acquire a label by forgetting.
+`every_listed_theme_has_a_menu_label` reads both ends and also refuses a label
+that is just the id.
+
+**THE FORCED CHOICE BEATS THE TEXT AND LOSES TO SILENCE**, which is the
+reference's order exactly. `matchEggId` returns a forced id before it normalises
+anything (`bandThemes.ts:197`) — a driver looking at the five themes should not
+have to wait for the right track — and `resolveEgg` checks `off` first, so a
+flattened face stays flat. The flat grey face is a STATE and a forced theme must
+not dress it.
+
+An id no row answers to resolves to NOTHING rather than falling through to the
+text: a theme deleted under a stored choice must not silently become whichever
+band is playing. An index past the end of the list is likewise off rather than
+the last row.
+
+**NOT PERSISTED, WHICH IS THE REFERENCE'S CHOICE AND THE SAFER ONE.** CarFM holds
+it in a `useState` beside `eggTaps`. A forced theme surviving a restart is a face
+wearing someone else's colours for no visible reason, with six taps between the
+driver and the way back.
+
+**THE GROUP BREAKS THE PANEL'S TWO-TONE RULE, AND SO DOES THE REFERENCE'S.**
+`Pal.raised` over `Pal.panel`, a 14dp corner against 18, and no inner padding so
+the rows run edge to edge behind a clip — which is what makes it read as
+something not meant to be found. `GroupCard` already carried `plate`, `corner`
+and `pad` for this, left there by #98 with the note that "the next exception will
+want them"; it did.
+
+The rule between rows is a TOP BORDER, not `RowDivider`. The reference draws
+`borderTopWidth: 1` edge to edge; `RowDivider` is a line inset 6dp with 6dp of
+margin, which is the divider of a PADDED group and there is no padding here to
+inset from. The tick is a gauge at zero opacity on unlit rows, so the label
+column cannot shift between them.
+
+**Pinned by `the_hidden_picker_dresses_the_face_and_undresses_it`**, asserted
+through the FACE and not through the tick — the tick moving is not the feature,
+and is precisely what got the first port removed. Driven through the UI callback,
+so the index the panel sends is the index the test sends: a test that set
+`forced_egg` directly would pass with the list and the lookup disagreeing, which
+is the one mistake a two-list design makes possible.
+
+**Three shots**, and they need `egg-taps` to be `in-out`: a section nothing
+outside the file can reveal is a section no render can check, and the layout of
+the one group that breaks the panel's rule is exactly what only a render checks.
+Nothing in the app writes it.
+
+**Evidence.** 309 tests, clippy clean over lib, bins and examples. Nine settings
+shots rendered against a stashed baseline: six byte-identical, three moved and
+all three are the log-with-wall-clock-stamps family —
+`settings-diagnostics-portrait` was not on the known-unstable list, so it was
+rendered TWICE FROM ONE BUILD and differed there too, which is the documented way
+to tell drift from a change.
+
 ### 107. A toast worth reading, and a log that keeps its own head
 **THE TOAST LANDED AND WAS THE WRONG SIZE IN THE WRONG PLACE.** *"While in
 another app, I did get a tiny pop-up at the bottom of the screen when I changed

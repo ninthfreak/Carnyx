@@ -86,6 +86,18 @@ pub struct Egg {
     pub id: &'static str,
     /// Advanced or basic. See [`Tier`].
     pub tier: Tier,
+    /// The label the hidden picker draws for this row — a PUN, never the id.
+    ///
+    /// `EGG_MENU` in the reference (`bandThemes.ts:215`) keeps the two apart in
+    /// as many words: *"labels are puns — matching still uses the real id"*. So
+    /// "Powerage" is what a driver reads and `AC/DC` is what the face switches
+    /// on, and re-wording a label can never change what a row does.
+    ///
+    /// EMPTY ON EVERY BASIC ROW, and that is structural rather than a
+    /// convention: [`basic`] builds from [`PLAIN`], which states `""`, so a basic
+    /// row cannot acquire one by forgetting. `every_listed_theme_has_a_menu_label`
+    /// reads both ends.
+    pub menu: &'static str,
     /// The line that replaces the PTY genre text.
     pub genre: &'static str,
     /// Base colour of that line.
@@ -330,6 +342,10 @@ pub const NO_SKIN: Skin = Skin {
 /// row would bury the four or five fields that are the theme.
 pub const PLAIN: Egg = Egg {
     id: "",
+    // NO LABEL, for the same reason `tier` defaults to Basic: a row that forgets
+    // to say is making the smaller claim. An unlisted row with a label is dead
+    // string; a listed row without one is a blank line in the picker.
+    menu: "",
     // BASIC, so a row that forgets to say is the SMALLER claim. An advanced row
     // that forgot would be missing from the picker, which someone notices the
     // first time they look; a basic row that forgot would appear in it, which
@@ -374,6 +390,7 @@ pub const PLAIN: Egg = Egg {
 /// red is just a bug with a costume on.
 pub const ACDC: Egg = Egg {
     id: "AC/DC",
+    menu: "Powerage",
     tier: Tier::Advanced,
     genre: "High Voltage Rock 'n' Roll",
     genre_ink: 0xE8A400,
@@ -470,6 +487,7 @@ const FACE_KNIGHT: &str = "Supernatural Knight";
 /// reference draws it this way on purpose, and the veto is the port.
 pub const BEATLES: Egg = Egg {
     id: "The Beatles",
+    menu: "The Walrus was Paul",
     tier: Tier::Advanced,
     genre: "Rock",
     genre_ink: 0x4A2C15,
@@ -510,6 +528,7 @@ const BEATLES_SKIN: Skin = Skin {
 /// theme that leaves the settings gear alone.
 pub const ZEPPELIN: Egg = Egg {
     id: "Led Zeppelin",
+    menu: "Hammer of the Gods",
     tier: Tier::Advanced,
     hero_face: FACE_KASHMIR,
     hero_scale: 1.3,
@@ -528,6 +547,7 @@ pub const ZEPPELIN: Egg = Egg {
 /// the lettering at 20% black — a photocopied look, which is what `xerox` names.
 pub const NIRVANA: Egg = Egg {
     id: "Nirvana",
+    menu: "Smells Like Gen X",
     tier: Tier::Advanced,
     genre: "Verse Chorus Verse",
     body_face: FACE_MARKER,
@@ -554,6 +574,7 @@ pub const NIRVANA: Egg = Egg {
 /// `heroGlitch` IS NOT CARRIED — see this module's header.
 pub const NIN: Egg = Egg {
     id: "Nine Inch Nails",
+    menu: "Now I’m Nothing",
     tier: Tier::Advanced,
     genre: "Broken Machines",
     genre_cycle: "Things Falling Apart",
@@ -759,20 +780,31 @@ fn basic_rows() -> impl Iterator<Item = &'static (&'static Egg, &'static [&'stat
     BASIC.iter().chain(BASIC_FIXTURES.iter())
 }
 
-/// The themes the hidden picker in settings would list — the advanced ones.
+/// The themes the hidden picker in settings lists — the advanced ones.
 ///
-/// THE PICKER DOES NOT EXIST. `ui/settings.slint` carries the note: CarFM wraps
-/// the about line in a Pressable that counts to six and reveals a band-theme
-/// picker, and that picker was ported here once against themes that did not
-/// exist yet, so it moved a radio button and changed nothing. It was removed
-/// rather than left half-built.
+/// THE PICKER READS THIS AND DOES NOT FILTER AGAIN. The owner's rule is that
+/// basic themes get no listing, and this is the mechanical half of what "basic"
+/// MEANS: a rule with no code behind it is a comment.
 ///
-/// This function is what it will read when it is rebuilt, and it exists now
-/// because it is the mechanical half of what "basic" MEANS: the owner's rule is
-/// that basic themes get no listing, and a rule with no code behind it is a
-/// comment. Whatever builds the picker takes this and does not filter again.
+/// It existed before the picker did, for exactly that reason. `ui/settings.slint`
+/// carried the note that CarFM wraps the about line in a Pressable counting to
+/// six, that a picker was ported here once against themes that did not exist yet
+/// — so six taps moved a radio button and changed nothing — and that it was
+/// removed rather than left half-built. The themes exist now, and so does the
+/// picker.
 pub fn listed() -> Vec<&'static Egg> {
     registry().map(|(egg, _)| *egg).filter(|e| e.tier == Tier::Advanced).collect()
+}
+
+/// One theme by its id, for the picker's forced choice.
+///
+/// SEARCHES EVERYTHING, not just [`listed`]. The picker can only offer what
+/// `listed` returns, but the id it hands back travels through a preference file
+/// and back through this lookup, and a resolver that could only find listed rows
+/// would be a SECOND place enforcing the tier rule — which is where the two would
+/// eventually disagree. There is one such place and it is `listed`.
+pub fn by_id(id: &str) -> Option<&'static Egg> {
+    registry().map(|(egg, _)| *egg).find(|e| e.id == id)
 }
 
 /// Every theme, listed or not, for tests and for anything that has to check the
@@ -876,9 +908,24 @@ pub fn match_egg_id(rt: &str) -> Option<&'static Egg> {
 /// `dead` is audio priority released — the face goes flat and grey — and CarFM
 /// suppresses every theme there (`resolveEgg`'s `off`). A grey face wearing a
 /// red accent would read as a rendering fault.
-pub fn resolve(rt: &str, dead: bool) -> Option<&'static Egg> {
+/// `forced` is the hidden picker's choice and BEATS THE RADIOTEXT OUTRIGHT —
+/// `matchEggId` returns it before it normalises anything (`bandThemes.ts:197`).
+/// That is the whole point of the control: a driver looking at the five themes
+/// should not have to wait for the right track.
+///
+/// IT DOES NOT BEAT `dead`, which is checked first here exactly as `resolveEgg`
+/// checks `off` before calling the matcher. Silence flattens the face whatever
+/// the picker says, because the flat grey face is a state and not a style.
+///
+/// A forced id no row answers to resolves to nothing rather than to a match on
+/// the text — a theme deleted out from under a stored preference must not
+/// silently become whichever band happens to be playing.
+pub fn resolve(rt: &str, dead: bool, forced: Option<&str>) -> Option<&'static Egg> {
     if dead {
         return None;
+    }
+    if let Some(id) = forced.filter(|id| !id.is_empty()) {
+        return by_id(id);
     }
     match_egg_id(rt)
 }
@@ -942,8 +989,8 @@ mod tests {
     /// A FLATTENED FACE WEARS NO THEME. CarFM's `resolveEgg({ off })`.
     #[test]
     fn a_dead_face_is_never_themed() {
-        assert_eq!(resolve("AC/DC - Back in Black", false).map(|e| e.id), Some("AC/DC"));
-        assert_eq!(resolve("AC/DC - Back in Black", true), None);
+        assert_eq!(resolve("AC/DC - Back in Black", false, None).map(|e| e.id), Some("AC/DC"));
+        assert_eq!(resolve("AC/DC - Back in Black", true, None), None);
     }
 
     /// "BACK IN BLACK", FIELD BY FIELD, against `bandThemes.ts`'s `modes.dark`.
@@ -1345,12 +1392,76 @@ mod tests {
         );
     }
 
+    /// EVERY LISTED ROW HAS A LABEL, AND NO UNLISTED ROW HAS ONE.
+    ///
+    /// The label is a PUN and the id is the key, kept apart because the reference
+    /// keeps them apart. A listed row without one is a blank line in the picker
+    /// — which is what the driver sees, since the picker draws `menu` and never
+    /// the id — and an unlisted row with one is a string nothing can ever read.
+    ///
+    /// The second half is why this is not just a spelling check: `basic` builds
+    /// from `PLAIN`, so a basic row cannot acquire a label by forgetting, and
+    /// this fails the day somebody writes one out by hand.
+    #[test]
+    fn every_listed_theme_has_a_menu_label() {
+        for e in listed() {
+            assert!(!e.menu.is_empty(), "{} is listed with no label to draw", e.id);
+            assert_ne!(e.menu, e.id, "{}'s label is its id — the labels are puns", e.id);
+        }
+        for e in all() {
+            if e.tier == Tier::Basic {
+                assert!(e.menu.is_empty(), "{} is unlisted and carries a label", e.id);
+            }
+        }
+    }
+
+    /// THE PICKER'S CHOICE BEATS THE RADIOTEXT, AND SILENCE BEATS THE PICKER.
+    ///
+    /// `matchEggId` returns a forced id before it normalises anything
+    /// (`bandThemes.ts:197`) — a driver looking at the five themes should not have
+    /// to wait for the right track. `resolveEgg` checks `off` before calling it at
+    /// all, which is the order kept here: the flat grey face is a STATE, and a
+    /// forced theme must not dress it.
+    #[test]
+    fn a_forced_theme_wins_over_the_text_but_not_over_silence() {
+        // Nothing playing that matches, forced to AC/DC: the theme shows.
+        let forced = resolve("Traffic and weather together", false, Some("AC/DC"));
+        assert_eq!(forced.map(|e| e.id), Some("AC/DC"), "the picker overrides the text");
+
+        // Playing Nirvana, forced to AC/DC: the picker still wins.
+        let over = resolve("Nirvana - Lithium", false, Some("AC/DC"));
+        assert_eq!(over.map(|e| e.id), Some("AC/DC"), "and it overrides a real match");
+
+        // Forced, but the audio priority is gone: flat and grey, no theme.
+        assert!(resolve("Nirvana - Lithium", true, Some("AC/DC")).is_none(), "silence wins");
+
+        // Off again, and the text is back in charge.
+        assert_eq!(
+            resolve("Nirvana - Lithium", false, None).map(|e| e.id),
+            Some("Nirvana"),
+            "with nothing forced the text decides"
+        );
+        assert_eq!(
+            resolve("Nirvana - Lithium", false, Some("")).map(|e| e.id),
+            Some("Nirvana"),
+            "and an empty id is 'nothing forced', not 'force nothing'"
+        );
+
+        // A stored id no row answers to resolves to NOTHING rather than falling
+        // through to the text — a theme deleted under a saved preference must not
+        // silently become whichever band is playing.
+        assert!(
+            resolve("Nirvana - Lithium", false, Some("Some Deleted Band")).is_none(),
+            "an unknown forced id shows no theme at all"
+        );
+    }
+
     /// THE PICKER LISTS THE ADVANCED ONES AND ONLY THOSE.
     ///
     /// This is the whole mechanical content of "basic themes don't get a
-    /// listing". The picker itself does not exist — see [`listed`] — so this is
-    /// the only place the rule is enforced, and it has to be enforced somewhere
-    /// or it is a sentence in a comment.
+    /// listing". [`listed`] is the one place the rule is enforced — the picker
+    /// draws what it returns and does not filter again — so it has to be enforced
+    /// there or it is a sentence in a comment.
     #[test]
     fn the_hidden_picker_never_lists_a_basic_theme() {
         let listed = listed();

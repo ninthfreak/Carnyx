@@ -1026,6 +1026,78 @@ component ChevronRow inherits Rectangle {
     }
 }
 
+/// BAND THEMES: one row of the hidden picker.
+///
+/// SettingsPanel.tsx:629-641. A radio row and not a chevron row: no affordance
+/// on the right unless it is the chosen one, and then a tick rather than an
+/// arrow, because tapping it goes nowhere.
+///
+/// THE PRESS IS AN OPACITY, NOT A FILL, which is the one place this departs from
+/// `ChevronRow` beside it. The reference styles this row `pressed && {opacity:
+/// 0.7}` where the rows above take a background — and this group departs from the
+/// panel's own two-tone rule anyway (`Pal.raised` over `Pal.panel`, a 14dp corner,
+/// rows running edge to edge), so matching the group it is in would be matching
+/// the wrong thing.
+///
+/// THE RULE IS A TOP BORDER, NOT A `RowDivider`. The reference draws
+/// `borderTopWidth: 1` on every row but the first, edge to edge; `RowDivider` is
+/// a 1dp line inset 6dp with 6dp of margin either side, which is the DIVIDER OF A
+/// PADDED GROUP. This group has no padding for it to inset from.
+component EggRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    /// False for the first row, which has nothing above it to be ruled off from.
+    in property <bool> ruled;
+
+    callback clicked();
+
+    opacity: touch.pressed ? 0.7 : 1.0;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    if root.ruled: Rectangle {
+        y: 0px;
+        height: 1px;
+        background: Pal.border;
+    }
+
+    HorizontalLayout {
+        padding-left: Metrics.s(16);
+        padding-right: Metrics.s(16);
+        padding-top: Metrics.s(13);
+        padding-bottom: Metrics.s(13);
+        spacing: 0px;
+
+        Text {
+            text: root.label;
+            horizontal-stretch: 1;
+            font-size: Math.max(12px, Metrics.s(16));
+            font-weight: 700;
+            // The chosen row is the only lit thing here; `Pal.text` otherwise.
+            // NOT `Pal.blue` on every row the way `ChevronRow` has it — there the
+            // blue says "this does something", here it says "this is the one".
+            color: root.on ? Pal.blue : Pal.text;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            horizontal-stretch: 0;
+            // A GAUGE, so the label's column does not move between rows. The tick
+            // is drawn in the same box whether or not it is showing, which is the
+            // pattern the face's own hidden elements use.
+            text: "✓";
+            font-size: Math.max(12px, Metrics.s(16));
+            font-weight: 700;
+            color: Pal.blue;
+            opacity: root.on ? 1.0 : 0.0;
+            vertical-alignment: center;
+        }
+    }
+}
+
 /// DIAGNOSTICS: the tuner log itself — the head unit's substitute for `adb
 /// logcat`, since there is no dev machine in the car.
 ///
@@ -1253,6 +1325,39 @@ export component SettingsOverlay inherits Rectangle {
     /// Whichever wins, the load-bearing part is the shape — two spaces either side
     /// of each U+00B7 — and that belongs in a byte-exact Rust test, not here.
     in property <string> about;
+
+    /// BAND THEMES: the hidden picker's rows, already finished by Rust.
+    ///
+    /// Row 0 is "Off (auto-detect)"; the rest are the ADVANCED themes' pun
+    /// labels, in registry order, from `eggs::listed()`. The list arrives with
+    /// the off row already in it rather than being prepended here, because the
+    /// index this component hands back is an index INTO THIS LIST and a list the
+    /// two sides build differently is an off-by-one waiting to happen.
+    ///
+    /// Empty in any build with no themes registered, which draws no group at all.
+    in property <[string]> egg-menu;
+    /// Which row is lit, as an index into `egg-menu`. 0 is auto-detect.
+    in property <int> egg-choice;
+    /// How many times the about line has been tapped. Six reveals the section.
+    ///
+    /// THE ONE PIECE OF STATE THIS FILE OWNS, and it is an INTERACTION rather
+    /// than a decision — the same category as the width track. Everything the
+    /// section then draws still arrives finished from Rust.
+    ///
+    /// It lives on the panel and not on the window, so it dies when the window
+    /// does and survives the panel being closed and reopened. CarFM's `eggTaps`
+    /// is a `useState` inside the Modal's component, which React keeps mounted
+    /// across `visible` toggles — same lifetime, reached differently.
+    ///
+    /// `in-out` RATHER THAN PRIVATE, for one reason: a section nothing outside
+    /// this file can reveal is a section no SCREENSHOT can render, and the
+    /// layout of a group that breaks the panel's own two-tone rule is exactly
+    /// the kind of thing only a render checks. Nothing in the app writes it.
+    in-out property <int> egg-taps;
+    /// A row was tapped. The index is into `egg-menu`; Rust turns it back into an
+    /// id, because the label is a pun and the id is the key.
+    callback force-egg(int);
+
     /// What the last probe row did, for a person rather than for a log.
     ///
     /// THE LOG WELL IS NOT FEEDBACK. Its rows are 12px, weight 400, `Pal.dim`
@@ -1583,15 +1688,23 @@ export component SettingsOverlay inherits Rectangle {
             // inside the ScrollView, which is why this overlay has no OverlayFooter.
             // dc.html `aboutStyle`:294 `padding:'20px 0 4px'`.
             //
-            // NOT A TAP TARGET ANY MORE. SettingsPanel.tsx:617 wraps this in a
-            // Pressable that counts to six and reveals a BAND THEMES picker. That
-            // picker was ported and the themes behind it were not — `egg_id`
-            // named five bands and nothing ever read it — so six taps revealed a
-            // control that moved a radio button and changed nothing on the face.
-            // The picker is gone rather than half-built; CarFM's `resolveEgg` and
-            // `eggTokens` recolour the whole face, swap the stereo fan art, the
-            // card frame and the band fonts, and that is a feature port rather
-            // than a fix.
+            // AND IT IS THE KEY TO THE FIFTH SECTION. SettingsPanel.tsx:617 wraps
+            // this in a Pressable that counts to six and reveals BAND THEMES.
+            //
+            // THIS COMMENT USED TO SAY THE PICKER WAS GONE, and it was right at
+            // the time: it had been ported against themes that did not exist, so
+            // six taps moved a radio button and changed nothing on the face. The
+            // themes exist now — all five, with their palettes, marks and faces —
+            // so the picker is back, reading `eggs::listed()`.
+            //
+            // NO ACCESSIBLE ROLE AND NO PRESSED STATE, which is the reference's
+            // own choice (`accessibilityRole="text"`, no pressed style). A line
+            // that looks tappable is a line a driver taps by accident, and the
+            // whole point of six taps is that nobody arrives here without meaning
+            // to. The counter never resets: it is per-mount in the reference and
+            // per-window here, so closing the panel and reopening it keeps the
+            // section open, exactly as remounting the modal does NOT — see the
+            // note on `egg-taps`.
             Rectangle {
                 VerticalLayout {
                     padding-top: Metrics.s(20);
@@ -1610,6 +1723,44 @@ export component SettingsOverlay inherits Rectangle {
                         // t.dim; the '#888' is dead and is not ported.
                         color: Pal.dim;
                         wrap: word-wrap;
+                    }
+                }
+
+                TouchArea {
+                    clicked => { root.egg-taps += 1; }
+                }
+            }
+
+            // ── BAND THEMES (§12), once the about line has been tapped six ──
+            //
+            // SettingsPanel.tsx:624-645. THE ONE GROUP THAT BREAKS THE PANEL'S
+            // TWO-TONE RULE, and it breaks it in the reference too: `pal.raised`
+            // rather than `pal.panel`, a 14dp corner rather than 18, and NO INNER
+            // PADDING so the rows run edge to edge behind the clip. That is what
+            // makes it read as a thing that was not meant to be found.
+            //
+            // `marginTop: 14` on the wrapper, which is the section label's own
+            // top padding in every other section — so the spacing above the label
+            // is stated once, here, rather than by the label.
+            //
+            // EMPTY LIST DRAWS NOTHING, not an empty card. A build with no
+            // advanced themes registered has nothing to force.
+            if root.egg-taps >= 6 && root.egg-menu.length > 0: VerticalLayout {
+                padding-top: Metrics.s(14);
+
+                SectionLabel { label: "BAND THEMES"; }
+
+                GroupCard {
+                    plate: Pal.raised;
+                    corner: Metrics.s(14);
+                    pad: 0px;
+                    clip: true;
+
+                    for label[i] in root.egg-menu: EggRow {
+                        label: label;
+                        on: i == root.egg-choice;
+                        ruled: i > 0;
+                        clicked => { root.force-egg(i); }
                     }
                 }
             }
