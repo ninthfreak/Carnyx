@@ -6,8 +6,9 @@
 // the spec's dp for the space actually available.
 
 import { Pal, Metrics, Font } from "tokens.slint";
-import { Preset, HeroSnapshot, EggTheme, LogoPlate } from "types.slint";
+import { Preset, HeroSnapshot, EggTheme, LogoPlate, NavStage } from "types.slint";
 import { StatusBar } from "status-bar.slint";
+import { TurnArrow } from "icons.slint";
 import { HeroRow, RadioTextStrip } from "hero.slint";
 import { PresetsBand } from "presets.slint";
 
@@ -53,6 +54,22 @@ export component Face inherits Rectangle {
     /// The OsmAnd tell (§4.9): the switch, and whether the service is answering.
     in property <bool> osmand-on: false;
     in property <bool> osmand-linked: false;
+
+    // ── The maneuver layer (§4.9) ──
+    /// Which of the three stages, or `idle` for "nothing to draw" — which covers
+    /// both no route and a layer suppressed by OsmAnd's own map.
+    in property <NavStage> nav-stage: NavStage.idle;
+    /// The stage-1 hairline's width, 0 to 1.
+    in property <float> nav-progress: 0.0;
+    /// Already local and already formatted. Empty draws nothing.
+    in property <string> nav-eta;
+    in property <string> nav-left-distance;
+    /// The maneuver arrow as SVG path data on a 24-unit box, and a roundabout's
+    /// exit number. Empty draws nothing — see `crate::app::arrow_for`.
+    in property <string> nav-arrow;
+    in property <string> nav-exit;
+    in property <string> nav-distance;
+    in property <string> nav-street;
 
     // ── Presets ──
     in property <[Preset]> presets;
@@ -228,14 +245,19 @@ export component Face inherits Rectangle {
     property <length> clock-gap-top: status.cluster-bottom;
     property <length> clock-gap-bottom: hero-slot.absolute-position.y;
     property <bool> clock-measured: root.clock-gap-bottom > root.clock-gap-top;
+    // ONE DEFINITION, READ BY THREE THINGS: the clock's own box, the ETA that
+    // hangs under it, and the countdown that has to clear both on the tall
+    // track. It was declared twice and drifting apart was only a matter of time.
+    property <length> clock-line-h: Metrics.tall ? Metrics.s(36) * 1.2 : Metrics.s(30) * 1.2;
+    property <length> clock-line-bottom:
+        (root.clock-gap-top + root.clock-gap-bottom) / 2 + root.clock-line-h / 2;
     if root.clock-time != "" && root.clock-measured: Rectangle {
         // The TIME's optical centre lands midway between the two edges. `y` is
         // the line's top, so half the line's own height comes back off it.
-        property <length> line-h: Metrics.tall ? Metrics.s(36) * 1.2 : Metrics.s(30) * 1.2;
         x: 0;
-        y: (root.clock-gap-top + root.clock-gap-bottom) / 2 - self.line-h / 2;
+        y: root.clock-line-bottom - root.clock-line-h;
         width: root.width;
-        height: self.line-h;
+        height: root.clock-line-h;
 
         HorizontalLayout {
             alignment: end;
@@ -277,6 +299,185 @@ export component Face inherits Rectangle {
                 letter-spacing: 1px;
                 color: Pal.dim;
                 vertical-alignment: center;
+            }
+        }
+    }
+
+    // ── STAGE 1: THE CRUISE HAIRLINE (§4.9) ──────────────────────────────────
+    //
+    // "A 3dp amber hairline flush to the face's top inner edge, its width the
+    // fraction of the way to the next turn."
+    //
+    // FLUSH TO THE INNER EDGE means y = 0 of the face's own box, above the
+    // status bar's padding and outside every layout — so it costs no height and
+    // nothing below it moves when a route starts. Same discipline as the clock.
+    //
+    // AMBER, WHICH IS THE FIXED SAFETY FAMILY. §4.9: "the maneuver is amber, the
+    // fixed safety family (TA, motion tell) — never the blue accent, never a
+    // band theme's palette." `Pal.amber` is not themeable and must not become so.
+    //
+    // IT DOES NOT ANIMATE. The bar is a distance readout, and one that eases
+    // toward its target is wrong for the length of the easing — at 100 km/h the
+    // driver covers 28 m a second, and the hairline's whole job is to be true
+    // at a glance.
+    if root.nav-stage != NavStage.idle: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width * Math.clamp(root.nav-progress, 0.0, 1.0);
+        height: 3px;
+        background: Pal.amber;
+    }
+
+    // ── STAGE 1: THE ETA, HANGING UNDER THE CLOCK (§4.9) ─────────────────────
+    //
+    // "ETA directly under the clock — right-aligned to it, 7dp clear, and in the
+    // UI face, not DSEG7: an `ETA` label at 11sp/700 with the time at 15sp/700
+    // (17sp on the tall track), all `dim`. Distance-left joins it on the tall
+    // track, where there is room."
+    //
+    // ── IT HANGS, IT DOES NOT PUSH ───────────────────────────────────────────
+    //
+    // A SEPARATE OUT-OF-FLOW BLOCK rather than a row inside the clock's, which
+    // is the whole reason §4.8 centres the clock's LINE and not its block: "so
+    // an ETA hanging below it (§4.9) changes neither the clock's size nor its
+    // position, and moves nothing else on the face." Putting this inside the
+    // clock's Rectangle would recentre the pair and shift the clock up the
+    // moment a route started — the one thing the design is arranged to avoid.
+    //
+    // Its top is the clock line's bottom, computed from the same two anchors, so
+    // the two cannot drift apart.
+    //
+    // THE UI FACE AND NOT DSEG7, which §4.9 states and which also matters
+    // mechanically: `crate::clock::eta` pads nothing, because the segment font's
+    // blank is a literal `!` in Atkinson.
+    property <bool> eta-showing:
+        root.nav-eta != "" && root.nav-stage != NavStage.idle && root.clock-measured;
+    property <length> eta-line-h: Metrics.tall ? Metrics.s(17) * 1.4 : Metrics.s(15) * 1.4;
+    if root.eta-showing: Rectangle {
+        x: 0;
+        y: root.clock-line-bottom + Metrics.s(7);
+        width: root.width;
+        height: root.eta-line-h;
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: Metrics.s(6);
+            // The same right padding the clock uses, so the two share an edge.
+            padding-right: Metrics.pad-h;
+            cross-axis-alignment: center;
+
+            // DISTANCE LEFT JOINS IT ON THE TALL TRACK ONLY, where §4.9 says
+            // there is room. It goes to the LEFT of the ETA so the ETA keeps the
+            // flush right edge it shares with the clock.
+            if Metrics.tall && root.nav-left-distance != "": Text {
+                text: root.nav-left-distance;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.s(15);
+                color: Pal.dim;
+            }
+            Text {
+                text: "ETA";
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.s(11);
+                letter-spacing: 0.5px;
+                color: Pal.dim;
+            }
+            Text {
+                text: root.nav-eta;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.tall ? Metrics.s(17) : Metrics.s(15);
+                color: Pal.dim;
+            }
+        }
+    }
+
+    // ── STAGE 1: THE CRUISE COUNTDOWN (§4.9) ─────────────────────────────────
+    //
+    // "One centered line in the band between the genre line and the hero card's
+    // top: `in` + the distance to the next turn, counting down (24sp/700 amber,
+    // tabular, 26sp on the tall track) + the maneuver arrow at 26dp + the street
+    // in `dim` at 18sp. Out of flow like the clock, so it costs no height."
+    //
+    // CRUISE ONLY, and §4.9 says why: "At stage 2 the strip carries the same
+    // maneuver, larger; two copies of one turn on one screen is noise, so the
+    // countdown ends when the strip yields."
+    //
+    // OUT OF FLOW, like the clock and the ETA — it costs no height and nothing
+    // below it moves when a route starts.
+    //
+    // CENTRED IN THE BAND AND CLAMPED TO IT, which is the spec's own wording.
+    // The clamp is what stops a short band (a tall surface with a deep status
+    // column) pushing the line up over the genre or down over the hero card.
+    property <length> countdown-top: status.genre-bottom;
+    property <length> countdown-bottom: hero-slot.absolute-position.y;
+    property <bool> countdown-measured: root.countdown-bottom > root.countdown-top;
+    if root.nav-stage == NavStage.cruise && root.nav-distance != "" && root.countdown-measured:
+    Rectangle {
+        property <length> line-h: Metrics.tall ? Metrics.s(26) * 1.35 : Metrics.s(24) * 1.35;
+        x: 0;
+        width: root.width;
+        height: self.line-h;
+        y: Math.clamp(
+            (root.countdown-top + root.countdown-bottom) / 2 - self.line-h / 2,
+            root.countdown-top,
+            root.countdown-bottom - self.line-h);
+
+        // ── IT SHARES THE BAND WITH THE CLOCK, AND ON A NARROW FACE THAT
+        //    MEANS GIVING WAY ─────────────────────────────────────────────────
+        //
+        // §4.9 puts this line in the same band the clock hangs in and centres
+        // it. On the wide track that works exactly as drawn: the clock is flush
+        // RIGHT and this is CENTRED, and 1024dp is wide enough that they never
+        // touch. At 360dp they do — `shots/nav-cruise-portrait.png` had
+        // "Whitney Way" running straight through the segment clock.
+        //
+        // So the tall track keeps the same band and the same anchor, and gives
+        // way sideways instead: the line goes flush LEFT and takes a width
+        // budget that stops short of the clock's column. A BUDGET AND NOT A
+        // MEASUREMENT, because the clock's own box is inside a conditional and
+        // Slint will not let its id out — 62% of the face leaves 137dp at
+        // 360dp, which is more than the clock and its ETA occupy. The street
+        // elides into whatever is left, which is what an elide is for.
+        //
+        // Stacking it under the clock was tried first and is worse: the band
+        // between the ETA and the hero card is 8dp at that surface, and the line
+        // disappeared entirely.
+        HorizontalLayout {
+            x: Metrics.tall ? Metrics.pad-h : 0;
+            width: Metrics.tall ? root.width * 0.62 - Metrics.pad-h : root.width;
+            alignment: Metrics.tall ? LayoutAlignment.start : LayoutAlignment.center;
+            spacing: Metrics.s(9);
+            cross-axis-alignment: center;
+
+            Text {
+                text: "in";
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.tall ? Metrics.s(17) : Metrics.s(16);
+                color: Pal.dim;
+            }
+            Text {
+                text: root.nav-distance;
+                font-family: Font.face; font-weight: Font.bold;
+                font-size: Metrics.tall ? Metrics.s(26) : Metrics.s(24);
+                // AMBER, THE FIXED SAFETY FAMILY — never a band theme's palette.
+                color: Pal.amber;
+            }
+            TurnArrow {
+                size: Metrics.s(26);
+                color: Pal.amber;
+                commands: root.nav-arrow;
+                exit: root.nav-exit;
+                // 2.4 at 26dp, which is §4.9's own heavier weight.
+                stroke-w: 2.4;
+            }
+            // THE STREET COLLAPSES WHEN IT IS MISSING rather than leaving a gap
+            // — the handoff's rule for every field the poll may not carry.
+            if root.nav-street != "": Text {
+                text: root.nav-street;
+                font-family: Font.face;
+                font-size: Metrics.s(18);
+                color: Pal.dim;
+                overflow: elide;
             }
         }
     }

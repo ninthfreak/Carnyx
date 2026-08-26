@@ -562,6 +562,13 @@ struct State {
     /// The line is written when it CHANGES, which is the only time it carries
     /// anything a reader did not already have.
     nav_said: String,
+    /// A clock reading forced by `set_clock_for_test`.
+    ///
+    /// THE HOST HAS NO PLATFORM CLOCK, so `android::clock_now` answers `None`
+    /// and every shot would draw neither a readout nor an ETA. This stands in
+    /// for that one platform call and nothing else — the formatting, the 12/24
+    /// branch and the timezone arithmetic all still run for real.
+    clock_test: Option<(u32, u32, bool)>,
     /// Feet and miles, or metres and kilometres (§4.9).
     ///
     /// READ ONCE AT START-UP from the device's locale, because OsmAnd does not
@@ -1232,6 +1239,7 @@ impl App {
                 announced: std::cell::Cell::new(f32::NAN),
                 nav: crate::nav::Nav::new(),
                 units: crate::units::Units::default(),
+                clock_test: None,
                 nav_said: String::new(),
                 nav_package: String::new(),
                 // The DECODER is not seeded, only the published state. A decoder
@@ -3273,9 +3281,17 @@ impl App {
     /// class that answers lives in the embedded dex. Drawing `00:00` there would
     /// be a real time and a lie; the face draws nothing instead, so no shot
     /// carries a clock that was never read.
+    /// The local hour, minute and 12/24 setting, or `None`.
+    ///
+    /// The test override first, then the platform. Both the readout and the ETA
+    /// go through this, so a shot cannot show one without the other.
+    fn clock_reading(&self) -> Option<(u32, u32, bool)> {
+        self.state.borrow().clock_test.or_else(crate::android::clock_now)
+    }
+
     fn push_clock(&self) {
         let on = self.state.borrow().settings.clock_on;
-        let now = on.then(crate::android::clock_now).flatten();
+        let now = on.then(|| self.clock_reading()).flatten();
         let clock = match now {
             Some((h, m, is24)) => crate::clock::format(h, m, is24),
             None => crate::clock::Clock::default(),
@@ -3419,7 +3435,55 @@ impl App {
         // diagnostics log asks "what arrived". Folding the suppression into
         // `nav-active` would answer the first by lying to the other two.
         let suppressed = r.map_visible && self.state.borrow().settings.nav_hide_on_map;
-        ui.set_nav_showing(active && !suppressed);
+        let showing = active && !suppressed;
+        ui.set_nav_showing(showing);
+
+        // ── STAGE 1's OWN FURNITURE (§4.9) ───────────────────────────────────
+        //
+        // Which rung the display is on, how full the hairline is, and the two
+        // arrows. All decided here for the reason every other string on this
+        // face is: the panel draws, it does not choose.
+        let stage = self.state.borrow().nav.stage(now, showing);
+        ui.set_nav_stage(match stage {
+            crate::nav::Stage::Idle => crate::NavStage::Idle,
+            crate::nav::Stage::Cruise => crate::NavStage::Cruise,
+            crate::nav::Stage::Approach => crate::NavStage::Approach,
+            crate::nav::Stage::TurnNow => crate::NavStage::TurnNow,
+        });
+        ui.set_nav_progress(self.state.borrow().nav.progress(now));
+
+        // THE ARROW IS A PATH AND NOT A GLYPH ID, so the Slint side has nothing
+        // to look up and no table to keep in step with `crate::arrow`'s.
+        let (arrow, exit) = arrow_for(r.turn_xml.as_deref());
+        ui.set_nav_arrow(arrow.into());
+        ui.set_nav_exit(exit.into());
+        let (after_arrow, after_exit) = arrow_for(r.after_turn_xml.as_deref());
+        ui.set_nav_after_arrow(after_arrow.into());
+        ui.set_nav_after_exit(after_exit.into());
+
+        // ── THE ETA, WHICH NEEDS A TIMEZONE NOBODY HANDED US ─────────────────
+        //
+        // `arrivalTime` is Unix millis and the face wants a local wall clock, so
+        // the offset is worked out from the clock reading this app already takes
+        // — see `crate::clock::offset_seconds`. No clock reading (a host build,
+        // or the switch off) means no ETA rather than one in UTC.
+        let eta = match (r.arrival_ms, self.clock_reading()) {
+            (Some(ms), Some((h, m, is24))) if ms > 0 => {
+                let off = crate::clock::offset_seconds(crate::session::now_unix() as i64, h, m);
+                crate::clock::eta(ms, off, is24)
+            }
+            _ => String::new(),
+        };
+        ui.set_nav_eta(eta.into());
+        // DISTANCE LEFT TO THE DESTINATION, not to the turn. §4.9 puts it beside
+        // the ETA on the tall track, "where there is room".
+        ui.set_nav_left_distance(
+            r.left_metres
+                .filter(|m| *m > 0)
+                .map(|m| crate::nav::Nav::distance_label(m, units))
+                .unwrap_or_default()
+                .into(),
+        );
 
         // ON A CHANGE ONLY. See `State::nav_said`.
         let line = line.unwrap_or_default();
@@ -4195,11 +4259,13 @@ impl App {
     /// clock — `android::clock_now` answers `None` there, which is why no
     /// ordinary render carries a time.
     pub fn set_clock_for_test(self: &Rc<App>, hour24: u32, minute: u32, is_24h: bool) {
-        let c = crate::clock::format(hour24, minute, is_24h);
-        let ui = self.ui();
-        ui.set_clock_time(c.time.as_str().into());
-        ui.set_clock_meridiem(c.meridiem.as_str().into());
-        ui.set_settings_clock_sub(crate::clock::sub_line(is_24h).as_str().into());
+        self.state.borrow_mut().clock_test = Some((hour24, minute, is_24h));
+        // THROUGH THE REAL PATH rather than writing the three properties here.
+        // This used to format and push them directly, which drew a clock while
+        // leaving `push_clock` untested and — once the ETA existed — left the
+        // one thing that needs a clock reading with nothing to read.
+        self.push_clock();
+        self.push_nav();
     }
 
     /// Put a track in the RadioText, for tests and shots of the band themes.
@@ -5682,6 +5748,21 @@ fn strings(v: &[String]) -> ModelRc<SharedString> {
 ///
 /// `HH:MM:SS` off the system clock, in UTC — there is no timezone database in
 /// this crate and a wrong local time would be worse than an honest one.
+/// The maneuver arrow's path and a roundabout's exit number, from the poll's
+/// TurnType XML string.
+///
+/// EMPTY IS A REAL ANSWER TWICE OVER. No string, or one this build does not
+/// recognise, draws no arrow — the same rule `Turn::from_osmand` follows for the
+/// integer, and for the same reason: an arrow is an instruction, and the wrong
+/// one given confidently is worse than none. A roundabout OsmAnd did not number
+/// gets a ring with nothing inside it rather than a nought.
+fn arrow_for(xml: Option<&str>) -> (String, String) {
+    let Some((turn, exit)) = xml.and_then(crate::nav::Turn::from_xml) else {
+        return (String::new(), String::new());
+    };
+    (crate::arrow::path(turn), exit.map(|n| n.to_string()).unwrap_or_default())
+}
+
 fn stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

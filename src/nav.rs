@@ -330,6 +330,9 @@ pub struct Nav {
     /// The last poll's answer, and when it landed. Aged on the same clock as the
     /// push: a poll that has stopped answering is a route that has ended.
     route: Option<(Route, u64)>,
+    /// The leg being driven: which turn it is, and how far away it was when it
+    /// FIRST appeared. See [`Nav::progress`].
+    leg: Option<(String, i32)>,
 }
 
 impl Nav {
@@ -392,7 +395,69 @@ impl Nav {
 
     /// One poll answer from `getAppInfo`.
     pub fn poll(&mut self, route: Route, now: u64) {
+        self.note_leg(&route);
         self.route = Some((route, now));
+    }
+
+    /// Remember where this leg started, for [`Nav::progress`].
+    ///
+    /// A LEG IS A TURN PLUS ITS STREET, and the baseline is the first distance
+    /// seen for it. Two rules reset it:
+    ///
+    /// * THE TURN CHANGED — a new leg, and its own full distance.
+    /// * THE DISTANCE WENT UP — which happens without the turn changing when
+    ///   OsmAnd recalculates around a missed exit, or when the driver rejoins
+    ///   the route further back. Keeping the old baseline there would leave the
+    ///   bar past full and then jumping backwards.
+    fn note_leg(&mut self, route: &Route) {
+        let Some(metres) = route.turn_metres.filter(|m| *m >= 0) else {
+            self.leg = None;
+            return;
+        };
+        let id = format!(
+            "{}|{}",
+            route.turn_xml.as_deref().unwrap_or_default(),
+            route.street.as_deref().unwrap_or_default()
+        );
+        match &self.leg {
+            // The same leg, no further away than has been seen: the baseline
+            // stands. THIS ARM IS WHAT MAKES ARRIVING WORK — nought metres to
+            // the turn is "you are at it", and it must fill the bar rather than
+            // read as no leg at all.
+            Some((was, baseline)) if *was == id && metres <= *baseline => {}
+            // A different turn, or the same one further off than before.
+            _ if metres > 0 => self.leg = Some((id, metres)),
+            // First sight at nought metres: nothing to divide by, and nothing
+            // was watched, so there is no fraction to claim.
+            _ => self.leg = None,
+        }
+    }
+
+    /// How far along this leg the driver is, `0.0` to `1.0` (§4.9's hairline).
+    ///
+    /// ── THE DENOMINATOR IS OURS BECAUSE OSMAND SENDS NO SUCH THING ──────────
+    ///
+    /// §4.9 asks for a hairline "its width the fraction of the way to the next
+    /// turn". OsmAnd hands over the distance REMAINING and nothing to divide it
+    /// by — there is no leg length in the bundle — so the baseline is the first
+    /// distance this build saw for this turn, kept by [`Nav::note_leg`].
+    ///
+    /// WHICH MEANS IT IS HONEST ABOUT ITS OWN LIMIT: joining a route mid-leg
+    /// makes the bar start at zero for a turn that is already close, rather than
+    /// at four-fifths. That is the right failure — it never claims MORE progress
+    /// than has been watched — and it settles within one turn.
+    ///
+    /// `0.0` with no route, which is a bar of no width rather than a full one.
+    pub fn progress(&self, now: u64) -> f32 {
+        let Some(route) = self.route(now) else { return 0.0 };
+        let (Some((_, baseline)), Some(left)) = (&self.leg, route.turn_metres) else {
+            return 0.0;
+        };
+        if *baseline <= 0 {
+            return 0.0;
+        }
+        let done = (baseline - left.max(0)) as f32 / *baseline as f32;
+        done.clamp(0.0, 1.0)
     }
 
     /// The last poll, if it is still fresh. See [`Nav::EXPIRY`].
@@ -408,6 +473,7 @@ impl Nav {
         self.last = None;
         self.spoken = None;
         self.route = None;
+        self.leg = None;
     }
 
     /// What to draw, at `now`.
@@ -970,6 +1036,61 @@ mod tests {
         // one clock; without that the hero card would stay taken over by a
         // junction the driver passed a minute ago.
         assert_eq!(nav.stage(100 + Nav::EXPIRY, true), Stage::Idle);
+    }
+
+    /// THE HAIRLINE'S FRACTION, WHOSE DENOMINATOR THIS BUILD HAS TO INVENT.
+    ///
+    /// OsmAnd sends the distance REMAINING and nothing to divide it by, so the
+    /// baseline is the first distance seen for a turn. What that has to get
+    /// right is when to forget it.
+    #[test]
+    fn the_leg_progress_fills_as_the_turn_comes_up() {
+        let mut nav = Nav::new();
+        let leg = |xml: &str, street: &str, m: i32| Route {
+            turn_xml: Some(xml.into()),
+            street: Some(street.into()),
+            turn_metres: Some(m),
+            ..Route::default()
+        };
+        assert_eq!(nav.progress(0), 0.0, "no route is an empty bar, not a full one");
+
+        // FIRST SIGHT SETS THE BASELINE, so the bar starts empty.
+        nav.poll(leg("TR", "Whitney Way", 800), 100);
+        assert_eq!(nav.progress(100), 0.0);
+        nav.poll(leg("TR", "Whitney Way", 400), 101);
+        assert!((nav.progress(101) - 0.5).abs() < 0.001, "half way");
+        nav.poll(leg("TR", "Whitney Way", 0), 102);
+        assert_eq!(nav.progress(102), 1.0, "arrived at the turn");
+
+        // A NEW TURN IS A NEW LEG, with its own baseline — the bar empties
+        // rather than staying full from the turn just taken.
+        nav.poll(leg("TSLL", "Odana Rd", 1200), 103);
+        assert_eq!(nav.progress(103), 0.0);
+        nav.poll(leg("TSLL", "Odana Rd", 300), 104);
+        assert!((nav.progress(104) - 0.75).abs() < 0.001);
+
+        // THE SAME TURN GETTING FURTHER AWAY RE-BASELINES. OsmAnd does this on
+        // a recalculation around a missed exit; keeping the old baseline would
+        // drive the bar past full and then jump it backwards.
+        nav.poll(leg("TSLL", "Odana Rd", 2000), 105);
+        assert_eq!(nav.progress(105), 0.0, "re-baselined, not clamped at 1.0");
+        nav.poll(leg("TSLL", "Odana Rd", 1000), 106);
+        assert!((nav.progress(106) - 0.5).abs() < 0.001);
+
+        // A POLL WITH NO TURN DISTANCE HAS NO LEG.
+        nav.poll(Route { street: Some("Odana Rd".into()), ..Route::default() }, 107);
+        assert_eq!(nav.progress(107), 0.0);
+
+        // AND IT NEVER LEAVES THE RANGE, whatever arrives.
+        nav.poll(leg("TR", "A", 500), 108);
+        nav.poll(leg("TR", "A", -50), 109);
+        let p = nav.progress(109);
+        assert!((0.0..=1.0).contains(&p), "{p}");
+
+        // A STALE ROUTE IS AN EMPTY BAR, on the same clock as everything else.
+        assert_eq!(nav.progress(109 + Nav::EXPIRY), 0.0);
+        nav.clear();
+        assert_eq!(nav.progress(109), 0.0, "clearing takes the leg too");
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.

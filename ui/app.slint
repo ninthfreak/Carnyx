@@ -1,5 +1,5 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset, HeroSnapshot, Overlay, EggTheme, LogoPlate } from "types.slint";
+import { Preset, HeroSnapshot, Overlay, EggTheme, LogoPlate, NavStage } from "types.slint";
 import { Face } from "face.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn, NearbyTab } from "nearby.slint";
 import {
@@ -87,6 +87,30 @@ export component AppWindow inherits Window {
     /// OsmAnd's own map is in front. The handoff hides the whole layer here,
     /// driver-overridable — so this is published and not obeyed in Rust.
     in property <bool> nav-map-visible: false;
+    /// WHICH OF §4.9'S THREE STAGES the maneuver layer is in. `idle` covers both
+    /// "no route" and "suppressed", which is all a layer that draws nothing
+    /// needs to know. Decided in `App::push_nav` from OsmAnd's own
+    /// `next_turn_imminent`.
+    in property <NavStage> nav-stage: NavStage.idle;
+    /// How far along this leg the driver is, 0 to 1 — the stage-1 hairline's
+    /// width. The denominator is this build's own; see `crate::nav::Nav::progress`.
+    in property <float> nav-progress: 0.0;
+    /// The maneuver arrow as SVG path data on a 24-unit box, straight from
+    /// `crate::arrow`. EMPTY DRAWS NOTHING, which is what an unrecognised turn
+    /// type gets — an arrow is an instruction and a wrong one is worse than none.
+    in property <string> nav-arrow;
+    in property <string> nav-after-arrow;
+    /// A roundabout's exit number, set inside the ring. Empty when OsmAnd did
+    /// not name one.
+    in property <string> nav-exit;
+    in property <string> nav-after-exit;
+    /// The arrival time, already local and already formatted — `4:35 PM`,
+    /// `16:35`. In the UI face, not DSEG7 (§4.9), so it carries no segment-font
+    /// blank. Empty when there is no route or no clock to read.
+    in property <string> nav-eta;
+    /// Distance to the DESTINATION, not to the turn. Joins the ETA on the tall
+    /// track, where §4.9 says there is room.
+    in property <string> nav-left-distance;
     /// MAY THE MANEUVER LAYER DRAW? (§4.9) — `nav-active` and not suppressed by
     /// OsmAnd's own map being in front. This is the ONE gate the layer binds to;
     /// `nav-active` stays raw so the settings sub-line can still say WHY nothing
@@ -362,6 +386,14 @@ export component AppWindow inherits Window {
         in-motion: root.in-motion;
         osmand-on: root.settings-nav-on;
         osmand-linked: root.nav-linked;
+        nav-stage: root.nav-stage;
+        nav-progress: root.nav-progress;
+        nav-eta: root.nav-eta;
+        nav-left-distance: root.nav-left-distance;
+        nav-arrow: root.nav-arrow;
+        nav-exit: root.nav-exit;
+        nav-distance: root.nav-distance;
+        nav-street: root.nav-street;
         presets: root.presets;
         active-index: root.active-index;
         prev-preset: root.prev-preset;

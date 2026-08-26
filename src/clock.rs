@@ -87,6 +87,72 @@ pub fn format(hour24: u32, minute: u32, is_24h: bool) -> Clock {
     Clock { time, meridiem: meridiem.to_string() }
 }
 
+/// The device's offset from UTC, in seconds, worked out from one local reading.
+///
+/// ── NO NEW JAVA CALL, AND THAT IS THE POINT ─────────────────────────────────
+///
+/// §4.9's ETA is an absolute arrival TIME and `AppInfoParams.arrivalTime` is
+/// Unix milliseconds, so something has to know which hour that lands on here.
+/// The obvious move is another platform call; this instead uses the two facts
+/// the app already has — the current epoch second, and the local hour and minute
+/// [`crate::android::clock_now`] returns for it — because their difference IS
+/// the offset, and a function taking two numbers can be tested on a machine with
+/// no head unit.
+///
+/// ROUNDED UP TO THE MINUTE, AND *UP* IS NOT A DETAIL. The local reading is
+/// TRUNCATED to the minute — `Calendar.MINUTE` drops the seconds — while the
+/// epoch keeps them, so the raw difference lands in `(offset - 60, offset]`:
+/// always short, never over. Every real UTC offset is a whole number of minutes,
+/// so the ceiling of that interval IS the offset, exactly.
+///
+/// Rounding to the NEAREST minute is the obvious thing and it is wrong for
+/// twenty-nine seconds out of every sixty — past thirty seconds past the minute
+/// it lands a minute below, and every ETA on the face reads a minute early.
+/// A test walks all sixty.
+///
+/// Half-hour and three-quarter-hour zones (India, Nepal, Chatham) come out of
+/// this correctly without being special-cased: nothing here assumes whole hours.
+pub fn offset_seconds(now_unix: i64, hour24: u32, minute: u32) -> i64 {
+    const DAY: i64 = 86_400;
+    let local = i64::from(hour24.min(23)) * 3600 + i64::from(minute.min(59)) * 60;
+    // `rem_euclid` rather than `%`, because a pre-epoch instant is negative and
+    // `%` would keep the sign.
+    let utc = now_unix.rem_euclid(DAY);
+    let raw = (local - utc).rem_euclid(DAY);
+    let rounded = ((raw as f64) / 60.0).ceil() as i64 * 60;
+    // WEST OF GREENWICH IS NEGATIVE. The modulo above puts everything in
+    // `0..86400`, so anything past twelve hours is really a negative offset —
+    // UTC-6 arrives here as 64800.
+    if rounded > DAY / 2 {
+        rounded - DAY
+    } else {
+        rounded
+    }
+}
+
+/// The arrival time §4.9 hangs under the clock — `4:35 PM`, `16:35`.
+///
+/// NOT [`format`]'s OUTPUT, AND THE DIFFERENCE MATTERS. §4.9 puts the ETA "in
+/// the **UI face, not DSEG7**", and [`BLANK`] is a DSEG7 convention: the `!`
+/// that reads as an unlit segment on the clock would print as a literal
+/// exclamation mark in Atkinson Hyperlegible. So this pads with nothing and
+/// spells the meridiem out, which is what a UI face can do and a segment face
+/// cannot.
+pub fn eta(arrival_ms: i64, offset_seconds: i64, is_24h: bool) -> String {
+    let local = arrival_ms.div_euclid(1000) + offset_seconds;
+    let of_day = local.rem_euclid(86_400);
+    let (h24, m) = ((of_day / 3600) as u32, ((of_day % 3600) / 60) as u32);
+    if is_24h {
+        return format!("{h24:02}:{m:02}");
+    }
+    let h12 = match h24 % 12 {
+        0 => 12,
+        other => other,
+    };
+    let meridiem = if h24 < 12 { "AM" } else { "PM" };
+    format!("{h12}:{m:02} {meridiem}")
+}
+
 /// What the settings row says under "Clock".
 ///
 /// IT REPORTS THE FORMAT, IT DOES NOT OFFER IT. §4.8: *"The settings sub-line
@@ -142,6 +208,71 @@ mod tests {
     fn a_bad_reading_shows_a_wrong_minute_rather_than_panicking() {
         assert_eq!(format(99, 99, true).time, "23:59");
         assert_eq!(format(24, 60, false).time, "11:59");
+    }
+
+    /// THE OFFSET COMES OUT OF TWO NUMBERS THE APP ALREADY HAS.
+    ///
+    /// `now_unix` is 2026-08-26 21:07:43 UTC — deliberately with seconds on it,
+    /// because the seconds are what makes the raw difference wrong.
+    #[test]
+    fn the_utc_offset_falls_out_of_the_clock_reading() {
+        let utc = 1_787_951_263_i64;
+        assert_eq!(utc.rem_euclid(86_400), 21 * 3600 + 7 * 60 + 43, "the fixture is 21:07:43 UTC");
+
+        // UTC itself, and the two sides of Greenwich.
+        assert_eq!(offset_seconds(utc, 21, 7), 0);
+        assert_eq!(offset_seconds(utc, 22, 7), 3600, "UTC+1");
+        assert_eq!(offset_seconds(utc, 16, 7), -5 * 3600, "UTC-5 — and it is NEGATIVE");
+        assert_eq!(offset_seconds(utc, 15, 7), -6 * 3600, "UTC-6");
+
+        // ACROSS MIDNIGHT, where the local date and the UTC date differ.
+        assert_eq!(offset_seconds(utc, 6, 7), 9 * 3600, "UTC+9, tomorrow morning");
+        assert_eq!(offset_seconds(utc, 9, 7), 12 * 3600, "UTC+12");
+        assert_eq!(offset_seconds(utc, 11, 7), -10 * 3600, "UTC-10, still yesterday");
+
+        // NOT EVERY ZONE IS A WHOLE HOUR, and nothing here assumes one.
+        assert_eq!(offset_seconds(utc, 2, 37), 5 * 3600 + 1800, "UTC+5:30, India");
+        assert_eq!(offset_seconds(utc, 2, 52), 5 * 3600 + 2700, "UTC+5:45, Nepal");
+
+        // AND THE SECONDS NEVER DRAG IT DOWN A MINUTE, at any second of the
+        // minute. This is the assertion that found the bug: rounding to the
+        // NEAREST minute gives -60 here for every second past thirty, and the
+        // ETA on the face reads a minute early for half of every minute.
+        let midnight_utc = utc - utc.rem_euclid(86_400);
+        for sec in 0..60 {
+            let at = midnight_utc + 21 * 3600 + 7 * 60 + sec;
+            assert_eq!(offset_seconds(at, 21, 7), 0, "UTC at :{sec:02} past the minute");
+            assert_eq!(offset_seconds(at, 16, 7), -5 * 3600, "UTC-5 at :{sec:02}");
+            assert_eq!(offset_seconds(at, 2, 37), 5 * 3600 + 1800, "UTC+5:30 at :{sec:02}");
+        }
+    }
+
+    /// THE ETA IS NOT THE CLOCK, and printing it with the clock's blank would
+    /// put an exclamation mark on the face.
+    #[test]
+    fn the_eta_spells_itself_out_for_a_ui_face() {
+        // 2026-08-26 21:07:43 UTC, arriving 35 minutes later.
+        let arrival = (1_787_951_263_i64 + 35 * 60) * 1000;
+
+        assert_eq!(eta(arrival, 0, true), "21:42");
+        assert_eq!(eta(arrival, 0, false), "9:42 PM");
+        assert_eq!(eta(arrival, -5 * 3600, false), "4:42 PM");
+        assert_eq!(eta(arrival, 9 * 3600, false), "6:42 AM", "and over into tomorrow");
+        assert_eq!(eta(arrival, 9 * 3600, true), "06:42");
+
+        // NO BLANK, EVER. `format` pads a single-digit 12-hour with `!`, which
+        // is right on DSEG7 and is a literal exclamation mark in the UI face.
+        for offset in (-12 * 3600..=12 * 3600).step_by(1800) {
+            let s = eta(arrival, offset, false);
+            assert!(!s.contains(BLANK), "the DSEG7 blank leaked into a UI-face string: {s}");
+            assert!(s.ends_with("AM") || s.ends_with("PM"), "{s}");
+        }
+
+        // Midnight and noon read twelve, the same as the clock does.
+        let midnight = 1_787_961_600_i64; // 2026-08-27 00:00:00 UTC
+        assert_eq!(eta(midnight * 1000, 0, false), "12:00 AM");
+        assert_eq!(eta((midnight + 12 * 3600) * 1000, 0, false), "12:00 PM");
+        assert_eq!(eta(midnight * 1000, 0, true), "00:00");
     }
 
     /// THE BLANK HOLDS A DIGIT'S COLUMN, MEASURED OUT OF THE FONT FILE.

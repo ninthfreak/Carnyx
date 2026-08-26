@@ -8,7 +8,7 @@
 // rotation. Those command strings are generated from the SAME numbers by
 // `tools/gen-icon-paths.py` and pasted in below.
 
-import { Pal } from "tokens.slint";
+import { Pal, Font } from "tokens.slint";
 
 // Slint's Path fits its geometry into (element size - stroke width) and then
 // nudges it back by half a stroke, and it does NOT scale stroke width with the
@@ -693,5 +693,55 @@ export component OsmAndMark {
           + "C55.979 85.695 56.104 85.417 56.25 85.125 C57.75 82.125 59.488 81 64.5 78.882 Z "
           + "M54 69 C45.716 69 39 62.284 39 54 C39 45.716 45.716 39 54 39 "
           + "C62.284 39 69 45.716 69 54 C69 62.284 62.284 69 54 69 Z";
+    }
+}
+
+// ── The maneuver arrow (§4.9) ───────────────────────────────────────────────
+//
+// THE SHAPE COMES FROM RUST, not from a table here. `crate::arrow` generates
+// every one of the thirteen from one number — degrees off straight ahead — and
+// hands the path across as SVG data on a 24-unit box, so there is no glyph id to
+// look up and no second table to keep in step with the first.
+//
+// EMPTY DRAWS NOTHING. An unrecognised turn type reaches here as an empty
+// string, and an arrow is an instruction: the wrong one given confidently is
+// worse than none at all.
+//
+// A ROUNDABOUT CARRIES ITS EXIT NUMBER INSIDE THE RING, which is why the number
+// is a `Text` over the path rather than part of it — §4.9 asks for exactly that,
+// and glyph outlines for digits are not something a path generator should own.
+export component TurnArrow {
+    in property <length> size: 26px;
+    in property <color> color;
+    /// SVG path data on a 24-unit box, from `crate::arrow::path`.
+    in property <string> commands;
+    /// A roundabout's exit, or empty.
+    in property <string> exit;
+    /// §4.9's two weights: 2.1 at the large sizes, 2.4 at 26–28dp.
+    in property <float> stroke-w: 2.4;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24;
+        raw-stroke: root.stroke-w;
+        commands: root.commands;
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    // The ring's centre is not the box's — the circulation arrowhead pushes the
+    // ink to one side and `crate::arrow` then centres the whole glyph on that.
+    // The offset is that shift: half the head's own barb spread, in box units.
+    if root.exit != "": Text {
+        x: 0; y: 0;
+        width: root.size; height: root.size;
+        text: root.exit;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: root.size * 9 / 24;
+        color: root.color;
     }
 }
