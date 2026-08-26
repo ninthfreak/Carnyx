@@ -415,6 +415,14 @@ pub struct Settings {
     /// Off is for a driver who would rather Carnyx kept it, and for finding out
     /// whether this path is the cause of something else.
     pub release_on_sleep: bool,
+    /// Turn-by-turn directions from OsmAnd. See `crate::nav`.
+    ///
+    /// DEFAULTS OFF, unlike every other switch in this panel, and the reason is
+    /// what it does rather than what it costs: turning it on BINDS ANOTHER APP
+    /// and, with `BIND_AUTO_CREATE`, starts it if it is not running. A radio
+    /// that launched a maps application on first run because a default said so
+    /// would be doing something nobody asked for.
+    pub nav_on: bool,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
     /// testing mode — were CarFM's investigation tools and are gone.
@@ -432,6 +440,7 @@ impl Default for Settings {
             clearing_logos: false,
             details_open: false,
             release_on_sleep: true,
+            nav_on: false,
             diag_on: false,
             log: DiagLog::new(),
         }

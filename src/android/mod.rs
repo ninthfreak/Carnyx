@@ -42,6 +42,8 @@ mod dex;
 #[cfg(target_os = "android")]
 pub mod location;
 #[cfg(target_os = "android")]
+pub mod nav;
+#[cfg(target_os = "android")]
 pub mod net;
 #[cfg(target_os = "android")]
 pub mod nwd;
@@ -417,6 +419,13 @@ pub struct LevelReading {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TunerEvent {
     Connected(Connected),
+    /// One OsmAnd navigation update, RAW — the three integers exactly as they
+    /// crossed the AIDL boundary. `crate::nav` decides what they mean; nothing
+    /// on this path does, which is why the sentinels are still in it.
+    Nav { distance_to: i32, turn_type: i32, left_side: bool },
+    /// One voice-router announcement, as its two unjoined lists. See
+    /// `crate::nav::Nav::speak` for which is preferred and why.
+    NavVoice { cmds: Vec<String>, played: Vec<String> },
     /// A location fix, or the loss of one.
     ///
     /// Not a tuner event, and it travels on the tuner's queue anyway: there is
@@ -937,6 +946,30 @@ pub fn is_foreground() -> bool {
 
 pub fn ingest_sleep(action: String, release: String) {
     emit(TunerEvent::Sleep { action, release });
+}
+
+/// One navigation update from OsmAnd. Called on a BINDER THREAD.
+///
+/// `jint`/`jboolean` are widened here rather than in the seam so the event type
+/// stays free of jni types and the host tests can build one.
+#[cfg(target_os = "android")]
+pub fn ingest_nav(distance_to: jni::sys::jint, turn_type: jni::sys::jint, left_side: jni::sys::jboolean) {
+    emit(TunerEvent::Nav {
+        distance_to,
+        turn_type,
+        left_side: left_side != 0,
+    });
+}
+
+/// The same, from a host test. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn ingest_nav(distance_to: i32, turn_type: i32, left_side: bool) {
+    emit(TunerEvent::Nav { distance_to, turn_type, left_side });
+}
+
+/// One voice-router announcement from OsmAnd. Called on a BINDER THREAD.
+pub fn ingest_nav_voice(cmds: Vec<String>, played: Vec<String>) {
+    emit(TunerEvent::NavVoice { cmds, played });
 }
 
 pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {

@@ -54,6 +54,9 @@ ROOT="$PWD"
 # The modules with no JNI in them, or whose shape the harness cannot stub. Named
 # rather than pattern-matched, and PRINTED, because a silent skip is how a check
 # like this stops covering something without anyone noticing.
+# `location.rs` is skipped for the shape its `EnvUnowned` natives take, which
+# this harness cannot stub; `nav.rs` takes the SAME shape and is checked anyway,
+# because it is the newest JNI in the tree and the one nothing else covers.
 SKIP=(mod.rs dex.rs nwd.rs net.rs location.rs)
 
 # The jni version this crate actually resolves to, read from the lockfile rather
@@ -139,6 +142,13 @@ pub mod dex {
 
 /// Stands in for `android::is_foreground`.
 pub fn is_foreground() -> bool { true }
+
+/// Stands in for the `ingest_*` edges the seam modules push events through.
+/// Their SIGNATURES are what the callers type-check against; where the event
+/// goes is not under test here and has no queue to go to.
+pub fn ingest_note(_line: String) {}
+pub fn ingest_nav(_distance_to: jni::sys::jint, _turn_type: jni::sys::jint, _left_side: jni::sys::jboolean) {}
+pub fn ingest_nav_voice(_cmds: Vec<String>, _played: Vec<String>) {}
 '''
 
 names = sorted(
@@ -156,6 +166,10 @@ for f in names:
     # module reach a jni type it had never imported — see the header note.
     body = body.replace("super::dex::", "crate::dex::")
     body = body.replace("super::is_foreground()", "crate::is_foreground()")
+    # NOT `f`: that is the loop's filename and shadowing it made every generated
+    # module `pub mod ingest_`.
+    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav"):
+        body = body.replace("super::" + edge, "crate::" + edge)
     body = body.replace("super::TunerError", "crate::TunerError")
     # NO `use super::*` EITHER, for the same reason: the three stubs are reached
     # by their `crate::` paths, rewritten above, and a glob here would put every

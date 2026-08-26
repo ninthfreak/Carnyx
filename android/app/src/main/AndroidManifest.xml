@@ -107,6 +107,21 @@
           Free on this unit, which is Android 10 and filters nothing.
         -->
         <package android:name="com.nwd.radio" />
+        <!--
+          OSMAND, all four application ids it ships under, for the turn-by-turn
+          integration (`CarnyxNav`). Same rule as the two above and the same
+          silent failure: without these `resolveService` returns null and
+          `bindService` returns false on a unit that plainly has OsmAnd, and the
+          settings row would report it "not installed" with no way to tell that
+          from the truth.
+
+          Free on this unit, which is Android 10 and filters nothing — these are
+          for the newer head unit this app has to keep working on.
+        -->
+        <package android:name="net.osmand.plus" />
+        <package android:name="net.osmand" />
+        <package android:name="net.osmand.huawei" />
+        <package android:name="net.osmand.dev" />
     </queries>
 
     <application

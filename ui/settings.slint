@@ -1274,6 +1274,10 @@ export component SettingsOverlay inherits Rectangle {
 
     // ── TUNER: what happens at the ends of an ignition cycle ──
     in property <bool> release-on-sleep: true;
+    in property <bool> nav-on: false;
+    /// The navigation row's sub-line, which says which OsmAnd was found. Decided
+    /// in Rust like every other string here.
+    in property <string> nav-sub;
 
     // ── APPEARANCE ──
     /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in Rust.
@@ -1376,6 +1380,7 @@ export component SettingsOverlay inherits Rectangle {
     callback pick-source(int);
     /// The NEW value, as every other switch row here passes it.
     callback set-release-on-sleep(bool);
+    callback set-nav-on(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
     callback set-theme(string);
@@ -1515,6 +1520,21 @@ export component SettingsOverlay inherits Rectangle {
                     sub: "Hand the FM source back when the head unit sleeps, so the stock radio app does not launch itself on the way back. A screen that goes dark on its own counts as sleeping: if that happens while you are listening the radio stops, and the power button starts it again.";
                     on: root.release-on-sleep;
                     toggled(v) => { root.set-release-on-sleep(v); }
+                }
+
+                RowDivider { }
+
+                // TURN-BY-TURN. In the TUNER group rather than a group of its
+                // own: it is a thing the radio shows while it is driving, and a
+                // section for one switch would read as a feature area this is
+                // not yet. The sub-line is Rust's and says which OsmAnd was
+                // found — "not installed" is the answer a driver most needs and
+                // the one a bare switch cannot give.
+                SwitchRow {
+                    title: "Turn-by-turn directions";
+                    sub: root.nav-sub;
+                    on: root.nav-on;
+                    toggled(v) => { root.set-nav-on(v); }
                 }
             }
 

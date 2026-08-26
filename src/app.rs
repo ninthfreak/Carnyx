@@ -548,6 +548,25 @@ struct State {
     /// this needs and is why it is not `0.0` — a zero would be a real value the
     /// out-of-band path could in principle land on.
     announced: std::cell::Cell<f32>,
+    /// Turn-by-turn from OsmAnd, if the driver has switched it on.
+    ///
+    /// HOLDS ITS OWN CLOCK, which is what the tick below feeds: OsmAnd stops
+    /// sending when a route ends and never says it has, so the state has to age
+    /// out or the last turn sits on the face for the rest of the drive. See
+    /// `crate::nav::Nav::EXPIRY`.
+    nav: crate::nav::Nav,
+    /// The last navigation line written to the diagnostics log.
+    ///
+    /// UPDATES ARRIVE ABOUT ONCE A SECOND while a route is running, so logging
+    /// each one would evict a three-minute drive from a six-hundred-line ring.
+    /// The line is written when it CHANGES, which is the only time it carries
+    /// anything a reader did not already have.
+    nav_said: String,
+    /// Which OsmAnd `CarnyxNav` found, or empty. Read once at start-up: an app
+    /// is not installed and uninstalled while a driver is looking at a switch,
+    /// and asking the package manager on every republish would put a binder call
+    /// in the path of ordinary radio traffic.
+    nav_package: String,
     /// How many re-commands the LIVE hold has left. Re-armed when a step takes a
     /// hold, so a budget one press spent is not inherited by the next.
     reasserts_left: u8,
@@ -1204,6 +1223,9 @@ impl App {
                 tuner_is_real,
                 rds: RdsDecoder::new(),
                 announced: std::cell::Cell::new(f32::NAN),
+                nav: crate::nav::Nav::new(),
+                nav_said: String::new(),
+                nav_package: String::new(),
                 // The DECODER is not seeded, only the published state. A decoder
                 // restored from disk would have consensus tallies it never
                 // earned, and the first corrupt group off the air would then
@@ -1357,6 +1379,28 @@ impl App {
         {
             let s = app.state.borrow();
             s.tuner.set_release_on_sleep(s.settings.release_on_sleep);
+        }
+        // ── OSMAND, IF THE DRIVER HAS ASKED FOR IT ───────────────────────
+        //
+        // The package is read either way, because the settings row says which
+        // OsmAnd it found whether or not the switch is on — a driver deciding
+        // whether to turn it on is exactly who needs that sentence.
+        //
+        // THE BIND IS GATED ON THE SWITCH, and that is not a saving. It uses
+        // `BIND_AUTO_CREATE`, so binding STARTS OsmAnd; a radio that launched a
+        // maps app at boot because a preference file said so would be doing
+        // something nobody asked for on a screen nobody is looking at.
+        {
+            let found = app.nav_installed_package();
+            let mut s = app.state.borrow_mut();
+            s.nav_package = found;
+        }
+        if app.state.borrow().settings.nav_on {
+            let outcome = app.set_nav_running(true);
+            if !outcome.is_empty() {
+                let at = stamp();
+                app.state.borrow_mut().settings.log.push(&at, &format!("nav: {outcome}"));
+            }
         }
         let sleep_watch = app.state.borrow().tuner.start_sleep_watch();
         if !sleep_watch.is_empty() {
@@ -1752,6 +1796,30 @@ impl App {
     fn apply_event(&self, event: TunerEvent) {
         let mut s = self.state.borrow_mut();
         match event {
+            // ── OSMAND, AND EVERY DECISION ABOUT IT IS ONE CALL AWAY ─────────
+            //
+            // The three integers go into `crate::nav` exactly as OsmAnd sent
+            // them, sentinels included, and what they mean is decided there
+            // where it is tested. Nothing is logged per update: these arrive at
+            // about one a second while a route is running and would fill the
+            // ring in three minutes. The log line is written on a CHANGE of
+            // state instead — see `push_nav`.
+            TunerEvent::Nav { distance_to, turn_type, .. } => {
+                let now = crate::session::now_unix();
+                s.nav.update(distance_to, turn_type, now);
+                // THE BORROW GOES BEFORE THE PUBLISH, which is the rule this
+                // file states everywhere: `push_nav` takes its own, and holding
+                // one across it is the `BorrowMutError` this codebase keeps
+                // warning about.
+                drop(s);
+                self.push_nav();
+            }
+            TunerEvent::NavVoice { cmds, played } => {
+                let now = crate::session::now_unix();
+                s.nav.speak(&cmds, &played, now);
+                drop(s);
+                self.push_nav();
+            }
             TunerEvent::Connected(c) => {
                 if let Some(mhz) = c.mhz {
                     s.dial = mhz;
@@ -3000,6 +3068,11 @@ impl App {
         ui.set_settings_clearing_logos(cfg.clearing_logos);
 
         ui.set_settings_release_on_sleep(cfg.release_on_sleep);
+        ui.set_settings_nav_on(cfg.nav_on);
+        // THE SUB-LINE SAYS WHETHER THERE IS ANYTHING TO TALK TO. A switch that
+        // only reports failure after it is turned on makes the driver perform an
+        // experiment to read a fact the package manager already knows.
+        ui.set_settings_nav_sub(crate::nav::sub_line(&s.nav_package).into());
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
         // again, and it matters most here: the diagnostics overlay is the one a
@@ -3148,6 +3221,89 @@ impl App {
         // "Outside 87.5–108.0 MHz band" and the band's ends are quoted to a tenth
         // everywhere else on the face. U+2013 EN DASH between them.
         ui.set_freq_error_text(format!("Outside {FM_LO:.1}\u{2013}{FM_HI:.1} MHz band").into());
+    }
+
+    /// Publish the navigation state, and log it when it changes.
+    ///
+    /// FINISHED STRINGS, as every other surface gets: the Slint side is handed
+    /// a distance already formatted and a turn already named, because the panel
+    /// decides nothing. The design handoff for the strip is still in progress,
+    /// so what is published is deliberately the DATA and not a layout — a glyph
+    /// id, a label and the words, which is what any drawing of this will bind
+    /// to whatever it ends up looking like.
+    /// Bind or unbind OsmAnd. Returns a line for the diagnostics log.
+    ///
+    /// THE HOST HAS NO OSMAND AND SAYS SO BY SAYING NOTHING. An empty answer is
+    /// "there was nothing to do", which is the honest one for every build that
+    /// is not the device — and it keeps the log line out of every screenshot.
+    /// Which OsmAnd is installed, or `""`. See `CarnyxNav.installedPackage`.
+    #[cfg(target_os = "android")]
+    fn nav_installed_package(&self) -> String {
+        crate::android::nav::installed_package()
+    }
+
+    /// The host has no OsmAnd. See the Android arm.
+    #[cfg(not(target_os = "android"))]
+    fn nav_installed_package(&self) -> String {
+        String::new()
+    }
+
+    #[cfg(target_os = "android")]
+    fn set_nav_running(&self, on: bool) -> String {
+        if on {
+            crate::android::nav::start()
+        } else {
+            crate::android::nav::stop()
+        }
+    }
+
+    /// See the Android arm.
+    #[cfg(not(target_os = "android"))]
+    fn set_nav_running(&self, _on: bool) -> String {
+        String::new()
+    }
+
+    fn push_nav(&self) {
+        let now = crate::session::now_unix();
+        let (state, spoken, line) = {
+            let s = self.state.borrow();
+            (s.nav.state(now), s.nav.spoken(now).unwrap_or_default().to_string(), s.nav.log_line(now))
+        };
+        let ui = self.ui();
+        use crate::nav::NavState;
+        let (active, turn, distance) = match state {
+            NavState::Idle => (false, String::new(), String::new()),
+            NavState::Waiting => (true, String::new(), String::new()),
+            NavState::OffRoute { metres } => (
+                true,
+                "off route".to_string(),
+                crate::nav::Nav::distance_label(metres),
+            ),
+            NavState::Turn { turn, metres } => (
+                true,
+                turn.name().to_string(),
+                crate::nav::Nav::distance_label(metres),
+            ),
+            NavState::Unknown { metres, .. } => {
+                (true, String::new(), crate::nav::Nav::distance_label(metres))
+            }
+        };
+        ui.set_nav_active(active);
+        ui.set_nav_turn(turn.into());
+        ui.set_nav_distance(distance.into());
+        ui.set_nav_instruction(spoken.into());
+
+        // ON A CHANGE ONLY. See `State::nav_said`.
+        let line = line.unwrap_or_default();
+        let changed = self.state.borrow().nav_said != line;
+        if changed {
+            let at = stamp();
+            let mut s = self.state.borrow_mut();
+            s.nav_said = line.clone();
+            if !line.is_empty() {
+                s.settings.log.push(&at, &format!("nav: {line}"));
+            }
+        }
     }
 
     fn push_logo_search(&self) {
@@ -3743,6 +3899,30 @@ impl App {
             // ui/confirm.slint exists this must not do the work.
             app.log_unavailable("clear all logos needs the confirm dialog first");
         });
+        on!(on_settings_set_nav_on, |app, v| {
+            app.state.borrow_mut().settings.nav_on = v;
+            // THE BIND FOLLOWS THE SWITCH IMMEDIATELY, both ways. Off has to
+            // unsubscribe rather than just stop reading: OsmAnd holds our
+            // callback and would go on paying for a transaction per location fix
+            // for a face that is no longer drawing it.
+            let outcome = app.set_nav_running(v);
+            {
+                let at = stamp();
+                let mut s = app.state.borrow_mut();
+                if !v {
+                    // The state goes with the switch. Without this the last turn
+                    // would sit on the face until `Nav::EXPIRY` cleared it,
+                    // twelve seconds after the driver switched it off.
+                    s.nav.clear();
+                    s.nav_said.clear();
+                }
+                if !outcome.is_empty() {
+                    s.settings.log.push(&at, &format!("nav: {outcome}"));
+                }
+            }
+            app.push_nav();
+            app.push_settings();
+        });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;
             // DOWN TO THE RECEIVER TOO. It cannot read `Settings` from a binder
@@ -4018,6 +4198,7 @@ impl App {
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
             release_on_sleep: s.settings.release_on_sleep,
+            nav_on: s.settings.nav_on,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -4080,6 +4261,14 @@ impl App {
             self.push_meter();
             self.push_settings();
         }
+        // THE ROUTE AGES OUT ON THIS CLOCK AND ON NOTHING ELSE. OsmAnd stops
+        // sending when a route ends, is cancelled, or the app is closed, and
+        // never says which — so without a tick the last turn before the driver
+        // arrived would stay on the face for the rest of the drive. Republished
+        // unconditionally rather than on a computed edge: `push_nav` is four
+        // property writes and a string compare, which is cheaper than the state
+        // needed to decide whether to skip it.
+        self.push_nav();
     }
 
     /// Disown the RDS on screen when the carrier has gone quiet.
@@ -6129,6 +6318,81 @@ mod tests {
         driver.apply_logo_event(service::Event::NoDarkChoices { base: "WMGN".into() });
         assert_eq!(ui.get_overlay(), Overlay::None);
         assert!(driver.state.borrow().dark_pick.is_none());
+    }
+
+    /// TURN-BY-TURN, FROM THE EVENT SEAM TO THE FACE, AND THE SWITCH THAT GATES IT.
+    ///
+    /// The Java half cannot run here — there is no OsmAnd in this container and
+    /// no binder to bind — so what is asserted is everything from `ingest_nav`
+    /// inward: the sentinels, the naming, the formatting, the log line, the
+    /// expiry, and that the switch both persists and clears what is on screen.
+    ///
+    /// DRIVEN THROUGH `ingest_nav`, which is the function `CarnyxNav`'s native
+    /// method calls. A test that wrote `State::nav` directly would pass with the
+    /// event plumbing disconnected, which is the half most likely to be wrong.
+    #[test]
+    fn a_navigation_update_reaches_the_face_and_the_switch_gates_it() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav");
+
+        assert!(!ui.get_nav_active(), "nothing received, nothing shown");
+        assert!(!ui.get_settings_nav_on(), "and the switch defaults OFF — it starts another app");
+        // THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO before it is tapped.
+        assert!(
+            ui.get_settings_nav_sub().to_string().contains("not installed"),
+            "the host has no OsmAnd and the row says so: {}",
+            ui.get_settings_nav_sub()
+        );
+
+        // A REAL TURN.
+        crate::android::ingest_nav(240, 5, false);
+        driver.drain_events();
+        assert!(ui.get_nav_active());
+        assert_eq!(ui.get_nav_turn().to_string(), "right");
+        assert_eq!(ui.get_nav_distance().to_string(), "240 m");
+
+        // THE WORDS, which are the only place a street name can come from.
+        crate::android::ingest_nav_voice(
+            vec!["Turn right".into()],
+            vec!["Turn right onto Main Street".into()],
+        );
+        driver.drain_events();
+        assert_eq!(ui.get_nav_instruction().to_string(), "Turn right onto Main Street");
+
+        // AND IT IS IN THE LOG, once — the updates arrive about once a second
+        // and logging each would evict a three-minute drive from the ring.
+        let said = |d: &Rc<App>| -> usize {
+            d.state.borrow().settings.log.lines().iter().filter(|l| l.contains("nav:")).count()
+        };
+        let before = said(&driver);
+        crate::android::ingest_nav(240, 5, false);
+        crate::android::ingest_nav(240, 5, false);
+        driver.drain_events();
+        assert_eq!(said(&driver), before, "an unchanged update says nothing new");
+
+        // OSMAND'S OWN `-1, -1`: navigating, nothing to say. Active, and blank —
+        // which is a state and not a gap.
+        crate::android::ingest_nav(-1, -1, false);
+        driver.drain_events();
+        assert!(ui.get_nav_active(), "still navigating");
+        assert_eq!(ui.get_nav_turn().to_string(), "");
+        assert_eq!(ui.get_nav_distance().to_string(), "");
+
+        // OFF ROUTE is its own thing: that distance is a deviation.
+        crate::android::ingest_nav(75, 12, false);
+        driver.drain_events();
+        assert_eq!(ui.get_nav_turn().to_string(), "off route");
+        assert_eq!(ui.get_nav_distance().to_string(), "75 m");
+
+        // THE SWITCH CLEARS THE FACE IMMEDIATELY. Without this the last turn
+        // would sit there until `Nav::EXPIRY`, twelve seconds after the driver
+        // said stop.
+        ui.invoke_settings_set_nav_on(true);
+        assert!(crate::prefs::load(&driver.state.borrow().prefs_dir).nav_on, "and it persists");
+        ui.invoke_settings_set_nav_on(false);
+        assert!(!ui.get_nav_active(), "off means off, now");
+        assert_eq!(ui.get_nav_turn().to_string(), "");
+        assert!(!crate::prefs::load(&driver.state.borrow().prefs_dir).nav_on);
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.

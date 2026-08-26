@@ -65,8 +65,21 @@ const JAVA_SOURCES: &[&str] = &[
     "com/ninthfreak/carnyx/CarnyxKeepAlive.java",
     "com/ninthfreak/carnyx/CarnyxStockRadio.java",
     "com/ninthfreak/carnyx/CarnyxWake.java",
+    "com/ninthfreak/carnyx/CarnyxNav.java",
     "com/nwd/radio/service/data/Frequency.java",
     "com/nwd/radio/service/data/RadioPoint.java",
+    // OSMAND'S AIDL PAYLOADS, and they are here for javac's sake exactly as the
+    // two above are. Interop scope; see `java/net/osmand/aidlapi/AidlParams.java`
+    // for the wire format and why reconstructing these is safe where the vendor
+    // radio's positional parcelables were not.
+    "net/osmand/aidlapi/AidlParams.java",
+    "net/osmand/aidlapi/navigation/ADirectionInfo.java",
+    "net/osmand/aidlapi/navigation/ANavigationUpdateParams.java",
+    "net/osmand/aidlapi/navigation/ANavigationVoiceRouterMessageParams.java",
+    "net/osmand/aidlapi/navigation/OnVoiceNavigationParams.java",
+    "net/osmand/aidlapi/search/SearchResult.java",
+    "net/osmand/aidlapi/gpx/AGpxBitmap.java",
+    "net/osmand/aidlapi/logcat/OnLogcatMessageParams.java",
 ];
 
 /// The AIDL interfaces to generate Java from. The two `parcelable` declarations
@@ -76,6 +89,13 @@ const JAVA_SOURCES: &[&str] = &[
 const AIDL_INTERFACES: &[&str] = &[
     "com/nwd/radio/service/RadioFeature.aidl",
     "com/nwd/radio/service/RadioCallback.aidl",
+    // OSMAND. The interface is a TRIMMED copy whose empty slots hold the
+    // transaction numbering; the callback is whole because we implement it.
+    // `tools/check-osmand-aidl.sh` checks both against upstream. The seven
+    // `parcelable` declarations beside them are include-path inputs, not
+    // arguments — same rule as the vendor radio's two.
+    "net/osmand/aidlapi/IOsmAndAidlInterface.aidl",
+    "net/osmand/aidlapi/IOsmAndAidlCallback.aidl",
 ];
 
 /// Escape hatch for a checkout with no Android SDK.

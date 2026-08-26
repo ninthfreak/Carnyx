@@ -184,6 +184,23 @@ name = "com.nwd.radio.service"
 [[package.metadata.android.queries.package]]
 name = "com.nwd.radio"
 
+# OSMAND, all four application ids it ships under, for the turn-by-turn
+# integration. Same rule as the two above: from targetSdk 30 a package cannot see
+# another it has not declared, and the filtering is SILENT — `resolveService`
+# returns null and the settings row would say "not installed" about an OsmAnd
+# that is right there. Kept in step with android/app/src/main/AndroidManifest.xml.
+[[package.metadata.android.queries.package]]
+name = "net.osmand.plus"
+
+[[package.metadata.android.queries.package]]
+name = "net.osmand"
+
+[[package.metadata.android.queries.package]]
+name = "net.osmand.huawei"
+
+[[package.metadata.android.queries.package]]
+name = "net.osmand.dev"
+
 # LOCATION. The nearby-station picker sorts by distance and the face carries a
 # satellite glyph, and neither can be honest without a fix — today both run on
 # `fake::FakeLocation`, which is pinned to Madison.

@@ -75,6 +75,8 @@ pub struct Prefs {
     pub theme: Theme,
     pub logos_on: bool,
     pub release_on_sleep: bool,
+    /// See `settings::Settings::nav_on`. Defaults OFF.
+    pub nav_on: bool,
     pub diag_on: bool,
 }
 
@@ -90,6 +92,7 @@ impl Default for Prefs {
             theme: s.theme,
             logos_on: s.logos_on,
             release_on_sleep: s.release_on_sleep,
+            nav_on: s.nav_on,
             diag_on: s.diag_on,
         }
     }
@@ -209,6 +212,7 @@ fn from_json(text: &str) -> Option<Prefs> {
     // so a file written before this key existed comes back with the feature ON
     // rather than silently off.
     p.release_on_sleep = flag("releaseOnSleep", p.release_on_sleep);
+    p.nav_on = flag("navOn", p.nav_on);
     p.diag_on = flag("diagOn", p.diag_on);
     // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
     // They were CarFM's diagnostics and are gone; a file written by an older
@@ -234,13 +238,14 @@ pub fn to_json(p: &Prefs) -> String {
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
-            "\"logosOn\":{},\"releaseOnSleep\":{},\"diagOn\":{}}}"
+            "\"logosOn\":{},\"releaseOnSleep\":{},\"navOn\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
         json::quote(theme_name(p.theme)),
         p.logos_on,
         p.release_on_sleep,
+        p.nav_on,
         p.diag_on,
     )
 }
@@ -331,6 +336,7 @@ mod tests {
             theme: Theme::Dark,
             logos_on: true,
             release_on_sleep: false,
+            nav_on: true,
             diag_on: true,
         };
         save(&d, &p);

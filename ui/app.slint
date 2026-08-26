@@ -53,6 +53,26 @@ export component AppWindow inherits Window {
     in property <string> ident-a;
     in property <string> ident-b;
     in property <bool> tuner-error: false;
+    // ── §? TURN-BY-TURN, from OsmAnd. See src/nav.rs. ───────────────────────
+    //
+    // FINISHED VALUES AND NO LAYOUT. The design handoff for the strip is still
+    // in progress, so what crosses is the DATA — is there a route, which way,
+    // how far, and the spoken words — already formatted by Rust. Whatever the
+    // handoff turns out to look like binds to these; guessing at the drawing now
+    // would be building something to throw away.
+    //
+    // `nav-active` true with both strings empty is OsmAnd's own "navigating,
+    // nothing to say", which is a real state and not a blank.
+    in property <bool> nav-active: false;
+    /// "right", "slight left", "roundabout", "off route", or empty when there
+    /// is no turn to name. Named in Rust; see `nav::Turn::name`.
+    in property <string> nav-turn;
+    /// "240 m" / "1.4 km", already formatted.
+    in property <string> nav-distance;
+    /// What the voice router last said — the only place a STREET NAME comes
+    /// from, since the structured half carries no text at all.
+    in property <string> nav-instruction;
+
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
     in property <[Preset]> presets;
@@ -181,6 +201,10 @@ export component AppWindow inherits Window {
     in property <[TunerDetail]> settings-tuner-details;
     in property <[TunerSource]> settings-sources;
     in property <bool> settings-release-on-sleep: true;
+    in property <bool> settings-nav-on: false;
+    /// Which OsmAnd the switch found, or empty. Drawn in the row's sub-line so a
+    /// driver can see whether it has anything to talk to WITHOUT turning it on.
+    in property <string> settings-nav-sub;
     in property <[string]> settings-theme-chips;
     in property <string> settings-theme;
     in property <BatteryState> settings-battery: BatteryState.checking;
@@ -213,6 +237,7 @@ export component AppWindow inherits Window {
     callback settings-toggle-details();
     callback settings-pick-source(int);
     callback settings-set-release-on-sleep(bool);
+    callback settings-set-nav-on(bool);
     callback settings-set-theme(string);
     callback settings-fix-battery();
     callback settings-set-logos(bool);
@@ -387,6 +412,8 @@ export component AppWindow inherits Window {
         tuner-details: root.settings-tuner-details;
         sources: root.settings-sources;
         release-on-sleep: root.settings-release-on-sleep;
+        nav-on: root.settings-nav-on;
+        nav-sub: root.settings-nav-sub;
         theme-chips: root.settings-theme-chips;
         theme: root.settings-theme;
         battery: root.settings-battery;
@@ -404,6 +431,7 @@ export component AppWindow inherits Window {
         toggle-details => { root.settings-toggle-details(); }
         pick-source(i) => { root.settings-pick-source(i); }
         set-release-on-sleep(v) => { root.settings-set-release-on-sleep(v); }
+        set-nav-on(v) => { root.settings-set-nav-on(v); }
         set-theme(t) => { root.settings-set-theme(t); }
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }

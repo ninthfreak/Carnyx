@@ -13,6 +13,7 @@ pub mod crashlog;
 pub mod eggs;
 pub mod fake;
 pub mod logos;
+pub mod nav;
 pub mod prefs;
 pub mod rds;
 pub mod session;

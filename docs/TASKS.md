@@ -1306,6 +1306,122 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 110. OsmAnd turn-by-turn: the integration, not the interface
+**DONE, AND UNTRIED.** The owner asked for the integration half of an OsmAnd
+turn-by-turn feature — *"the visual elements will come from a hand-off from
+Claude Design (in the works) but I want you to get the code running for the
+actual integration part. It will be enabled/disabled with a toggle in settings."*
+So the data arrives, is decided on, is testable, and is switchable; nothing draws
+it yet.
+
+**EVERY API FACT BELOW WAS READ OUT OF OSMAND'S OWN SOURCE**, not out of a blog
+post, and `tools/check-osmand-aidl.sh` re-reads it. A first attempt to research
+this with a fan-out of agents lost nine of thirteen to a session limit, and the
+four that lived were the ones reading THIS repository; the OsmAnd half was then
+done by hand against `raw.githubusercontent.com`, which is where it should have
+been done anyway — a wrong AIDL signature is a crash on a device with no adb.
+
+**THE API, AND HOW LITTLE OF IT THERE IS.** `registerForNavigationUpdates`
+delivers `ADirectionInfo`: `distanceTo`, `turnType`, `isLeftSide`, and nothing
+else. NO STREET NAME, no exit number, no ETA, no distance to the destination.
+The only text an API client can get is the voice router's, through
+`registerForVoiceRouterMessages` — which is why both are subscribed and not just
+the first.
+
+Read out of `OsmandAidlApi.registerForNavigationUpdates`, the sender: the update
+is built `(-1, -1, false)` and left that way when there is no next direction, so
+`-1` is "navigating, nothing to say" and not an error; a deviation writes
+`TurnType.OFFR` (12) with the DEVIATION in the distance field, which is a
+different quantity in the same slot; and `isLeftSide` is never assigned on that
+path, so it arrives false everywhere and nothing reads it.
+
+**THE INTERFACE IS TRIMMED, AND THAT IS THE ONE INTERESTING DECISION.** A Binder
+transaction id is POSITIONAL — `aidl` numbers methods in declaration order and
+the name travels nowhere — so an interface with only the two methods we want
+would compile, bind, and call whatever OsmAnd has at slots 0 and 1. Upstream's
+file is 958 lines importing about a hundred parcelables, every one of which
+`aidl` would need declared and `javac` implemented, for methods this app never
+calls.
+
+So the SHAPE is kept and the payloads are not: 99 slots in upstream's order, real
+signatures on 65 and 71, `void reservedNN()` on the rest. Nine vendored files
+instead of about a hundred.
+
+THAT IS NOT MORE FRAGILE THAN VENDORING THE REAL FILE — that has identical
+positional ids and breaks identically if OsmAnd inserts a method above ours. It
+is the same fragility, CHECKED: `tools/check-osmand-aidl.sh` fetches upstream and
+asserts the count, both indices, the callback's nine-method order, and the bundle
+keys of the two payloads we read. Verified by inserting a method into our file
+and watching all three index assertions fail.
+
+**THE PAYLOADS RECONSTRUCT SAFELY, unlike the vendor radio's.**
+`AidlParams.writeToParcel` is `dest.writeBundle(bundle)` and nothing else, so the
+contract is NAMED KEYS rather than a positional field order. `Frequency.java`
+next door had to have its write order recovered from the service and is a silent
+corruption if it is wrong; here a key we spell wrong reads back as a zero, in one
+field, and a key upstream adds is ignored.
+
+**THE LICENCE IS COMPATIBLE**, which is why reconstruction was a choice rather
+than a requirement: OsmAnd is GPL-3.0-or-later and `Cargo.toml` declares Carnyx
+`GPL-3.0-only`.
+
+**NOTHING IS DECIDED IN JAVA.** `CarnyxNav` binds, subscribes, and hands three
+integers and two string lists to Rust untouched — sentinels included. What turn
+type 13 means, whether `-1` is a turn, which of the voice router's two lists is
+the instruction, and when a route has gone stale are all `src/nav.rs`, where they
+are tested on a machine with no head unit and no OsmAnd. That is
+`CarnyxLocation`'s rule for the motion verdict, applied again.
+
+**THE EXPIRY IS THE THING A CALLER MUST NOT GET WRONG.** OsmAnd sends while it is
+navigating and STOPS when the route ends, is cancelled, or the app closes — there
+is no "navigation over" message on that callback. Without a clock the last turn
+before the driver arrived would sit on the face for the rest of the drive. Twelve
+seconds, off the sender's own cadence; the spoken words expire separately at
+twenty, because a turn stays true until it is taken and an announcement does not.
+
+**THE SWITCH DEFAULTS OFF**, alone among this panel's switches, and not to save
+anything: binding uses `BIND_AUTO_CREATE`, so turning it on STARTS OSMAND. A
+radio that launched a maps app at boot because a preference file said so would be
+doing something nobody asked for. Off also unsubscribes rather than just
+ignoring — OsmAnd holds the callback and would go on paying a transaction per
+location fix — and clears the face at once rather than leaving the last turn for
+the expiry to take twelve seconds later.
+
+**THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO.** `installedPackage` asks
+the package manager WITHOUT binding, and the sub-line names what it found or says
+"not installed". A switch whose only failure report arrives after it is flipped
+makes the driver run an experiment to learn a fact the platform already knows.
+All four OsmAnd application ids are declared in `<queries>` in BOTH manifests,
+because from targetSdk 30 the filtering is silent and the row would report an
+OsmAnd that is right there as absent.
+
+**WHAT CROSSES TO SLINT IS DATA, NOT A LAYOUT.** `nav-active`, `nav-turn`,
+`nav-distance`, `nav-instruction` — finished strings, as every surface here gets.
+The strip's handoff is still in progress and guessing at the drawing now would be
+building something to throw away.
+
+**Pinned by seven tests.** Six in `src/nav.rs` — the turn table against OsmAnd's
+own constants, the expiry, the three not-a-turn states told apart, which voice
+list wins, the distance breaks, the log line — and
+`a_navigation_update_reaches_the_face_and_the_switch_gates_it`, driven through
+`ingest_nav`, which is the function the native method calls: a test that wrote
+`State::nav` directly would pass with the event plumbing disconnected.
+
+**WHAT IS NOT VERIFIED, and it is the whole device half.** No Java compiled — no
+real `android.jar` here — though `javac`'s parse phase over both trees reports no
+syntax errors. No AIDL generated: the `aidl` compiler needs an SDK this container
+does not have, so the 99-slot file has never been through it. Nothing has bound
+OsmAnd, because there is no OsmAnd here. The seam type-checks against jni 0.22.4
+(`tools/check-jni.sh`, which now covers `nav.rs`), and the AIDL matches upstream
+(`tools/check-osmand-aidl.sh`). Both are readings.
+
+**On the unit, in order:** build the APK; check the settings row names an OsmAnd;
+turn it on and read `nav: connected to …, turns id N, voice id M`; start a route
+and watch `nav:` lines; end it and confirm the face clears within twelve seconds.
+
+**Evidence.** 319 tests, clippy clean over lib, bins and examples, both seam
+checks green. Settings shots move — the panel has a new row.
+
 ### 109. Build the dark-logo treatment picker
 **DONE.** The engine shipped in #76 and nothing could reach it. Assigning a logo
 now opens the picker: four treatments rendered ON THE REAL DARK SURFACE, the
