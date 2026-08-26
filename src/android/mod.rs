@@ -912,6 +912,19 @@ fn record_foreground(on: bool) {
 #[cfg(not(target_os = "android"))]
 fn record_foreground(_on: bool) {}
 
+/// The clock's two facts. See [`service::clock_now`].
+#[cfg(target_os = "android")]
+pub fn clock_now() -> Option<(u32, u32, bool)> {
+    service::clock_now()
+}
+
+/// The host has no platform clock to ask, and drawing one it invented would put
+/// a time in every screenshot. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn clock_now() -> Option<(u32, u32, bool)> {
+    None
+}
+
 /// What the wake receiver did on the way up, and forget it. See [`wake`].
 #[cfg(target_os = "android")]
 pub fn take_wake_note() -> String {

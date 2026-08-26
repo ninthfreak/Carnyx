@@ -1306,6 +1306,79 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 112. The status-bar clock (§4.8)
+**DONE.** Step 1 of the handoff's build order — *"no external dependency,
+exercises the out-of-flow measuring that the ETA later reuses. Ship it, look at
+it in the car at night, then continue."*
+
+**THE SPEC'S PADDING MECHANISM IS NOT TRUE OF THE FILE THAT SHIPPED, AND THE
+INTENT IS.** §4.8 asks for a leading blank rather than a leading zero and gives
+the mechanism: *"12-hour single-digit hours pad with U+0020, which DSEG7 sets at
+digit width — the position simply reads unlit … and the digit columns do not
+shift at 1 o'clock."* Measured out of the bundled font's own `hmtx`, at 1000 upem:
+
+| glyph | advance | outline |
+|---|---|---|
+| `U+0020` | **200** | empty |
+| `!` | **816** | empty |
+| `0`–`9` | **816** | — |
+
+A space would pull ` 8:05` 616/1000 em left of `12:05` — the exact twitch the
+paragraph exists to prevent. `!` is DSEG's own blank-digit convention: empty at
+digit width, which IS "the position reads unlit". The intent is honoured, the
+mechanism is not, and `the_blank_holds_a_digits_column` reads both advances out
+of the file so a future reader with §4.8 open cannot quietly "correct" it back.
+
+**THE FAMILY IS "DSEG7 Classic Mini", WITH SPACES.** Not the filename — the same
+trap `ui/tokens.slint` records this tree falling into five times, and the one
+that made #103's font silently render as Atkinson. Read out of the `name` table.
+
+**REGULAR ONLY**, and there is no `font-weight` on either Text. §4.8: a
+synthesized bold "smears the gaps between segments". `usWeightClass` is 400 and
+there is one cut.
+
+**12/24 IS NOT AN APP SETTING.** `DateFormat.is24HourFormat(context)`, read every
+tick, so flipping Android's own toggle changes the face with no restart and
+nothing to keep in sync. The settings row REPORTS the format in its sub-line and
+does not offer it.
+
+**THE CLOCK LINE IS CENTRED, NOT THE BLOCK**, which is §4.8's emphatic
+requirement and the reason the ETA can hang below it later without moving
+anything. The readout is out of flow — a sibling of the face's layout, like the
+hero band — so it adds no height to the status bar.
+
+**THE UPPER ANCHOR IS THE CLUSTER, NOT THE STATUS BAR, AND NOT ALWAYS THE GEAR.**
+§4.8 says the box runs deeper on the left, so the gear is measured rather than
+the bar. It also says the cluster's bottom is the NEARBY BUTTON on the tall
+track — which I missed on the first pass, and `clock-portrait.png` showed the
+clock running straight through the disc. Fixed.
+
+Slint will not let an id inside `if Metrics.tall:` be referenced from outside it
+("Cannot access id 'nearby-disc'"), so the disc's bottom is DERIVED from the two
+numbers that place it — both now named properties the layout itself uses, so
+changing either moves both.
+
+**HIDDEN UNTIL MEASURED.** Both anchors are zero before the first layout pass,
+which would put the clock at the top-left for one frame. The mock hides the
+countdown until it has measured its top; this is the same guard.
+
+**NO ORDINARY SHOT CARRIES A TIME.** `android::clock_now` answers `None` off the
+device, so the readout draws nothing rather than an invented `00:00` — which
+would be a real time and a lie in every screenshot. The four `clock-*` shots go
+through `crate::clock::format` rather than writing the properties, so what they
+show is what the face does with 8:05.
+
+**Pinned by five tests** — the two formats, midnight and noon, a clamped bad
+reading, and the font measurement.
+
+**Evidence.** 326 tests, clippy clean, `javac`'s parse phase clean over both
+trees. Nine representative shots against a pre-clock baseline: eight
+byte-identical and `driving` moved — which two renders from ONE build then showed
+moving on its own, because the vehicle-in-motion tell pulses on a 2.6s beat. It
+was not on the harness's non-deterministic list and now is.
+
+**NOT DONE:** the ETA under the clock is §4.9's and waits for the nav layer.
+
 ### 111. The v3.0.0 handoff, and the half of the OsmAnd feed I had missed
 **THE POLL IS IN; THE LAYOUT IS NOT.** The design bundle arrived (v3.0.0,
 `docs/design/v3/`) and its `NAVIGATION-HANDOFF.md` §3.1 names an API surface #110

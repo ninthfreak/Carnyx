@@ -415,6 +415,11 @@ pub struct Settings {
     /// Off is for a driver who would rather Carnyx kept it, and for finding out
     /// whether this path is the cause of something else.
     pub release_on_sleep: bool,
+    /// The status-bar clock (§4.8). Default ON.
+    ///
+    /// ON, unlike the navigation switch beside it, because it costs nothing and
+    /// starts nothing: it is a second read off a timer this app already runs.
+    pub clock_on: bool,
     /// Turn-by-turn directions from OsmAnd. See `crate::nav`.
     ///
     /// DEFAULTS OFF, unlike every other switch in this panel, and the reason is
@@ -440,6 +445,7 @@ impl Default for Settings {
             clearing_logos: false,
             details_open: false,
             release_on_sleep: true,
+            clock_on: true,
             nav_on: false,
             diag_on: false,
             log: DiagLog::new(),

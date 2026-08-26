@@ -4,6 +4,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.text.format.DateFormat;
 import android.util.Log;
 
 /**
@@ -113,6 +114,57 @@ public final class CarnyxProcess {
             ctx.stopService(intent);
         } catch (Exception e) {
             Log.i(TAG, "stopService: " + e);
+        }
+    }
+
+    // ── THE CLOCK'S TWO FACTS (§4.8) ─────────────────────────────────────────
+    //
+    // Here rather than in a class of their own because this one already holds
+    // the application context and a clock is two reads off it. Both return
+    // FACTS, not strings: what to do with a 20 and a 5 — whether it is `08:05`,
+    // `!8:05 A`, or nothing at all — is `crate::clock`, where it is tested.
+
+    /**
+     * The local wall clock as {@code hour * 100 + minute}, or -1.
+     *
+     * <p>ONE INT RATHER THAN TWO CALLS, because the two must come from the SAME
+     * reading: asked separately, a call that straddles 09:59→10:00 returns hour
+     * 9 and minute 0, and the face shows 09:00 for a minute. `Calendar` is read
+     * once and both fields taken off it.
+     *
+     * <p>{@code Calendar.getInstance()} and not {@code LocalTime}: this dex is
+     * built for API 26 and {@code java.time} is API 26+ ONLY WITH desugaring,
+     * which {@code build.rs}'s d8 invocation does not turn on.
+     */
+    public static int clockHourMinute() {
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            return c.get(java.util.Calendar.HOUR_OF_DAY) * 100 + c.get(java.util.Calendar.MINUTE);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the clock", t);
+            return -1;
+        }
+    }
+
+    /**
+     * Is the system set to 24-hour time?
+     *
+     * <p>ASKED EVERY TICK AND NEVER STORED. §4.8: the readout "re-formats on
+     * every tick, so flipping the system toggle in Settings ▸ System ▸ Date &
+     * time changes the radio face with no restart and no app-side preference to
+     * keep in sync". An app-side copy of this would be a second source of truth
+     * for a fact Android already owns.
+     *
+     * <p>Defaults to FALSE with no context, which is the same answer a US-locale
+     * device gives — a wrong guess here shows a meridiem that should not be
+     * there rather than hiding one that should.
+     */
+    public static boolean clockIs24Hour() {
+        try {
+            return ctx != null && DateFormat.is24HourFormat(ctx);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the 12/24 setting", t);
+            return false;
         }
     }
 }

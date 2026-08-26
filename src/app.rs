@@ -3074,6 +3074,7 @@ impl App {
         ui.set_settings_clearing_logos(cfg.clearing_logos);
 
         ui.set_settings_release_on_sleep(cfg.release_on_sleep);
+        ui.set_settings_clock_on(cfg.clock_on);
         ui.set_settings_nav_on(cfg.nav_on);
         // THE SUB-LINE SAYS WHETHER THERE IS ANYTHING TO TALK TO. A switch that
         // only reports failure after it is turned on makes the driver perform an
@@ -3227,6 +3228,41 @@ impl App {
         // "Outside 87.5–108.0 MHz band" and the band's ends are quoted to a tenth
         // everywhere else on the face. U+2013 EN DASH between them.
         ui.set_freq_error_text(format!("Outside {FM_LO:.1}\u{2013}{FM_HI:.1} MHz band").into());
+    }
+
+    /// Publish the clock (§4.8).
+    ///
+    /// FORMATTED EVERY TIME AND PUBLISHED ONLY ON A CHANGE. §4.8 asks for both:
+    /// *"One 1s timer, but state changes only when the minute changes — no
+    /// per-second re-render of the face"*, and *"Formatting is derived at render
+    /// time, so a format change … shows immediately"*. Deriving costs two
+    /// integers and a `format!`; the property write is what would cost a frame,
+    /// and that is what the comparison guards.
+    ///
+    /// EMPTY WHEN THERE IS NO READING, which on every host build is always — the
+    /// class that answers lives in the embedded dex. Drawing `00:00` there would
+    /// be a real time and a lie; the face draws nothing instead, so no shot
+    /// carries a clock that was never read.
+    fn push_clock(&self) {
+        let on = self.state.borrow().settings.clock_on;
+        let now = on.then(crate::android::clock_now).flatten();
+        let clock = match now {
+            Some((h, m, is24)) => crate::clock::format(h, m, is24),
+            None => crate::clock::Clock::default(),
+        };
+        let ui = self.ui();
+        if ui.get_clock_time() != clock.time.as_str() {
+            ui.set_clock_time(clock.time.as_str().into());
+        }
+        if ui.get_clock_meridiem() != clock.meridiem.as_str() {
+            ui.set_clock_meridiem(clock.meridiem.as_str().into());
+        }
+        // THE SUB-LINE FOLLOWS THE SYSTEM, so it has to be republished when the
+        // system flips — which this is the only thing that notices.
+        let sub = crate::clock::sub_line(now.map(|(_, _, is24)| is24).unwrap_or(false));
+        if ui.get_settings_clock_sub() != sub.as_str() {
+            ui.set_settings_clock_sub(sub.as_str().into());
+        }
     }
 
     /// Publish the navigation state, and log it when it changes.
@@ -3926,6 +3962,13 @@ impl App {
             // ui/confirm.slint exists this must not do the work.
             app.log_unavailable("clear all logos needs the confirm dialog first");
         });
+        on!(on_settings_set_clock_on, |app, v| {
+            app.state.borrow_mut().settings.clock_on = v;
+            // THE READOUT GOES AT ONCE, not on the next tick: a switch whose
+            // effect waits up to a second reads as a switch that did not work.
+            app.push_clock();
+            app.push_settings();
+        });
         on!(on_settings_set_nav_on, |app, v| {
             app.state.borrow_mut().settings.nav_on = v;
             // THE BIND FOLLOWS THE SWITCH IMMEDIATELY, both ways. Off has to
@@ -4067,6 +4110,21 @@ impl App {
     /// from real state; faking the properties would render a picture of one.
     pub fn push_logo_event_for_test(self: &Rc<App>, event: service::Event) {
         self.apply_logo_event(event);
+    }
+
+    /// Set the clock to a fixed reading, for tests and screenshots.
+    ///
+    /// THROUGH `crate::clock::format`, not by writing the properties: the shot
+    /// is evidence about what the face draws for 8:05, and one that set the
+    /// strings itself would be evidence about the shot. The host has no platform
+    /// clock — `android::clock_now` answers `None` there, which is why no
+    /// ordinary render carries a time.
+    pub fn set_clock_for_test(self: &Rc<App>, hour24: u32, minute: u32, is_24h: bool) {
+        let c = crate::clock::format(hour24, minute, is_24h);
+        let ui = self.ui();
+        ui.set_clock_time(c.time.as_str().into());
+        ui.set_clock_meridiem(c.meridiem.as_str().into());
+        ui.set_settings_clock_sub(crate::clock::sub_line(is_24h).as_str().into());
     }
 
     /// Put a track in the RadioText, for tests and shots of the band themes.
@@ -4225,6 +4283,7 @@ impl App {
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
             release_on_sleep: s.settings.release_on_sleep,
+            clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
             diag_on: s.settings.diag_on,
         };
@@ -4288,6 +4347,10 @@ impl App {
             self.push_meter();
             self.push_settings();
         }
+        // THE CLOCK, WHICH IS WHY THIS TIMER IS 1s AND NOT SLOWER. §4.8 asks
+        // for a 1s tick that only changes state on the minute roll, which is
+        // what `push_clock` does with its own comparison.
+        self.push_clock();
         // THE ROUTE AGES OUT ON THIS CLOCK AND ON NOTHING ELSE. OsmAnd stops
         // sending when a route ends, is cancelled, or the app is closed, and
         // never says which — so without a tick the last turn before the driver

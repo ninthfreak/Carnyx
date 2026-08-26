@@ -27,7 +27,10 @@
 //! A HANDFUL OF SHOTS ARE NOT DETERMINISTIC and will differ between two runs of
 //! an unchanged tree — they capture a moment in something that moves:
 //! `hero-step-morph` (a frame mid-travel), `logo-search-loading` (the spinner),
-//! `audio-released` (the power button's ring, by a single LSB), and
+//! `audio-released` (the power button's ring, by a single LSB), `driving` (the
+//! vehicle-in-motion tell pulses on a 2.6s beat — added to this list after a
+//! clock change appeared to move it and two renders from ONE build showed it
+//! moving on its own), and
 //! `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
 //! `long-radiotext` drifts too when the marquee is mid-scroll, and so do the
 //! THEMED shots whose genre line pulses — `acdc`, `acdc-portrait`, `beatles-dark`
@@ -137,6 +140,13 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-phone-portrait-scrolled", 360, 800, false, State::Settings, -8.0),
     // The hidden fifth section, which no other shot can reach: it sits BELOW the
     // about line, so it needs the end scroll and then some.
+    // §4.8's clock, which no ordinary shot carries: the host has no platform
+    // clock, so `android::clock_now` answers None and the readout draws nothing.
+    // Three renders — the two formats, and the tall track where it is 36sp.
+    ("clock-head-unit", 1024, 614, false, State::Clock12, 0.0),
+    ("clock-head-unit-dark", 1024, 614, true, State::Clock12, 0.0),
+    ("clock-24-hour", 1024, 614, false, State::Clock24, 0.0),
+    ("clock-portrait", 360, 800, false, State::Clock12, 0.0),
     ("settings-band-themes", 1024, 614, false, State::SettingsEggs, -11.0),
     ("settings-band-themes-dark", 1024, 614, true, State::SettingsEggs, -11.0),
     ("settings-band-themes-portrait", 360, 800, false, State::SettingsEggs, -14.0),
@@ -349,6 +359,11 @@ enum State {
     /// The settings panel with BAND THEMES revealed — the section six taps on
     /// the about line unlocks, with one theme forced so the tick has somewhere
     /// to be. The only render of a group that breaks the panel's two-tone rule.
+    /// §4.8's clock at 8:05 in the morning — the SINGLE-DIGIT hour, which is the
+    /// case the blank-digit pad exists for.
+    Clock12,
+    /// The same instant in 24-hour, where it zero-pads and drops the meridiem.
+    Clock24,
     SettingsEggs,
     /// §6.4's dark-mode logo picker, the step after a logo is assigned.
     LogoDarkPick,
@@ -771,6 +786,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             driver.settle_meter_for_test();
             ui.set_overlay(Overlay::Settings);
         }
+        // 8:05 rather than a round number: a single-digit hour is what the
+        // blank-digit pad is for, and 05 is what "minutes always pad" is for.
+        State::Clock12 => driver.set_clock_for_test(8, 5, false),
+        State::Clock24 => driver.set_clock_for_test(8, 5, true),
         State::SettingsEggs => {
             // THROUGH THE REAL CALLBACK, so the list, the label and the lit row
             // all come from `eggs::listed()` deciding rather than from a literal

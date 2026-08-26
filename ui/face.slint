@@ -42,6 +42,12 @@ export component Face inherits Rectangle {
     in property <string> ident-a;
     in property <string> ident-b;
     in property <bool> tuner-error: false;
+    /// §4.8's readout, already formatted. EMPTY DRAWS NOTHING — the switch is
+    /// off, or the platform had no reading to give.
+    in property <string> clock-time;
+    /// `A`, `P`, or empty in 24-hour mode.
+    in property <string> clock-meridiem;
+
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
 
@@ -133,7 +139,7 @@ export component Face inherits Rectangle {
         padding-bottom: Metrics.pad-v;
         spacing: Metrics.gap;
 
-        StatusBar {
+        status := StatusBar {
             vertical-stretch: 0;
             // §4.7: with priority released the indicators go to their off states
             // — no bars, no level, an empty pill, dim tells, no genre. The face
@@ -183,6 +189,90 @@ export component Face inherits Rectangle {
             reorder(from, to) => { root.reorder-preset(from, to); }
             drag-note(m) => { root.drag-note(m); }
             open-logo-search(i) => { root.open-logo-search(i); }
+        }
+    }
+
+    // ── §4.8 THE CLOCK ───────────────────────────────────────────────────────
+    //
+    // OUT OF FLOW, so it adds no height to the status bar and starting or ending
+    // navigation cannot move it. A sibling of the layout above, positioned from
+    // two measured edges, exactly as the hero band below is.
+    //
+    // ── IT IS THE LINE THAT IS CENTRED, NOT THE BLOCK ────────────────────────
+    //
+    // §4.8 is emphatic and says why: "so an ETA hanging below it (§4.9) changes
+    // neither the clock's size nor its position, and moves nothing else on the
+    // face." So the TIME's own box is centred in the gap and the block is left
+    // to hang below it — get this wrong and the ETA pushes the clock up the
+    // moment a route starts, which is the one thing the whole design avoids.
+    //
+    // ── THE UPPER EDGE IS THE CLUSTER, NOT THE STATUS BAR ────────────────────
+    //
+    // Also §4.8's: the status bar runs deeper on the left, so its box bottom is
+    // not the cluster's. `status.cluster-bottom` reports the gear on the wide and
+    // landscape tracks and the NEARBY DISC on the tall one, where that sits below
+    // the gear — anchoring to the gear everywhere ran the clock straight through
+    // the disc in portrait.
+    //
+    // ── HIDDEN UNTIL MEASURED ────────────────────────────────────────────────
+    //
+    // Both anchors are zero before the first layout pass, which would put the
+    // clock at the top-left for one frame. The mock "hides the countdown until
+    // it has measured its top, so it never flashes at the wrong y"; this is the
+    // same guard for the same reason.
+    property <length> clock-gap-top: status.cluster-bottom;
+    property <length> clock-gap-bottom: hero-slot.absolute-position.y;
+    property <bool> clock-measured: root.clock-gap-bottom > root.clock-gap-top;
+    if root.clock-time != "" && root.clock-measured: Rectangle {
+        // The TIME's optical centre lands midway between the two edges. `y` is
+        // the line's top, so half the line's own height comes back off it.
+        property <length> line-h: Metrics.tall ? Metrics.s(36) * 1.2 : Metrics.s(30) * 1.2;
+        x: 0;
+        y: (root.clock-gap-top + root.clock-gap-bottom) / 2 - self.line-h / 2;
+        width: root.width;
+        height: self.line-h;
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 0px;
+            // RIGHT EDGE FLUSH WITH THE GEAR (§4.8). The face's own right
+            // padding is what puts the gear where it is, so the same padding
+            // lands this on the same edge.
+            padding-right: Metrics.pad-h;
+
+            Text {
+                text: root.clock-time;
+                // THE ONE NON-ATKINSON FACE IN THE APP, and deliberately: §4.8
+                // wants it to "read as head-unit hardware, not as UI text".
+                // REGULAR ONLY — a synthesized bold smears the segment gaps, so
+                // there is no `font-weight` here and there must not be one.
+                //
+                // THE FAMILY IS "DSEG7 Classic Mini", WITH SPACES, which is what
+                // the file's own `name` table declares — not the filename. Slint
+                // resolves `font-family` against the declared family and falls
+                // back to Atkinson in silence when it misses, which is the trap
+                // `ui/tokens.slint` records this tree falling into five times.
+                font-family: "DSEG7 Classic Mini";
+                font-size: Metrics.tall ? Metrics.s(36) : Metrics.s(30);
+                letter-spacing: 1px;
+                // `dim` — the genre line's colour, §4.8.
+                color: Pal.dim;
+                vertical-alignment: center;
+            }
+
+            // The meridiem: a SINGLE letter, never AM/PM, absent in 24-hour.
+            // Baseline-aligned to the time, which with two centred boxes of
+            // different sizes is `bottom` plus the difference in descent — near
+            // enough at these sizes, and the alternative is measuring a font
+            // this renderer will not measure.
+            if root.clock-meridiem != "": Text {
+                text: " " + root.clock-meridiem;
+                font-family: "DSEG7 Classic Mini";
+                font-size: Metrics.tall ? Metrics.s(20) : Metrics.s(17);
+                letter-spacing: 1px;
+                color: Pal.dim;
+                vertical-alignment: center;
+            }
         }
     }
 

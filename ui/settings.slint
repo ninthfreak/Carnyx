@@ -1274,6 +1274,10 @@ export component SettingsOverlay inherits Rectangle {
 
     // ── TUNER: what happens at the ends of an ignition cycle ──
     in property <bool> release-on-sleep: true;
+    in property <bool> clock-on: true;
+    /// The Clock row's sub-line, which REPORTS the system's 12/24 format rather
+    /// than offering it. Decided in Rust.
+    in property <string> clock-sub;
     in property <bool> nav-on: false;
     /// The navigation row's sub-line, which says which OsmAnd was found. Decided
     /// in Rust like every other string here.
@@ -1380,6 +1384,7 @@ export component SettingsOverlay inherits Rectangle {
     callback pick-source(int);
     /// The NEW value, as every other switch row here passes it.
     callback set-release-on-sleep(bool);
+    callback set-clock-on(bool);
     callback set-nav-on(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
@@ -1608,6 +1613,23 @@ export component SettingsOverlay inherits Rectangle {
                             pick(v) => { root.set-theme(v); }
                         }
                     }
+                }
+
+                RowDivider { }
+
+                // §4.8's switch. In APPEARANCE because a clock is what the face
+                // LOOKS like rather than what the radio does — which is the same
+                // reason the theme control is here and the sleep release is not.
+                //
+                // THE SUB-LINE REPORTS THE 12/24 FORMAT AND DOES NOT OFFER IT.
+                // §4.8: "The settings sub-line reports which format is in force —
+                // it does not offer the choice." Android owns that setting; a
+                // second switch here would be a second source of truth for it.
+                SwitchRow {
+                    title: "Clock";
+                    sub: root.clock-sub;
+                    on: root.clock-on;
+                    toggled(v) => { root.set-clock-on(v); }
                 }
             }
 

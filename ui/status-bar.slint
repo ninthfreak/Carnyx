@@ -706,6 +706,40 @@ export component DrivingStatus inherits HorizontalLayout {
 }
 
 export component StatusBar inherits Rectangle {
+    // ── WHERE THE CLOCK HANGS ITSELF (§4.8) ─────────────────────────────────
+    //
+    // The clock is OUT OF FLOW in the face's top-level Rectangle, and §4.8 says
+    // what it measures from: "the clock line's optical center sits midway
+    // between the bottom edge of the right cluster and the top line of the hero
+    // card … Right edge flush with the gear."
+    //
+    // THE CLUSTER'S BOTTOM EDGE IS NOT THIS BOX'S. The status bar runs deeper on
+    // the left — the signal arcs and the level readout are taller than the icon
+    // row — so centring in the gap below this component would put the clock too
+    // low and the spec calls that out in as many words. These two report the
+    // GEAR, which is the cluster's real bottom on the wide and landscape tracks.
+    //
+    // Absolute, because the consumer is a sibling of this component's parent and
+    // has no other frame of reference. Zero until the first layout pass, which
+    // is why the face hides the readout until it has measured — see `clock-y`.
+    // THE GEAR IS NOT ALWAYS THE BOTTOM OF THE CLUSTER, and §4.8 says which is:
+    // "the settings gear on the wide/landscape tracks and the nearby button on
+    // the tall track, where that sits below the gear." Anchoring to the gear
+    // everywhere ran the clock straight THROUGH the nearby disc in portrait; the
+    // first render of `clock-portrait.png` is what showed it.
+    //
+    // ── WHY THE DISC IS COMPUTED AND THE GEAR IS MEASURED ────────────────────
+    //
+    // The disc lives inside `if Metrics.tall:`, and Slint will not let an id
+    // inside a conditional be referenced from outside it — "Cannot access id
+    // 'nearby-disc'". So its bottom is derived from the two numbers that place
+    // it, and BOTH are named properties used by the layout itself: change either
+    // and this follows, which is the only thing that stops the two drifting.
+    property <length> cluster-gap: 12px;
+    property <length> nearby-disc-size: Metrics.s(74);
+    out property <length> cluster-bottom: gear.absolute-position.y + gear.height
+        + (Metrics.tall ? root.cluster-gap + root.nearby-disc-size : 0px);
+    out property <length> gear-right: gear.absolute-position.x + gear.width;
     in property <int> full-pairs: 0;
     in property <bool> half: false;
     in property <float> dot-opacity: 1.0;
@@ -872,7 +906,9 @@ export component StatusBar inherits Rectangle {
         VerticalLayout {
             alignment: start;
             horizontal-stretch: Metrics.tall ? 1 : 0;
-            spacing: 12px;
+            // NAMED AND READ BACK by `cluster-bottom`, which cannot measure the
+            // disc directly — see that property. One source for each number.
+            spacing: root.cluster-gap;
 
             HorizontalLayout {
                 spacing: 6px;
@@ -881,7 +917,7 @@ export component StatusBar inherits Rectangle {
                     alignment: center;
                     DrivingStatus { gps-fix: root.gps-fix; in-motion: root.in-motion; egg: root.egg; }
                 }
-                Rectangle {
+                gear := Rectangle {
                     width: 44px; height: 44px;
                     border-radius: 12px;
                     border-width: 1px;
@@ -921,7 +957,7 @@ export component StatusBar inherits Rectangle {
             if Metrics.tall: HorizontalLayout {
                 alignment: end;
                 Rectangle {
-                    width: Metrics.s(74); height: Metrics.s(74);
+                    width: root.nearby-disc-size; height: root.nearby-disc-size;
                     border-radius: self.width / 2;
                     background: root.reordering ? Pal.blue : Pal.nearby-disc;
                     border-width: root.reordering ? 0px : 1px;

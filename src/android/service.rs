@@ -161,3 +161,30 @@ pub fn start(text: &str) -> bool {
     })
     .unwrap_or(false)
 }
+
+/// The clock's two facts (§4.8): the local time and the system's 12/24 setting.
+///
+/// ONE CALL FOR THE TIME so both fields come from one reading — see
+/// `CarnyxProcess.clockHourMinute` for why two calls would show 09:00 for a
+/// minute at ten o'clock.
+///
+/// `None` when the class never loaded, which is every host build. The caller
+/// draws nothing rather than a zero, because `00:00` is a real time.
+pub fn clock_now() -> Option<(u32, u32, bool)> {
+    let class = CLASS_REF.get()?;
+    let jvm = JavaVM::singleton().ok()?;
+    jvm.attach_current_thread(|env: &mut Env| -> Result<Option<(u32, u32, bool)>, jni::errors::Error> {
+        let hm = env
+            .call_static_method(class, jni_str!("clockHourMinute"), jni_sig!("()I"), &[])?
+            .i()?;
+        if hm < 0 {
+            return Ok(None);
+        }
+        let is24 = env
+            .call_static_method(class, jni_str!("clockIs24Hour"), jni_sig!("()Z"), &[])?
+            .z()?;
+        Ok(Some(((hm / 100) as u32, (hm % 100) as u32, is24)))
+    })
+    .ok()
+    .flatten()
+}
