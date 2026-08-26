@@ -770,9 +770,18 @@ public final class NwdBridge {
      */
     private static volatile boolean releaseOnSleep = true;
 
-    /** See {@link #releaseOnSleep}. Called from Rust whenever the switch moves. */
+    /**
+     * See {@link #releaseOnSleep}. Called from Rust whenever the switch moves.
+     *
+     * <p>MIRRORED TO DISK AS WELL, because this field only reaches the runtime
+     * watch. {@code SleepReceiver} is a manifest component that runs in a cold
+     * process with no app, no settings file read and no Rust — a static here
+     * says nothing to it. {@link CarnyxWake#setReleaseOnSleep} is the copy it
+     * can read.
+     */
     public static void setReleaseOnSleep(boolean on) {
         releaseOnSleep = on;
+        CarnyxWake.setReleaseOnSleep(on);
     }
 
     /**
@@ -858,6 +867,17 @@ public final class NwdBridge {
                 // it. The outcome travels with the event so the diagnostics log
                 // records what this call managed rather than what it attempted.
                 String outcome = releaseOnSleep ? releaseSource() : "skipped, release is off";
+                // WRITTEN DOWN BEFORE IT IS LOGGED, and the ordering is the
+                // point. `safeSleep` hops to Rust and queues a line into a ring
+                // that lives IN MEMORY and dies with this process — which the
+                // MCU has just announced it is about to kill. Every sleep line
+                // this app has written was lost that way, which is why the
+                // owner's report that the radio does not shut off at sleep could
+                // not be answered from the log at all: the run that recorded it
+                // was gone before anyone could read it. This lands on disk, with
+                // a blocking write, on the thread that heard the broadcast. See
+                // CarnyxWake.noteSleep.
+                CarnyxWake.noteSleep(action + ": runtime watch, " + outcome);
                 safeSleep(action, outcome);
             }
         };

@@ -5190,6 +5190,45 @@ mod tests {
         assert!(!crate::prefs::load(&dir).release_on_sleep, "and the sleep release");
     }
 
+    /// THE RELEASE SWITCH IS PUSHED DOWN, AT START-UP AND ON EVERY MOVE.
+    ///
+    /// `SleepReceiver` is a MANIFEST receiver, and the reason it exists is that
+    /// the process may already be dead when ACC-off is broadcast — so when it
+    /// runs there is no settings file read, no Rust and no `Settings` to consult.
+    /// The only thing it can read is the copy `CarnyxWake.setReleaseOnSleep`
+    /// leaves in shared preferences, and the only thing that writes that copy is
+    /// this push. A push that never happens leaves the receiver releasing the
+    /// source on a unit whose driver turned the feature off.
+    ///
+    /// NOTHING ELSE IN THIS FILE WOULD CATCH IT. `Tuner::set_release_on_sleep`
+    /// has an empty default body, so a missing call and a working one are
+    /// indistinguishable from every other test — which is why the fake records
+    /// into a static and this reads it back.
+    #[test]
+    fn the_release_switch_reaches_the_receiver_that_cannot_ask() {
+        let _ui_lock = harness::ui_lock();
+        crate::android::clear_release_mirror();
+
+        // START-UP pushes the restored value, before the watch is armed.
+        let (ui, driver) = app_for("release-mirror");
+        assert_eq!(
+            crate::android::last_release_mirror(),
+            Some(true),
+            "start-up pushes the restored switch, which defaults on"
+        );
+
+        // AND EVERY MOVE pushes the new one.
+        ui.invoke_settings_set_release_on_sleep(false);
+        assert_eq!(
+            crate::android::last_release_mirror(),
+            Some(false),
+            "turning it off reaches the receiver too"
+        );
+        ui.invoke_settings_set_release_on_sleep(true);
+        assert_eq!(crate::android::last_release_mirror(), Some(true), "and back on");
+        drop(driver);
+    }
+
     /// THE SLEEP WATCH IS ARMED AT START-UP, NOT INSIDE `connect`.
     ///
     /// `NwdBridge.startSleepWatch` was called from `connect()`, after

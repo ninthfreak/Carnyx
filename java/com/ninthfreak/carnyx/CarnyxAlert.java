@@ -8,9 +8,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.widget.RemoteViews;
+import android.widget.Toast;
 
 /**
  * The station pop-up: a heads-up notification saying what is now tuned, for the
@@ -40,6 +43,21 @@ import android.widget.RemoteViews;
  * channels rather than one raised, so a driver who wants the pop-up but not the
  * ongoing line, or the reverse, can say so in Settings and the app obeys without
  * knowing.
+ *
+ * <h2>ON THIS ROM THE NOTIFICATION IS NOT WHAT THE DRIVER SEES</h2>
+ *
+ * <p>Posting works and shows nothing. A drive produced {@code station pop-up:
+ * WQLF at 102.1 (logo) — posted, channel importance 4} twice, with
+ * {@code panel key … [background]} above each, and the owner saw no banner and
+ * no shade entry. That rules out every failure this class can name — the gate,
+ * the context, {@code areNotificationsEnabled}, a downgraded channel, a throw —
+ * and leaves SystemUI, which on a head unit of this class often has no heads-up
+ * banner and sometimes no notification panel at all.
+ *
+ * <p>So {@link #post} ALSO RAISES A TOAST, which is a WindowManager window
+ * rather than SystemUI's, and needs no channel, no importance and no shade. The
+ * notification is still posted: it costs nothing where it is invisible and is
+ * the better artefact where a shade exists. See {@link #toast}.
  *
  * <h2>What the driver's Android version decides</h2>
  *
@@ -127,11 +145,13 @@ public final class CarnyxAlert {
      *     does not decode simply leaves the banner as words, which is the whole
      *     message either way.
      * @return WHAT HAPPENED, for the diagnostics log — "posted, channel
-     *     importance 4", "notifications are off for this app", "notify threw:
-     *     …". It returned a bool and told logcat the reason, which on a unit
-     *     with no adb reaches nobody: every way of failing printed the same
-     *     "not posted", and they need different fixes — one is a driver's
-     *     Settings toggle, one needs a new channel id, one is SystemUI's.
+     *     importance 4, toast queued", "notifications are off for this app",
+     *     "notify threw: …". It returned a bool and told logcat the reason,
+     *     which on a unit with no adb reaches nobody: every way of failing
+     *     printed the same "not posted", and they need different fixes — one is
+     *     a driver's Settings toggle, one needs a new channel id, one is
+     *     SystemUI's. THE LAST CLAUSE IS THE TOAST, which on this ROM is the
+     *     half the driver actually sees; see {@link #toast}.
      */
     public static synchronized String post(String title, String text, String logoPath) {
         if (ctx == null) {
@@ -148,11 +168,89 @@ public final class CarnyxAlert {
             return "notifications are off for this app";
         }
         ensureChannel(nm);
+        String posted;
         try {
             nm.notify(NOTIFICATION_ID, build(title, text, decode(logoPath)));
-            return "posted, " + channelState();
+            posted = "posted, " + channelState();
         } catch (Throwable t) {
-            return "notify threw: " + why(t);
+            posted = "notify threw: " + why(t);
+        }
+        return posted + ", " + toast(title, text);
+    }
+
+    /**
+     * The same message as a TOAST, because on this unit the notification is not
+     * what the driver sees.
+     *
+     * <h2>Why this exists at all</h2>
+     *
+     * <p>ONE DRIVE SETTLED IT. Two wheel presses with another app in front
+     * produced, in the diagnostics log, {@code panel key 62 (preset next) …
+     * [background]} followed by {@code station pop-up: WQLF at 102.1 (logo) —
+     * posted, channel importance 4}. So the announce gate opened, the app's
+     * notifications are enabled, the channel is {@code IMPORTANCE_HIGH}, and
+     * {@code notify} did not throw — and the owner saw nothing. Every failure
+     * this class can name had been ruled out; what is left is the ROM, which on
+     * a head unit of this class is entirely ordinary. SystemUI here raises no
+     * heads-up banner.
+     *
+     * <h2>Why a toast is the answer and not another notification trick</h2>
+     *
+     * <p>A toast is not SystemUI's. It is a window the WindowManager puts up
+     * over whatever is in front, and it needs no channel, no importance, no
+     * shade and no notification panel — so every mechanism that swallowed the
+     * banner is out of the path. On API 29 a background app may still raise one:
+     * the block on background toasts landed in API 30 and covers CUSTOM views,
+     * and a text toast is exempt.
+     *
+     * <h2>Both, not either</h2>
+     *
+     * <p>The notification is still posted. It costs nothing where it is
+     * invisible, and where a shade DOES exist it is the better artefact —
+     * tappable, and it comes back to the face. The toast is the one that shows
+     * on this unit.
+     *
+     * <h2>The main looper, not this thread</h2>
+     *
+     * <p>{@code post} arrives on the NATIVE thread running {@code android_main},
+     * which has an {@code ALooper} but no Java {@link Looper} — {@code
+     * Toast.show} on it would throw "Can't create handler inside thread that has
+     * not called Looper.prepare()". {@code Looper.getMainLooper()} is always
+     * there and is where a toast belongs.
+     *
+     * @return one clause for the diagnostics log, so the drive after this one
+     *     says which of the two the driver was actually shown.
+     */
+    private static String toast(String title, String text) {
+        if (ctx == null) {
+            return "no toast: no context";
+        }
+        final String message = title == null || title.isEmpty()
+                ? (text == null ? "" : text)
+                : (text == null || text.isEmpty() ? title : title + "  ·  " + text);
+        if (message.isEmpty()) {
+            return "no toast: nothing to say";
+        }
+        try {
+            Looper main = Looper.getMainLooper();
+            if (main == null) {
+                return "no toast: no main looper";
+            }
+            boolean queued = new Handler(main).post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show();
+                    } catch (Throwable t) {
+                        // Nothing to recover and nobody to tell: this runs a
+                        // moment later, on another thread, after `post` has
+                        // already returned its line to the log.
+                        Log.w(TAG, "toast failed: " + why(t));
+                    }
+                }
+            });
+            return queued ? "toast queued" : "toast REFUSED by the main looper";
+        } catch (Throwable t) {
+            return "toast threw: " + why(t);
         }
     }
 

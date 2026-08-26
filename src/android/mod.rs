@@ -913,6 +913,18 @@ pub fn take_wake_note() -> String {
     String::new()
 }
 
+/// What the last sleep managed, and forget it. See [`wake::take_last_sleep`].
+#[cfg(target_os = "android")]
+pub fn take_sleep_note() -> String {
+    wake::take_last_sleep()
+}
+
+/// The host never sleeps an ignition. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn take_sleep_note() -> String {
+    String::new()
+}
+
 /// Whether the face is the thing the driver is looking at.
 ///
 /// THE RESUMED HALF ALONE, and [`FOCUSED`] records why it is not both. The unit
@@ -1171,6 +1183,31 @@ struct FakeState {
     logs_written: u32,
 }
 
+/// The last value the app pushed through [`Tuner::set_release_on_sleep`].
+///
+/// RECORDED BECAUSE THE PUSH IS THE FEATURE, AND THE TRAIT DEFAULT HIDES IT. On
+/// the unit that value is mirrored into shared preferences for `SleepReceiver`,
+/// which runs in a COLD PROCESS with no settings file read and no Rust — a
+/// switch the app never pushed is a switch that receiver cannot honour. The
+/// trait's default implementation is an empty body, so a missing push looks
+/// exactly like a working one from every test that does not check.
+///
+/// A STATIC RATHER THAN A FIELD ON THE FAKE, because the app owns its tuner as a
+/// `Box<dyn Tuner>` and no test can reach back through it. The tests that read
+/// this hold `harness::ui_lock`, which serialises them, the same way [`RESUMED`]
+/// and [`FOCUSED`] are read.
+static RELEASE_MIRROR: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+/// Forget what was pushed, so one test's push is not another's evidence.
+pub fn clear_release_mirror() {
+    *RELEASE_MIRROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// What the app last pushed. See [`RELEASE_MIRROR`].
+pub fn last_release_mirror() -> Option<bool> {
+    *RELEASE_MIRROR.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 impl FakeTuner {
     pub fn new() -> Self {
         Self {
@@ -1295,6 +1332,11 @@ impl Default for FakeTuner {
 impl Tuner for FakeTuner {
     fn is_available(&self) -> bool {
         self.available
+    }
+
+    /// Record it rather than ignore it. See [`RELEASE_MIRROR`].
+    fn set_release_on_sleep(&self, on: bool) {
+        *RELEASE_MIRROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(on);
     }
 
     fn connect(&self) -> Result<(), TunerError> {

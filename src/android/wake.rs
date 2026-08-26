@@ -120,9 +120,30 @@ pub fn set_foreground(front: bool) {
 /// What the receiver did last time, and forget it.
 ///
 /// Empty when it has said nothing since the app last asked — an ordinary
-/// launcher tap, or a build with no receiver in it. See [`take_last_wake`]'s
-/// counterpart `CarnyxWake.takeLastWake` for why this takes rather than reads.
+/// launcher tap, or a build with no receiver in it. See its counterpart
+/// `CarnyxWake.takeLastWake` for why this takes rather than reads.
 pub fn take_last_wake() -> String {
+    take(jni_str!("takeLastWake"))
+}
+
+/// What the LAST SLEEP managed, and forget it.
+///
+/// THE ONE LINE THE DIAGNOSTICS LOG CANNOT KEEP. That log is a ring in memory —
+/// `prefs.rs` says so and `crashlog.rs` was built on the same fact — so a line
+/// written as the MCU cuts power dies with the process that wrote it. Both
+/// receivers therefore write this one to disk with a blocking `commit` before
+/// anything else, and this reads it on the way back up.
+///
+/// EMPTY IS A FINDING, not an absence of one, which is why the caller prints a
+/// line either way: nothing recorded on a launch that followed an ignition cycle
+/// means the ACC-off broadcast never arrived, and that needs a different fix
+/// from a release that was attempted and failed.
+pub fn take_last_sleep() -> String {
+    take(jni_str!("takeLastSleep"))
+}
+
+/// One `()Ljava/lang/String;` static, or `""` where the class never loaded.
+fn take(method: &JNIStr) -> String {
     let Some(class) = CLASS_REF.get() else {
         return String::new();
     };
@@ -131,17 +152,12 @@ pub fn take_last_wake() -> String {
     };
     jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
         let note = env
-            .call_static_method(
-                class,
-                jni_str!("takeLastWake"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )?
+            .call_static_method(class, method, jni_sig!("()Ljava/lang/String;"), &[])?
             .l()?;
         // See `probe::report`. A null comes back as `Error::NullPtr` from
         // `try_to_string` rather than as an empty string, which the caller's
-        // `unwrap_or_default` turns into the same thing — and `takeLastWake`
-        // returns `""` for "nothing to say" rather than null anyway.
+        // `unwrap_or_default` turns into the same thing — and both Java methods
+        // return `""` for "nothing to say" rather than null anyway.
         let note = JString::cast_local(env, note)?;
         note.try_to_string(env)
     })

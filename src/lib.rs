@@ -373,6 +373,26 @@ fn android_main(android_app: slint::android::AndroidApp) {
         _driver.log_platform(&format!("wake: {wake_note}"));
     }
 
+    // AND WHAT THE LAST SLEEP MANAGED, which is a line the diagnostics log has
+    // never been able to hold. That log is a ring in memory, so everything
+    // written as the MCU cuts power died with the process that wrote it — which
+    // is why "Carnyx does not shut off the radio audio when the head unit
+    // sleeps" could not be answered from a drive log at all. Both receivers now
+    // write it to disk with a blocking `commit` before anything else, and this
+    // reads it back.
+    //
+    // PRINTED EVEN WHEN EMPTY, unlike the wake note above, because here the
+    // absence is the finding. A launch that follows an ignition cycle with
+    // nothing recorded means the ACC-off broadcast never arrived — a different
+    // fault from a release that was attempted and failed, needing a different
+    // fix — and a missing line cannot say which, while this one can.
+    let sleep_note = android::take_sleep_note();
+    _driver.log_platform(&if sleep_note.is_empty() {
+        "last sleep: nothing recorded".to_string()
+    } else {
+        format!("last sleep: {sleep_note}")
+    });
+
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
     // a driver can get that the renderer saw it, since the alternative — Slint

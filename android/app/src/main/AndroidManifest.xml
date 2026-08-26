@@ -220,5 +220,43 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!--
+          THE SLEEP RECEIVER, the wake receiver's mirror image and here for the
+          same reason: the process may already be dead when the broadcast is
+          sent.
+
+          `NwdBridge.startSleepWatch` registers for these same two actions at run
+          time, which is right while the app is alive and useless when it is not.
+          The MCU kills apps on ACC-off and nothing says it does so after
+          broadcasting rather than before — and a runtime receiver in a dead
+          process hears nothing, releases nothing and leaves no trace, which is
+          exactly what "Carnyx does not shut off the radio audio when the head
+          unit sleeps" looks like from the driver's seat.
+
+          BOTH SPELLINGS, because nobody knows which this ROM sends. The only
+          record of the action anywhere writes it unqualified while writing the
+          other vendor actions out in full, and this ROM uses two prefixes. A
+          filter for an action nothing sends registers cleanly and never fires,
+          so the wrong guess is invisible; both cost one line, and the action
+          travels with the note the receiver leaves.
+
+          ACTION_SCREEN_OFF IS DELIBERATELY ABSENT. Android 8 took it off the
+          implicit-broadcast allowlist, so a manifest filter for it is never
+          delivered. It stays in the runtime watch, where it works.
+
+          `exported="true"` for WakeReceiver's reason: the sender is the MCU's
+          service, outside this app, and an unexported receiver receives from its
+          own package only.
+        -->
+        <receiver
+            android:name=".SleepReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="com.nwd.ACTION_ACCOFF_UPDATE" />
+                <action android:name="com.nwd.action.ACTION_ACCOFF_UPDATE" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

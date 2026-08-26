@@ -1306,6 +1306,98 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 106. The drive log answers the pop-up, and the sleep gets a witness
+**THE FIRST REAL DRIVE LOG OFF THE UNIT SINCE #102**, and it settles one of the
+two faults outright.
+
+**THE POP-UP: EVERY CANDIDATE BUT ONE IS DEAD.** The log carries, twice:
+
+```
+01:34:51  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE [background]
+01:34:52  station pop-up: WQLF at 102.1 (logo) — posted, channel importance 4
+```
+
+That line is only reachable through `ctx != null`, a live `NotificationManager`,
+`areNotificationsEnabled()` TRUE, and a `notify` that did not throw — and the
+`4` is read back off the platform's own channel, not off what the app asked for.
+`[background]` says the gate opened, which is what #104's retraction predicted it
+would. The owner saw nothing. So the app's half worked completely and SystemUI
+raised no banner, which on a head unit of this class is entirely ordinary.
+
+**SO THE MESSAGE IS ALSO A TOAST.** A toast is a WindowManager window rather than
+SystemUI's: no channel, no importance, no shade, no notification panel — every
+mechanism that could have swallowed the banner is out of the path. On API 29 a
+background app may still raise one; the background-toast block landed in API 30
+and covers CUSTOM views, and a text toast is exempt.
+
+BOTH, NOT EITHER. The notification is still posted: it costs nothing where it is
+invisible, and where a shade exists it is the better artefact — tappable, and it
+comes back to the face. On the MAIN LOOPER rather than the calling thread, which
+is the native `android_main` thread and has no Java `Looper` at all; `Toast.show`
+there throws "Can't create handler inside thread that has not called
+Looper.prepare()". The outcome joins the log line, so the next drive says which
+of the two the driver was shown.
+
+**THE SLEEP: THE LOG COULD NEVER HAVE SHOWN IT, AND THAT IS THE FINDING.** This
+log has no `sleep:` line and no ignition cycle in it — it opens with
+`session: launch #29 … last run ended in destroy 60s ago`. But the deeper problem
+is that a `sleep:` line CANNOT SURVIVE THE EVENT IT RECORDS. The diagnostics log
+is a ring in memory — `prefs.rs` says so and `crashlog.rs` was built on exactly
+this fact — so every line written as the MCU cuts power died with the process
+that wrote it. The owner's report was unanswerable from a drive log, and would
+have stayed unanswerable however many cycles they drove.
+
+**SO BOTH RECEIVERS WRITE IT DOWN FIRST.** `CarnyxWake.noteSleep` commits one
+line to the shared preferences before anything hops to Rust, and
+`take_last_sleep` reads it on the way back up. `commit()` and not `apply()`, for
+`WakeReceiver.note`'s reason: the app holds no wake lock and an `apply` whose
+background thread is never scheduled loses the only artefact this path can
+produce. PRINTED EVEN WHEN EMPTY, unlike the wake note, because the absence is
+the finding — nothing recorded after an ignition cycle means the ACC-off
+broadcast never arrived, which needs a different fix from a release that failed.
+
+**AND THE ACC-OFF IS NOW HEARD BY A MANIFEST RECEIVER.** `SleepReceiver`, both
+spellings, mirroring `WakeReceiver`. The runtime watch in `NwdBridge` is right
+while the app is alive and useless when it is not — and the MCU kills apps on
+ACC-off, with nothing saying it does so after broadcasting rather than before. A
+runtime receiver in a dead process hears nothing, releases nothing and leaves no
+trace, which is exactly what the owner described.
+
+THE PATTERN IS CONFIRMED ON THIS ROM by the same log: the stock-radio probe
+resolved `com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm,
+rcv:com.ninthfreak.carnyx` — our manifest receiver, for a vendor action, listed
+by the package manager as a live handler.
+
+It sends only the source change, not the binder call: `bindService` is
+asynchronous and a receiver has milliseconds. That one call is what the source
+probe found sticks. `ACTION_SCREEN_OFF` stays in the runtime watch alone —
+Android 8 took it off the implicit-broadcast allowlist and a manifest filter for
+it is never delivered.
+
+**THE SWITCH HAD TO FOLLOW IT DOWN.** `SleepReceiver` runs with no settings file
+read, so `NwdBridge.setReleaseOnSleep` now mirrors the driver's choice into the
+same preferences, and the receiver defaults to TRUE where the wake receiver
+defaults to false — there, acting on an unreadable flag steals the screen; here
+the failure is a radio playing into a parked car.
+
+**Pinned by `the_release_switch_reaches_the_receiver_that_cannot_ask`**, which
+covers the one thing a host test can reach: the push happening at start-up and on
+every move. `Tuner::set_release_on_sleep` has an EMPTY DEFAULT BODY, so a missing
+call is invisible to every other test in the file — the fake now records into a
+static and this reads it back. Verified by deleting the start-up push and
+watching it fail.
+
+**WHAT IS NOT VERIFIED, and it is most of this.** No Java here has been compiled:
+this container has no real `android.jar` (`/tmp/fake-sdk`'s is zero bytes) and
+`NwdBridge` additionally needs AIDL-generated classes. What was run is `javac`'s
+PARSE phase over the four touched files — it reached attribution and reported 60
+missing-symbol errors and no syntax errors — which covers the shape and nothing
+about the names. The receiver, the toast and the notes are all untried on the
+unit.
+
+**Evidence.** 305 tests, clippy clean over lib, bins and examples, the JNI seam
+check green. No shot moves: the launch lines are inside `android_main`.
+
 ### 105. The JNI harness supplied the names it was built to check
 **FIXED, AND THE HARNESS WAS THE BUG.** The owner's Gradle build failed on
 `alert.rs:142`: *"cannot find type `JString` in this scope"*, with unused-import
