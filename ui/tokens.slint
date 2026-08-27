@@ -254,6 +254,19 @@ export global Metrics {
     in property <length> avail-w: 1024px;
     in property <length> avail-h: 614px;
 
+    // THE HERO CARD'S TOP EDGE, in the face's coordinates — written back by
+    // `HeroRow`, the same way the face writes `avail-w` above, and for the same
+    // structural reason: the reader cannot reach the source directly. §4.8
+    // anchors the clock "midway between the bottom edge of the right cluster
+    // and the top line of the hero card", and §4.9 clamps the countdown to the
+    // same line — the CARD's top, not the slot's. The card hangs centred inside
+    // a slot that starts higher (~7px on the wide track, ~70 on the tall one),
+    // and the rows that hold it live inside the face's per-track `if` arms,
+    // where their ids are unreachable from outside. So the row that owns the
+    // card reports the edge here. Zero until the first layout pass, which the
+    // face's `> top` guards already treat as "not measured yet".
+    in-out property <length> hero-card-top: 0px;
+
     out property <float> w: Metrics.avail-w / 1px;
     out property <float> h: Metrics.avail-h / 1px;
 

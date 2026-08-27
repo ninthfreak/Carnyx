@@ -1688,6 +1688,23 @@ export component HeroRow inherits Rectangle {
     // So this card never scales and never moves. The two that fly are separate
     // elements, drawn only while the morph runs, and the incoming one lands
     // exactly on this rect — the handover is between two cards that coincide.
+    //
+    // ── THE ROW REPORTS THE CARD'S TOP TO `Metrics` ──────────────────────────
+    //
+    // §4.8 anchors the clock to "the top line of the hero card" and §4.9 clamps
+    // the countdown to the same line, but the face cannot ask: each track's row
+    // sits inside an `if` arm, and Slint's ids are unreachable across that wall
+    // ("Cannot access id"). Anchoring to the SLOT instead put the clock ~4px
+    // high on the head unit and ~53px high in portrait, because the card hangs
+    // centred below the slot's top. So the one row that exists per track pushes
+    // the card's edge into the global — `Metrics.avail-w`'s init + changed
+    // pattern exactly. The property indirection is what makes `changed` fire:
+    // it re-evaluates whenever the card's absolute position shifts under
+    // relayout.
+    property <length> card-top-abs: card.absolute-position.y;
+    init => { Metrics.hero-card-top = self.card-top-abs; }
+    changed card-top-abs => { Metrics.hero-card-top = self.card-top-abs; }
+
     card := HeroCard {
         width: root.card-w;
         height: root.resolved-card-h;

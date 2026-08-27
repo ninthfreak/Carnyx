@@ -248,14 +248,42 @@ export component Face inherits Rectangle {
     // it has measured its top, so it never flashes at the wrong y"; this is the
     // same guard for the same reason.
     property <length> clock-gap-top: status.cluster-bottom;
-    property <length> clock-gap-bottom: hero-slot.absolute-position.y;
+    // THE CARD'S TOP, NOT THE SLOT'S. §4.8 says "the top line of the hero
+    // card", and the two differ: the card hangs centred inside its slot, ~7px
+    // lower on the wide track and ~70px lower on the tall one, where the slot
+    // takes whatever the column above leaves. Anchored to the slot, the clock
+    // sat ~4px high on the head unit and ~53px high in portrait — measured off
+    // the shots, not estimated. `Metrics.hero-card-top` is written back by the
+    // HeroRow that owns the card, because the rows live inside this face's
+    // per-track `if` arms and their ids cannot be reached from here.
+    property <length> clock-gap-bottom: Metrics.hero-card-top;
     property <bool> clock-measured: root.clock-gap-bottom > root.clock-gap-top;
     // ONE DEFINITION, READ BY THREE THINGS: the clock's own box, the ETA that
     // hangs under it, and the countdown that has to clear both on the tall
     // track. It was declared twice and drifting apart was only a matter of time.
     property <length> clock-line-h: Metrics.tall ? Metrics.s(36) * 1.2 : Metrics.s(30) * 1.2;
+    // THE INK RIDES ABOVE THE BOX'S CENTRE, and §4.8 anchors the OPTICAL
+    // centre — the ink's — not the box's. MEASURED, NOT DERIVED: with the box's
+    // centre placed exactly on the spec midpoint, subpixel edge-crossing
+    // profiles of the reference surface put the digits' ink centre 0.85px
+    // above it at 30sp — 0.03 × font-size. Part is how parley (the one text
+    // layout behind this harness's software renderer AND the device's Skia
+    // renderer) seats DSEG's 90/em line gap in the centred line box, part is
+    // the anchors' own whole-pixel edge snapping; deriving the split kept
+    // predicting 0 or 1.35px, and the render said 0.85 both times it was
+    // asked. So the constant is the measurement, scaled with the font size.
+    // DEAD-ON IS NOT REACHABLE: the rasterizer snaps the glyphs' rows in
+    // whole-pixel steps whose phase depends on the layout's fractions, so
+    // sweeping this constant moves the ink in ~1px jumps. Against the painted
+    // midpoint of gear bottom y62 and card top y86 (y74.0), the head-unit shot
+    // reads 73.5 with this value — half a pixel, the quantizer's floor, down
+    // from the 2.5px the slot anchor plus no ride used to miss by. The ETA
+    // hangs off the same `clock-line-bottom`, so its 7dp clearance from the
+    // box is untouched.
+    property <length> clock-ink-ride: (Metrics.tall ? Metrics.s(36) : Metrics.s(30)) * 0.03;
     property <length> clock-line-bottom:
-        (root.clock-gap-top + root.clock-gap-bottom) / 2 + root.clock-line-h / 2;
+        (root.clock-gap-top + root.clock-gap-bottom) / 2 + root.clock-line-h / 2
+        + root.clock-ink-ride;
     if root.clock-time != "" && root.clock-measured: Rectangle {
         // The TIME's optical centre lands midway between the two edges. `y` is
         // the line's top, so half the line's own height comes back off it.
@@ -355,10 +383,10 @@ export component Face inherits Rectangle {
     // THE UI FACE AND NOT DSEG7, which §4.9 states and which also matters
     // mechanically: `crate::clock::eta` pads nothing, because the segment font's
     // blank is a literal `!` in Atkinson.
-    // NO FIT GUARD, AND ONE WAS TRIED: `clock-gap-bottom` is the hero SLOT's
-    // top, the ETA hangs past it BY DESIGN — §4.8's own verification puts it
-    // "in the empty space right of the hero card", which is inside the slot —
-    // and a guard demanding it stay above the slot hid it on the head unit
+    // NO FIT GUARD, AND ONE WAS TRIED: `clock-gap-bottom` is the hero CARD's
+    // top line, the ETA hangs past it BY DESIGN — §4.8's own verification puts
+    // it "in the empty space right of the hero card", which is BELOW that line —
+    // and a guard demanding it stay above the anchor hid it on the head unit
     // itself. The clock takes the same liberty with the same anchor.
     property <bool> eta-showing:
         root.nav-eta != "" && root.nav-stage != NavStage.idle && root.clock-measured;
@@ -419,16 +447,20 @@ export component Face inherits Rectangle {
     // The clamp is what stops a short band (a tall surface with a deep status
     // column) pushing the line up over the genre or down over the hero card.
     property <length> countdown-top: status.genre-bottom;
-    property <length> countdown-bottom: hero-slot.absolute-position.y;
+    // "The hero card's top" is §4.9's own wording, and it is the same line the
+    // clock anchors to — the card's, not the slot's, written back through
+    // `Metrics` because the card's row is unreachable from here (see the clock's
+    // anchor above). The two readouts sharing one anchor is what keeps them in
+    // one band.
+    property <length> countdown-bottom: Metrics.hero-card-top;
     property <length> countdown-line-h: Metrics.tall ? Metrics.s(26) * 1.35 : Metrics.s(24) * 1.35;
     // MEASURED MEANS THE ANCHORS EXIST, NOT THAT THE LINE FITS BETWEEN THEM —
-    // and the difference emptied the face once. `countdown-bottom` is the hero
-    // SLOT's top, and the hero CARD hangs centred well below it: on the wide
-    // track the band between the genre and the slot is a few pixels, the line
-    // has always overhung the slot's empty top region, and §4.8 places the ETA
-    // "in the empty space right of the hero card" the same way. A guard that
-    // demanded the line fit above the slot hid the countdown on exactly the
-    // track it was built for. The y below is order-safe instead.
+    // and the difference emptied the face once. On the wide track the band
+    // between the genre line and the card's top is thin, the line has always
+    // overhung the card's flanks, and §4.8 places the ETA "in the empty space
+    // right of the hero card" the same way. A guard that demanded the line fit
+    // above the anchor hid the countdown on exactly the track it was built
+    // for. The y below is order-safe instead.
     property <bool> countdown-measured: root.countdown-bottom > root.countdown-top;
     if root.nav-stage == NavStage.cruise && root.nav-distance != "" && root.countdown-measured:
     Rectangle {
