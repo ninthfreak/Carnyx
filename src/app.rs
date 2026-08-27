@@ -562,6 +562,20 @@ struct State {
     /// The line is written when it CHANGES, which is the only time it carries
     /// anything a reader did not already have.
     nav_said: String,
+    /// A clock reading forced by `set_clock_for_test`.
+    ///
+    /// THE HOST HAS NO PLATFORM CLOCK, so `android::clock_now` answers `None`
+    /// and every shot would draw neither a readout nor an ETA. This stands in
+    /// for that one platform call and nothing else — the formatting, the 12/24
+    /// branch and the timezone arithmetic all still run for real.
+    clock_test: Option<(u32, u32, bool)>,
+    /// Feet and miles, or metres and kilometres (§4.9).
+    ///
+    /// READ ONCE AT START-UP from the device's locale, because OsmAnd does not
+    /// expose its own unit setting over the API. A driver does not cross a
+    /// border mid-drive often enough to poll for it, and units changing under a
+    /// live countdown would be worse than being one launch behind.
+    units: crate::units::Units,
     /// Which OsmAnd `CarnyxNav` found, or empty. Read once at start-up: an app
     /// is not installed and uninstalled while a driver is looking at a switch,
     /// and asking the package manager on every republish would put a binder call
@@ -1224,6 +1238,8 @@ impl App {
                 rds: RdsDecoder::new(),
                 announced: std::cell::Cell::new(f32::NAN),
                 nav: crate::nav::Nav::new(),
+                units: crate::units::Units::default(),
+                clock_test: None,
                 nav_said: String::new(),
                 nav_package: String::new(),
                 // The DECODER is not seeded, only the published state. A decoder
@@ -1392,8 +1408,13 @@ impl App {
         // something nobody asked for on a screen nobody is looking at.
         {
             let found = app.nav_installed_package();
+            // AND WHICH UNITS THE ROADS AROUND THIS DRIVER ARE SIGNED IN
+            // (§4.9). Same one-shot read, and for a stronger reason: this one
+            // must not change while a countdown is running.
+            let units = crate::units::Units::for_country(&crate::android::country_code());
             let mut s = app.state.borrow_mut();
             s.nav_package = found;
+            s.units = units;
         }
         if app.state.borrow().settings.nav_on {
             let outcome = app.set_nav_running(true);
@@ -3076,10 +3097,16 @@ impl App {
         ui.set_settings_release_on_sleep(cfg.release_on_sleep);
         ui.set_settings_clock_on(cfg.clock_on);
         ui.set_settings_nav_on(cfg.nav_on);
-        // THE SUB-LINE SAYS WHETHER THERE IS ANYTHING TO TALK TO. A switch that
-        // only reports failure after it is turned on makes the driver perform an
-        // experiment to read a fact the package manager already knows.
-        ui.set_settings_nav_sub(crate::nav::sub_line(&s.nav_package).into());
+        ui.set_settings_nav_hide_on_map(cfg.nav_hide_on_map);
+        // ── THE SUB-LINE SAYS WHY NOTHING IS SHOWING (§4.9) ──────────────────
+        //
+        // Every reason the maneuver layer can be blank — no OsmAnd, the switch
+        // off, OsmAnd closed, OsmAnd open with no route, or the layer hidden
+        // behind OsmAnd's own map — looks the same on the face, so this row is
+        // the only place they can be told apart. `crate::nav::sub_line` holds
+        // the wording and the ordering; this only gathers the facts.
+        ui.set_settings_nav_sub(self.nav_sub_line().into());
+        ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a 200-line ring and this is a 200-string model. Same rule
         // again, and it matters most here: the diagnostics overlay is the one a
@@ -3243,9 +3270,17 @@ impl App {
     /// class that answers lives in the embedded dex. Drawing `00:00` there would
     /// be a real time and a lie; the face draws nothing instead, so no shot
     /// carries a clock that was never read.
+    /// The local hour, minute and 12/24 setting, or `None`.
+    ///
+    /// The test override first, then the platform. Both the readout and the ETA
+    /// go through this, so a shot cannot show one without the other.
+    fn clock_reading(&self) -> Option<(u32, u32, bool)> {
+        self.state.borrow().clock_test.or_else(crate::android::clock_now)
+    }
+
     fn push_clock(&self) {
         let on = self.state.borrow().settings.clock_on;
-        let now = on.then(crate::android::clock_now).flatten();
+        let now = on.then(|| self.clock_reading()).flatten();
         let clock = match now {
             Some((h, m, is24)) => crate::clock::format(h, m, is24),
             None => crate::clock::Clock::default(),
@@ -3265,20 +3300,33 @@ impl App {
         }
     }
 
-    /// Publish the navigation state, and log it when it changes.
+    /// The NAVIGATION row's sub-line, from the live link state.
     ///
-    /// FINISHED STRINGS, as every other surface gets: the Slint side is handed
-    /// a distance already formatted and a turn already named, because the panel
-    /// decides nothing. The design handoff for the strip is still in progress,
-    /// so what is published is deliberately the DATA and not a layout — a glyph
-    /// id, a label and the words, which is what any drawing of this will bind
-    /// to whatever it ends up looking like.
-    /// Bind or unbind OsmAnd. Returns a line for the diagnostics log.
-    ///
-    /// THE HOST HAS NO OSMAND AND SAYS SO BY SAYING NOTHING. An empty answer is
-    /// "there was nothing to do", which is the honest one for every build that
-    /// is not the device — and it keeps the log line out of every screenshot.
+    /// ONE BUILDER, TWO WRITERS. `push_settings` paints the whole panel, and
+    /// `push_nav` repaints this one row — because the row reports facts that
+    /// move with the DRIVE, not with the settings: OsmAnd starts answering, a
+    /// route begins or ends, its map comes to the front. Written only from
+    /// `push_settings`, the row froze on whatever was true when the panel was
+    /// last painted, which for a panel open during a drive is exactly when it
+    /// is being read.
+    fn nav_sub_line(&self) -> String {
+        let s = self.state.borrow();
+        let route = s.nav.route(crate::session::now_unix());
+        crate::nav::sub_line(&crate::nav::Link {
+            package: &s.nav_package,
+            on: s.settings.nav_on,
+            linked: route.is_some(),
+            navigating: route.is_some_and(crate::nav::Route::navigating),
+            map_visible: route.is_some_and(|r| r.map_visible),
+            hide_on_map: s.settings.nav_hide_on_map,
+        })
+    }
+
     /// Which OsmAnd is installed, or `""`. See `CarnyxNav.installedPackage`.
+    ///
+    /// THE HOST HAS NO OSMAND AND SAYS SO BY SAYING NOTHING — an empty answer
+    /// keeps the "not installed" wording honest on every build that is not the
+    /// device, and the log line out of every screenshot.
     #[cfg(target_os = "android")]
     fn nav_installed_package(&self) -> String {
         crate::android::nav::installed_package()
@@ -3309,9 +3357,14 @@ impl App {
         let now = crate::session::now_unix();
         let (state, spoken, line) = {
             let s = self.state.borrow();
-            (s.nav.state(now), s.nav.spoken(now).unwrap_or_default().to_string(), s.nav.log_line(now))
+            (
+                s.nav.state(now),
+                s.nav.spoken(now).unwrap_or_default().to_string(),
+                s.nav.log_line(now, s.units),
+            )
         };
         let ui = self.ui();
+        let units = self.state.borrow().units;
         use crate::nav::NavState;
         let (active, turn, distance) = match state {
             NavState::Idle => (false, String::new(), String::new()),
@@ -3319,15 +3372,15 @@ impl App {
             NavState::OffRoute { metres } => (
                 true,
                 "off route".to_string(),
-                crate::nav::Nav::distance_label(metres),
+                crate::nav::Nav::distance_label(metres, units),
             ),
             NavState::Turn { turn, metres } => (
                 true,
                 turn.name().to_string(),
-                crate::nav::Nav::distance_label(metres),
+                crate::nav::Nav::distance_label(metres, units),
             ),
             NavState::Unknown { metres, .. } => {
-                (true, String::new(), crate::nav::Nav::distance_label(metres))
+                (true, String::new(), crate::nav::Nav::distance_label(metres, units))
             }
         };
         ui.set_nav_active(active);
@@ -3342,6 +3395,23 @@ impl App {
         // leaves a gap or a placeholder." So a missing street is `""` and the
         // strip draws nothing there, rather than a dash or a spinner.
         let route = self.state.borrow().nav.route(now).cloned();
+
+        // ── IS THE LINK UP? (§4.9's status-bar tell) ─────────────────────────
+        //
+        // A FRESH POLL IS THE ANSWER, AND IT IS A BETTER ONE THAN THE BIND.
+        // `bindService` returning true means the request was ACCEPTED, not that
+        // anything is on the other end: `onServiceConnected` may not have run
+        // yet, and a binder that has since died still leaves the bind looking
+        // good until Android gets round to saying otherwise.
+        //
+        // `CarnyxNav.pollOnce` calls `nativeNavInfo` on every answered
+        // `getAppInfo`, and OsmAnd answers that whether or not it is navigating
+        // — so a poll inside `Nav::EXPIRY` means the service is bound AND
+        // talking, which is what a lit tell should claim. An idle OsmAnd still
+        // lights it; one that has gone away goes dim within twelve seconds, on
+        // the same clock that ages the turn.
+        ui.set_nav_linked(route.is_some());
+
         let r = route.unwrap_or_default();
         ui.set_nav_street(r.street.clone().unwrap_or_default().into());
         ui.set_nav_after_street(r.after_street.clone().unwrap_or_default().into());
@@ -3352,9 +3422,79 @@ impl App {
         ui.set_nav_turn_xml(r.turn_xml.clone().unwrap_or_default().into());
         ui.set_nav_after_turn_xml(r.after_turn_xml.clone().unwrap_or_default().into());
         // OSMAND'S MAP IS IN FRONT — the driver is already looking at the turn.
-        // Published rather than acted on here: the handoff makes the suppression
-        // a SETTING, and the face is what honours it.
         ui.set_nav_map_visible(r.map_visible);
+
+        // ── THE ONE GATE THE MANEUVER LAYER BINDS TO (§4.9) ──────────────────
+        //
+        // "`AppInfoParams.mapVisible` reports whether OsmAnd's own map is on
+        // screen; while it is, the maneuver layer is hidden — the driver is
+        // already looking at the turn. Driver-overridable (Settings ▸
+        // NAVIGATION ▸ Hide when the map is showing, default on)."
+        //
+        // SEPARATE FROM `nav-active`, WHICH STAYS RAW. Three surfaces ask
+        // different questions of the same state: the maneuver layer asks "may I
+        // draw", the settings sub-line asks "why am I not drawing", and the
+        // diagnostics log asks "what arrived". Folding the suppression into
+        // `nav-active` would answer the first by lying to the other two.
+        let suppressed = r.map_visible && self.state.borrow().settings.nav_hide_on_map;
+        let showing = active && !suppressed;
+        ui.set_nav_showing(showing);
+
+        // ── STAGE 1's OWN FURNITURE (§4.9) ───────────────────────────────────
+        //
+        // Which rung the display is on, how full the hairline is, and the two
+        // arrows. All decided here for the reason every other string on this
+        // face is: the panel draws, it does not choose.
+        let stage = self.state.borrow().nav.stage(now, showing);
+        ui.set_nav_stage(match stage {
+            crate::nav::Stage::Idle => crate::NavStage::Idle,
+            crate::nav::Stage::Cruise => crate::NavStage::Cruise,
+            crate::nav::Stage::Approach => crate::NavStage::Approach,
+            crate::nav::Stage::TurnNow => crate::NavStage::TurnNow,
+        });
+        ui.set_nav_progress(self.state.borrow().nav.progress(now));
+
+        // THE ARROW IS A PATH AND NOT A GLYPH ID, so the Slint side has nothing
+        // to look up and no table to keep in step with `crate::arrow`'s.
+        let (arrow, exit) = arrow_for(r.turn_xml.as_deref());
+        ui.set_nav_arrow(arrow.into());
+        ui.set_nav_exit(exit.into());
+        let (after_arrow, after_exit) = arrow_for(r.after_turn_xml.as_deref());
+        ui.set_nav_after_arrow(after_arrow.into());
+        ui.set_nav_after_exit(after_exit.into());
+
+        // ── THE ETA, WHICH NEEDS A TIMEZONE NOBODY HANDED US ─────────────────
+        //
+        // `arrivalTime` is Unix millis and the face wants a local wall clock, so
+        // the offset is worked out from the clock reading this app already takes
+        // — see `crate::clock::offset_seconds`. No clock reading (a host build,
+        // or the switch off) means no ETA rather than one in UTC.
+        let eta = match (r.arrival_ms, self.clock_reading()) {
+            (Some(ms), Some((h, m, is24))) if ms > 0 => {
+                let off = crate::clock::offset_seconds(crate::session::now_unix() as i64, h, m);
+                crate::clock::eta(ms, off, is24)
+            }
+            _ => String::new(),
+        };
+        ui.set_nav_eta(eta.into());
+        // DISTANCE LEFT TO THE DESTINATION, not to the turn. §4.9 puts it beside
+        // the ETA on the tall track, "where there is room".
+        ui.set_nav_left_distance(
+            r.left_metres
+                .filter(|m| *m > 0)
+                .map(|m| crate::nav::Nav::distance_label(m, units))
+                .unwrap_or_default()
+                .into(),
+        );
+
+        // THE SETTINGS ROW FOLLOWS THE DRIVE. Its sub-line reports link state
+        // that moves with nav events, not with settings — see `nav_sub_line`.
+        // Compared before writing so the once-a-second tick does not repaint a
+        // row that has not changed.
+        let sub = self.nav_sub_line();
+        if ui.get_settings_nav_sub() != sub.as_str() {
+            ui.set_settings_nav_sub(sub.as_str().into());
+        }
 
         // ON A CHANGE ONLY. See `State::nav_said`.
         let line = line.unwrap_or_default();
@@ -3993,6 +4133,16 @@ impl App {
             app.push_nav();
             app.push_settings();
         });
+        on!(on_settings_set_nav_hide_on_map, |app, v| {
+            app.state.borrow_mut().settings.nav_hide_on_map = v;
+            // NOTHING TO BIND OR UNBIND. This is a DISPLAY rule and not a link
+            // rule: the poll keeps answering either way, and the face decides
+            // whether to draw what it says. `push_nav` republishes so the
+            // maneuver layer appears or goes the moment the switch moves rather
+            // than at the next OsmAnd update.
+            app.push_nav();
+            app.push_settings();
+        });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;
             // DOWN TO THE RECEIVER TOO. It cannot read `Settings` from a binder
@@ -4120,11 +4270,13 @@ impl App {
     /// clock — `android::clock_now` answers `None` there, which is why no
     /// ordinary render carries a time.
     pub fn set_clock_for_test(self: &Rc<App>, hour24: u32, minute: u32, is_24h: bool) {
-        let c = crate::clock::format(hour24, minute, is_24h);
-        let ui = self.ui();
-        ui.set_clock_time(c.time.as_str().into());
-        ui.set_clock_meridiem(c.meridiem.as_str().into());
-        ui.set_settings_clock_sub(crate::clock::sub_line(is_24h).as_str().into());
+        self.state.borrow_mut().clock_test = Some((hour24, minute, is_24h));
+        // THROUGH THE REAL PATH rather than writing the three properties here.
+        // This used to format and push them directly, which drew a clock while
+        // leaving `push_clock` untested and — once the ETA existed — left the
+        // one thing that needs a clock reading with nothing to read.
+        self.push_clock();
+        self.push_nav();
     }
 
     /// Put a track in the RadioText, for tests and shots of the band themes.
@@ -4285,6 +4437,7 @@ impl App {
             release_on_sleep: s.settings.release_on_sleep,
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
+            nav_hide_on_map: s.settings.nav_hide_on_map,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -5606,6 +5759,21 @@ fn strings(v: &[String]) -> ModelRc<SharedString> {
 ///
 /// `HH:MM:SS` off the system clock, in UTC — there is no timezone database in
 /// this crate and a wrong local time would be worse than an honest one.
+/// The maneuver arrow's path and a roundabout's exit number, from the poll's
+/// TurnType XML string.
+///
+/// EMPTY IS A REAL ANSWER TWICE OVER. No string, or one this build does not
+/// recognise, draws no arrow — the same rule `Turn::from_osmand` follows for the
+/// integer, and for the same reason: an arrow is an instruction, and the wrong
+/// one given confidently is worse than none. A roundabout OsmAnd did not number
+/// gets a ring with nothing inside it rather than a nought.
+fn arrow_for(xml: Option<&str>) -> (String, String) {
+    let Some((turn, exit)) = xml.and_then(crate::nav::Turn::from_xml) else {
+        return (String::new(), String::new());
+    };
+    (crate::arrow::path(turn), exit.map(|n| n.to_string()).unwrap_or_default())
+}
+
 fn stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -6426,7 +6594,13 @@ mod tests {
         let (ui, driver) = app_for("nav");
 
         assert!(!ui.get_nav_active(), "nothing received, nothing shown");
-        assert!(!ui.get_settings_nav_on(), "and the switch defaults OFF — it starts another app");
+        // BOTH SWITCHES DEFAULT ON, which §4.9 states outright: "OsmAnd
+        // integration (default on …)" and "Hide when the map is showing,
+        // default on". The integration was off here until the handoff said
+        // otherwise — see `settings::Settings::nav_on` for what turning it on
+        // by default actually costs and why it is defensible.
+        assert!(ui.get_settings_nav_on(), "§4.9: the integration defaults on");
+        assert!(ui.get_settings_nav_hide_on_map(), "§4.9: the map suppression defaults on");
         // THE ROW SAYS WHETHER THERE IS ANYTHING TO TALK TO before it is tapped.
         assert!(
             ui.get_settings_nav_sub().to_string().contains("not installed"),
@@ -6483,6 +6657,101 @@ mod tests {
         assert!(!ui.get_nav_active(), "off means off, now");
         assert_eq!(ui.get_nav_turn().to_string(), "");
         assert!(!crate::prefs::load(&driver.state.borrow().prefs_dir).nav_on);
+    }
+
+    /// OSMAND'S MAP IN FRONT HIDES THE LAYER, AND THE DRIVER CAN SAY OTHERWISE.
+    ///
+    /// §4.9: "`AppInfoParams.mapVisible` reports whether OsmAnd's own map is on
+    /// screen; while it is, the maneuver layer is hidden — the driver is already
+    /// looking at the turn. Driver-overridable (Settings ▸ NAVIGATION ▸ Hide
+    /// when the map is showing, default on)."
+    ///
+    /// THROUGH `nav-showing` AND NOT `nav-active`, which is the distinction the
+    /// property exists for: three surfaces ask different questions of one state,
+    /// and a suppression folded into `nav-active` would have the settings row
+    /// reporting "not navigating" while OsmAnd is mid-route.
+    #[test]
+    fn osmands_own_map_hides_the_maneuver_layer_unless_the_driver_says_not_to() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-map");
+
+        // A route, with OsmAnd's map NOT in front.
+        crate::android::ingest_nav(240, 5, false);
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: false,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(ui.get_nav_active(), "navigating");
+        assert!(ui.get_nav_showing(), "and nothing is hiding it");
+        assert!(!ui.get_nav_map_visible());
+
+        // THE MAP COMES TO THE FRONT. The route is unchanged — only the layer goes.
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: true,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(ui.get_nav_map_visible(), "OsmAnd says its map is up");
+        assert!(ui.get_nav_active(), "STILL navigating — the route did not end");
+        assert!(!ui.get_nav_showing(), "and the layer is hidden");
+
+        // AND THE ROW SAYS WHICH OF THE FIVE REASONS THIS IS. A blank strip with
+        // no explanation is the failure the sub-line exists to prevent.
+        //
+        // THE PACKAGE IS PLANTED, because the host has no OsmAnd and "not
+        // installed" is answered FIRST — correctly, since it is the truest thing
+        // to say about this machine. The wording of all five branches is
+        // `nav::each_reason_for_a_blank_strip_says_which_one_it_is`'s; what this
+        // is checking is that `push_settings` gathers the right FACTS, which is
+        // the half a unit test on `sub_line` cannot see.
+        driver.state.borrow_mut().nav_package = "net.osmand.plus".to_string();
+        driver.push_settings();
+        assert!(
+            ui.get_settings_nav_sub().to_string().contains("map is in front"),
+            "got {}",
+            ui.get_settings_nav_sub()
+        );
+
+        // THE DRIVER OVERRIDES IT, and the layer comes back with no new update
+        // from OsmAnd — the switch republishes rather than waiting for one.
+        ui.invoke_settings_set_nav_hide_on_map(false);
+        assert!(ui.get_nav_showing(), "the override puts the layer back");
+        assert!(ui.get_nav_map_visible(), "the fact is unchanged; only the rule moved");
+        assert!(
+            !crate::prefs::load(&driver.state.borrow().prefs_dir).nav_hide_on_map,
+            "and it persists"
+        );
+
+        // Back on, and it hides again.
+        ui.invoke_settings_set_nav_hide_on_map(true);
+        assert!(!ui.get_nav_showing());
+
+        // ── AND THE ROW FOLLOWS THE DRIVE, NOT THE PANEL ─────────────────────
+        //
+        // A nav event ALONE must update the sub-line — no `push_settings`, no
+        // switch touched. Found in review: the row was written only by
+        // `push_settings`, so a panel open during a drive froze on whatever
+        // was true when it was painted.
+        crate::android::ingest_nav_info(crate::nav::Route {
+            street: Some("Whitney Way".into()),
+            turn_xml: Some("TR".into()),
+            turn_metres: Some(240),
+            map_visible: false,
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        assert!(
+            ui.get_settings_nav_sub().to_string().contains("Showing"),
+            "the map went away and the row must say so by itself: {}",
+            ui.get_settings_nav_sub()
+        );
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.
@@ -6822,9 +7091,8 @@ mod tests {
         // frame so the well can repaint; what the driver sees FIRST is this.
         let after_tap = driver.state.borrow().settings.log.lines();
         assert!(after_tap.len() > before, "the tap wrote something immediately");
-        assert_eq!(
+        assert!(
             after_tap.last().unwrap().contains("keep-alive probe: reading"),
-            true,
             "and it says the probe has started, got {:?}",
             after_tap.last()
         );

@@ -27,11 +27,22 @@
 //! A HANDFUL OF SHOTS ARE NOT DETERMINISTIC and will differ between two runs of
 //! an unchanged tree — they capture a moment in something that moves:
 //! `hero-step-morph` (a frame mid-travel), `logo-search-loading` (the spinner),
-//! `audio-released` (the power button's ring, by a single LSB), `driving` (the
+//! `audio-released` (the power button's ring, by a single LSB), `nearby-loading`,
+//! `nav-cruise`, `nav-approach`, `nav-turn-now` and their portraits, `driving` (the
 //! vehicle-in-motion tell pulses on a 2.6s beat — added to this list after a
 //! clock change appeared to move it and two renders from ONE build showed it
 //! moving on its own), and
 //! `settings-diagnostics-open`/`-full` (the log carries wall-clock stamps).
+//! `nearby-loading` is a spinner like `logo-search-loading` and belongs on that
+//! list too; it was found by a full comparison rather than added when it was
+//! written. The three `nav-*` shots put the vehicle in motion, so they inherit
+//! `driving`'s 2.6s pulse and move by the same handful of levels.
+//!
+//! Their ETA does NOT drift, and that took arranging: it is derived from the
+//! real wall clock against a forced local reading, so a FIXED arrival epoch
+//! would have rendered a different time every minute. The arrival is set
+//! relative to `now`, which makes the difference — and therefore the printed
+//! ETA — the same on every run.
 //! `long-radiotext` drifts too when the marquee is mid-scroll, and so do the
 //! THEMED shots whose genre line pulses — `acdc`, `acdc-portrait`, `beatles-dark`
 //! have all been seen to move by a dozen levels between two runs of one build,
@@ -69,6 +80,15 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("audio-released", 1024, 614, false, State::AudioReleased),
     ("tuner-error", 1024, 614, false, State::TunerError),
     ("driving", 1024, 614, false, State::Driving),
+    // §4.9's maneuver layer at stage 1, on both tracks. Driven through the real
+    // nav seam so the arrow, the distance and the ETA are the ones the device
+    // would compute, not properties pushed past the logic.
+    ("nav-cruise", 1024, 614, false, State::NavCruise),
+    ("nav-cruise-portrait", 360, 800, false, State::NavCruise),
+    ("nav-approach", 1024, 614, false, State::NavApproach),
+    ("nav-approach-portrait", 360, 800, false, State::NavApproach),
+    ("nav-turn-now", 1024, 614, false, State::NavTurnNow),
+    ("nav-turn-now-portrait", 360, 800, false, State::NavTurnNow),
     ("weak-and-lossy", 1024, 614, false, State::WeakAndLossy),
     ("no-presets", 1024, 614, false, State::NoPresets),
     // A LONG STRIP. Both save paths used to cap the list at six and delete the
@@ -266,6 +286,14 @@ enum State {
     TunerError,
     /// §4.6 — moving, with a GPS fix, and a traffic announcement running.
     Driving,
+    /// §4.9's stage 1 — the cruise hairline, the ETA under the clock and the
+    /// countdown between the genre line and the hero card.
+    NavCruise,
+    /// §4.9's stage 2 — the RadioText strip yields to the maneuver.
+    NavApproach,
+    /// §4.9's stage 3 — the hero card takes over and the logo moves to its
+    /// upper-right corner.
+    NavTurnNow,
     /// A strong carrier arriving in pieces: dotted outer arcs, mono, no RDS.
     WeakAndLossy,
     NoPresets,
@@ -553,6 +581,63 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
             ui.set_tp(true);
             ui.set_ta(true);
+            // THE OSMAND TELL IN ITS LIT STATE (§4.9). Pushed rather than driven
+            // through the nav seam, because the host has no OsmAnd to bind to —
+            // and this is the state worth holding a picture of: the mark in
+            // their own orange between the car and the satellite, with the car
+            // moved one slot left to make room for it.
+            ui.set_settings_nav_on(true);
+            ui.set_nav_linked(true);
+        }
+        // The three stages share one setup and differ only in the rung OsmAnd
+        // reports — which is the claim worth photographing: the same route data
+        // moves through three layouts on `next_turn_imminent` alone.
+        State::NavCruise | State::NavApproach | State::NavTurnNow => {
+            driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
+            ui.set_settings_nav_on(true);
+            // THROUGH THE SEAM `CarnyxNav` CALLS, not by setting properties. A
+            // shot that pushed `nav-arrow` directly would render happily with
+            // the XML parser, the arrow generator and the stage ladder all
+            // disconnected — which is most of what there is to get wrong.
+            // §4.8'S CLOCK, WHICH THE ETA HANGS UNDER — and which the ETA
+            // cannot be computed without: the timezone offset comes out of the
+            // difference between this reading and the epoch second.
+            driver.set_clock_for_test(8, 5, false);
+            // AN ARRIVAL RELATIVE TO NOW, NOT AN ABSOLUTE INSTANT, and that is
+            // what makes this shot reproducible. The offset is derived from the
+            // real wall clock against a fixed local reading, so a FIXED arrival
+            // epoch would render a different time every minute. Twenty-one
+            // minutes from now against a clock reading 8:05 is 8:26, always.
+            let arrival_ms = (carnyx::session::now_unix() as i64 + 21 * 60) * 1000;
+            let leg = |metres: i32| carnyx::nav::Route {
+                arrival_ms: Some(arrival_ms),
+                left_seconds: Some(1_260),
+                left_metres: Some(9_400),
+                map_visible: false,
+                street: Some("Whitney Way".into()),
+                turn_xml: Some("TR".into()),
+                turn_metres: Some(metres),
+                // OsmAnd's own rung: -1 cruise, 1 approach, 0 turn now. Zero is
+                // the LOUDEST, which is the trap `crate::nav::Stage` documents.
+                imminent: Some(match state {
+                    State::NavApproach => 1,
+                    State::NavTurnNow => 0,
+                    _ => -1,
+                }),
+                after_street: Some("Odana Rd".into()),
+                after_turn_xml: Some("TSLL".into()),
+            };
+            // TWO POLLS, AND THE FIRST ONE IS THE POINT: the hairline's
+            // denominator is the distance FIRST seen for a leg, so a single poll
+            // leaves the bar empty however close the turn is. Eight hundred
+            // metres back, then two hundred and forty — seven tenths of the way.
+            carnyx::android::ingest_nav(800, 5, false);
+            carnyx::android::ingest_nav_info(leg(800));
+            driver.drain_events();
+            carnyx::android::ingest_nav(240, 5, false);
+            carnyx::android::ingest_nav_info(leg(240));
+            driver.drain_events();
+            ui.set_nav_linked(true);
         }
         State::WeakAndLossy => {
             ui.set_full_pairs(3);

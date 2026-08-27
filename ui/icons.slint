@@ -8,7 +8,7 @@
 // rotation. Those command strings are generated from the SAME numbers by
 // `tools/gen-icon-paths.py` and pasted in below.
 
-import { Pal } from "tokens.slint";
+import { Pal, Font } from "tokens.slint";
 
 // Slint's Path fits its geometry into (element size - stroke width) and then
 // nudges it back by half a stroke, and it does NOT scale stroke width with the
@@ -629,5 +629,127 @@ export component AirshipIcon inherits Rectangle {
         box-w: root.width; box-h: root.height; vbw: 34; vbh: 24; raw-stroke: 1.5;
         commands: "M22.2 16.7 L22.2 18.9 L25.8 18.9 L25.8 16.1";
         stroke: root.ink; stroke-line-cap: round; stroke-line-join: round;
+    }
+}
+
+// ── OsmAnd's own mark (§4.9) ────────────────────────────────────────────────
+//
+// THIS IS THEIR ART, NOT A LOOKALIKE. §4.9: "The art is OsmAnd's own monochrome
+// launcher drawable (`OsmAnd/res/drawable/ic_launcher_osmand_monochrome.xml`,
+// GPL) with its viewBox cropped to the mark — their geometry and their orange,
+// never a redrawn lookalike. Using it to name the integration is nominative
+// use; confirm with OsmAnd before shipping, and if they decline, replace it
+// with a neutral route glyph rather than a variation on their mark."
+//
+// The path data below is that file's, verbatim but for two mechanical changes,
+// neither of which moves a point:
+//
+// 1. COMMAS TO SPACES, to match every other path in this file.
+// 2. THE INNER CIRCLE IS TRAVERSED BACKWARDS. The source declares
+//    `android:fillType="evenOdd"` and draws both rings the same way round, so
+//    only an even-odd fill leaves the hole. Slint HAS `fill-rule`, but only the
+//    FemtoVG renderer honours it — the software renderer (which every shot goes
+//    through) and Skia both ignore the property, and the mark fills in solid.
+//    Reversing the inner ring makes the hole come out of the NONZERO rule as
+//    well, so it is a hole in all three. `fill-rule` is set anyway, because it
+//    is what the source says and it costs nothing.
+//
+// The drawable's `<group>` scales 0.85 and translates 8.1 to inset the mark in
+// a 108dp launcher canvas. That transform is DROPPED rather than applied: it is
+// a uniform scale plus a translation, so cropping the viewBox to the ink gives
+// the identical shape either way. The ink is x 27..81 and y 27..87.75 — a
+// 27-radius disc centred at (54,54) with the pin's tail running to 87.75.
+export component OsmAndMark {
+    in property <length> size: 30px;
+    in property <color> color;
+
+    // The crop, which is the ink's own bounds.
+    property <float> vbx: 27;
+    property <float> vby: 27;
+    property <float> vbw: 54;
+    property <float> vbh: 60.75;
+
+    // TALLER THAN IT IS WIDE, so the height governs the uniform fit. Slint's
+    // `Path` stretches its viewbox to whatever width and height it is given —
+    // it does not preserve the aspect on its own — which is why this is worked
+    // out here rather than handed two equal numbers.
+    height: root.size;
+    width: root.size * root.vbw / root.vbh;
+
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: root.vbx;
+        viewbox-y: root.vby;
+        viewbox-width: root.vbw;
+        viewbox-height: root.vbh;
+        fill: root.color;
+        fill-rule: FillRule.evenodd;
+        commands:
+            "M64.5 78.882 C74.196 74.786 81 65.188 81 54 C81 39.088 68.912 27 54 27 "
+          + "C39.088 27 27 39.088 27 54 C27 65.188 33.804 74.786 43.5 78.882 "
+          + "C48.375 81 50.25 82.125 51.75 85.125 C51.896 85.417 52.021 85.695 52.137 85.953 "
+          + "C52.616 87.021 52.943 87.75 54 87.75 C55.057 87.75 55.384 87.021 55.863 85.953 "
+          + "C55.979 85.695 56.104 85.417 56.25 85.125 C57.75 82.125 59.488 81 64.5 78.882 Z "
+          + "M54 69 C45.716 69 39 62.284 39 54 C39 45.716 45.716 39 54 39 "
+          + "C62.284 39 69 45.716 69 54 C69 62.284 62.284 69 54 69 Z";
+    }
+}
+
+// ── The maneuver arrow (§4.9) ───────────────────────────────────────────────
+//
+// THE SHAPE COMES FROM RUST, not from a table here. `crate::arrow` generates
+// every one of the thirteen from one number — degrees off straight ahead — and
+// hands the path across as SVG data on a 24-unit box, so there is no glyph id to
+// look up and no second table to keep in step with the first.
+//
+// EMPTY DRAWS NOTHING. An unrecognised turn type reaches here as an empty
+// string, and an arrow is an instruction: the wrong one given confidently is
+// worse than none at all.
+//
+// A ROUNDABOUT CARRIES ITS EXIT NUMBER INSIDE THE RING, which is why the number
+// is a `Text` over the path rather than part of it — §4.9 asks for exactly that,
+// and glyph outlines for digits are not something a path generator should own.
+export component TurnArrow {
+    in property <length> size: 26px;
+    in property <color> color;
+    /// SVG path data on a 24-unit box, from `crate::arrow::path`.
+    in property <string> commands;
+    /// A roundabout's exit, or empty.
+    in property <string> exit;
+    /// §4.9's two weights: 2.1 at the large sizes, 2.4 at 26–28dp.
+    in property <float> stroke-w: 2.4;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24;
+        raw-stroke: root.stroke-w;
+        commands: root.commands;
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    // ── THE NUMBER SITS AT THE RING'S CENTRE, WHICH IS NOT THE BOX'S ─────────
+    //
+    // `crate::arrow` centres the whole INK in the box, and the circulation
+    // barbs reach 1.8 units past the ring's top — so the ring's centre lands
+    // 1.4 units ABOVE the box's, from the generator's own constants: the ink
+    // runs −8.4 (barb tip) to +11.2 (stem tail) about the ring's centre, whose
+    // midpoint is +1.4. The same 1.4 for both roundabouts, since only the
+    // mirror differs. At the hero's 100dp that is 6px — a digit that reads as
+    // a misprint. (An earlier comment here described this offset without the
+    // code applying it, which is the worse half of a fix.)
+    if root.exit != "": Text {
+        x: 0;
+        y: -root.size * 1.4 / 24;
+        width: root.size; height: root.size;
+        text: root.exit;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: root.size * 9 / 24;
+        color: root.color;
     }
 }

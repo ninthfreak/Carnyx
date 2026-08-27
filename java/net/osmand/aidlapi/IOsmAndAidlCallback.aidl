@@ -20,6 +20,12 @@ import net.osmand.aidlapi.gpx.AGpxBitmap;
 import net.osmand.aidlapi.navigation.ADirectionInfo;
 import net.osmand.aidlapi.navigation.OnVoiceNavigationParams;
 import net.osmand.aidlapi.logcat.OnLogcatMessageParams;
+// THE ONE LINE UPSTREAM DOES NOT HAVE. Their build resolves the bare `KeyEvent`
+// below against the SDK's preprocessed framework.aidl (`-p`), which our aidl
+// run does not pass — it resolves through `-I` and this import, against the
+// declaration at java/android/view/KeyEvent.aidl. Same type, same slot, stated
+// where our pipeline can read it; an import changes no transaction id.
+import android.view.KeyEvent;
 
 interface IOsmAndAidlCallback {
 

@@ -12,6 +12,14 @@
 /// takes `plain` and the ordinary gear is drawn.
 export enum BandGear { plain, bolt, drum, smiley, spiral }
 
+/// How loudly the face is saying the next maneuver (§4.9's three stages).
+///
+/// THE LADDER IS OSMAND'S OWN `next_turn_imminent` and not a distance of ours —
+/// `crate::nav::Stage` holds the mapping and the source it was read out of.
+/// Idle is "nothing to say", which covers both no route and a layer suppressed
+/// because OsmAnd's map is in front.
+export enum NavStage { idle, cruise, approach, turn-now }
+
 /// What a surface draws BEHIND a logo, decided in Rust by `logos::assign`.
 ///
 /// A DARK-ADAPTED LOGO IS NOT ONE PICTURE, it is four, and only three of them

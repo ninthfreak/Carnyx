@@ -40,6 +40,98 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ── LOCAL FIRST: EVERY .aidl MUST RESOLVE WITHOUT THE SDK'S HELP ─────────────
+#
+# This section needs no network and ALWAYS runs. It re-implements the one rule
+# our `aidl` invocation lives by — `-I java` and nothing else — and holds every
+# .aidl in the tree to it: each import must resolve to a file on the include
+# path, and every type a signature uses must be a builtin, an import, or a
+# same-package neighbour.
+#
+# IT EXISTS BECAUSE THE CALLBACK SHIPPED UNRESOLVABLE. `onKeyEvent(in KeyEvent)`
+# is upstream's line, and upstream compiles it with no import because Gradle
+# passes the SDK's preprocessed framework.aidl (`-p`), where every framework
+# parcelable is pre-declared. Our build.rs passes no `-p`, no container check
+# ran aidl (there is no SDK here), and the first device build died in the aidl
+# step. Framework types need a declaration under java/ (see
+# java/android/view/KeyEvent.aidl) — and this is what notices the next one
+# BEFORE a build on the unit's own machine does.
+python3 - <<'LOCALPY'
+import os, re, sys
+
+ROOT = "java"
+BUILTIN = {
+    "void", "int", "long", "boolean", "float", "double", "byte", "char", "short",
+    "String", "CharSequence", "List", "Map", "IBinder", "FileDescriptor",
+    "in", "out", "inout", "oneway", "interface", "parcelable", "import", "package",
+}
+fail = []
+
+aidls = []
+for dirpath, _, names in os.walk(ROOT):
+    for n in names:
+        if n.endswith(".aidl"):
+            aidls.append(os.path.join(dirpath, n))
+
+for path in sorted(aidls):
+    text = open(path, encoding="utf-8").read()
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//.*", "", text)
+
+    pkg = re.search(r"\bpackage\s+([\w.]+)\s*;", text)
+    pkg = pkg.group(1) if pkg else ""
+    if pkg and not path.startswith(os.path.join(ROOT, *pkg.split("."))):
+        fail.append(f"{path}: declares package {pkg}, which is not its directory.")
+
+    imports = re.findall(r"\bimport\s+([\w.]+)\s*;", text)
+    by_simple = {}
+    for imp in imports:
+        f = os.path.join(ROOT, *imp.split(".")) + ".aidl"
+        if not os.path.exists(f):
+            fail.append(f"{path}: import {imp} has no {f} — aidl searches -I{ROOT} and nowhere else.")
+        by_simple[imp.rsplit(".", 1)[-1]] = imp
+
+    # Parcelable declarations have no signatures to scan.
+    if re.search(r"\bparcelable\s+\w+\s*;", text):
+        continue
+
+    # TYPE POSITIONS ONLY — return types and parameter types. A first cut
+    # scanned every capitalised identifier and flagged the NWD tree's
+    # ALL-CAPS method names (`void AMS();`), which have built on the unit
+    # for weeks. Method names are not resolved by aidl; types are.
+    body = text[text.index("{"):] if "{" in text else ""
+    used = set()
+    for ret, _name, params in re.findall(r"([\w.<>\[\], ]+?)\s+(\w+)\s*\(([^)]*)\)\s*;", body):
+        used.update(re.findall(r"[\w.]+", ret))
+        for param in params.split(","):
+            toks = param.split()
+            while toks and toks[0] in ("in", "out", "inout"):
+                toks.pop(0)
+            if len(toks) >= 2:
+                for t in toks[:-1]:
+                    used.update(re.findall(r"[\w.]+", t))
+    for t in sorted(used):
+        simple = t.rsplit(".", 1)[-1]
+        if simple in BUILTIN or simple in by_simple or not simple[:1].isupper():
+            continue
+        qualified = os.path.join(ROOT, *t.split(".")) + ".aidl" if "." in t else ""
+        here = os.path.join(os.path.dirname(path), simple + ".aidl")
+        if (qualified and os.path.exists(qualified)) or os.path.exists(here):
+            continue
+        fail.append(f"{path}: uses type {t}, which is not imported, not beside it, and not a builtin.")
+
+if fail:
+    for f in sorted(set(fail)):
+        print("FAIL: " + f)
+    sys.exit(1)
+print(f"  local: {len(aidls)} .aidl files resolve with -I{ROOT} alone (framework types declared)")
+LOCALPY
+if [ $? -ne 0 ]; then
+    echo
+    echo "AIDL will not resolve on the machine that builds the APK." >&2
+    exit 1
+fi
+
 BASE="https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd-api/src/net/osmand/aidlapi"
 OURS="java/net/osmand/aidlapi"
 TMP="$(mktemp -d)"
@@ -62,6 +154,14 @@ fetch "$BASE/info/AppInfoParams.java" "$TMP/appinfo.java" || true
 curl -sS --fail --max-time 45 \
     "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/helpers/ExternalApiHelper.java" \
     -o "$TMP/ext.java" 2>/dev/null || true
+
+# `next_turn_imminent` is the only trigger 4.9 permits for escalating the
+# maneuver display, and its three values are NOT a rising scale: zero is the
+# most urgent. `crate::nav::Stage` reads them; this is where that reading is
+# held against the function that produces them.
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/routing/data/AnnounceTimeDistances.java" \
+    -o "$TMP/atd.java" 2>/dev/null || true
 
 python3 - "$TMP" "$OURS" <<'PY'
 import os, re, sys
@@ -159,6 +259,41 @@ if os.path.exists(ext) and os.path.getsize(ext):
     if not [f for f in fail if "prefix" in f or "turnInfo key" in f]:
         print("  turnInfo: keys and both prefixes unchanged "
               "(after-next still has no trailing underscore)")
+
+# ── `imminent`: three values, and zero is the loudest ────────────────────────
+#
+# `crate::nav::Stage::from_imminent` maps 0 -> TurnNow, 1 -> Approach, anything
+# else -> Cruise. That ordering is the trap: a reader who assumed the integer
+# rose with urgency would put the hero takeover on the cruise state. The body of
+# `getImminentTurnStatus` is four lines and this checks all of them.
+atd = os.path.join(tmp, "atd.java")
+if os.path.exists(atd):
+    text = open(atd, encoding="utf-8", errors="replace").read()
+    body = re.search(r"getImminentTurnStatus\s*\([^)]*\)\s*\{(.*?)\n\t\}", text, re.S)
+    if not body:
+        fail.append("AnnounceTimeDistances.getImminentTurnStatus is gone or reshaped — "
+                    "nav::Stage reads its return values.")
+    else:
+        b = re.sub(r"//.*", "", body.group(1))
+        want = [
+            (r"isTurnStateActive\([^)]*STATE_TURN_NOW\)[^{]*\{\s*return\s+0\s*;",
+             "STATE_TURN_NOW no longer returns 0 — Stage::TurnNow reads 0."),
+            (r"isTurnStateActive\([^)]*STATE_PREPARE_TURN\)[^{]*\{\s*return\s+1\s*;",
+             "STATE_PREPARE_TURN no longer returns 1 — Stage::Approach reads 1."),
+            (r"else\s*\{\s*return\s+-1\s*;",
+             "the cruising fall-through no longer returns -1 — Stage::Cruise reads it."),
+        ]
+        bad = [msg for pat, msg in want if not re.search(pat, b, re.S)]
+        fail.extend(bad)
+        # And nothing else may return from it: a fourth value would be a rung
+        # this ladder does not have, and `from_imminent` would read it as Cruise.
+        returns = sorted(set(re.findall(r"return\s+(-?\d+)\s*;", b)))
+        if returns and returns != ["-1", "0", "1"]:
+            fail.append(f"getImminentTurnStatus now returns {returns} — nav::Stage "
+                        "knows only -1, 0 and 1.")
+        if not bad:
+            print("  imminent: still -1 cruise / 1 prepare / 0 turn-now "
+                  "(zero is the most urgent)")
 
 if fail:
     print()

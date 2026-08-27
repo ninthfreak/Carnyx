@@ -8,6 +8,7 @@ slint::include_modules!();
 
 pub mod android;
 pub mod app;
+pub mod arrow;
 pub mod callsigns;
 pub mod clock;
 pub mod crashlog;
@@ -22,6 +23,7 @@ pub mod settings;
 pub mod signal;
 pub mod station;
 pub mod stations;
+pub mod units;
 
 /// Build the window and drive it from the real services.
 ///

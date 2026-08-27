@@ -1,5 +1,5 @@
 import { Pal, Metrics } from "tokens.slint";
-import { Preset, HeroSnapshot, Overlay, EggTheme, LogoPlate } from "types.slint";
+import { Preset, HeroSnapshot, Overlay, EggTheme, LogoPlate, NavStage } from "types.slint";
 import { Face } from "face.slint";
 import { NearbyOverlay, NearbyState, NearbyStation, GenreColumn, NearbyTab } from "nearby.slint";
 import {
@@ -87,6 +87,39 @@ export component AppWindow inherits Window {
     /// OsmAnd's own map is in front. The handoff hides the whole layer here,
     /// driver-overridable — so this is published and not obeyed in Rust.
     in property <bool> nav-map-visible: false;
+    /// WHICH OF §4.9'S THREE STAGES the maneuver layer is in. `idle` covers both
+    /// "no route" and "suppressed", which is all a layer that draws nothing
+    /// needs to know. Decided in `App::push_nav` from OsmAnd's own
+    /// `next_turn_imminent`.
+    in property <NavStage> nav-stage: NavStage.idle;
+    /// How far along this leg the driver is, 0 to 1 — the stage-1 hairline's
+    /// width. The denominator is this build's own; see `crate::nav::Nav::progress`.
+    in property <float> nav-progress: 0.0;
+    /// The maneuver arrow as SVG path data on a 24-unit box, straight from
+    /// `crate::arrow`. EMPTY DRAWS NOTHING, which is what an unrecognised turn
+    /// type gets — an arrow is an instruction and a wrong one is worse than none.
+    in property <string> nav-arrow;
+    in property <string> nav-after-arrow;
+    /// A roundabout's exit number, set inside the ring. Empty when OsmAnd did
+    /// not name one.
+    in property <string> nav-exit;
+    in property <string> nav-after-exit;
+    /// The arrival time, already local and already formatted — `4:35 PM`,
+    /// `16:35`. In the UI face, not DSEG7 (§4.9), so it carries no segment-font
+    /// blank. Empty when there is no route or no clock to read.
+    in property <string> nav-eta;
+    /// Distance to the DESTINATION, not to the turn. Joins the ETA on the tall
+    /// track, where §4.9 says there is room.
+    in property <string> nav-left-distance;
+    /// MAY THE MANEUVER LAYER DRAW? (§4.9) — `nav-active` and not suppressed by
+    /// OsmAnd's own map being in front. This is the ONE gate the layer binds to;
+    /// `nav-active` stays raw so the settings sub-line can still say WHY nothing
+    /// is showing. Decided in `App::push_nav`.
+    in property <bool> nav-showing: false;
+    /// The AIDL service is bound AND answering — the OsmAnd tell's lit state
+    /// (§4.9). Derived from the poll's freshness rather than from `bindService`
+    /// having returned true; see `App::push_nav`.
+    in property <bool> nav-linked: false;
 
     /// §4.8's clock, already formatted by Rust. EMPTY DRAWS NOTHING.
     in property <string> clock-time;
@@ -224,7 +257,11 @@ export component AppWindow inherits Window {
     /// What the Clock row says underneath — it REPORTS the 12/24 format that
     /// Android is in, it does not offer it. See `crate::clock::sub_line`.
     in property <string> settings-clock-sub;
-    in property <bool> settings-nav-on: false;
+    in property <bool> settings-nav-on: true;
+    /// Settings ▸ NAVIGATION ▸ Hide when the map is showing (§4.9). Default on.
+    in property <bool> settings-nav-hide-on-map: true;
+    /// That row's own sub-line. See `crate::nav::hide_sub_line`.
+    in property <string> settings-nav-hide-sub;
     /// Which OsmAnd the switch found, or empty. Drawn in the row's sub-line so a
     /// driver can see whether it has anything to talk to WITHOUT turning it on.
     in property <string> settings-nav-sub;
@@ -262,6 +299,7 @@ export component AppWindow inherits Window {
     callback settings-set-release-on-sleep(bool);
     callback settings-set-clock-on(bool);
     callback settings-set-nav-on(bool);
+    callback settings-set-nav-hide-on-map(bool);
     callback settings-set-theme(string);
     callback settings-fix-battery();
     callback settings-set-logos(bool);
@@ -346,6 +384,19 @@ export component AppWindow inherits Window {
         clock-meridiem: root.clock-meridiem;
         gps-fix: root.gps-fix;
         in-motion: root.in-motion;
+        osmand-on: root.settings-nav-on;
+        osmand-linked: root.nav-linked;
+        nav-stage: root.nav-stage;
+        nav-progress: root.nav-progress;
+        nav-eta: root.nav-eta;
+        nav-left-distance: root.nav-left-distance;
+        nav-arrow: root.nav-arrow;
+        nav-exit: root.nav-exit;
+        nav-distance: root.nav-distance;
+        nav-street: root.nav-street;
+        nav-after-arrow: root.nav-after-arrow;
+        nav-after-exit: root.nav-after-exit;
+        nav-after-street: root.nav-after-street;
         presets: root.presets;
         active-index: root.active-index;
         prev-preset: root.prev-preset;
@@ -442,6 +493,8 @@ export component AppWindow inherits Window {
         clock-sub: root.settings-clock-sub;
         nav-on: root.settings-nav-on;
         nav-sub: root.settings-nav-sub;
+        nav-hide-on-map: root.settings-nav-hide-on-map;
+        nav-hide-sub: root.settings-nav-hide-sub;
         theme-chips: root.settings-theme-chips;
         theme: root.settings-theme;
         battery: root.settings-battery;
@@ -461,6 +514,7 @@ export component AppWindow inherits Window {
         set-release-on-sleep(v) => { root.settings-set-release-on-sleep(v); }
         set-clock-on(v) => { root.settings-set-clock-on(v); }
         set-nav-on(v) => { root.settings-set-nav-on(v); }
+        set-nav-hide-on-map(v) => { root.settings-set-nav-hide-on-map(v); }
         set-theme(t) => { root.settings-set-theme(t); }
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }

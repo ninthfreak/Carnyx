@@ -6,7 +6,7 @@
 import { Pal, Metrics, Font } from "tokens.slint";
 import { EggTheme, BandGear } from "types.slint";
 import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar,
-         ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon } from "icons.slint";
+         ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon, OsmAndMark } from "icons.slint";
 
 // One of the little status letters. Lit = full weight with a soft dark drop; off
 // = 32% with a faint 1px light emboss (an engraved look). §4.7 removes all of it
@@ -654,6 +654,10 @@ component OutOfBandPill inherits Rectangle {
 export component DrivingStatus inherits HorizontalLayout {
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
+    /// Settings ▸ TUNER ▸ Turn-by-turn. Off means no tell at all (§4.9).
+    in property <bool> osmand-on: false;
+    /// The AIDL service is bound AND answering. See `App::push_nav`.
+    in property <bool> osmand-linked: false;
     /// The band theme, for the airship alone.
     in property <EggTheme> egg;
 
@@ -691,6 +695,43 @@ export component DrivingStatus inherits HorizontalLayout {
         size: 34px;
         ink: Pal.amber;
         opacity: root.breathe;
+    }
+    // ── THE OSMAND TELL (§4.9) ──────────────────────────────────────────────
+    //
+    // "While the integration is enabled, OsmAnd's own mark sits in the right
+    // cluster between the vehicle-in-motion glyph and the GPS satellite (so the
+    // car glyph moves one slot left): full colour (#FF8800) once the AIDL
+    // service is bound, the flat text colour at ~30% when it is not — the same
+    // 'present but inert' language the GPS tell uses with no fix."
+    //
+    // ABSENT WHEN THE SWITCH IS OFF, not dimmed: "Off means no mirroring AND no
+    // tell in the status bar." Dim already means something else on this mark —
+    // enabled but not bound — and one glyph cannot carry two different
+    // absences.
+    //
+    // THE ORANGE IS A LITERAL AND NOT A PALETTE TOKEN, on purpose. It is
+    // OsmAnd's own #FF8800, near to but not `Pal.amber`: the amber family is
+    // this face's safety colour and this is somebody else's brand. Routing it
+    // through the palette would let a band theme restyle it, and §4.9 forbids
+    // exactly that for the maneuver layer.
+    if root.osmand-on: Rectangle {
+        // The mark's own rendered width, so the row's 12px spacing is the whole
+        // gap. §4.9 asks for "small negative margins" to close an optical gap;
+        // those cancel per-tile padding the reference carries and this build
+        // does not — its tiles are the ink.
+        width: 27px; height: 30px;
+        OsmAndMark {
+            // NUDGED DOWN 2dp so the DISC's centre lands on the row's, which is
+            // where the eye reads a round mark from. The glyph's box is not
+            // centred on its disc — the pin's tail hangs below — and the offset
+            // is that difference: the disc's centre sits 44.4% down a
+            // 60.75-unit box against the box's own 50%, which over 30px is
+            // 1.7px. §4.9 rounds it to 2.
+            y: 2px;
+            size: 30px;
+            color: root.osmand-linked ? #FF8800 : Pal.text;
+            opacity: root.osmand-linked ? 1.0 : 0.30;
+        }
     }
     // Always present: it communicates lock state. With no fix it is not greyed
     // but styled like a disabled tell — full text colour at ~32%.
@@ -740,6 +781,32 @@ export component StatusBar inherits Rectangle {
     out property <length> cluster-bottom: gear.absolute-position.y + gear.height
         + (Metrics.tall ? root.cluster-gap + root.nearby-disc-size : 0px);
     out property <length> gear-right: gear.absolute-position.x + gear.width;
+    /// Where the centred column ends — §4.9's cruise countdown hangs from this.
+    ///
+    /// ── COMPUTED, NOT MEASURED, AND FOR THE USUAL REASON ────────────────────
+    ///
+    /// §4.9 anchors the countdown to "the genre line's baseline, not the status
+    /// bar's box — the box runs deeper on the left for the RDS chip row, but the
+    /// centered column is clear from the genre down". The genre line's own id
+    /// cannot be reached: it lives inside two nested conditionals, and Slint
+    /// refuses ("Cannot access id"), which is the same wall `cluster-bottom` hit
+    /// and is solved the same way — derive it from the numbers that PLACE it.
+    ///
+    /// WIDE AND LANDSCAPE: the genre line is a column of the inline cluster and
+    /// is given `band-h: Metrics.stereo-h`, so it is a box of exactly that
+    /// height at the row's top. Its baseline is the bar's own top plus that
+    /// band. The RDS chip strip hangs BELOW this and is deliberately not counted
+    /// — that is the "box runs deeper" the spec is telling us to ignore.
+    ///
+    /// TALL: the genre line is in the separately centred middle column, under a
+    /// stereo cluster whose height varies with its tell strip, and none of that
+    /// is a named number. So this reports the bar's own bottom instead, which is
+    /// BELOW the genre line rather than above it — the countdown sits a little
+    /// lower than §4.9 draws it and can never land on top of the column. Said
+    /// plainly rather than left as a silent difference.
+    out property <length> genre-bottom: Metrics.tall
+        ? root.absolute-position.y + root.height
+        : root.absolute-position.y + Metrics.stereo-h;
     in property <int> full-pairs: 0;
     in property <bool> half: false;
     in property <float> dot-opacity: 1.0;
@@ -777,6 +844,9 @@ export component StatusBar inherits Rectangle {
     in property <bool> dead: false;
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
+    /// The OsmAnd tell (§4.9). See `DrivingStatus`.
+    in property <bool> osmand-on: false;
+    in property <bool> osmand-linked: false;
     in property <bool> reordering: false;
 
     callback open-settings();
@@ -915,7 +985,13 @@ export component StatusBar inherits Rectangle {
                 alignment: end;
                 if !Metrics.tall: VerticalLayout {
                     alignment: center;
-                    DrivingStatus { gps-fix: root.gps-fix; in-motion: root.in-motion; egg: root.egg; }
+                    DrivingStatus {
+                        gps-fix: root.gps-fix;
+                        in-motion: root.in-motion;
+                        osmand-on: root.osmand-on;
+                        osmand-linked: root.osmand-linked;
+                        egg: root.egg;
+                    }
                 }
                 gear := Rectangle {
                     width: 44px; height: 44px;
