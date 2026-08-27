@@ -49,6 +49,32 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+# ── FIRST: EVERY init IS CALLED, NOT JUST CORRECT ────────────────────────────
+#
+# Type-checking the seam says a module WOULD work; it says nothing about
+# whether `android_main` ever runs it. `nav::init` shipped complete, correct,
+# type-checked by this very script — and uncalled, so `installedPackage`
+# answered "" and the settings row reported OsmAnd "not installed" on a unit
+# with OsmAnd mid-route. `android_main` is the one function no container check
+# can compile (skia's build script needs an NDK), so the wiring is held by
+# grep: every src/android module that exports an `init` must be invoked from
+# src/lib.rs — by its own path, or through mod.rs's `pub use nwd::init`, which
+# lib.rs calls as `android::init`.
+for f in src/android/*.rs; do
+    m="$(basename "$f" .rs)"
+    grep -q "pub unsafe fn init\|pub fn init" "$f" || continue
+    if grep -q "android::${m}::init" src/lib.rs; then
+        continue
+    fi
+    if grep -q "pub use ${m}::{init" src/android/mod.rs && grep -q "android::init(" src/lib.rs; then
+        continue
+    fi
+    echo "FAIL: src/android/${m}.rs exports init() and src/lib.rs never calls it —" >&2
+    echo "      the class never loads and every probe answers 'not installed'." >&2
+    exit 1
+done
+echo "init wiring: every android module init is called from android_main"
 ROOT="$PWD"
 
 # The modules with no JNI in them, or whose shape the harness cannot stub. Named
