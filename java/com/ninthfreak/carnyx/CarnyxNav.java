@@ -138,6 +138,17 @@ public final class CarnyxNav {
      */
     private static volatile boolean refusedReported;
 
+    /**
+     * Whether a poll fault has been reported, edge-triggered like the refusal.
+     *
+     * <p>THE POLL'S CATCH WAS SILENT AND IT COST A DRIVE. The eager-unparcel
+     * fault threw once a second into logcat, which this unit cannot show, and
+     * the drive log had nothing to say about a feed that was dead with the
+     * permission gate open. One line per edge is the fix; per-tick logging
+     * would fill the 600-line ring in ten minutes.
+     */
+    private static volatile boolean pollFaultReported;
+
     private CarnyxNav() {
     }
 
@@ -347,12 +358,21 @@ public final class CarnyxNav {
                 try {
                     answered = pollOnce(api);
                 } catch (Throwable t) {
-                    // Not logged per failure: this runs once a second and a
-                    // persistent fault would fill the ring. The link state is
-                    // already reported by the connection callbacks.
                     Log.w(TAG, "getAppInfo failed", t);
+                    // ONE LINE PER EDGE, WITH THE REASON. The fault that taught
+                    // this lesson was a BadParcelableException thrown on every
+                    // poll of a drive — visible nowhere, because this catch
+                    // logged only to logcat and the unit has no adb.
+                    if (!pollFaultReported) {
+                        pollFaultReported = true;
+                        safeNote("nav: getAppInfo failing — " + why(t));
+                    }
                 }
                 if (answered != null) {
+                    if (pollFaultReported) {
+                        pollFaultReported = false;
+                        safeNote("nav: getAppInfo recovered");
+                    }
                     afterPoll(answered);
                 }
             }
