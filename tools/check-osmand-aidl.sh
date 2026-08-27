@@ -40,6 +40,98 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
+# ── LOCAL FIRST: EVERY .aidl MUST RESOLVE WITHOUT THE SDK'S HELP ─────────────
+#
+# This section needs no network and ALWAYS runs. It re-implements the one rule
+# our `aidl` invocation lives by — `-I java` and nothing else — and holds every
+# .aidl in the tree to it: each import must resolve to a file on the include
+# path, and every type a signature uses must be a builtin, an import, or a
+# same-package neighbour.
+#
+# IT EXISTS BECAUSE THE CALLBACK SHIPPED UNRESOLVABLE. `onKeyEvent(in KeyEvent)`
+# is upstream's line, and upstream compiles it with no import because Gradle
+# passes the SDK's preprocessed framework.aidl (`-p`), where every framework
+# parcelable is pre-declared. Our build.rs passes no `-p`, no container check
+# ran aidl (there is no SDK here), and the first device build died in the aidl
+# step. Framework types need a declaration under java/ (see
+# java/android/view/KeyEvent.aidl) — and this is what notices the next one
+# BEFORE a build on the unit's own machine does.
+python3 - <<'LOCALPY'
+import os, re, sys
+
+ROOT = "java"
+BUILTIN = {
+    "void", "int", "long", "boolean", "float", "double", "byte", "char", "short",
+    "String", "CharSequence", "List", "Map", "IBinder", "FileDescriptor",
+    "in", "out", "inout", "oneway", "interface", "parcelable", "import", "package",
+}
+fail = []
+
+aidls = []
+for dirpath, _, names in os.walk(ROOT):
+    for n in names:
+        if n.endswith(".aidl"):
+            aidls.append(os.path.join(dirpath, n))
+
+for path in sorted(aidls):
+    text = open(path, encoding="utf-8").read()
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//.*", "", text)
+
+    pkg = re.search(r"\bpackage\s+([\w.]+)\s*;", text)
+    pkg = pkg.group(1) if pkg else ""
+    if pkg and not path.startswith(os.path.join(ROOT, *pkg.split("."))):
+        fail.append(f"{path}: declares package {pkg}, which is not its directory.")
+
+    imports = re.findall(r"\bimport\s+([\w.]+)\s*;", text)
+    by_simple = {}
+    for imp in imports:
+        f = os.path.join(ROOT, *imp.split(".")) + ".aidl"
+        if not os.path.exists(f):
+            fail.append(f"{path}: import {imp} has no {f} — aidl searches -I{ROOT} and nowhere else.")
+        by_simple[imp.rsplit(".", 1)[-1]] = imp
+
+    # Parcelable declarations have no signatures to scan.
+    if re.search(r"\bparcelable\s+\w+\s*;", text):
+        continue
+
+    # TYPE POSITIONS ONLY — return types and parameter types. A first cut
+    # scanned every capitalised identifier and flagged the NWD tree's
+    # ALL-CAPS method names (`void AMS();`), which have built on the unit
+    # for weeks. Method names are not resolved by aidl; types are.
+    body = text[text.index("{"):] if "{" in text else ""
+    used = set()
+    for ret, _name, params in re.findall(r"([\w.<>\[\], ]+?)\s+(\w+)\s*\(([^)]*)\)\s*;", body):
+        used.update(re.findall(r"[\w.]+", ret))
+        for param in params.split(","):
+            toks = param.split()
+            while toks and toks[0] in ("in", "out", "inout"):
+                toks.pop(0)
+            if len(toks) >= 2:
+                for t in toks[:-1]:
+                    used.update(re.findall(r"[\w.]+", t))
+    for t in sorted(used):
+        simple = t.rsplit(".", 1)[-1]
+        if simple in BUILTIN or simple in by_simple or not simple[:1].isupper():
+            continue
+        qualified = os.path.join(ROOT, *t.split(".")) + ".aidl" if "." in t else ""
+        here = os.path.join(os.path.dirname(path), simple + ".aidl")
+        if (qualified and os.path.exists(qualified)) or os.path.exists(here):
+            continue
+        fail.append(f"{path}: uses type {t}, which is not imported, not beside it, and not a builtin.")
+
+if fail:
+    for f in sorted(set(fail)):
+        print("FAIL: " + f)
+    sys.exit(1)
+print(f"  local: {len(aidls)} .aidl files resolve with -I{ROOT} alone (framework types declared)")
+LOCALPY
+if [ $? -ne 0 ]; then
+    echo
+    echo "AIDL will not resolve on the machine that builds the APK." >&2
+    exit 1
+fi
+
 BASE="https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd-api/src/net/osmand/aidlapi"
 OURS="java/net/osmand/aidlapi"
 TMP="$(mktemp -d)"

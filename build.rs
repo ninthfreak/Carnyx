@@ -92,9 +92,11 @@ const AIDL_INTERFACES: &[&str] = &[
     "com/nwd/radio/service/RadioCallback.aidl",
     // OSMAND. The interface is a TRIMMED copy whose empty slots hold the
     // transaction numbering; the callback is whole because we implement it.
-    // `tools/check-osmand-aidl.sh` checks both against upstream. The seven
-    // `parcelable` declarations beside them are include-path inputs, not
-    // arguments — same rule as the vendor radio's two.
+    // `tools/check-osmand-aidl.sh` checks both against upstream. The
+    // `parcelable` declarations beside them — and the FRAMEWORK one at
+    // java/android/view/KeyEvent.aidl, which declares a type android.jar
+    // provides so it must never grow a .java — are include-path inputs, not
+    // arguments; same rule as the vendor radio's two.
     "net/osmand/aidlapi/IOsmAndAidlInterface.aidl",
     "net/osmand/aidlapi/IOsmAndAidlCallback.aidl",
 ];
