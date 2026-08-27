@@ -172,13 +172,17 @@ export component RadioTextStrip inherits Rectangle {
         height: parent.height;
         padding-left: Metrics.s(22);
         padding-right: Metrics.s(22);
-        spacing: Metrics.s(14);
+        spacing: Metrics.s(Metrics.tall ? 16 : 14);
         cross-axis-alignment: center;
 
         // Gated on the path, like the countdown's: an empty TurnArrow is a
-        // 34dp hole at the head of the line, not an absence.
+        // hole at the head of the line, not an absence. TALL LARGER THAN WIDE,
+        // per the v3.0.1 correction — `Metrics.k` already shrinks the tall
+        // track's own dp, so a ramp that was ALSO smaller there compounded it
+        // and inverted the design (stage 3's distance landed at 30px against
+        // the spec's 60).
         if root.nav-arrow != "": TurnArrow {
-            size: Metrics.s(34);
+            size: Metrics.s(Metrics.tall ? 52 : 46);
             color: Pal.amber;
             commands: root.nav-arrow;
             exit: root.nav-exit;
@@ -188,7 +192,7 @@ export component RadioTextStrip inherits Rectangle {
         Text {
             text: root.nav-distance;
             font-family: Font.face; font-weight: Font.bold;
-            font-size: Metrics.s(24);
+            font-size: Metrics.s(Metrics.tall ? 38 : 34);
             color: Pal.amber;
             vertical-alignment: center;
         }
@@ -198,47 +202,75 @@ export component RadioTextStrip inherits Rectangle {
             horizontal-stretch: 1;
             text: root.nav-street;
             font-family: Font.face; font-weight: Font.bold;
-            font-size: Metrics.s(19);
+            font-size: Metrics.s(Metrics.tall ? 27 : 25);
             color: root.ink;
             overflow: elide;
             vertical-alignment: center;
         }
-        // THE HAIRLINE RULE §4.9 asks for, and the `then` block behind it. Both
-        // collapse when there is no turn after this one — a rule with nothing on
-        // the far side of it is a line for its own sake.
-        if root.nav-after-arrow != "": Rectangle {
-            width: 1px;
-            height: parent.height * 0.55;
-            background: root.plate-edge;
-        }
-        // PACKED, NOT SPREAD. Without `alignment: start` the inner row shares
-        // out whatever width the elided street left it, and "then" drifts a
-        // hundred dp from its own arrow.
+        // THE HAIRLINE RULE §4.9 asks for, and the `then` block behind it — one
+        // wrapper now, not two independently-gated siblings, because both live
+        // or die on the same condition and the rule's own gap TO the block is a
+        // number distinct from the row's general spacing (see below).
         if root.nav-after-arrow != "": HorizontalLayout {
-            spacing: Metrics.s(8);
-            alignment: start;
+            // THE 1PX RULE'S OWN CLEARANCE FROM THE `then` BLOCK, per the v3.0.1
+            // correction — s(12) tall / s(16) wide, which is NOT the row's
+            // general spacing above (s(16) tall / s(14) wide) and has to be
+            // this layout's own, nested one level in for that reason.
+            spacing: Metrics.s(Metrics.tall ? 12 : 16);
             cross-axis-alignment: center;
-            Text {
-                text: "then";
-                font-family: Font.face;
-                font-size: Metrics.s(14);
-                color: Pal.dim;
-                vertical-alignment: center;
+
+            Rectangle {
+                width: 1px;
+                // `root.height`, NOT `parent.height` — the rule now sits one
+                // layout deeper than it used to (see the wrapper above), and
+                // `parent` here is that wrapper, whose own height this rule
+                // would then be part of deciding. `root` is the strip itself,
+                // same 55% it always was.
+                height: root.height * 0.55;
+                background: root.plate-edge;
             }
-            TurnArrow {
-                size: Metrics.s(20);
-                color: Pal.dim;
-                commands: root.nav-after-arrow;
-                exit: root.nav-after-exit;
-                stroke-w: 2.4;
-            }
-            if root.nav-after-street != "": Text {
-                text: root.nav-after-street;
-                font-family: Font.face;
-                font-size: Metrics.s(15);
-                color: Pal.dim;
-                overflow: elide;
-                vertical-alignment: center;
+            // PACKED, NOT SPREAD. Without `alignment: start` the inner row
+            // shares out whatever width the elided street left it, and "then"
+            // drifts a hundred dp from its own arrow.
+            HorizontalLayout {
+                alignment: start;
+                cross-axis-alignment: center;
+                Text {
+                    text: "THEN";
+                    font-family: Font.face; font-weight: Font.bold;
+                    font-size: Metrics.s(14);
+                    letter-spacing: 1.4px;
+                    color: Pal.dim;
+                    vertical-alignment: center;
+                }
+                // A SPACER, NOT THE LAYOUT'S `spacing` — the label-to-arrow gap
+                // (s(7)) and the arrow-to-street one (s(6) tall / s(10) wide)
+                // are two different numbers in the v3.0.1 correction, and a
+                // HorizontalLayout's `spacing` can only state one.
+                Rectangle { width: Metrics.s(7); height: 1px; }
+                TurnArrow {
+                    size: Metrics.s(26);
+                    color: Pal.dim;
+                    commands: root.nav-after-arrow;
+                    exit: root.nav-after-exit;
+                    stroke-w: 2.4;
+                }
+                if root.nav-after-street != "": Rectangle {
+                    width: Metrics.s(Metrics.tall ? 6 : 10); height: 1px;
+                }
+                if root.nav-after-street != "": Text {
+                    text: root.nav-after-street;
+                    font-family: Font.face;
+                    font-size: Metrics.s(17);
+                    color: Pal.dim;
+                    overflow: elide;
+                    // A CAP, NOT A FIXED WIDTH — short streets keep their own
+                    // preferred size, and only a long one is clipped at the
+                    // v3.0.1 correction's s(150) tall / s(240) wide.
+                    width: Math.min(self.preferred-width,
+                        Metrics.s(Metrics.tall ? 150 : 240));
+                    vertical-alignment: center;
+                }
             }
         }
     }
@@ -250,19 +282,24 @@ export component RadioTextStrip inherits Rectangle {
         height: parent.height;
         padding-left: Metrics.s(22);
         padding-right: Metrics.s(22);
-        spacing: Metrics.s(12);
+        spacing: Metrics.s(9);
         alignment: center;
         cross-axis-alignment: center;
 
+        // THE LABEL AND THE ARROW ARE THE SAME AT BOTH STAGES, per the v3.0.1
+        // correction — only the STREET promotes here (17sp/400 -> 20sp/700).
+        // The tree had promoted the label and the arrow instead and left the
+        // street where stage 2 found it.
         Text {
-            text: "then";
-            font-family: Font.face;
-            font-size: Metrics.s(17);
+            text: "THEN";
+            font-family: Font.face; font-weight: Font.bold;
+            font-size: Metrics.s(14);
+            letter-spacing: 1.4px;
             color: Pal.dim;
             vertical-alignment: center;
         }
         TurnArrow {
-            size: Metrics.s(28);
+            size: Metrics.s(26);
             color: Pal.dim;
             commands: root.nav-after-arrow;
             exit: root.nav-after-exit;
@@ -271,7 +308,7 @@ export component RadioTextStrip inherits Rectangle {
         if root.nav-after-street != "": Text {
             text: root.nav-after-street;
             font-family: Font.face; font-weight: Font.bold;
-            font-size: Metrics.s(19);
+            font-size: Metrics.s(20);
             color: Pal.dim;
             overflow: elide;
             vertical-alignment: center;
@@ -864,13 +901,20 @@ export component HeroCard inherits Rectangle {
             padding-bottom: root.pad-v;
             padding-left: root.pad-h;
             padding-right: root.pad-h;
-            spacing: Metrics.s(6) * root.scale;
+            // s(2), per the v3.0.1 correction — the distance and the street
+            // read as one block, not as two rows, at the gap the spec states.
+            // 605x248 on the wide track fits 88 + 52 + 25 with this gap and
+            // the card's own `pad-v`.
+            spacing: Metrics.s(2) * root.scale;
             alignment: center;
 
             HorizontalLayout {
                 alignment: center;
+                // TALL LARGER THAN WIDE, per the v3.0.1 correction, same as
+                // the strip's stage-2 arrow above — `Metrics.k` already
+                // shrinks the tall track's dp on its own.
                 TurnArrow {
-                    size: Metrics.s(root.tall ? 84 : 100) * root.scale;
+                    size: Metrics.s(root.tall ? 104 : 88) * root.scale;
                     color: Pal.amber;
                     commands: root.nav-arrow;
                     exit: root.nav-exit;
@@ -882,7 +926,7 @@ export component HeroCard inherits Rectangle {
                 text: root.nav-distance;
                 horizontal-alignment: center;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.s(root.tall ? 40 : 46) * root.scale;
+                font-size: Metrics.s(root.tall ? 60 : 52) * root.scale;
                 color: Pal.amber;
             }
             // THE STREET COLLAPSES WHEN IT IS MISSING, which is the handoff's rule
@@ -892,8 +936,9 @@ export component HeroCard inherits Rectangle {
                 horizontal-alignment: center;
                 overflow: elide;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.s(root.tall ? 20 : 24) * root.scale;
+                font-size: Metrics.s(root.tall ? 28 : 25) * root.scale;
                 color: root.ink;
+                width: Math.min(self.preferred-width, parent.width * 0.92);
             }
         }
 
@@ -1121,9 +1166,13 @@ export component HeroCard inherits Rectangle {
     // straight through it. So the mark sits one star-width further in, on the
     // star's own line — the corner is shared rather than taken, and the driver
     // keeps a control they can still reach.
+    // THE MARK'S OWN INSET, per the v3.0.1 correction — s(14) tall / s(12)
+    // wide, NOT `root.corner` (s(16)/s(18)), which stays the star's alone.
+    // The star-width shift above is unaffected and still holds.
+    property <length> corner-mark-inset: Metrics.s(root.tall ? 14 : 12) * root.scale;
     property <length> corner-mark-w: Metrics.s(root.tall ? 115 : 101) * root.scale;
     property <length> corner-mark-x:
-        root.width - root.corner - Metrics.star * root.scale
+        root.width - root.corner-mark-inset - Metrics.star * root.scale
         - Metrics.s(10) * root.scale - root.corner-mark-w;
 
     if root.taking-over && root.has-logo && !root.egg.suppress-logo: Image {
@@ -1136,7 +1185,7 @@ export component HeroCard inherits Rectangle {
         width: root.corner-mark-w;
         height: Metrics.star * root.scale;
         x: root.corner-mark-x;
-        y: root.corner;
+        y: root.corner-mark-inset;
     }
     if root.taking-over && (!root.has-logo || root.egg.suppress-logo) && root.ident != "": Text {
         text: root.ident;
@@ -1144,13 +1193,16 @@ export component HeroCard inherits Rectangle {
         vertical-alignment: center;
         overflow: elide;
         font-family: Font.face; font-weight: Font.bold;
-        font-size: Metrics.s(root.tall ? 20 : 24) * root.scale;
+        // s(19)/s(17), per the v3.0.1 correction — the call-sign fallback,
+        // not the logo image above, which keeps `corner-mark-w`.
+        font-size: Metrics.s(root.tall ? 19 : 17) * root.scale;
+        letter-spacing: 0.3px * root.scale;
         // "the call sign in `dim` when a station has no logo" (§4.9).
         color: Pal.dim;
-        width: root.corner-mark-w;
+        width: Math.min(self.preferred-width, root.width * 0.42);
         height: Metrics.star * root.scale;
-        x: root.corner-mark-x;
-        y: root.corner;
+        x: root.corner-mark-x + root.corner-mark-w - self.width;
+        y: root.corner-mark-inset;
     }
 
 

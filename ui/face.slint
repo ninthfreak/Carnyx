@@ -516,10 +516,15 @@ export component Face inherits Rectangle {
             spacing: Metrics.s(9);
             cross-axis-alignment: center;
 
+            // A LABEL, NOT A WORD IN A SENTENCE — the v3.0.1 correction: at
+            // 16-17sp lowercase it competed with the distance beside it.
+            // s(13)/700/1.5px/uppercase reads as a tag the way the ETA
+            // label and the `THEN` blocks above it do.
             Text {
-                text: "in";
+                text: "IN";
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.tall ? Metrics.s(17) : Metrics.s(16);
+                font-size: Metrics.s(13);
+                letter-spacing: 1.5px;
                 color: Pal.dim;
             }
             Text {
@@ -530,12 +535,13 @@ export component Face inherits Rectangle {
                 color: Pal.amber;
             }
             // GATED ON THE PATH: an unknown turn type arrives as an empty
-            // string, and an empty TurnArrow is not nothing — it is a 26dp
-            // hole in the middle of the line. The distance and street still
-            // show, which is `NavState::Unknown`'s own rule: the distance is
-            // good and the glyph is not.
+            // string, and an empty TurnArrow is not nothing — it is a hole
+            // in the middle of the line. The distance and street still show,
+            // which is `NavState::Unknown`'s own rule: the distance is good
+            // and the glyph is not.
             if root.nav-arrow != "": TurnArrow {
-                size: Metrics.s(26);
+                // The tall-track step the v3.0.1 correction found missing.
+                size: Metrics.s(Metrics.tall ? 28 : 26);
                 color: Pal.amber;
                 commands: root.nav-arrow;
                 exit: root.nav-exit;
@@ -547,7 +553,8 @@ export component Face inherits Rectangle {
             if root.nav-street != "": Text {
                 text: root.nav-street;
                 font-family: Font.face;
-                font-size: Metrics.s(18);
+                // The tall-track step the v3.0.1 correction found missing.
+                font-size: Metrics.s(Metrics.tall ? 19 : 18);
                 color: Pal.dim;
                 overflow: elide;
             }
