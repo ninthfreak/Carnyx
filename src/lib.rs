@@ -274,6 +274,27 @@ fn android_main(android_app: slint::android::AndroidApp) {
         Err(_) => None,
     };
 
+    // ── TURN-BY-TURN'S CLASS (§4.9), AND IT MUST PRECEDE `with_tuner` ────────
+    //
+    // The App's CONSTRUCTION is what asks `CarnyxNav.installedPackage` and —
+    // switch permitting — binds OsmAnd, so a class loaded after `with_tuner`
+    // answers a question that has already been asked: `installed_package()`
+    // returns `""` with no class ref, the settings row reports "OsmAnd is not
+    // installed" on a unit with OsmAnd mid-route, and the bind never happens.
+    //
+    // THIS CALL WAS MISSING ENTIRELY, and that is the whole story of the first
+    // drive with a route running: every seam, manifest entry and AIDL file was
+    // in place, `nav::init` existed and was correct, and nothing called it.
+    // `android_main` is the one function no container check can compile — its
+    // own header says nothing below its line has ever executed — and the
+    // init-wiring check at the top of tools/check-jni.sh now holds this list
+    // complete.
+    //
+    // The outcome is logged AFTER `with_tuner`, which is where the log lives.
+    //
+    // SAFETY: same pointers, same lifetime argument as the tuner above.
+    let nav_ready = unsafe { android::nav::init(vm, activity) };
+
     let _driver = app::App::with_tuner(
         &ui,
         &db_path,
@@ -315,6 +336,14 @@ fn android_main(android_app: slint::android::AndroidApp) {
     //   `service: none`                                          it never ran
     //
     // SAFETY: same pointers, same lifetime argument as the tuner above.
+    // The nav class's receipt, in the driver-readable log — same rule as the
+    // service line below: this unit has no adb, and "the class never loaded"
+    // and "OsmAnd is not installed" must not read identically.
+    match &nav_ready {
+        Ok(()) => _driver.log_platform("nav: seam ready"),
+        Err(e) => _driver.log_platform(&format!("nav: seam unavailable — {e}")),
+    }
+
     let started = unsafe { android::service::init(vm, activity) }.is_ok()
         && android::service::start(ui.get_freq_label().as_str());
     _driver.log_platform(if started {
