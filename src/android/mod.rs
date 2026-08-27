@@ -428,6 +428,10 @@ pub enum TunerEvent {
     NavVoice { cmds: Vec<String>, played: Vec<String> },
     /// One `getAppInfo` poll answer — the half of the feed that has words in it.
     NavInfo(NavRoute),
+    /// OsmAnd's gate closed on this app (true) or opened (false) — the
+    /// connected-apps whitelist `OsmandAidlServiceV2.getApi` checks on every
+    /// call. See `CarnyxNav.afterPoll`.
+    NavRefused(bool),
     /// A location fix, or the loss of one.
     ///
     /// Not a tuner event, and it travels on the tuner's queue anyway: there is
@@ -999,6 +1003,20 @@ pub fn ingest_nav(distance_to: i32, turn_type: i32, left_side: bool) {
 /// One voice-router announcement from OsmAnd. Called on a BINDER THREAD.
 pub fn ingest_nav_voice(cmds: Vec<String>, played: Vec<String>) {
     emit(TunerEvent::NavVoice { cmds, played });
+}
+
+/// The refused edge from `CarnyxNav` — see [`TunerEvent::NavRefused`].
+///
+/// `jboolean` IS `bool` in this crate's jni; no `!= 0`, same as `ingest_nav`.
+#[cfg(target_os = "android")]
+pub fn ingest_nav_refused(refused: jni::sys::jboolean) {
+    emit(TunerEvent::NavRefused(refused));
+}
+
+/// The same, from a host test. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn ingest_nav_refused(refused: bool) {
+    emit(TunerEvent::NavRefused(refused));
 }
 
 /// The poll's answer. Called on `CarnyxNav`'s own poll thread.

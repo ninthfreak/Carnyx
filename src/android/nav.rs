@@ -52,6 +52,24 @@ extern "system" fn native_nav<'a>(
     });
 }
 
+/// Java → Rust: the refused edge — OsmAnd's gate closed (true) or opened
+/// (false).
+///
+/// A STATE, NOT A LOG LINE. The note beside it goes to the diagnostics ring;
+/// this goes to the settings row, which has to tell bound-but-refused apart
+/// from bound-but-idle because only one of them has a fix the driver can
+/// perform. See `CarnyxNav.afterPoll` for how the edges are found.
+extern "system" fn native_nav_refused<'a>(
+    mut env: EnvUnowned<'a>,
+    _class: JClass<'a>,
+    refused: jboolean,
+) {
+    guard(&mut env, |_env| {
+        super::ingest_nav_refused(refused);
+        Ok(())
+    });
+}
+
 /// Java → Rust: one voice-router announcement, as its two lists.
 ///
 /// BOTH LISTS, unjoined. Which one to show is a decision and it is made in
@@ -193,6 +211,11 @@ fn natives() -> Vec<NativeMethod<'static>> {
                 jni_str!("nativeNavNote"),
                 jni_str!("(Ljava/lang/String;)V"),
                 native_nav_note as *mut c_void,
+            ),
+            NativeMethod::from_raw_parts(
+                jni_str!("nativeNavRefused"),
+                jni_str!("(Z)V"),
+                native_nav_refused as *mut c_void,
             ),
         ]
     }

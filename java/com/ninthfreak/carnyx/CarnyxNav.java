@@ -56,10 +56,17 @@ import java.util.List;
  * {@code net.osmand.aidl.*}. Binding V1 with a V2 interface would hand back a
  * binder whose descriptor does not match and every call would throw.
  *
- * <p>NEITHER IS PERMISSION-PROTECTED and {@code onBind} returns the binder
- * unconditionally — there is no whitelist, no API key and no plugin to enable.
- * Read out of OsmAnd's own source rather than assumed; see
- * {@code tools/check-osmand-aidl.sh}, which re-reads it.
+ * <p>THE BIND IS OPEN AND EVERY CALL IS GATED, and an earlier version of this
+ * comment had that half wrong — it said "no whitelist, no plugin to enable",
+ * read off {@code onBind} alone, and the first drive with a route disproved it.
+ * {@code OsmandAidlServiceV2.getApi} checks {@code isAppEnabled(callingPackage)}
+ * on EVERY method: an unknown caller is added to OsmAnd's connected-apps list
+ * DISABLED ({@code new ConnectedApp(app, pack, false)}), saved, and refused —
+ * registrations return -1 and {@code getAppInfo} returns null, silently, until
+ * the driver opens OsmAnd's Plugins screen and switches this app on. The
+ * refused state is detected below, reported on the settings row, and retried
+ * once the poll starts answering. {@code tools/check-osmand-aidl.sh} pins the
+ * gate against upstream.
  *
  * <h2>Four package names, tried in order</h2>
  *
@@ -125,11 +132,26 @@ public final class CarnyxNav {
     private static long navCallbackId = -1L;
     private static long voiceCallbackId = -1L;
 
+    /**
+     * Whether the refused state has been reported, so the 1 Hz poll notes the
+     * EDGES and not every tick — the same restraint the poll's own catch shows.
+     */
+    private static volatile boolean refusedReported;
+
     private CarnyxNav() {
     }
 
     /** Three integers, exactly as they arrived. See {@code src/nav.rs}. */
     private static native void nativeNav(int distanceTo, int turnType, boolean leftSide);
+
+    /**
+     * OsmAnd is refusing this app (true), or has started answering (false).
+     *
+     * <p>THE ONE LINK STATE A GRAY TELL CANNOT EXPLAIN. Bound-but-refused looks
+     * identical to bound-but-idle from the face, and the settings row has to
+     * tell the driver which one they are in — one of them has a fix.
+     */
+    private static native void nativeNavRefused(boolean refused);
 
     /**
      * The voice router's two lists, unjoined and unfiltered.
@@ -317,13 +339,21 @@ public final class CarnyxNav {
                 api = osmand;
             }
             if (api != null) {
+                // TRI-STATE ON PURPOSE. A throw is a transport fault and says
+                // nothing about permission — marking it refused would flash the
+                // wrong instruction at the driver over a blip. Only a clean
+                // null answer means refused; only a real answer means accepted.
+                Boolean answered = null;
                 try {
-                    pollOnce(api);
+                    answered = pollOnce(api);
                 } catch (Throwable t) {
                     // Not logged per failure: this runs once a second and a
                     // persistent fault would fill the ring. The link state is
                     // already reported by the connection callbacks.
                     Log.w(TAG, "getAppInfo failed", t);
+                }
+                if (answered != null) {
+                    afterPoll(answered);
                 }
             }
             Handler h = pollHandler;
@@ -333,11 +363,17 @@ public final class CarnyxNav {
         }
     };
 
-    /** Ask once and hand every field across. */
-    private static void pollOnce(IOsmAndAidlInterface api) throws RemoteException {
+    /**
+     * Ask once and hand every field across.
+     *
+     * @return whether OsmAnd ANSWERED. Null is not "no route" — an idle OsmAnd
+     *     answers with zeroed fields — it is `getApi` refusing the caller, and
+     *     the poll's follow-up turns that into the refused state.
+     */
+    private static boolean pollOnce(IOsmAndAidlInterface api) throws RemoteException {
         AppInfoParams info = api.getAppInfo();
         if (info == null) {
-            return;
+            return false;
         }
         Bundle turn = info.getTurnInfo();
         nativeNavInfo(
@@ -362,6 +398,7 @@ public final class CarnyxNav {
             // read back null and collapse the THEN block with nothing to say why.
             str(turn, "after_nextturn_name"),
             str(turn, "after_nextturn_type"));
+        return true;
     }
 
     /** A bundle string, or null. Null is "this route has none", not an error. */
@@ -425,6 +462,19 @@ public final class CarnyxNav {
             out.append(", voice id ").append(voiceCallbackId);
         } catch (Throwable t) {
             out.append(", VOICE FAILED: ").append(why(t));
+        }
+        // BOTH IDS -1 IS OSMAND SAYING NO, not a registration quirk. Per
+        // upstream's own source there is one common way to get here: `getApi`
+        // found this package in the connected-apps list switched off — where
+        // OsmAnd itself put it, disabled, on our first call. The fix is the
+        // driver's one-time toggle, so the log says exactly where it is.
+        if (navCallbackId == -1L && voiceCallbackId == -1L) {
+            if (!refusedReported) {
+                refusedReported = true;
+                safeRefused(true);
+            }
+            out.append(" — OsmAnd is refusing this app; open OsmAnd's Plugins screen")
+               .append(" and switch on Carnyx (it appears there after this attempt)");
         }
         startPoll();
         return out.toString();
@@ -521,6 +571,50 @@ public final class CarnyxNav {
         pollThread = null;
         if (t != null) {
             t.quit();
+        }
+    }
+
+    /**
+     * What one answered (or refused) poll means for the link state.
+     *
+     * <p>THE POLL IS THE RECOVERY PATH as well as the detector. When the driver
+     * flips this app on inside OsmAnd, nothing calls us — OsmAnd just starts
+     * answering — so the first real answer after a refusal clears the state
+     * AND re-runs the subscriptions that returned -1 while refused. Without
+     * that, enabling Carnyx would light the tell and leave the push callbacks
+     * dead until the next toggle or reboot.
+     */
+    private static void afterPoll(boolean answered) {
+        if (!answered) {
+            if (!refusedReported) {
+                refusedReported = true;
+                safeRefused(true);
+                safeNote("nav: OsmAnd is refusing this app — open OsmAnd's"
+                        + " Plugins screen and switch on Carnyx");
+            }
+            return;
+        }
+        if (refusedReported) {
+            refusedReported = false;
+            safeRefused(false);
+        }
+        String note = null;
+        synchronized (CarnyxNav.class) {
+            if (osmand != null && (navCallbackId == -1L || voiceCallbackId == -1L)) {
+                note = subscribe();
+            }
+        }
+        if (note != null) {
+            safeNote("nav: " + note);
+        }
+    }
+
+    /** The refused edge, delivered so it cannot break the poll. */
+    private static void safeRefused(boolean refused) {
+        try {
+            nativeNavRefused(refused);
+        } catch (Throwable t) {
+            Log.w(TAG, "refused state not delivered", t);
         }
     }
 

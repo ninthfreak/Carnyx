@@ -625,6 +625,9 @@ pub struct Link<'a> {
     pub package: &'a str,
     /// The switch itself.
     pub on: bool,
+    /// Bound, and OsmAnd refuses every call: its connected-apps gate has this
+    /// app switched off. See `CarnyxNav.afterPoll` for the detection.
+    pub refused: bool,
     /// The poll is answering. See `App::push_nav`.
     pub linked: bool,
     /// OsmAnd has a route running.
@@ -661,6 +664,23 @@ pub fn sub_line(link: &Link) -> String {
         // THE SWITCH'S OWN POSITION ALREADY SAYS "off", so this says the thing
         // the switch cannot: which OsmAnd it would talk to if it were on.
         return format!("{WHAT} Off. Found {}.", link.package);
+    }
+    if link.refused {
+        // ── THE ONE BLANK STATE WITH A BUTTON BEHIND IT ──────────────────────
+        //
+        // OsmAnd gates every API call on its connected-apps list, and an
+        // unknown caller is added to that list SWITCHED OFF — by OsmAnd, on our
+        // first call — then refused silently forever. So this row is the only
+        // place the driver can learn the fix exists, and it names the exact
+        // screen: Carnyx is already sitting in OsmAnd's Plugins list, toggled
+        // off, from the moment the first bind was attempted.
+        //
+        // Before the `linked` branch below, because refused IS unlinked — the
+        // poll gets nulls — and "Waiting for OsmAnd to start" would be a wrong
+        // diagnosis over a right one: OsmAnd is running and saying no.
+        return format!(
+            "{WHAT} Waiting for permission: in OsmAnd, open the Plugins screen              and switch on Carnyx."
+        );
     }
     if !link.linked {
         // ON, INSTALLED, AND NOTHING ANSWERING — OsmAnd is not running. Worded
@@ -878,6 +898,7 @@ mod tests {
         let pkg = "net.osmand.plus";
         let off = Link { on: false, ..linked_to(pkg) };
         let waiting = linked_to(pkg);
+        let refused = Link { refused: true, ..linked_to(pkg) };
         let idle = Link { linked: true, ..linked_to(pkg) };
         let behind_map = Link {
             linked: true,
@@ -889,12 +910,17 @@ mod tests {
 
         assert!(sub_line(&off).contains("Off"), "{}", sub_line(&off));
         assert!(sub_line(&waiting).contains("Waiting"), "{}", sub_line(&waiting));
+        // THE REFUSED SENTENCE NAMES THE SCREEN WITH THE FIX ON IT. OsmAnd put
+        // this app in its Plugins list switched off; a row that said anything
+        // vaguer would leave the driver toggling OUR switch, which cannot help.
+        assert!(sub_line(&refused).contains("Plugins"), "{}", sub_line(&refused));
+        assert!(sub_line(&refused).contains("permission"), "{}", sub_line(&refused));
         assert!(sub_line(&idle).contains("no route"), "{}", sub_line(&idle));
         assert!(sub_line(&behind_map).contains("map is in front"), "{}", sub_line(&behind_map));
         assert!(sub_line(&showing).contains("Showing"), "{}", sub_line(&showing));
 
         // AND NO TWO OF THEM ARE THE SAME STRING.
-        let all = [&off, &waiting, &idle, &behind_map, &showing].map(|l| sub_line(l));
+        let all = [&off, &waiting, &refused, &idle, &behind_map, &showing].map(|l| sub_line(l));
         for i in 0..all.len() {
             for j in (i + 1)..all.len() {
                 assert_ne!(all[i], all[j], "two states share one sentence");
@@ -920,6 +946,7 @@ mod tests {
             Link::default(),
             Link { on: false, ..linked_to(pkg) },
             linked_to(pkg),
+            Link { refused: true, ..linked_to(pkg) },
             Link { linked: true, ..linked_to(pkg) },
             Link { linked: true, navigating: true, map_visible: true, ..linked_to(pkg) },
             Link { linked: true, navigating: true, ..linked_to(pkg) },
