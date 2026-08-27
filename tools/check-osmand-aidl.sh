@@ -163,6 +163,21 @@ curl -sS --fail --max-time 45 \
     "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/routing/data/AnnounceTimeDistances.java" \
     -o "$TMP/atd.java" 2>/dev/null || true
 
+# The V2 service's PERMISSION GATE, learned from a drive rather than a reading:
+# every call goes through `getApi`, which checks the connected-apps list, and
+# an unknown caller is added to it DISABLED and refused with -1s and nulls.
+# CarnyxNav detects that state and the settings row tells the driver where the
+# toggle is — copy that depends on all three of these files staying true.
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/aidl/OsmandAidlServiceV2.java" \
+    -o "$TMP/svc2.java" 2>/dev/null || true
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/aidl/OsmandAidlApi.java" \
+    -o "$TMP/api.java" 2>/dev/null || true
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/plugins/PluginsFragment.java" \
+    -o "$TMP/plugins.java" 2>/dev/null || true
+
 python3 - "$TMP" "$OURS" <<'PY'
 import os, re, sys
 
@@ -235,8 +250,46 @@ for fname, (cls, keys) in KEYS.items():
     missing = [k for k in keys if f'"{k}"' not in text]
     if missing:
         fail.append(f"{cls} no longer carries bundle key(s) {missing} — we read them.")
+
     else:
         print(f"  {cls}: bundle keys {keys} all present")
+
+# ── every parcelable in the poll's bundle must have a vendored class ─────────
+#
+# NOT because anything reads them — nothing does — but because Android 10's
+# Bundle.unparcel() is ALL-OR-NOTHING: the first getter deserializes every
+# value, through OUR classloader. AppInfoParams carried three ALatLon values,
+# this tree had no ALatLon class, and every poll of a drive threw
+# BadParcelableException into a logcat nobody can read, with the permission
+# gate open and both subscriptions working. If upstream adds a parcelable to
+# this bundle, the next build must vendor its class BEFORE a drive finds it.
+appinfo = os.path.join(tmp, "appinfo.java")
+if os.path.exists(appinfo) and os.path.getsize(appinfo):
+    text = open(appinfo, encoding="utf-8", errors="replace").read()
+    body = re.search(r"public void writeToBundle\s*\(.*?\n\t\}", text, re.S)
+    if not body:
+        fail.append("AppInfoParams.writeToBundle is gone or reshaped — the poll reads its bundle.")
+    else:
+        fields = re.findall(r"putParcelable(?:ArrayList)?\(\"\w+\",\s*(\w+)\)", body.group(0))
+        types = set()
+        for f in fields:
+            m = re.search(r"private\s+(?:ArrayList<)?(\w+)>?\s+" + f + r"\s*;", text)
+            types.add(m.group(1) if m else f"<type of {f} not found>")
+        unvendored = []
+        for t in sorted(types):
+            hits = []
+            for dirpath, _, names in os.walk(ours):
+                if t + ".java" in names:
+                    hits.append(dirpath)
+            if not hits:
+                unvendored.append(t)
+        if unvendored:
+            fail.append(f"AppInfoParams's bundle carries parcelable type(s) {unvendored} with no "
+                        "vendored class — Android 10 unparcels EVERY value, and a missing class "
+                        "is a BadParcelableException on every poll. Vendor the class (read "
+                        "nothing from it); see map/ALatLon.java.")
+        else:
+            print(f"  poll bundle: parcelable types {sorted(types)} all have vendored classes")
 
 # ── 6: the turnInfo keys, and the prefix that is not what it looks like ──────
 ext = os.path.join(tmp, "ext.java")
@@ -294,6 +347,37 @@ if os.path.exists(atd):
         if not bad:
             print("  imminent: still -1 cruise / 1 prepare / 0 turn-now "
                   "(zero is the most urgent)")
+
+# ── the permission gate: refused means "toggle me in Plugins" ────────────────
+#
+# Three claims Carnyx makes to the DRIVER, each pinned to the line that makes
+# it true. If any moves, the refused sub-line's instructions need re-checking
+# before a driver follows them to a screen that no longer has the switch.
+svc2 = os.path.join(tmp, "svc2.java")
+if os.path.exists(svc2):
+    text = open(svc2, encoding="utf-8", errors="replace").read()
+    gate = re.search(r"private OsmandAidlApi getApi\(.*?\n\t\}", text, re.S)
+    if not gate or "isAppEnabled" not in gate.group(0):
+        fail.append("OsmandAidlServiceV2.getApi no longer gates on isAppEnabled — "
+                    "the refused detection and its sub-line copy are built on that gate.")
+    else:
+        print("  gate: getApi still checks isAppEnabled(callingPackage) on every call")
+api = os.path.join(tmp, "api.java")
+if os.path.exists(api):
+    text = open(api, encoding="utf-8", errors="replace").read()
+    if not re.search(r"new ConnectedApp\(app, pack, false\)", text):
+        fail.append("OsmandAidlApi.isAppEnabled no longer adds unknown callers DISABLED — "
+                    "the 'Carnyx appears in the Plugins list switched off' claim depends on it.")
+    else:
+        print("  gate: unknown callers are still added to connected-apps DISABLED")
+plugins = os.path.join(tmp, "plugins.java")
+if os.path.exists(plugins):
+    text = open(plugins, encoding="utf-8", errors="replace").read()
+    if "ConnectedApp" not in text:
+        fail.append("PluginsFragment no longer lists connected apps — the sub-line "
+                    "sends the driver to the Plugins screen for the toggle.")
+    else:
+        print("  gate: the enable toggle still lives on the Plugins screen")
 
 if fail:
     print()

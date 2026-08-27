@@ -175,6 +175,7 @@ pub fn is_foreground() -> bool { true }
 pub fn ingest_note(_line: String) {}
 pub fn ingest_nav(_distance_to: jni::sys::jint, _turn_type: jni::sys::jint, _left_side: jni::sys::jboolean) {}
 pub fn ingest_nav_voice(_cmds: Vec<String>, _played: Vec<String>) {}
+pub fn ingest_nav_refused(_refused: jni::sys::jboolean) {}
 pub fn ingest_nav_info(_route: NavRoute) {}
 
 /// Stands in for `crate::nav::Route`, which `android::mod` re-exports as
@@ -213,7 +214,7 @@ for f in names:
     body = body.replace("super::is_foreground()", "crate::is_foreground()")
     # NOT `f`: that is the loop's filename and shadowing it made every generated
     # module `pub mod ingest_`.
-    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_info", "ingest_nav", "NavRoute"):
+    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_refused", "ingest_nav_info", "ingest_nav", "NavRoute"):
         body = body.replace("super::" + edge, "crate::" + edge)
     body = body.replace("super::TunerError", "crate::TunerError")
     # NO `use super::*` EITHER, for the same reason: the three stubs are reached

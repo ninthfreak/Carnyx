@@ -35,10 +35,14 @@ public abstract class AidlParams implements Parcelable {
     }
 
     public final void readFromParcel(Parcel in) {
-        // THE CLASS LOADER IS THIS CLASS'S, as upstream has it. A bundle read
-        // with the wrong loader throws only when something inside it needs
-        // unmarshalling, which for these payloads is never — but matching
-        // upstream costs nothing and removes the question.
+        // THE CLASS LOADER IS THIS CLASS'S, as upstream has it — and it is
+        // LOAD-BEARING, which an earlier version of this comment denied. It
+        // said unmarshalling "for these payloads is never" needed: Android 13's
+        // truth, where bundle values deserialize lazily per key. On this
+        // unit's Android 10 the first getter unparcels EVERY value through
+        // exactly this loader, so each parcelable TYPE any payload can carry
+        // must be in our dex — see map/ALatLon.java for the drive that proved
+        // it, and tools/check-osmand-aidl.sh for the check that now holds it.
         Bundle bundle = in.readBundle(getClass().getClassLoader());
         if (bundle != null) {
             readFromBundle(bundle);

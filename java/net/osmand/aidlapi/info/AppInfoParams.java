@@ -23,11 +23,16 @@ import net.osmand.aidlapi.AidlParams;
  * {@code routingData} are left in the bundle unread — Carnyx has its own GPS fix
  * and no use for the rest.
  *
- * <p>THAT IS SAFE ONLY BECAUSE THE WIRE IS A BUNDLE. {@code AidlParams} writes
- * one {@code writeBundle} and the keys are named, so an unread key costs nothing
- * and an unread PARCELABLE is never unmarshalled — which is what lets this class
- * skip {@code ALatLon} without vendoring it. A positional format could not be
- * read partially at all.
+ * <p>UNREAD IS NOT FREE, AND A DRIVE PROVED IT. An earlier version of this
+ * paragraph said an unread parcelable is never unmarshalled and skipped
+ * vendoring {@code ALatLon} on the strength of it. That is Android 13's rule —
+ * lazy bundle values, deserialized per key. On Android 10, which this unit
+ * runs, {@code unparcel()} is ALL-OR-NOTHING: the first getter deserializes
+ * every value in the bundle, so the three unread {@code ALatLon}s threw
+ * {@code BadParcelableException} on every poll and the feed was dead with the
+ * permission gate wide open. The fields stay unread — but every parcelable
+ * TYPE the bundle can carry must have a class in the dex, which is why
+ * {@code map/ALatLon.java} exists and reads nothing.
  *
  * <h2>The turnInfo bundle</h2>
  *

@@ -576,6 +576,13 @@ struct State {
     /// border mid-drive often enough to poll for it, and units changing under a
     /// live countdown would be worse than being one launch behind.
     units: crate::units::Units,
+    /// OsmAnd's gate is closed on this app — bound, and refused every call.
+    ///
+    /// Set by the refused edge from `CarnyxNav`, cleared by the same edge or by
+    /// any poll answer arriving (belt and braces: an answer IS the gate open).
+    /// The settings row branches on it, because bound-but-refused and
+    /// bound-but-idle look identical on the face and only one has a fix.
+    nav_refused: bool,
     /// Which OsmAnd `CarnyxNav` found, or empty. Read once at start-up: an app
     /// is not installed and uninstalled while a driver is looking at a switch,
     /// and asking the package manager on every republish would put a binder call
@@ -1238,6 +1245,7 @@ impl App {
                 rds: RdsDecoder::new(),
                 announced: std::cell::Cell::new(f32::NAN),
                 nav: crate::nav::Nav::new(),
+                nav_refused: false,
                 units: crate::units::Units::default(),
                 clock_test: None,
                 nav_said: String::new(),
@@ -1841,7 +1849,20 @@ impl App {
                 drop(s);
                 self.push_nav();
             }
+            TunerEvent::NavRefused(refused) => {
+                // `s` is the handler's own borrow — a fresh `borrow_mut` here
+                // is the RefCell panic the arm beside this one drops `s` for.
+                s.nav_refused = refused;
+                drop(s);
+                // The sub-line is push_nav's now, so the row changes the moment
+                // the driver flips the toggle inside OsmAnd — not at the next
+                // settings repaint.
+                self.push_nav();
+            }
             TunerEvent::NavInfo(route) => {
+                // AN ANSWER IS THE GATE OPEN, whatever the edge reporting said:
+                // the poll only carries data when `getApi` let the call through.
+                s.nav_refused = false;
                 let now = crate::session::now_unix();
                 s.nav.poll(route, now);
                 drop(s);
@@ -3315,6 +3336,7 @@ impl App {
         crate::nav::sub_line(&crate::nav::Link {
             package: &s.nav_package,
             on: s.settings.nav_on,
+            refused: s.nav_refused,
             linked: route.is_some(),
             navigating: route.is_some_and(crate::nav::Route::navigating),
             map_visible: route.is_some_and(|r| r.map_visible),
@@ -6752,6 +6774,44 @@ mod tests {
             "the map went away and the row must say so by itself: {}",
             ui.get_settings_nav_sub()
         );
+    }
+
+    /// OSMAND SAYING NO REACHES THE ROW, AND AN ANSWER TAKES IT BACK.
+    ///
+    /// The drive log this reproduces: bound, `turns id -1, voice id -1`, tell
+    /// gray for nine minutes, and the row saying "Waiting for net.osmand to
+    /// start" — a wrong diagnosis, because OsmAnd was running and refusing.
+    /// Driven through `ingest_nav_refused`, the function `CarnyxNav`'s native
+    /// calls, so the event plumbing is the thing under test.
+    #[test]
+    fn osmand_refusing_the_app_names_the_fix_and_an_answer_clears_it() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-refused");
+        driver.state.borrow_mut().nav_package = "net.osmand".to_string();
+
+        crate::android::ingest_nav_refused(true);
+        driver.drain_events();
+        let sub = ui.get_settings_nav_sub().to_string();
+        assert!(sub.contains("Plugins"), "the row must name OsmAnd's screen: {sub}");
+        assert!(!sub.contains("Waiting for net.osmand to start"), "not the wrong wait: {sub}");
+
+        // The driver flips the toggle inside OsmAnd. Nothing tells us — OsmAnd
+        // just starts answering — and the ANSWER must clear the state even if
+        // the explicit edge never arrives.
+        crate::android::ingest_nav_info(crate::nav::Route {
+            arrival_ms: Some(1_700_000_000_000),
+            left_metres: Some(9_400),
+            ..crate::nav::Route::default()
+        });
+        driver.drain_events();
+        let sub = ui.get_settings_nav_sub().to_string();
+        assert!(!sub.contains("Plugins"), "an answer is the gate open: {sub}");
+
+        // And the explicit edge works alone too, both ways.
+        crate::android::ingest_nav_refused(true);
+        crate::android::ingest_nav_refused(false);
+        driver.drain_events();
+        assert!(!ui.get_settings_nav_sub().to_string().contains("Plugins"));
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.
