@@ -105,6 +105,8 @@ export component Face inherits Rectangle {
     callback toggle-save();
     callback open-settings();
     callback open-nearby();
+    /// A tap on the OsmAnd status-bar mark — bring OsmAnd to the front.
+    callback open-osmand();
     /// The reorder-mode logo badge on preset `i` (§6.4).
     callback open-logo-search(int);
     callback claim-audio();
@@ -192,6 +194,7 @@ export component Face inherits Rectangle {
             reordering: root.reordering;
             open-settings => { root.open-settings(); }
             open-nearby => { root.open-nearby(); }
+            open-osmand => { root.open-osmand(); }
             done-reordering => { root.done-reordering(); }
         }
 

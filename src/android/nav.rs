@@ -313,3 +313,15 @@ pub fn stop() -> String {
     })
     .unwrap_or_default()
 }
+
+/// Bring OsmAnd to the front — the status-bar mark's tap. Returns a line for
+/// the diagnostics log.
+pub fn launch() -> String {
+    with_class(|env, class| {
+        let s = env
+            .call_static_method(class, jni_str!("launch"), jni_sig!("()Ljava/lang/String;"), &[])?
+            .l()?;
+        JString::cast_local(env, s)?.try_to_string(env)
+    })
+    .unwrap_or_else(|| "navigation is unavailable in this build".into())
+}

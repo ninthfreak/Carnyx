@@ -3375,6 +3375,18 @@ impl App {
         String::new()
     }
 
+    /// Bring OsmAnd to the front. The status-bar mark's tap.
+    #[cfg(target_os = "android")]
+    fn launch_osmand(&self) -> String {
+        crate::android::nav::launch()
+    }
+
+    /// See the Android arm.
+    #[cfg(not(target_os = "android"))]
+    fn launch_osmand(&self) -> String {
+        String::new()
+    }
+
     fn push_nav(&self) {
         let now = crate::session::now_unix();
         let (state, spoken, line) = {
@@ -4175,6 +4187,18 @@ impl App {
             // than at the next OsmAnd update.
             app.push_nav();
             app.push_settings();
+        });
+        on!(on_open_osmand, |app| {
+            // TAPPING THE MARK, NOT THE SWITCH. §4.9 draws it only while the
+            // integration is on, so this fires only from that state — but the
+            // mark itself may still be dim (bound and refused, or the poll has
+            // not landed yet), and a tap should still try to bring OsmAnd
+            // forward rather than waiting on the feed to catch up first.
+            let outcome = app.launch_osmand();
+            if !outcome.is_empty() {
+                let at = stamp();
+                app.state.borrow_mut().settings.log.push(&at, &format!("nav: {outcome}"));
+            }
         });
         on!(on_settings_set_release_on_sleep, |app, v| {
             app.state.borrow_mut().settings.release_on_sleep = v;

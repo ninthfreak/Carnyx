@@ -660,6 +660,10 @@ export component DrivingStatus inherits HorizontalLayout {
     in property <bool> osmand-linked: false;
     /// The band theme, for the airship alone.
     in property <EggTheme> egg;
+    /// A tap on the mark itself — bring OsmAnd to the front. Fires whether or
+    /// not `osmand-linked` is true; a driver watching a dim mark still wants
+    /// the tap to try.
+    callback open-osmand();
 
     // A slow ~2.6s breathe — gentler than TA's 1.1s.
     property <float> breathe: 1.0;
@@ -720,6 +724,14 @@ export component DrivingStatus inherits HorizontalLayout {
         // those cancel per-tile padding the reference carries and this build
         // does not — its tiles are the ink.
         width: 27px; height: 30px;
+        // A TAP BRINGS OSMAND FORWARD. Sized to the mark's own box rather than
+        // padded out to a larger target: growing it would eat into the 12px
+        // gap §4.9 tuned against the car glyph and the satellite on either
+        // side, and this mark is no smaller than the GPS tell beside it, which
+        // has never needed one.
+        mark-touch := TouchArea {
+            clicked => { root.open-osmand(); }
+        }
         OsmAndMark {
             // NUDGED DOWN 2dp so the DISC's centre lands on the row's, which is
             // where the eye reads a round mark from. The glyph's box is not
@@ -730,6 +742,10 @@ export component DrivingStatus inherits HorizontalLayout {
             y: 2px;
             size: 30px;
             color: root.osmand-linked ? #FF8800 : Pal.text;
+            // NOT `mark-touch.pressed` HERE — this opacity already carries the
+            // linked/unlinked state (1.0 / 0.30), and folding a press-state
+            // into the same property would flash a linked mark toward
+            // "unlinked" for the length of every tap.
             opacity: root.osmand-linked ? 1.0 : 0.30;
         }
     }
@@ -851,6 +867,7 @@ export component StatusBar inherits Rectangle {
 
     callback open-settings();
     callback open-nearby();
+    callback open-osmand();
     callback done-reordering();
 
     HorizontalLayout {
@@ -991,6 +1008,7 @@ export component StatusBar inherits Rectangle {
                         osmand-on: root.osmand-on;
                         osmand-linked: root.osmand-linked;
                         egg: root.egg;
+                        open-osmand => { root.open-osmand(); }
                     }
                 }
                 gear := Rectangle {

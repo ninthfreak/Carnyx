@@ -335,6 +335,44 @@ public final class CarnyxNav {
     }
 
     /**
+     * Bring OsmAnd to the front — the tap the status-bar mark answers.
+     *
+     * <p>WORKS WHETHER OR NOT THE FEED IS BOUND. A driver may tap the mark
+     * while it is still dim (enabled but not yet answering) or even before the
+     * poll has run once, so this resolves the package itself rather than
+     * trusting {@link #boundPackage}, which is only set once binding has
+     * actually succeeded.
+     *
+     * <p>{@code FLAG_ACTIVITY_NEW_TASK} IS NOT OPTIONAL. {@link #ctx} is the
+     * application context ({@link #attach}), and {@code startActivity} off a
+     * non-Activity context throws {@code AndroidRuntimeException} without it.
+     * No other flag is needed for "switch to, not relaunch": OsmAnd's own
+     * launcher activity is standard launch mode, so Android brings its
+     * existing task to the front by itself when one is already running —
+     * the same behaviour tapping its icon in a launcher would produce.
+     */
+    public static synchronized String launch() {
+        if (ctx == null) {
+            return "no context — attach() has not run";
+        }
+        String pkg = boundPackage.isEmpty() ? installedPackage() : boundPackage;
+        if (pkg.isEmpty()) {
+            return "OsmAnd is not installed — nothing to launch";
+        }
+        Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+        if (launch == null) {
+            return pkg + " has no launcher activity";
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            ctx.startActivity(launch);
+            return "launched " + pkg;
+        } catch (Throwable t) {
+            return "startActivity failed: " + why(t);
+        }
+    }
+
+    /**
      * One poll, then schedule the next.
      *
      * <p>RESCHEDULES ITSELF EVEN WHEN THE CALL FAILS. A `DeadObjectException`
