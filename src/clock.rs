@@ -91,8 +91,11 @@ pub fn format(hour24: u32, minute: u32, is_24h: bool) -> Clock {
 ///
 /// ── NO NEW JAVA CALL, AND THAT IS THE POINT ─────────────────────────────────
 ///
-/// §4.9's ETA is an absolute arrival TIME and `AppInfoParams.arrivalTime` is
-/// Unix milliseconds, so something has to know which hour that lands on here.
+/// §4.9's ETA is an absolute arrival TIME, so something has to know which hour
+/// that lands on here. (`AppInfoParams.arrivalTime` is Unix SECONDS on the
+/// wire, not millis — a mistake this tree made once — but `CarnyxNav.pollOnce`
+/// converts at the JNI seam, so everything below this line, including the
+/// `arrival_ms` this function is named for, is genuinely milliseconds.)
 /// The obvious move is another platform call; this instead uses the two facts
 /// the app already has — the current epoch second, and the local hour and minute
 /// [`crate::android::clock_now`] returns for it — because their difference IS
@@ -130,14 +133,21 @@ pub fn offset_seconds(now_unix: i64, hour24: u32, minute: u32) -> i64 {
     }
 }
 
-/// The arrival time §4.9 hangs under the clock — `4:35 PM`, `16:35`.
+/// The arrival time §4.9 hangs under the clock — `4:35`, `16:35`.
 ///
 /// NOT [`format`]'s OUTPUT, AND THE DIFFERENCE MATTERS. §4.9 puts the ETA "in
 /// the **UI face, not DSEG7**", and [`BLANK`] is a DSEG7 convention: the `!`
 /// that reads as an unlit segment on the clock would print as a literal
-/// exclamation mark in Atkinson Hyperlegible. So this pads with nothing and
-/// spells the meridiem out, which is what a UI face can do and a segment face
-/// cannot.
+/// exclamation mark in Atkinson Hyperlegible. So this pads with nothing —
+/// which is what a UI face can do and a segment face cannot.
+///
+/// NO MERIDIEM, EVEN IN 12-HOUR MODE, and that is a direct ask — "it doesn't
+/// need an am/pm (or A/P) readout" — not an oversight. This used to spell
+/// "AM"/"PM" out for the reason above; that suffix is gone rather than
+/// shortened, so a 12-hour reading of `4:35` is ambiguous between morning and
+/// afternoon on the face. Accepted: the ETA sits a few minutes from the
+/// segment clock above it, which DOES carry a meridiem, and a driver reading
+/// one against the other resolves it the same way a glance at the sky would.
 pub fn eta(arrival_ms: i64, offset_seconds: i64, is_24h: bool) -> String {
     let local = arrival_ms.div_euclid(1000) + offset_seconds;
     let of_day = local.rem_euclid(86_400);
@@ -149,8 +159,7 @@ pub fn eta(arrival_ms: i64, offset_seconds: i64, is_24h: bool) -> String {
         0 => 12,
         other => other,
     };
-    let meridiem = if h24 < 12 { "AM" } else { "PM" };
-    format!("{h12}:{m:02} {meridiem}")
+    format!("{h12}:{m:02}")
 }
 
 /// What the settings row says under "Clock".
@@ -255,23 +264,29 @@ mod tests {
         let arrival = (1_787_951_263_i64 + 35 * 60) * 1000;
 
         assert_eq!(eta(arrival, 0, true), "21:42");
-        assert_eq!(eta(arrival, 0, false), "9:42 PM");
-        assert_eq!(eta(arrival, -5 * 3600, false), "4:42 PM");
-        assert_eq!(eta(arrival, 9 * 3600, false), "6:42 AM", "and over into tomorrow");
+        assert_eq!(eta(arrival, 0, false), "9:42");
+        assert_eq!(eta(arrival, -5 * 3600, false), "4:42");
+        assert_eq!(eta(arrival, 9 * 3600, false), "6:42", "and over into tomorrow");
         assert_eq!(eta(arrival, 9 * 3600, true), "06:42");
 
         // NO BLANK, EVER. `format` pads a single-digit 12-hour with `!`, which
         // is right on DSEG7 and is a literal exclamation mark in the UI face.
+        //
+        // NO MERIDIEM, EITHER — a direct ask, not the DSEG7 rule above. Every
+        // reading across a full day of offsets is just `H:MM` or `HH:MM`.
         for offset in (-12 * 3600..=12 * 3600).step_by(1800) {
             let s = eta(arrival, offset, false);
             assert!(!s.contains(BLANK), "the DSEG7 blank leaked into a UI-face string: {s}");
-            assert!(s.ends_with("AM") || s.ends_with("PM"), "{s}");
+            assert!(
+                !s.ends_with("AM") && !s.ends_with("PM"),
+                "no meridiem on the ETA, spelled out or not: {s}"
+            );
         }
 
         // Midnight and noon read twelve, the same as the clock does.
         let midnight = 1_787_961_600_i64; // 2026-08-27 00:00:00 UTC
-        assert_eq!(eta(midnight * 1000, 0, false), "12:00 AM");
-        assert_eq!(eta((midnight + 12 * 3600) * 1000, 0, false), "12:00 PM");
+        assert_eq!(eta(midnight * 1000, 0, false), "12:00");
+        assert_eq!(eta((midnight + 12 * 3600) * 1000, 0, false), "12:00");
         assert_eq!(eta(midnight * 1000, 0, true), "00:00");
     }
 

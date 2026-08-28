@@ -258,37 +258,50 @@ export component Face inherits Rectangle {
     // per-track `if` arms and their ids cannot be reached from here.
     property <length> clock-gap-bottom: Metrics.hero-card-top;
     property <bool> clock-measured: root.clock-gap-bottom > root.clock-gap-top;
+    // §4.8 STATED 30SP/36SP; A LATER, DIRECT ASK GREW IT 20% ON TOP — "the
+    // clock ... be 20% larger" — WHILE PINNING ITS TOP TO THE SAME DISTANCE
+    // FROM THE GEAR IT ALREADY SAT AT, rather than letting a taller box
+    // re-centre and creep closer to the settings button as it grew. So the
+    // clock no longer centres itself in the gap at all: `clock-top-gap` below
+    // measures where the top of the box sat under the ORIGINAL, un-enlarged
+    // formula — computed once, from the pre-enlargement height alone — and the
+    // enlarged box hangs from that same fixed point, growing downward toward
+    // the hero card instead of both ways from the middle.
+    property <length> clock-font-size: (Metrics.tall ? Metrics.s(36) : Metrics.s(30)) * 1.2;
     // ONE DEFINITION, READ BY THREE THINGS: the clock's own box, the ETA that
     // hangs under it, and the countdown that has to clear both on the tall
     // track. It was declared twice and drifting apart was only a matter of time.
-    property <length> clock-line-h: Metrics.tall ? Metrics.s(36) * 1.2 : Metrics.s(30) * 1.2;
+    property <length> clock-line-h: root.clock-font-size * 1.2;
     // THE INK RIDES ABOVE THE BOX'S CENTRE, and §4.8 anchors the OPTICAL
-    // centre — the ink's — not the box's. MEASURED, NOT DERIVED: with the box's
-    // centre placed exactly on the spec midpoint, subpixel edge-crossing
-    // profiles of the reference surface put the digits' ink centre 0.85px
-    // above it at 30sp — 0.03 × font-size. Part is how parley (the one text
-    // layout behind this harness's software renderer AND the device's Skia
-    // renderer) seats DSEG's 90/em line gap in the centred line box, part is
-    // the anchors' own whole-pixel edge snapping; deriving the split kept
-    // predicting 0 or 1.35px, and the render said 0.85 both times it was
-    // asked. So the constant is the measurement, scaled with the font size.
-    // DEAD-ON IS NOT REACHABLE: the rasterizer snaps the glyphs' rows in
-    // whole-pixel steps whose phase depends on the layout's fractions, so
-    // sweeping this constant moves the ink in ~1px jumps. Against the painted
-    // midpoint of gear bottom y62 and card top y86 (y74.0), the head-unit shot
-    // reads 73.5 with this value — half a pixel, the quantizer's floor, down
-    // from the 2.5px the slot anchor plus no ride used to miss by. The ETA
-    // hangs off the same `clock-line-bottom`, so its 7dp clearance from the
-    // box is untouched.
-    property <length> clock-ink-ride: (Metrics.tall ? Metrics.s(36) : Metrics.s(30)) * 0.03;
-    property <length> clock-line-bottom:
-        (root.clock-gap-top + root.clock-gap-bottom) / 2 + root.clock-line-h / 2
-        + root.clock-ink-ride;
+    // centre — the ink's — not the box's. MEASURED, NOT DERIVED, at 30sp
+    // (before the 20% enlargement): with the box's centre placed exactly on
+    // the spec midpoint, subpixel edge-crossing profiles of the reference
+    // surface put the digits' ink centre 0.85px above it — 0.03 × font-size.
+    // Part is how parley (the one text layout behind this harness's software
+    // renderer AND the device's Skia renderer) seats DSEG's 90/em line gap in
+    // the centred line box, part is the anchors' own whole-pixel edge
+    // snapping. Scaled here off the box's OWN centring, which the fixed-gap
+    // anchor below no longer provides on its own — kept as a ride on the
+    // painted centre of whatever height the box ends up, so enlarging the
+    // clock further does not have to re-derive this constant again.
+    property <length> clock-ink-ride: root.clock-font-size * 0.03;
+    // THE ORIGINAL, UN-ENLARGED LINE HEIGHT — §4.8's 30sp/36sp × the same 1.2
+    // leading — used ONLY to find where the top of the box sat before the 20%
+    // ask, so that point can be held fixed while the real, enlarged
+    // `clock-line-h` above decides how tall the box actually is.
+    property <length> clock-line-h-preenlarge: (Metrics.tall ? Metrics.s(36) : Metrics.s(30)) * 1.2;
+    property <length> clock-top-gap:
+        (root.clock-gap-bottom - root.clock-gap-top - root.clock-line-h-preenlarge) / 2
+        + ((Metrics.tall ? Metrics.s(36) : Metrics.s(30)) * 0.03);
+    property <length> clock-line-top: root.clock-gap-top + root.clock-top-gap;
+    property <length> clock-line-bottom: root.clock-line-top + root.clock-line-h;
     if root.clock-time != "" && root.clock-measured: Rectangle {
-        // The TIME's optical centre lands midway between the two edges. `y` is
-        // the line's top, so half the line's own height comes back off it.
+        // `clock-line-top` is fixed relative to the gear; the box's height is
+        // the only thing the 20% enlargement changed, and it grows downward
+        // from this same top edge rather than the old centred formula's `y:
+        // clock-line-bottom - clock-line-h`.
         x: 0;
-        y: root.clock-line-bottom - root.clock-line-h;
+        y: root.clock-line-top;
         width: root.width;
         height: root.clock-line-h;
 
@@ -313,7 +326,7 @@ export component Face inherits Rectangle {
                 // back to Atkinson in silence when it misses, which is the trap
                 // `ui/tokens.slint` records this tree falling into five times.
                 font-family: "DSEG7 Classic Mini";
-                font-size: Metrics.tall ? Metrics.s(36) : Metrics.s(30);
+                font-size: root.clock-font-size;
                 letter-spacing: 1px;
                 // `dim` — the genre line's colour, §4.8.
                 color: Pal.dim;
@@ -324,11 +337,13 @@ export component Face inherits Rectangle {
             // Baseline-aligned to the time, which with two centred boxes of
             // different sizes is `bottom` plus the difference in descent — near
             // enough at these sizes, and the alternative is measuring a font
-            // this renderer will not measure.
+            // this renderer will not measure. SCALES WITH THE CLOCK'S OWN 20%
+            // — it is part of the clock, not the ETA that dropped its meridiem
+            // entirely; see `crate::clock::eta`.
             if root.clock-meridiem != "": Text {
                 text: " " + root.clock-meridiem;
                 font-family: "DSEG7 Classic Mini";
-                font-size: Metrics.tall ? Metrics.s(20) : Metrics.s(17);
+                font-size: (Metrics.tall ? Metrics.s(20) : Metrics.s(17)) * 1.2;
                 letter-spacing: 1px;
                 color: Pal.dim;
                 vertical-alignment: center;
@@ -390,7 +405,13 @@ export component Face inherits Rectangle {
     // itself. The clock takes the same liberty with the same anchor.
     property <bool> eta-showing:
         root.nav-eta != "" && root.nav-stage != NavStage.idle && root.clock-measured;
-    property <length> eta-line-h: Metrics.tall ? Metrics.s(17) * 1.4 : Metrics.s(15) * 1.4;
+    // 60% LARGER, A DIRECT ASK — "the ETA display should be 60% larger". Only
+    // the READOUT itself (`root.nav-eta`'s own text): the "ETA" caption and the
+    // tall track's distance-left figure are labels beside it, not the display
+    // named in the ask, and stay their own size so the readout still reads as
+    // the loudest thing in the row rather than three same-sized numbers.
+    property <length> eta-font-size: (Metrics.tall ? Metrics.s(17) : Metrics.s(15)) * 1.6;
+    property <length> eta-line-h: root.eta-font-size * 1.4;
     if root.eta-showing: Rectangle {
         x: 0;
         y: root.clock-line-bottom + Metrics.s(7);
@@ -421,9 +442,13 @@ export component Face inherits Rectangle {
                 color: Pal.dim;
             }
             Text {
+                // NO MERIDIEM, SPELLED OUT OR ABBREVIATED — a direct ask: "it
+                // doesn't need an am/pm (or A/P) readout". `crate::clock::eta`
+                // no longer appends one in 12-hour mode; 24-hour mode never
+                // had one to begin with.
                 text: root.nav-eta;
                 font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.tall ? Metrics.s(17) : Metrics.s(15);
+                font-size: root.eta-font-size;
                 color: Pal.dim;
             }
         }
