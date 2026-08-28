@@ -3489,8 +3489,16 @@ impl App {
         //
         // `arrivalTime` is Unix millis and the face wants a local wall clock, so
         // the offset is worked out from the clock reading this app already takes
-        // — see `crate::clock::offset_seconds`. No clock reading (a host build,
-        // or the switch off) means no ETA rather than one in UTC.
+        // — see `crate::clock::offset_seconds`. No clock reading means no ETA
+        // rather than one in UTC.
+        //
+        // NOT THE CLOCK SWITCH, and this comment used to say it was. Settings ▸
+        // the clock toggle is read by `push_clock` alone; `clock_reading` asks
+        // the PLATFORM (`crate::android::clock_now`, or the test override) and
+        // never consults `settings.clock_on`. So a driver with the segment clock
+        // switched off still gets an ETA, which is the right behaviour — §4.9
+        // does not gate one on the other — and the old comment would have sent
+        // the next reader hunting a dependency that is not there.
         let eta = match (r.arrival_ms, self.clock_reading()) {
             (Some(ms), Some((h, m, is24))) if ms > 0 => {
                 let off = crate::clock::offset_seconds(crate::session::now_unix() as i64, h, m);

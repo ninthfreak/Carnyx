@@ -89,6 +89,7 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("nav-approach-portrait", 360, 800, false, State::NavApproach),
     ("nav-turn-now", 1024, 614, false, State::NavTurnNow),
     ("nav-turn-now-portrait", 360, 800, false, State::NavTurnNow),
+    ("nav-poll-only", 1024, 614, false, State::NavPollOnly),
     ("weak-and-lossy", 1024, 614, false, State::WeakAndLossy),
     ("no-presets", 1024, 614, false, State::NoPresets),
     // A LONG STRIP. Both save paths used to cap the list at six and delete the
@@ -294,6 +295,14 @@ enum State {
     /// §4.9's stage 3 — the hero card takes over and the logo moves to its
     /// upper-right corner.
     NavTurnNow,
+    /// THE DRIVE THIS BUILD ACTUALLY GETS: a healthy 1 Hz poll and NO push.
+    ///
+    /// Every other nav state above feeds both channels in the same breath, so
+    /// the poll-only frame was never rendered once — and that is exactly how
+    /// the maneuver layer shipped gated on the push, which fires only when the
+    /// vehicle crosses a route geometry node. This shot must look like
+    /// `nav-approach`: same strip yield, same countdown, same ETA.
+    NavPollOnly,
     /// A strong carrier arriving in pieces: dotted outer arcs, mono, no RDS.
     WeakAndLossy,
     NoPresets,
@@ -592,7 +601,7 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         // The three stages share one setup and differ only in the rung OsmAnd
         // reports — which is the claim worth photographing: the same route data
         // moves through three layouts on `next_turn_imminent` alone.
-        State::NavCruise | State::NavApproach | State::NavTurnNow => {
+        State::NavCruise | State::NavApproach | State::NavTurnNow | State::NavPollOnly => {
             driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
             ui.set_settings_nav_on(true);
             // THROUGH THE SEAM `CarnyxNav` CALLS, not by setting properties. A
@@ -620,7 +629,9 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
                 // OsmAnd's own rung: -1 cruise, 1 approach, 0 turn now. Zero is
                 // the LOUDEST, which is the trap `crate::nav::Stage` documents.
                 imminent: Some(match state {
-                    State::NavApproach => 1,
+                    // Poll-only stands at stage 2, so this shot is directly
+                    // comparable with `nav-approach` — the two must match.
+                    State::NavApproach | State::NavPollOnly => 1,
                     State::NavTurnNow => 0,
                     _ => -1,
                 }),
@@ -631,10 +642,18 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             // denominator is the distance FIRST seen for a leg, so a single poll
             // leaves the bar empty however close the turn is. Eight hundred
             // metres back, then two hundred and forty — seven tenths of the way.
-            carnyx::android::ingest_nav(800, 5, false);
+            // NO PUSH AT ALL for the poll-only shot — `ingest_nav` is the push
+            // seam and this state deliberately never calls it. That is the whole
+            // claim: the poll carries the layer by itself.
+            let push = state != State::NavPollOnly;
+            if push {
+                carnyx::android::ingest_nav(800, 5, false);
+            }
             carnyx::android::ingest_nav_info(leg(800));
             driver.drain_events();
-            carnyx::android::ingest_nav(240, 5, false);
+            if push {
+                carnyx::android::ingest_nav(240, 5, false);
+            }
             carnyx::android::ingest_nav_info(leg(240));
             driver.drain_events();
             ui.set_nav_linked(true);
