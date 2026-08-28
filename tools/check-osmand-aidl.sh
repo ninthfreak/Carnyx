@@ -379,6 +379,41 @@ if os.path.exists(plugins):
     else:
         print("  gate: the enable toggle still lives on the Plugins screen")
 
+# ── arrivalTime IS SECONDS, NOT MILLIS — a drive reported a static ETA wrong
+# by hours before this was caught. `AppInfoParams.arrivalTime` is named and
+# javadoc'd like a millis field but upstream builds it from `getLeftTime()`
+# (seconds) plus `currentTimeMillis() / 1000` — i.e. seconds — and
+# `CarnyxNav.pollOnce` multiplies by 1000L to correct it at the JNI seam. If
+# upstream ever starts sending real millis, that multiply doubles the error
+# instead of fixing it, silently, with no compile-time signal — the same
+# class of failure this whole script exists to catch positionally.
+if os.path.exists(api):
+    text = open(api, encoding="utf-8", errors="replace").read()
+    # THERE ARE TWO `arrivalTime = ...;` ASSIGNMENTS — a `= 0` initializer and
+    # the real formula further down — so every match is checked rather than
+    # just the first; `re.search` alone found the initializer and passed.
+    assigns = re.findall(r"arrivalTime\s*=\s*[^;]*;", text)
+    formula = next((a for a in assigns if "leftTime" in a), None)
+    # `/\s*1000` AND NOT JUST "1000" — a formula that MULTIPLIES by 1000
+    # (`leftTime * 1000L + currentTimeMillis()`) contains the substring "1000"
+    # too, but means the opposite thing: leftTime already converted to millis,
+    # i.e. the field is already millis and CarnyxNav's `*1000L` would double
+    # it. Caught in the standalone sabotage pass before this shipped.
+    divides_by_1000 = bool(formula and re.search(r"/\s*1000\b", formula))
+    if not assigns:
+        fail.append("OsmandAidlApi no longer sets arrivalTime the way expected — "
+                    "confirm its unit before trusting CarnyxNav's *1000L conversion.")
+    elif not formula or not divides_by_1000:
+        fail.append(
+            "OsmandAidlApi.arrivalTime's formula changed shape "
+            f"(found {assigns!r}) — it no longer visibly divides "
+            "currentTimeMillis() by 1000, so it may already be millis. "
+            "CarnyxNav.pollOnce's `* 1000L` would then double the error."
+        )
+    else:
+        print("  eta: arrivalTime is still leftTime + currentTimeMillis()/1000 — seconds, "
+              "which is why CarnyxNav.pollOnce multiplies by 1000L")
+
 if fail:
     print()
     for f in fail:

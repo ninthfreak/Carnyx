@@ -397,7 +397,21 @@ public final class CarnyxNav {
         }
         Bundle turn = info.getTurnInfo();
         nativeNavInfo(
-            info.getArrivalTime(),
+            // *1000L, AND THIS IS THE FIX, NOT DECORATION. `AppInfoParams`'s own
+            // javadoc calls this "Unix millis" — wrong. Upstream computes it as
+            // `arrivalTime = leftTime + System.currentTimeMillis() / 1000` (see
+            // `OsmandAidlApi.getAppInfo`), which is Unix SECONDS. Everything past
+            // this line — the native parameter name, `Route.arrival_ms`,
+            // `crate::clock::eta`'s own `div_euclid(1000)` — was built and tested
+            // assuming milliseconds, so the conversion belongs HERE, at the one
+            // seam that knows the wire's real unit, not scattered downstream.
+            // Unconverted, a ~1.7-billion-second value divided by 1000 a second
+            // time lands on a date three weeks after the epoch — a bogus
+            // time-of-day that barely moves for the length of a drive (the raw
+            // seconds value is itself nearly constant: `leftTime` falls as `now`
+            // rises), which reads on the face as exactly what a drive reported:
+            // a static ETA, wrong by hours.
+            info.getArrivalTime() * 1000L,
             info.getLeftTime(),
             info.getLeftDistance(),
             info.isMapVisible(),

@@ -61,7 +61,20 @@ public class AppInfoParams extends AidlParams {
         @Override public AppInfoParams[] newArray(int size) { return new AppInfoParams[size]; }
     };
 
-    /** Unix millis at the destination, or 0 when not navigating. */
+    /**
+     * Unix SECONDS at the destination, or 0 when not navigating — NOT millis,
+     * despite the name and despite what this javadoc used to say.
+     *
+     * <p>Upstream {@code OsmandAidlApi.getAppInfo()} computes this as
+     * {@code leftTime + System.currentTimeMillis() / 1000} — {@code leftTime}
+     * is seconds ({@link #getLeftTime()}) and the millis term is divided down
+     * to seconds before the add. A caller that treats the result as millis (as
+     * this class's own javadoc did, and as {@code CarnyxNav.pollOnce} — the one
+     * caller — used to) gets a value about three weeks after the epoch once
+     * divided by 1000 a second time: a static, hours-wrong ETA is exactly what
+     * that produces on the face, and exactly what a drive reported. See the
+     * {@code * 1000L} at the call site.
+     */
     public long getArrivalTime() { return arrivalTime; }
 
     /** Seconds left, or 0. */

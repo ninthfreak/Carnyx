@@ -91,8 +91,11 @@ pub fn format(hour24: u32, minute: u32, is_24h: bool) -> Clock {
 ///
 /// ── NO NEW JAVA CALL, AND THAT IS THE POINT ─────────────────────────────────
 ///
-/// §4.9's ETA is an absolute arrival TIME and `AppInfoParams.arrivalTime` is
-/// Unix milliseconds, so something has to know which hour that lands on here.
+/// §4.9's ETA is an absolute arrival TIME, so something has to know which hour
+/// that lands on here. (`AppInfoParams.arrivalTime` is Unix SECONDS on the
+/// wire, not millis — a mistake this tree made once — but `CarnyxNav.pollOnce`
+/// converts at the JNI seam, so everything below this line, including the
+/// `arrival_ms` this function is named for, is genuinely milliseconds.)
 /// The obvious move is another platform call; this instead uses the two facts
 /// the app already has — the current epoch second, and the local hour and minute
 /// [`crate::android::clock_now`] returns for it — because their difference IS

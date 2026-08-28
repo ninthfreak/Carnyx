@@ -3487,10 +3487,13 @@ impl App {
 
         // ── THE ETA, WHICH NEEDS A TIMEZONE NOBODY HANDED US ─────────────────
         //
-        // `arrivalTime` is Unix millis and the face wants a local wall clock, so
-        // the offset is worked out from the clock reading this app already takes
-        // — see `crate::clock::offset_seconds`. No clock reading means no ETA
-        // rather than one in UTC.
+        // `r.arrival_ms` is Unix millis by the time it reaches here — OsmAnd's
+        // own `arrivalTime` is SECONDS, and `CarnyxNav.pollOnce` converts at the
+        // JNI seam; see the `* 1000L` there and `AppInfoParams.getArrivalTime`'s
+        // javadoc for a drive that shipped without it. The face wants a local
+        // wall clock, so the offset is worked out from the clock reading this
+        // app already takes — see `crate::clock::offset_seconds`. No clock
+        // reading means no ETA rather than one in UTC.
         //
         // NOT THE CLOCK SWITCH, and this comment used to say it was. Settings ▸
         // the clock toggle is read by `push_clock` alone; `clock_reading` asks
