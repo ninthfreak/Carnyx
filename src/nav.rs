@@ -345,11 +345,19 @@ impl Nav {
     /// the last turn before the driver arrived would sit on the face for the rest
     /// of the drive, pointing at a junction miles behind them.
     ///
-    /// TWELVE SECONDS, from the sender's own cadence: the updates come off
-    /// `IRoutingDataUpdateListener`, which fires on routing recalculation — about
-    /// one per location fix. Twelve is long enough to ride out a tunnel or a
-    /// dropped fix and short enough that a finished route clears before the
-    /// driver has parked.
+    /// TWELVE SECONDS, FROM THE POLL'S CADENCE — AND ONLY THE POLL'S. The poll
+    /// is genuinely 1 Hz (`CarnyxNav.POLL_MS = 1000`), so twelve is long enough
+    /// to ride out a tunnel or a dropped fix and short enough that a finished
+    /// route clears before the driver has parked.
+    ///
+    /// THIS COMMENT USED TO CLAIM THE PUSH FIRES "ABOUT ONE PER LOCATION FIX",
+    /// AND THAT WAS FALSE — the mistake that made the maneuver layer blink.
+    /// `IRoutingDataUpdateListener` is fired from ONE site in upstream's
+    /// `RoutingHelper`: the `if (processed)` branch of the node-advance loop in
+    /// `updateCurrentRouteStatus`, i.e. when the vehicle CROSSES A ROUTE
+    /// GEOMETRY NODE. On a long straight that can be minutes apart, so twelve
+    /// seconds is far too short a leash for the push and always was. Nothing
+    /// user-visible may depend on the push alone; see [`Nav::polled_state`].
     pub const EXPIRY: u64 = 12;
 
     /// How long a spoken instruction stays on screen, in seconds.
@@ -490,14 +498,66 @@ impl Nav {
         self.leg = None;
     }
 
-    /// What to draw, at `now`.
-    pub fn state(&self, now: u64) -> NavState {
-        let Some((metres, code, at)) = self.last else {
+    /// What the POLL alone says, when the push has gone quiet.
+    ///
+    /// ── THE MIRROR OF "PUSHING WITHOUT A POLL IS STILL CRUISING" ─────────────
+    ///
+    /// [`Nav::stage`] has always handled a push with no poll behind it. The
+    /// opposite case — a healthy 1 Hz poll with no push — was not handled, and
+    /// it is the COMMON one: the push fires when the vehicle crosses a route
+    /// GEOMETRY NODE (upstream `RoutingHelper.fireRoutingDataUpdateEvent`, one
+    /// call site, inside the `if (processed)` node-advance branch), not once a
+    /// second. On a motorway or a long straight, node spacing at speed easily
+    /// exceeds [`Nav::EXPIRY`]. Without this fallback the whole maneuver layer
+    /// — hairline, countdown, ETA, the strip's yield and the hero's takeover —
+    /// went dark twelve seconds after each node crossing and came back at the
+    /// next one, while the status-bar tell stayed lit because a poll WAS
+    /// landing. "Linked, but blank", periodically, is exactly what a drive
+    /// reported.
+    ///
+    /// EVERYTHING WITH WORDS IN IT IS ON THIS CHANNEL ANYWAY (§4.9: "the street
+    /// name, ETA, distance left and the turn-after-next come from the polled
+    /// `getAppInfo`"), so the feed that carries the content now also carries the
+    /// liveness. `turn_metres` is the poll's own `next_turn_distance`, which
+    /// `NAVIGATION-HANDOFF.md` §216 names as the countdown's distance.
+    fn polled_state(&self, now: u64) -> NavState {
+        // NOT MERELY "A POLL LANDED". OsmAnd answers `getAppInfo` whether or not
+        // it is navigating and zeroes the route fields when it is not, so the
+        // answer alone is liveness of the LINK, not of a ROUTE. See
+        // [`Route::navigating`].
+        let Some(r) = self.route(now).filter(|r| r.navigating()) else {
             return NavState::Idle;
         };
-        if now.saturating_sub(at) >= Self::EXPIRY {
-            return NavState::Idle;
+        let metres = r.turn_metres.unwrap_or(-1);
+        // OFF-ROUTE BEFORE ANYTHING ELSE, for the same reason the push arm below
+        // checks it first — and it MUST be checked here too. `Turn::from_xml`
+        // returns `None` for "OFFR" deliberately, so without this arm a
+        // deviation would fall through to `Waiting`, and `stage`'s catch-all
+        // would then read the poll's leftover `imminent` and dress the
+        // recalculation up as a maneuver. That is the precise failure the
+        // `NavState::OffRoute => Stage::Idle` arm exists to prevent; it just
+        // needed the poll to be able to say "off route" in the first place.
+        if r.turn_xml.as_deref() == Some("OFFR") {
+            return NavState::OffRoute { metres: metres.max(0) };
         }
+        match r.turn_xml.as_deref().and_then(Turn::from_xml) {
+            // A ROUTE IS RUNNING AND THE POLL HAS NOTHING TO DRAW YET — the
+            // poll's own `(-1)` distance, or a turn string this build does not
+            // know. `Waiting` and not `Unknown`: `Unknown`'s log line prints the
+            // PUSH's integer code, and there is no integer on this channel.
+            Some((turn, _)) if metres >= 0 => NavState::Turn { turn, metres },
+            _ => NavState::Waiting,
+        }
+    }
+
+    /// What to draw, at `now`.
+    pub fn state(&self, now: u64) -> NavState {
+        // A STALE PUSH IS NOT AN IDLE ROUTE. Falls through to the poll rather
+        // than returning `Idle` outright — see [`Nav::polled_state`].
+        let fresh = self.last.filter(|(_, _, at)| now.saturating_sub(*at) < Self::EXPIRY);
+        let Some((metres, code, _)) = fresh else {
+            return self.polled_state(now);
+        };
         // OFF-ROUTE IS CHECKED BEFORE THE `-1` PAIR, because a deviation is a
         // real reading and the sender writes it into the same two fields.
         if code == Turn::OFF_ROUTE {
@@ -546,10 +606,15 @@ impl Nav {
             NavState::OffRoute { .. } => Stage::Idle,
             _ => match self.route(now) {
                 Some(r) => Stage::from_imminent(r.imminent),
-                // PUSHING WITHOUT A POLL IS STILL CRUISING. The push callback
-                // is the one that keeps arriving on a slow route; a face that
-                // fell back to `Idle` because the poll was a second late would
-                // blink.
+                // PUSHING WITHOUT A POLL IS STILL CRUISING. A face that fell
+                // back to `Idle` because the poll was a second late would blink.
+                //
+                // THE OPPOSITE CASE IS HANDLED IN `state`, NOT HERE, and it is
+                // the one that actually bit: polling without a push. This arm
+                // reads `state(now)`, which now consults the poll itself when
+                // the push has gone quiet — so `NavState::Idle` above really
+                // does mean "neither channel has a route", and this `None` arm
+                // is reached only in its own narrow case.
                 None => Stage::Cruise,
             },
         }
@@ -1213,6 +1278,116 @@ mod tests {
         // Recalculated: the push carries a turn again and the stage returns.
         nav.update(120, 2, 103);
         assert_eq!(nav.stage(103, true), Stage::Approach, "back the moment there is a turn");
+    }
+
+    /// A LIVE POLL HOLDS THE WHOLE LAYER UP ON ITS OWN, and this is the drive
+    /// this build actually gets.
+    ///
+    /// The push fires when the vehicle crosses a route GEOMETRY NODE, not once
+    /// per second — minutes apart on a long straight. Gating the face on it
+    /// blanked the hairline, the countdown, the ETA, the strip's yield and the
+    /// hero's takeover twelve seconds after every node crossing, then brought
+    /// them back at the next one, all while the status-bar tell stayed lit
+    /// because the poll WAS answering. "Linked, but blank", periodically — and
+    /// no test caught it because every nav shot feeds both channels in the same
+    /// breath.
+    #[test]
+    fn a_poll_with_no_push_behind_it_still_draws_the_whole_maneuver_layer() {
+        let mut nav = Nav::new();
+        let leg = |imminent: i32| Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(240),
+            arrival_ms: Some(1_700_000_000_000),
+            left_metres: Some(9_400),
+            imminent: Some(imminent),
+            ..Route::default()
+        };
+
+        // NOT ONE PUSH, EVER — the case the old code called `Idle`.
+        nav.poll(leg(-1), 100);
+        assert_eq!(
+            nav.state(100),
+            NavState::Turn { turn: Turn::Right, metres: 240 },
+            "the poll's own turn and its own next_turn_distance"
+        );
+        assert_eq!(nav.stage(100, true), Stage::Cruise);
+
+        // AND IT ESCALATES ON THE POLL'S `imminent` ALONE, which is the only
+        // channel that carries it at all — the push has no such field.
+        nav.poll(leg(1), 101);
+        assert_eq!(nav.stage(101, true), Stage::Approach, "stage 2, poll-only");
+        nav.poll(leg(0), 102);
+        assert_eq!(nav.stage(102, true), Stage::TurnNow, "stage 3, poll-only");
+
+        // A PUSH THAT LANDED AND WENT QUIET MUST NOT PULL THE LAYER DOWN WITH
+        // IT. This is the exact sequence a motorway produces.
+        let mut nav = Nav::new();
+        nav.update(240, 5, 100);
+        nav.poll(leg(1), 100);
+        assert_eq!(nav.stage(100, true), Stage::Approach, "both channels fresh");
+        for t in [100 + Nav::EXPIRY, 100 + Nav::EXPIRY * 3] {
+            nav.poll(leg(1), t);
+            assert_eq!(
+                nav.stage(t, true),
+                Stage::Approach,
+                "the push is {}s stale and the poll is a second old",
+                t - 100
+            );
+        }
+
+        // THE POLL CAN END A ROUTE TOO. OsmAnd answers `getAppInfo` whether or
+        // not it is navigating, so an answer alone is liveness of the LINK; the
+        // route fields are what say a route is running.
+        nav.poll(Route::default(), 200);
+        assert_eq!(nav.state(200), NavState::Idle, "answering, but not navigating");
+        assert_eq!(nav.stage(200, true), Stage::Idle);
+    }
+
+    /// OFF-ROUTE HAS TO BE SAYABLE ON THE POLL CHANNEL, or the fallback above
+    /// would dress a recalculation up as a maneuver.
+    ///
+    /// `Turn::from_xml` returns `None` for "OFFR" deliberately, so without its
+    /// own arm a deviation fell through to `Waiting` — and `stage`'s catch-all
+    /// would then read the poll's leftover `imminent` and draw the turn the
+    /// driver just missed. Same failure the push channel's `OffRoute` arm was
+    /// built to prevent, reached the other way round.
+    #[test]
+    fn the_poll_can_say_off_route_and_the_layer_goes_quiet() {
+        let mut nav = Nav::new();
+        nav.poll(
+            Route {
+                turn_xml: Some("OFFR".into()),
+                turn_metres: Some(75),
+                // The leftovers from before the deviation are still here.
+                street: Some("Whitney Way".into()),
+                imminent: Some(1),
+                ..Route::default()
+            },
+            100,
+        );
+        assert_eq!(nav.state(100), NavState::OffRoute { metres: 75 });
+        assert_eq!(nav.stage(100, true), Stage::Idle, "no maneuver to draw");
+        assert!(nav.log_line(100, Units::Metric).unwrap().starts_with("OFF ROUTE"));
+    }
+
+    /// A ROUTE IS RUNNING BUT THIS TICK HAS NO TURN TO DRAW.
+    #[test]
+    fn a_navigating_poll_with_no_usable_turn_is_waiting_not_idle() {
+        let mut nav = Nav::new();
+        // Navigating (there is a destination) with OsmAnd's own `-1` distance.
+        nav.poll(
+            Route {
+                arrival_ms: Some(1_700_000_000_000),
+                turn_metres: Some(-1),
+                ..Route::default()
+            },
+            100,
+        );
+        assert_eq!(nav.state(100), NavState::Waiting, "a route, nothing to say yet");
+        // WAITING IS NOT IDLE: the layer is live, so the hairline and the ETA
+        // stay up and only the countdown's own text is empty.
+        assert_ne!(nav.stage(100, true), Stage::Idle);
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.
