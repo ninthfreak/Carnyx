@@ -152,6 +152,9 @@ export component AppWindow inherits Window {
     callback toggle-save();
     callback open-settings();
     callback open-nearby();
+    /// A tap on the OsmAnd status-bar mark — bring OsmAnd to the front. No
+    /// overlay to set: this leaves Carnyx and does not open anything of ours.
+    callback open-osmand();
     /// The per-tile logo badge, reorder mode only (§6.4 block 0). Carries the
     /// preset index so Rust can resolve the call sign before the window opens.
     callback open-logo-search(int);
@@ -414,6 +417,7 @@ export component AppWindow inherits Window {
         toggle-save => { root.toggle-save(); }
         open-settings => { root.overlay = Overlay.settings; root.open-settings(); }
         open-nearby => { root.overlay = Overlay.nearby; root.open-nearby(); }
+        open-osmand => { root.open-osmand(); }
         open-logo-search(i) => { root.overlay = Overlay.logo-search; root.open-logo-search(i); }
         claim-audio => { root.claim-audio(); }
         release-audio => { root.release-audio(); }
