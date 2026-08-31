@@ -50,6 +50,7 @@
 //! them stays inside it at the heavier of the two strokes.
 
 use crate::nav::Turn;
+use std::sync::OnceLock;
 
 /// The icon box every glyph in this tree is drawn on (§7.1).
 pub const BOX: f32 = 24.0;
@@ -109,6 +110,27 @@ const GAP_DEG: f32 = 40.0;
 /// number set inside the ring.
 const RING_BARB_LEN: f32 = 3.4;
 
+/// How far ABOVE the box's centre the RING's centre sits, for the exit digit
+/// that goes inside it.
+///
+/// DERIVED FROM THE FOUR CONSTANTS ABOVE AND NOT CHOSEN. [`generate`] centres
+/// the whole INK, not the ring: the circulation barbs reach `RING_BARB_LEN *
+/// sin(BARB_DEG)` = 1.8 units past the ring's top, so the ink runs −8.4 (barb
+/// tip) to +11.2 (`HEIGHT` below that, the stem's tail) about the ring's centre.
+/// Its midpoint — the point [`generate`] lands on the box's centre — is therefore
+/// 1.4 units BELOW that centre, which is the same as saying the ring rides 1.4
+/// ABOVE the box's. The same value serves both roundabouts, since only the
+/// mirror differs between them.
+///
+/// DUPLICATED IN SLINT, exactly as [`crate::signal::HALF_STEP_OPACITY`] is and
+/// for the same reason: `ui/icons.slint` hard-codes `y: -root.size * 1.4 / 24`
+/// on the exit number because a Slint expression cannot read a Rust constant.
+/// Nothing pinned the two together, so tuning any one of `RING_R`,
+/// `RING_BARB_LEN`, `BARB_DEG` or [`HEIGHT`] would have slid the digit off the
+/// ring in silence — 6px of it at the hero's 100dp, which reads as a misprint.
+/// `the_exit_digit_rides_where_the_ring_actually_is` is that pin.
+pub const RING_CENTRE_RIDE: f32 = 1.4;
+
 /// Degrees off straight ahead, from §4.9's table.
 ///
 /// THE TABLE IS THE SPEC'S AND NOT DERIVED FROM ANYTHING. OsmAnd's `turn_angle`
@@ -136,12 +158,65 @@ pub fn degrees(turn: Turn) -> Option<f32> {
     })
 }
 
+/// Every [`Turn`] there is, in the order [`path`] caches them.
+///
+/// ONE LIST AND NO SECOND TABLE. The lookup below is a `position` over this
+/// array rather than a `match` mapping each variant to an index, because a match
+/// would be a second copy of the same ordering — exactly the kind of pair that
+/// drifts. Thirteen equality checks on a fieldless enum cost less than the one
+/// `String` clone that follows them.
+const TURNS: [Turn; 13] = [
+    Turn::Straight,
+    Turn::KeepLeft,
+    Turn::KeepRight,
+    Turn::SlightLeft,
+    Turn::SlightRight,
+    Turn::Left,
+    Turn::Right,
+    Turn::SharpLeft,
+    Turn::SharpRight,
+    Turn::UTurn,
+    Turn::RightUTurn,
+    Turn::Roundabout,
+    Turn::RoundaboutLeft,
+];
+
 /// The SVG path for one maneuver, on a 24-unit box.
 ///
 /// The exit NUMBER is not in here: it is text, and it is set inside the ring by
 /// the caller drawing a `Text` over this `Path`. See [`Turn::from_xml`] for
 /// where the number comes from.
+///
+/// ── MEMOISED, BECAUSE THE ANSWER IS A PURE FUNCTION OF A 13-VALUE ENUM ──────
+///
+/// `App::push_nav` calls this TWICE per publish — the next turn and the turn
+/// after it — at roughly 2 Hz for the whole of a route, and every one of those
+/// calls used to redo the trigonometry and then rebuild a byte-identical string:
+/// a `Vec<Cmd>`, a bbox pass, and one `format!` per command with two to four
+/// `String` allocations inside each. Something like 36 heap allocations for a
+/// glyph that has thirteen possible shapes. The table is built once, on first
+/// use, and the caller gets a clone of the one it asked for.
+///
+/// THE SIGNATURE IS DELIBERATELY UNCHANGED. `crate::app` hands the result
+/// straight to a Slint `SharedString`, which owns its bytes anyway, so returning
+/// a `&'static str` would save nothing here and change every caller.
 pub fn path(turn: Turn) -> String {
+    static PATHS: OnceLock<[String; 13]> = OnceLock::new();
+    let table = PATHS.get_or_init(|| TURNS.map(generate));
+    match TURNS.iter().position(|t| *t == turn) {
+        Some(i) => table[i].clone(),
+        // UNREACHABLE, AND STILL NOT A PANIC. A `Turn` missing from `TURNS` is a
+        // variant added to the enum without its line here, and the right answer
+        // for it is the shape it has always had: one glyph generated the slow
+        // way beats a face that stops drawing on the road.
+        // `the_cache_holds_every_turn` below is what keeps this arm cold.
+        None => generate(turn),
+    }
+}
+
+/// One glyph's path data, worked out from scratch. [`path`]'s table is the only
+/// caller, and it calls this once per [`Turn`].
+fn generate(turn: Turn) -> String {
     let cmds = match turn {
         // A U-TURN IS AN ARC, NOT A 179° ELBOW. The elbow construction would put
         // the tip 0.17 units to one side of the stem and the two would overlap
@@ -162,7 +237,7 @@ pub fn path(turn: Turn) -> String {
 
 /// Stem, radiused elbow, head, two barbs — the whole set bar three.
 ///
-/// Built about the elbow at the local origin; [`path`] moves it into the box.
+/// Built about the elbow at the local origin; [`generate`] moves it into the box.
 fn elbow(deg: f32) -> Vec<Cmd> {
     let (dx, dy) = heading(deg);
     let corner_in = (0.0, ELBOW_R);
@@ -592,6 +667,57 @@ mod tests {
             let apart = ((lip.0 - head.0).powi(2) + (lip.1 - head.1).powi(2)).sqrt();
             assert!(apart > 3.0, "{turn:?} closes the ring: lip {lip:?} head {head:?}");
         }
+    }
+
+    /// THE EXIT DIGIT'S RIDE IS DERIVED FROM THE RING, AND SLINT HAS A COPY.
+    ///
+    /// `ui/icons.slint` sets the number at `y: -root.size * 1.4 / 24`, and that
+    /// 1.4 is not a design value: it falls out of `RING_R`, `RING_BARB_LEN`,
+    /// `BARB_DEG` and `HEIGHT`. Nothing held the two ends together, so tuning
+    /// any one of those four would have slid the digit off the ring in silence.
+    /// Same treatment as `crate::signal::HALF_STEP_OPACITY`, for the same
+    /// reason: a number that lives in two languages needs one test that fails
+    /// when they stop agreeing.
+    #[test]
+    fn the_exit_digit_rides_where_the_ring_actually_is() {
+        // FROM THE FOUR CONSTANTS. The barbs reach past the ring's top by
+        // `RING_BARB_LEN * sin(BARB_DEG)`, the ink is `HEIGHT` tall from there,
+        // and `generate` puts the middle of that on the box's centre.
+        let top = -(RING_R + RING_BARB_LEN * BARB_DEG.to_radians().sin());
+        let ride = HEIGHT / 2.0 + top;
+        assert_eq!(format!("{ride:.1}"), "1.4", "the ring rides {ride}");
+        assert!((ride - RING_CENTRE_RIDE).abs() < 0.005, "the ring rides {ride}");
+
+        // AND FROM THE GLYPH ITSELF, so this is not just arithmetic agreeing
+        // with itself: the stem meets the ring at 6 o'clock (the second point
+        // emitted) and the circulation head sits at 12 (the tip), so the
+        // midpoint of those two is the ring's own centre.
+        for turn in [Turn::Roundabout, Turn::RoundaboutLeft] {
+            let centre = (points(&path(turn))[1].1 + tip_of(turn).1) / 2.0;
+            assert!(
+                (BOX / 2.0 - centre - RING_CENTRE_RIDE).abs() < 0.01,
+                "{turn:?} centres its ring at {centre}, not {RING_CENTRE_RIDE} above the box's"
+            );
+        }
+    }
+
+    /// THE CACHE HOLDS EVERY TURN, AND HOLDS WHAT THE GENERATOR MAKES.
+    ///
+    /// [`path`] looks its answer up in `TURNS` and falls back to generating one
+    /// for anything missing from that list — which would still draw the right
+    /// glyph, so the memoisation could quietly stop applying with nothing on
+    /// screen to say so. This walks all thirteen: the list is complete, and the
+    /// string it hands back is the one [`generate`] makes.
+    #[test]
+    fn the_cache_holds_every_turn() {
+        for turn in every_turn() {
+            assert!(TURNS.contains(&turn), "{turn:?} is missing from the cached table");
+            assert_eq!(path(turn), generate(turn), "{turn:?} caches a different glyph");
+            // And the same call twice is the same answer, which is the whole of
+            // what a cache promises.
+            assert_eq!(path(turn), path(turn), "{turn:?}");
+        }
+        assert_eq!(TURNS.len(), every_turn().len(), "two lists of the same thirteen");
     }
 
     /// EVERY GLYPH IS THE SAME HEIGHT AND SITS ON THE BOX'S CENTRE.

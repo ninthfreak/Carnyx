@@ -647,9 +647,18 @@ pub fn ingest_note(line: String) {
 /// Which poll is the live one. Bumped by every start and every stop, so a thread
 /// whose number no longer matches knows it has been superseded and exits.
 ///
-/// The same generation trick `NwdBridge.startRdsPump` and `startLevelWatch` use
-/// on the Java side, and for the same reason: there is no way to interrupt a
-/// sleeping thread from here, so the thread has to ask.
+/// The same generation trick the Java side uses for its two long-lived threads
+/// — `levelGen` for `NwdBridge.startLevelWatch`, `rdsGen` for
+/// `NwdBridge.startRdsPump` — and for the same reason there: a bare `volatile
+/// boolean` races, because stop sets it false and a start immediately after sets
+/// it true again, so an outgoing thread that has not re-checked in between
+/// simply carries on and two threads run at once. A generation cannot be handed
+/// back: the thread captures its own and exits the moment it is no longer the
+/// current one.
+///
+/// Here it also covers the thing a `boolean` could not: this poll has no way to
+/// interrupt its own sleep, so the check has to be something the thread asks
+/// for, on every slice. See [`POLL_SLICE`].
 static POLL_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How finely the poll's sleep is sliced.
@@ -1038,13 +1047,23 @@ pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {
 /// What the tuner state looks like right now, read synchronously.
 ///
 /// The push callbacks do not always reach a passive client on this firmware, but
-/// these getters do return live values, which is why the face polls at all.
+/// the NUMBER getters do return live values, which is why the face polls at all.
+/// The string ones do not, and are no longer read — see [`TunerSnapshot::ps`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct TunerSnapshot {
     pub raw: i32,
     pub mhz: Option<f32>,
     pub band: i8,
+    /// ALWAYS EMPTY FROM THE DEVICE, and deliberately. `NwdTuner::snapshot` no
+    /// longer calls `NwdBridge.pollPs` / `pollRt`: nothing reads either field —
+    /// see `src/app.rs:2084-2091`, where the poll spells out that it does not
+    /// drive PS or RadioText — and each cost a static call and a binder
+    /// transaction every 1.5 s for a whole drive. PS and RadioText reach the
+    /// face on the push path, through [`ingest_frequency`] and
+    /// [`ingest_radio_text`]. The fields stay because [`FakeTuner`] fills `ps`
+    /// from its own simulated state and the probes construct the struct.
     pub ps: String,
+    /// See [`TunerSnapshot::ps`]: not polled, always empty.
     pub rt: String,
     pub pty: i32,
     /// The vendor's `isStreroOn()`, reported ONLY so a diagnostic can show it.
@@ -1331,21 +1350,6 @@ impl FakeTuner {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeState> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// Replace the stations a seek walks. Ascending raw frequencies.
-    pub fn set_stations(&self, raw: Vec<i32>) {
-        self.lock().stations = raw;
-    }
-
-    /// Set the level the next reading reports.
-    pub fn set_level(&self, level: i32) {
-        self.lock().level = level;
-    }
-
-    /// Pretend the MCU pushed a group. The string is the vendor's 16 hex chars.
-    pub fn push_rds_hex(&self, hex: &str) {
-        ingest_rds_group(hex);
     }
 
     /// Model the device's ASYNCHRONOUS frequency reporting: `tune` commands and

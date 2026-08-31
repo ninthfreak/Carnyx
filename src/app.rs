@@ -77,6 +77,76 @@ static LOGO_QUEUE: Mutex<VecDeque<service::Event>> = Mutex::new(VecDeque::new())
 type Wake = Box<dyn Fn() + Send + Sync>;
 static WAKE: OnceLock<Wake> = OnceLock::new();
 
+/// A drain has been asked for and has not started yet.
+///
+/// ── WHY THIS EXISTS: ONE WAKE PER BATCH, NOT ONE PER EVENT ──────────────────
+///
+/// `enqueue` used to wake on EVERY event, and each wake posts its own
+/// `invoke_from_event_loop(drain_current)` — while [`drain_current`] drains the
+/// queue until it is EMPTY and then republishes everything. So the first drain
+/// of a batch did all the work and every later one re-ran a full `push_all`
+/// (hero, presets, meter, nearby, settings, freq) over a queue with nothing in
+/// it. The raw RDS pump alone runs at 90ms (`NwdBridge.RDS_POLL_MS`), which is
+/// roughly eleven groups a second, so a station with RDS bought about twelve
+/// full republishes a second where one or two would do. `examples/pushbench.rs`
+/// is what that costs.
+///
+/// ── AND THE ORDERING IS THE WHOLE FIX ───────────────────────────────────────
+///
+/// [`drain_current`] MUST clear this BEFORE it drains, never after. Clearing
+/// after loses any event enqueued mid-drain: that event finds the flag still
+/// set, posts no wake of its own, and is then left in the queue by the clear
+/// that follows — stranded until some unrelated event happens along and wakes
+/// the loop for it. On the nav path, where an update is minutes apart on a long
+/// straight, that is a visible stall. Clearing first can at worst post one
+/// redundant wake, which costs an empty drain.
+///
+/// THE FLAG IS NEVER TAKEN WHILE NO WAKE IS INSTALLED, and that ordering is the
+/// difference between working and a dead face. `android_main` installs the event
+/// SINK inside `App::with_tuner` and the WAKE seventeen lines later; the location
+/// block in between calls `ingest_note` on every path, and that enqueues. A
+/// `post_drain` that latched the flag before finding `WAKE` empty would leave it
+/// true with nothing able to clear it — `clear_drain_post` runs only from
+/// `drain_current`, which only the wake can reach — so from `ui.run()` onward
+/// every RDS group, frequency report, snapshot and fix would queue and never wake
+/// the loop. The face would sit frozen until the driver pressed something. So:
+/// check the wake FIRST, and only then take the edge.
+static DRAIN_POSTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the UI thread for a drain, once per batch.
+///
+/// Both queues' sinks come through here. The `swap` is the whole gate: only the
+/// false->true edge posts, and every event behind it rides the drain that is
+/// already coming.
+///
+/// NO WAKE MEANS NO LATCH — see [`DRAIN_POSTED`]. That covers the host, where the
+/// caller drains inline after each command, and the device's own startup window
+/// before `set_event_wake` runs.
+fn post_drain() {
+    use std::sync::atomic::Ordering;
+    let Some(wake) = WAKE.get() else { return };
+    if DRAIN_POSTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    wake();
+}
+
+/// No drain is outstanding any more, so the next event has to post its own.
+fn clear_drain_post() {
+    DRAIN_POSTED.store(false, std::sync::atomic::Ordering::Release);
+}
+
+/// The post did not take, so no drain is coming after all.
+///
+/// FOR THE ONE CASE THAT WOULD OTHERWISE LATCH FOREVER: `invoke_from_event_loop`
+/// fails when there is no event loop to post to, and if the flag stayed set
+/// after that, every later event would find a drain "already posted" that never
+/// runs, and the queue would stop being serviced for the life of the process.
+/// See the wake installed in `lib.rs`.
+pub fn drain_post_failed() {
+    clear_drain_post();
+}
+
 /// Install the "an event is waiting" signal.
 ///
 /// On Android this is `slint::invoke_from_event_loop(|| …drain…)`. On the host
@@ -137,7 +207,13 @@ static APPS_BUILT_HERE: std::sync::atomic::AtomicU32 = std::sync::atomic::Atomic
 /// Drain and republish on the current thread's App. This is what the wake hop
 /// runs; it does nothing if there is no App here, which is the correct answer
 /// for a late event after the window has gone.
+///
+/// THE FLAG IS CLEARED FIRST AND THE ORDER IS NOT NEGOTIABLE. See
+/// [`DRAIN_POSTED`]: clearing after the drain strands any event that arrives
+/// while this is running. Cleared even when there is no App to drain into,
+/// because a flag left set would suppress every later wake as well.
 pub fn drain_current() {
+    clear_drain_post();
     let app = CURRENT.with(|c| c.borrow().as_ref().and_then(std::rc::Weak::upgrade));
     if let Some(app) = app {
         app.drain_events();
@@ -373,19 +449,23 @@ fn arm_level_schedule(s: &mut State) {
 
 /// The sink every tuner event lands in. Deliberately the smallest possible
 /// amount of work on a binder thread: push, then signal.
+///
+/// The signal is [`post_drain`], not the wake itself: a drain that has been
+/// asked for and not yet started will pick this event up on its way through, so
+/// asking again would buy nothing and cost a whole `push_all`.
 fn enqueue(event: TunerEvent) {
     queue().push_back(event);
-    if let Some(wake) = WAKE.get() {
-        wake();
-    }
+    post_drain();
 }
 
 /// The same, for the logo worker. Runs on `carnyx-logos`, never the UI thread.
+///
+/// ONE FLAG FOR BOTH QUEUES, because there is one drain: `drain_events` empties
+/// the tuner's queue and then the worker's, so a wake posted for either serves
+/// whatever is waiting in the other.
 fn enqueue_logo(event: service::Event) {
     logo_queue().push_back(event);
-    if let Some(wake) = WAKE.get() {
-        wake();
-    }
+    post_drain();
 }
 
 // ── The face's own state ─────────────────────────────────────────────────────
@@ -717,11 +797,19 @@ struct State {
     /// with RDS.
     last_sources: Option<Vec<TunerSource>>,
     last_diag_actions: Option<Vec<DiagAction>>,
-    /// The two models in `push_settings` that CANNOT change: the theme chips are
-    /// a fixed list and the tuner-details list is always empty (the panel
-    /// describes an RTL-SDR, which the provenance rule bars from this tree). One
-    /// publish is the whole truth about both, so they are published once and then
-    /// never touched again rather than re-derived per wake.
+    /// The THREE models in `push_settings` that CANNOT change: the theme chips
+    /// are a fixed list, the tuner-details list is always empty (the panel
+    /// describes an RTL-SDR, which the provenance rule bars from this tree), and
+    /// the band-theme menu is `eggs::listed()` — a const filter over a const
+    /// table — behind a const off-row label. One publish is the whole truth about
+    /// all three, so they are published once and then never touched again rather
+    /// than re-derived per wake.
+    ///
+    /// The band-theme menu joined them late and cost the most while it was
+    /// outside: `ModelRc` compares by POINTER, so handing Slint a freshly built
+    /// model of identical rows made the property dirty on every wake and the
+    /// picker's repeater was torn down and rebuilt roughly eleven times a second
+    /// on a station with RDS.
     statics_published: bool,
     /// FRAMES THE DRIVER ACTUALLY GOT during the morph now running, and when it
     /// started. See `ui/hero.slint`'s `morph-frame`.
@@ -1031,8 +1119,15 @@ impl Drop for App {
 }
 
 /// The FM band, and the only band this app tunes.
-const FM_LO: f32 = 87.5;
-const FM_HI: f32 = 108.0;
+///
+/// PUBLIC BECAUSE THREE OTHER MODULES NEED THE SAME TWO NUMBERS, and until this
+/// was `pub` they could not reach them: `prefs::from_json` drops an out-of-band
+/// preset, `callsigns::key` refuses an out-of-band dial, and
+/// `session::Session::warm_rds` refuses an out-of-band snapshot — and all three
+/// had written `(87.5..=108.0)` out again by hand. Five copies of a band edge is
+/// five places to change it and four places to forget.
+pub const FM_LO: f32 = 87.5;
+pub const FM_HI: f32 = 108.0;
 
 /// How often to re-read the signal level while connected.
 ///
@@ -1214,6 +1309,19 @@ impl App {
         let warm = previous
             .as_ref()
             .and_then(|p| p.warm_rds(crate::session::now_unix()).map(|(rds, age)| (p.dial, rds, age)));
+        // THE DIAL IS NOT THE RDS AND MUST NOT RIDE ON IT. It used to: the dial
+        // was carried inside `warm`, so it survived only when `warm_rds` said
+        // yes — and `warm_rds` refuses a snapshot older than 25s AND one whose
+        // RDS is empty. So coming back to a station that broadcasts no RDS at
+        // all, or after half a minute in another app, dropped the face onto
+        // `fake::SEED_DIAL_MHZ` (105.1), a Madison frequency the driver had
+        // never tuned. A frequency does not go stale the way RadioText does; the
+        // only thing worth checking is that it is a dial this radio can have
+        // been on, which is what the band filter is for.
+        let last_dial = previous
+            .as_ref()
+            .map(|p| p.dial)
+            .filter(|d| (FM_LO..=FM_HI).contains(d));
 
         // The store sits BESIDE `prefs.json`, under the same private directory,
         // for the same reason it is passed in rather than derived: `assets/` is
@@ -1265,7 +1373,9 @@ impl App {
                 // The last dial beats the seed, which is a Madison frequency
                 // from the host fake. The tuner overwrites it the moment it
                 // connects; until then this is the better guess by far.
-                dial: warm.as_ref().map(|&(dial, _, _)| dial).unwrap_or(fake::SEED_DIAL_MHZ),
+                //
+                // FROM `last_dial`, NOT `warm` — see the note where it is read.
+                dial: last_dial.unwrap_or(fake::SEED_DIAL_MHZ),
                 level: None,
                 dotted: 0,
                 audio: true,
@@ -1282,11 +1392,25 @@ impl App {
                 location,
                 location_dirty: false,
                 picker,
+                // EVERY FIELD `Prefs` CARRIES IS READ BACK HERE, and the count
+                // is the whole point: three of the eight — `clock_on`, `nav_on`
+                // and `nav_hide_on_map` — were missing, so they fell through to
+                // `Settings::default`, which has all three ON. `s.saved` below
+                // is seeded from the FILE, so the first `push_settings` saw
+                // now != saved and wrote the defaults back over the driver's
+                // choices: three switches that could not be turned off across a
+                // launch, and `nav_on` reverting to true re-bound OsmAnd with
+                // BIND_AUTO_CREATE — starting a maps app the driver had
+                // switched off. `a_launch_reads_back_every_setting_prefs_keeps`
+                // is what holds this list complete.
                 settings: settings::Settings {
                     selected: saved.selected,
                     theme: saved.theme,
                     logos_on: saved.logos_on,
                     release_on_sleep: saved.release_on_sleep,
+                    clock_on: saved.clock_on,
+                    nav_on: saved.nav_on,
+                    nav_hide_on_map: saved.nav_hide_on_map,
                     diag_on: saved.diag_on,
                     ..settings::Settings::default()
                 },
@@ -1829,10 +1953,19 @@ impl App {
             //
             // The three integers go into `crate::nav` exactly as OsmAnd sent
             // them, sentinels included, and what they mean is decided there
-            // where it is tested. Nothing is logged per update: these arrive at
-            // about one a second while a route is running and would fill the
-            // ring in three minutes. The log line is written on a CHANGE of
-            // state instead — see `push_nav`.
+            // where it is tested.
+            //
+            // NOTHING IS LOGGED PER UPDATE, and the reason is NOT the cadence.
+            // This comment used to say these "arrive at about one a second
+            // while a route is running", which `crate::nav::Nav::EXPIRY` records
+            // as false and names as the cause of the blinking maneuver layer:
+            // upstream fires `IRoutingDataUpdateListener` from ONE site,
+            // `RoutingHelper.java:730`, inside the `if (processed)` node-advance
+            // branch of `updateCurrentRouteStatus` — i.e. when the vehicle
+            // crosses a route geometry node, which on a long straight is minutes
+            // apart. The rate is therefore unknown and bursty, and a log line
+            // per update would say nothing about state anyway. The line is
+            // written on a CHANGE of state instead — see `push_nav`.
             TunerEvent::Nav { distance_to, turn_type, .. } => {
                 let now = crate::session::now_unix();
                 s.nav.update(distance_to, turn_type, now);
@@ -2160,7 +2293,18 @@ impl App {
                 // reading until the 1s read replaced it. CarFM clears it right
                 // here, in the same handler (`setFmLevel(null)`,
                 // RadioScreen.tsx:2829).
+                //
+                // AND THE DOTTED BAND GOES WITH IT, which it did not until now.
+                // `tune` clears both together (see the pair beside `s.scanning`)
+                // and this arm cleared only the level, so a retune the vendor
+                // drove left the PREVIOUS station's settled reception-loss arcs
+                // drawn over the new station's bars. `settle_dotted` is a
+                // one-step-per-poll state machine fed its own previous count, so
+                // the stale band did not snap away — it walked down at one step
+                // per 1.5s poll, which is the arcs visibly draining after a
+                // wheel press.
                 s.level = None;
+                s.dotted = 0;
                 arm_level_schedule(&mut s);
                 let line = format!("tuned {:.1}", s.dial);
                 s.settings.log.push(&stamp(), &line);
@@ -2174,12 +2318,15 @@ impl App {
                 // published or not — a group the consensus gates reject is still
                 // proof that there is a transmitter out there.
                 s.last_rds_at = Some(std::time::Instant::now());
-                let hex = g
-                    .0
-                    .iter()
-                    .map(|b| format!("{b:04x}"))
-                    .collect::<String>();
-                let published = s.rds.push(&hex);
+                // THE BLOCKS GO IN AS BLOCKS. `android::ingest_rds_group` has
+                // already parsed the bridge's string into four `u16`s at the
+                // edge, and this used to build a 16-character hex string back
+                // out of them — four `format!`s and a `collect::<String>()` —
+                // for `RdsDecoder::push` to validate and parse a second time,
+                // about eleven times a second for the whole drive. `push` is now
+                // the wrapper for the callers that really do hold text: the
+                // host's fake stream below, and the decoder's own tests.
+                let published = s.rds.push_blocks(g.0);
                 let mut changed = false;
                 if std::mem::take(&mut s.rds_stale) {
                     // THE CARRIER IS BACK. The expiry cleared the face but
@@ -3068,16 +3215,44 @@ impl App {
         // provenance rule, so the list is empty and the panel draws its own
         // emptiness rather than inventing a device.
         //
-        // PUBLISHED ONCE, with the theme chips below it. Neither list has an
-        // input: this one is always empty and `theme_chips()` takes no argument
-        // and returns the same three labels forever. Handing Slint a fresh model
-        // of unchanging content on every wake from the tuner queue is a repeater
-        // rebuilt for nothing. See `State::statics_published`.
+        // PUBLISHED ONCE, with the theme chips and the band-theme menu below it.
+        // None of the three has an input: this one is always empty,
+        // `theme_chips()` takes no argument and returns the same three labels
+        // forever, and the band-theme menu is a const table behind a const
+        // filter. Handing Slint a fresh model of unchanging content on every
+        // wake from the tuner queue is a repeater rebuilt for nothing —
+        // `ModelRc` compares by POINTER, so a rebuilt model of identical rows is
+        // a dirty property every time. See `State::statics_published`.
         if !s.statics_published {
             ui.set_settings_tuner_details(ModelRc::from(Rc::new(VecModel::from(
                 Vec::<TunerDetail>::new(),
             ))));
             ui.set_settings_theme_chips(strings(&settings::theme_chips()));
+
+            // ── THE HIDDEN BAND-THEME PICKER ─────────────────────────────────
+            //
+            // The whole list, finished, with the off row already in it — the
+            // panel's index is an index into THIS list, and a list the two sides
+            // build differently is an off-by-one waiting to happen.
+            //
+            // LABELS, NEVER IDS. `Egg::menu` is a pun and `Egg::id` is the key
+            // the matcher and the face switch on, and the reference keeps them
+            // apart in as many words. Nothing that crosses this seam is an id.
+            //
+            // `listed()` AND NO SECOND FILTER. The owner's rule is that basic
+            // themes get no listing, and `eggs::listed` is the one place it is
+            // enforced.
+            //
+            // UP HERE WITH THE OTHER STATICS, and only the menu: the CHOICE
+            // below is an `int` that moves whenever a driver forces a theme, and
+            // an int property compares by value.
+            let listed = crate::eggs::listed();
+            let mut menu: Vec<slint::SharedString> = Vec::with_capacity(listed.len() + 1);
+            menu.push(EGG_MENU_OFF.into());
+            menu.extend(listed.iter().map(|e| slint::SharedString::from(e.menu)));
+            ui.set_settings_egg_menu(slint::ModelRc::from(std::rc::Rc::new(
+                slint::VecModel::from(menu),
+            )));
         }
 
         // THE SOURCE LIST, under `last_presets`' rule. Its inputs are whether a
@@ -3129,10 +3304,18 @@ impl App {
         ui.set_settings_nav_sub(self.nav_sub_line().into());
         ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
         ui.set_settings_diag_on(cfg.diag_on);
-        // The log is a 200-line ring and this is a 200-string model. Same rule
-        // again, and it matters most here: the diagnostics overlay is the one a
-        // driver leaves open while watching the radio misbehave. The cache write
-        // waits until the borrow is released, at the foot of this function.
+        // The log is a `DiagLog::CAP`-line ring — 600 — with up to
+        // `DiagLog::HEAD_CAP` (24) more in the head that never scrolls, and
+        // `lines()` returns both, so this is a model of up to 624 strings. Same
+        // rule again, and it matters most here: the diagnostics overlay is the
+        // one a driver leaves open while watching the radio misbehave. The cache
+        // write waits until the borrow is released, at the foot of this function.
+        //
+        // STILL A FULL CLONE PER CALL, and that is the known cost: `lines()`
+        // deep-copies every string just to be compared against `last_diag`, at
+        // this function's ~12 Hz. Fixing it needs a version counter inside
+        // `DiagLog` itself — nothing it exposes today changes on a push — which
+        // is a `settings.rs` change, not one that can be made from here.
         let lines = cfg.log.lines();
         let diag_changed = s.last_diag.as_ref() != Some(&lines);
         if diag_changed {
@@ -3160,33 +3343,21 @@ impl App {
 
         ui.set_settings_diag_status(s.diag_status.as_str().into());
 
-        // ── THE HIDDEN BAND-THEME PICKER ─────────────────────────────────────
+        // THE BAND-THEME PICKER'S SELECTED ROW, and only that. The MENU it
+        // indexes into is published once, up with the other statics; this is an
+        // `int` and moves whenever a driver forces or clears a theme.
         //
-        // The whole list, finished, with the off row already in it — the panel's
-        // index is an index into THIS list, and a list the two sides build
-        // differently is an off-by-one waiting to happen.
-        //
-        // LABELS, NEVER IDS. `Egg::menu` is a pun and `Egg::id` is the key the
-        // matcher and the face switch on, and the reference keeps them apart in
-        // as many words. Nothing that crosses this seam is an id.
-        //
-        // `listed()` AND NO SECOND FILTER. The owner's rule is that basic themes
-        // get no listing, and `eggs::listed` is the one place it is enforced.
-        let listed = crate::eggs::listed();
-        let mut menu: Vec<slint::SharedString> = Vec::with_capacity(listed.len() + 1);
-        menu.push(EGG_MENU_OFF.into());
-        menu.extend(listed.iter().map(|e| slint::SharedString::from(e.menu)));
-        ui.set_settings_egg_menu(slint::ModelRc::from(std::rc::Rc::new(
-            slint::VecModel::from(menu),
-        )));
         // ZERO WHEN NOTHING IS FORCED, and zero when the stored id names a row
         // that is no longer listed — the picker cannot show a choice it cannot
         // offer, and lighting nothing while a theme is forced would be worse than
         // lighting the off row, which is at least a way back.
+        //
+        // The same `eggs::listed()` the menu was built from, so the index and the
+        // list it indexes cannot come from two different tables.
         let choice = s
             .forced_egg
             .as_deref()
-            .and_then(|id| listed.iter().position(|e| e.id == id))
+            .and_then(|id| crate::eggs::listed().iter().position(|e| e.id == id))
             .map(|i| i as i32 + 1)
             .unwrap_or(0);
         ui.set_settings_egg_choice(choice);
@@ -3203,10 +3374,11 @@ impl App {
         // and before the diagnostics cache is written back.
         //
         // AND THE `save_prefs` AT THE END OF THIS FUNCTION IS WHERE EVERY PANEL
-        // SETTING PERSISTS. Five fields of `prefs::Prefs` — the source, the
-        // theme, the logo switch, the sleep release and the diagnostics switch —
-        // are moved by callbacks that write nothing themselves, and they reach
-        // the disk because every one of those callbacks ends in `push_settings`.
+        // SETTING PERSISTS. Eight fields of `prefs::Prefs` — the source, the
+        // theme, the logo switch, the sleep release, the clock, the OsmAnd
+        // switch, hide-on-map and the diagnostics switch — are moved by callbacks
+        // that write nothing themselves, and they reach the disk because every
+        // one of those callbacks ends in `push_settings`.
         // Worth saying out loud: from the callback's side that write is
         // invisible, and the obvious "fix" is to add one there — a second write
         // of the same struct, which the equality check below would discard.
@@ -4534,16 +4706,39 @@ impl App {
         }
     }
 
-    /// A new position.
+    /// A new position, from the SCREENSHOT harness.
     ///
-    /// This is the seam a real `LocationManager` callback lands on: it takes the
-    /// fix, re-runs the nearby query against it, and republishes. Nothing else
-    /// in this crate knows where the position came from, which is why the fake
-    /// and the framework can share one path.
+    /// NOT THE SEAM A REAL `LocationManager` CALLBACK LANDS ON, which this doc
+    /// claimed and which was never true. The framework's fix goes to
+    /// [`crate::android::ingest_position`], becomes a `TunerEvent::Position`,
+    /// and is serviced in `drain_events`: the arm records the fix and sets
+    /// `location_dirty`, and the tail of the batch does the work ONCE for
+    /// however many fixes arrived. This is the way in for `examples/shot.rs`
+    /// and `examples/pushbench.rs`, which are its only callers.
+    ///
+    /// AND IT NOW DOES THE SAME WORK, which it did not: `resolve_presets` and
+    /// `push_presets` were missing, so a shot that moved the car re-ranked the
+    /// nearby list and re-resolved the hero while the preset strip still carried
+    /// the call signs of the position before it — two halves of one face
+    /// disagreeing about where the car is. Same four calls, same order: nearby
+    /// FIRST, because it is what LEARNS the band from this fix and the strip
+    /// reads what it learned.
+    ///
+    /// The change guard is the drain's too. A parked car with a lock produces a
+    /// fix every two seconds forever, and a fix identical to the last one has
+    /// nothing to re-rank.
     pub fn set_position(&self, location: fake::FakeLocation) {
-        self.state.borrow_mut().location = location;
+        {
+            let mut s = self.state.borrow_mut();
+            if s.location == location {
+                return;
+            }
+            s.location = location;
+        }
         self.refresh_nearby();
+        self.resolve_presets();
         self.push_hero();
+        self.push_presets();
     }
 
     /// One second has passed.
@@ -5059,10 +5254,28 @@ impl App {
                 None => return,
             }
         };
-        {
+        // WHAT STILL HAS TO HAPPEN ONCE THE BORROW IS GONE, if anything.
+        //
+        // `Tuner::write_log` crosses into JNI and does a MediaStore insert, and
+        // this file holds one rule about calls like that — stated at
+        // `run_pending_probe`, at `drain_events`' sleep release and at
+        // `apply_panel_action` — which is that no `RefMut` on `State` may be
+        // alive across them. This arm held one all the way through the insert.
+        // Nothing on that path re-enters the App today, so it was latent rather
+        // than live; it was also the one place in this file where the file's own
+        // invariant was broken, which is why it is written out here rather than
+        // fixed quietly.
+        //
+        // Same shape as `run_pending_probe`: take a clone of what the call needs
+        // inside a scoped borrow, drop it, make the call, then re-borrow to
+        // write the result line.
+        let saving = {
             let mut s = self.state.borrow_mut();
             match action {
-                settings::Action::ClearLog => s.settings.log.clear(),
+                settings::Action::ClearLog => {
+                    s.settings.log.clear();
+                    None
+                }
                 // ── WHAT COULD KEEP US ALIVE THROUGH A SLEEP ──────────────────
                 //
                 // The report is a handful of lines and they go into the log
@@ -5093,6 +5306,7 @@ impl App {
                         std::time::Duration::from_millis(PROBE_DEFER_MS),
                         run_pending_probe_current,
                     );
+                    None
                 }
                 settings::Action::SaveLog => {
                     let at = stamp();
@@ -5101,27 +5315,32 @@ impl App {
                         // There is no alert here; the log IS the channel, and a
                         // line saying why is what a tap has to leave behind.
                         s.settings.log.push(&at, "save to file: the log is empty");
+                        None
                     } else {
                         // `lines().join("\n")` is CarFM's `diagText()` exactly —
                         // "lines.join('\\n')" (`services/diag.ts:105`), same order,
                         // oldest first. THE WHOLE RING, not the handful on screen:
                         // that is the entire reason this exists.
-                        let text = s.settings.log.lines().join("\n");
-                        // ON THE UI THREAD, which CarFM's was not — a `@ReactMethod`
-                        // runs on the native-modules thread. A MediaStore insert
-                        // plus a write of at most 200 short lines is a few
-                        // milliseconds of binder, taken on an explicit tap in a
-                        // settings panel, so the hitch lands where nobody is
-                        // driving by it. Worth knowing if this ever grows.
-                        let outcome = s.tuner.write_log(&text);
-                        let line = match outcome {
-                            Ok(path) => format!("log saved to {path}"),
-                            Err(e) => format!("save to file failed: {e}"),
-                        };
-                        s.settings.log.push(&at, &line);
+                        //
+                        // Both halves are taken HERE and used below, after the
+                        // borrow has been dropped.
+                        Some((s.tuner.clone(), s.settings.log.lines().join("\n"), at))
                     }
                 }
             }
+        };
+        if let Some((tuner, text, at)) = saving {
+            // ON THE UI THREAD, which CarFM's was not — a `@ReactMethod` runs on
+            // the native-modules thread. A MediaStore insert plus a write of at
+            // most `DiagLog::CAP` short lines — 600, plus up to `HEAD_CAP` more
+            // from the head — is a few milliseconds of binder, taken on an
+            // explicit tap in a settings panel, so the hitch lands where nobody
+            // is driving by it. Worth knowing if this ever grows.
+            let line = match tuner.write_log(&text) {
+                Ok(path) => format!("log saved to {path}"),
+                Err(e) => format!("save to file failed: {e}"),
+            };
+            self.state.borrow_mut().settings.log.push(&at, &line);
         }
         self.push_settings();
     }
@@ -5812,10 +6031,6 @@ fn strings(v: &[String]) -> ModelRc<SharedString> {
     )))
 }
 
-/// A wall-clock stamp for the diagnostics log.
-///
-/// `HH:MM:SS` off the system clock, in UTC — there is no timezone database in
-/// this crate and a wrong local time would be worse than an honest one.
 /// The maneuver arrow's path and a roundabout's exit number, from the poll's
 /// TurnType XML string.
 ///
@@ -5831,6 +6046,10 @@ fn arrow_for(xml: Option<&str>) -> (String, String) {
     (crate::arrow::path(turn), exit.map(|n| n.to_string()).unwrap_or_default())
 }
 
+/// A wall-clock stamp for the diagnostics log.
+///
+/// `HH:MM:SS` off the system clock, in UTC — there is no timezone database in
+/// this crate and a wrong local time would be worse than an honest one.
 fn stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -5956,12 +6175,91 @@ mod tests {
         (ui, driver)
     }
 
+    /// ONE WAKE PER BATCH — AND AN EVENT THAT ARRIVES MID-DRAIN STILL GETS ONE.
+    ///
+    /// THE SECOND HALF IS THE ONE THAT BITES. Making the wake idempotent is easy
+    /// and obvious; the ordering inside `drain_current` is neither, and getting
+    /// it backwards looks like a tidy-up. Clear the flag AFTER the drain and an
+    /// event enqueued while the drain is running finds the flag still set, posts
+    /// nothing, and is then left in the queue by the clear that follows —
+    /// stranded until an unrelated event happens along. On the nav path, where
+    /// upstream fires an update only on a route-node crossing, that is minutes.
+    ///
+    /// DRIVEN THROUGH `enqueue` AND `drain_current` THEMSELVES, not through a
+    /// re-implementation of the protocol beside them, because the ordering is
+    /// the thing under test and a copy of it would agree with itself.
+    ///
+    /// ASSERTED IN DELTAS, AND THAT IS NOT FASTIDIOUSNESS. `WAKE`, `DRAIN_POSTED`
+    /// and both queues are process-wide, and `enqueue` is reachable from any test
+    /// in the crate that emits through the sink. Every step below holds whether
+    /// or not one stray event lands in it: while the flag is set a stray posts
+    /// nothing, and if a stray beats this test to a post then this test's own
+    /// event rides it — the count after the step is the same either way. Two
+    /// strays cannot both post, because only `drain_current` clears the flag and
+    /// this closure does not call it.
+    #[test]
+    fn a_burst_costs_one_wake_and_an_event_during_the_drain_is_not_stranded() {
+        use std::sync::atomic::Ordering::Relaxed;
+        static POSTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+        // The same lock every other test that reaches the queue takes.
+        let _ui_lock = harness::ui_lock();
+        // COUNTING IS ALL IT MAY DO. This closure runs on the ENQUEUEING thread
+        // — a binder thread on the device — so anything here that borrowed
+        // `State` would be the re-entrancy the rest of this file is written to
+        // avoid. Nothing else in this crate's tests or examples installs a wake,
+        // so this `OnceLock` set is the one that takes.
+        set_event_wake(|| {
+            POSTS.fetch_add(1, Relaxed);
+        });
+        clear_drain_post();
+        let start = POSTS.load(Relaxed);
+
+        // FIVE EVENTS, ONE WAKE. At the RDS pump's 90ms cadence the old code
+        // posted eleven a second, each one a full `push_all` over a queue the
+        // first drain had already emptied.
+        enqueue(TunerEvent::Note("first of the batch".into()));
+        assert_eq!(POSTS.load(Relaxed), start + 1, "the first event posts a drain");
+        for i in 1..5 {
+            enqueue(TunerEvent::Note(format!("behind it {i}")));
+        }
+        assert_eq!(
+            POSTS.load(Relaxed),
+            start + 1,
+            "the four behind it ride that drain rather than posting four more"
+        );
+
+        // THE DRAIN RUNS. There is no App on this thread, so nothing is applied
+        // — and the flag is cleared anyway, which is the half that matters: a
+        // flag left set suppresses every later wake in the process.
+        drain_current();
+
+        // An event arriving while that drain is still in flight gets its own.
+        enqueue(TunerEvent::Note("landed mid-drain".into()));
+        assert_eq!(
+            POSTS.load(Relaxed),
+            start + 2,
+            "an event enqueued during the drain is not stranded"
+        );
+
+        // The queue is process-wide; leave nothing for the next test.
+        while queue().pop_front().is_some() {}
+        clear_drain_post();
+    }
+
     /// EVERY SWITCH IN THE PANEL REACHES THE DISK.
     ///
-    /// `Prefs` carries five settings and `App::with_tuner` reads all five back at
-    /// launch, so every one of them is meant to survive — and NOT ONE of the five
-    /// callbacks that move them writes anything. They persist because each ends
-    /// in `push_settings`, whose last statement is `save_prefs`.
+    /// `Prefs` carries EIGHT settings beside the preset strip, and
+    /// `App::with_tuner` reads all eight back at launch, so every one of them is
+    /// meant to survive — and NOT ONE of the eight callbacks that move them
+    /// writes anything. They persist because each ends in `push_settings`, whose
+    /// last statement is `save_prefs`.
+    ///
+    /// THIS TEST SAID FIVE, AND SO DID THE LOAD SIDE. `clock_on`, `nav_on` and
+    /// `nav_hide_on_map` were written here and never read back, which is the
+    /// half a write-side test cannot see: the file was right and the next launch
+    /// ignored it. The round trip is pinned separately, in
+    /// `a_launch_reads_back_every_setting_prefs_keeps`.
     ///
     /// WRITTEN BECAUSE THAT ARRANGEMENT LOOKS BROKEN FROM THE CALLBACK'S SIDE and
     /// was read that way once, during a bug sweep, on the way to adding four
@@ -6006,6 +6304,122 @@ mod tests {
         // quietly take it back with the others.
         ui.invoke_settings_set_release_on_sleep(false);
         assert!(!crate::prefs::load(&dir).release_on_sleep, "and the sleep release");
+
+        // The three that reach the disk and were then thrown away on the way
+        // back in. Each defaults ON, so `false` is the value a broken load
+        // cannot fake.
+        ui.invoke_settings_set_clock_on(false);
+        assert!(!crate::prefs::load(&dir).clock_on, "and the clock switch");
+
+        ui.invoke_settings_set_nav_on(false);
+        assert!(!crate::prefs::load(&dir).nav_on, "and the OsmAnd switch");
+
+        ui.invoke_settings_set_nav_hide_on_map(false);
+        assert!(
+            !crate::prefs::load(&dir).nav_hide_on_map,
+            "and the hide-on-map switch"
+        );
+        drop(driver);
+    }
+
+    /// AND EVERY ONE OF THEM IS READ BACK AT THE NEXT LAUNCH.
+    ///
+    /// THE OTHER HALF, AND THE HALF THAT WAS BROKEN. `Prefs` persisted eight
+    /// settings and `App::with_tuner` restored five: `clock_on`, `nav_on` and
+    /// `nav_hide_on_map` fell through to `Settings::default`, which has all
+    /// three ON. `State::saved` is seeded from the FILE, so the first
+    /// `push_settings` compared the defaults against what was on disk, found
+    /// them different, and wrote the defaults back — silently overwriting the
+    /// driver's choices with the values they had just turned off. Three
+    /// switches that could not be turned off across an ignition cycle, and
+    /// `nav_on` back on meant OsmAnd re-bound with `BIND_AUTO_CREATE` at every
+    /// launch, starting an app the driver had switched off.
+    ///
+    /// A WRITE-SIDE TEST CANNOT CATCH THAT, which is why this one exists beside
+    /// `every_remembered_setting_is_written_when_it_changes` rather than inside
+    /// it: the file was correct at every moment that test looked at it. So this
+    /// writes a file with all eight at their NON-default values, builds an App
+    /// on it — which ends in `push_all` and therefore in `save_prefs`, the exact
+    /// step that did the overwriting — and reads the file back.
+    #[test]
+    fn a_launch_reads_back_every_setting_prefs_keeps() {
+        let _ui_lock = harness::ui_lock();
+        let dir = std::env::temp_dir().join("carnyx-apptest-reload");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Every field the opposite of `Settings::default`, so no field can pass
+        // by accident. The preset's dial is Madison's WERN, which the shipped
+        // database resolves — the call sign is therefore re-resolved on load and
+        // is NOT asserted below; the dial is the identity and it is.
+        let chosen = crate::prefs::Prefs {
+            presets: vec![crate::prefs::Preset { mhz: 88.7, call: None }],
+            selected: settings::Source::Rtl,
+            theme: settings::Theme::Dark,
+            logos_on: true,
+            release_on_sleep: false,
+            clock_on: false,
+            nav_on: false,
+            nav_hide_on_map: false,
+            diag_on: true,
+        };
+        crate::prefs::save(&dir, &chosen);
+
+        let ui = AppWindow::new().expect("window");
+        let driver = App::with_tuner(
+            &ui,
+            &host_db_path(),
+            &dir,
+            Box::new(crate::android::FakeTuner::new()),
+            false,
+            None,
+            fake::FakeLocation::default(),
+        );
+        driver.drain_events();
+
+        // THE MODEL HELD WHAT THE FILE SAID.
+        {
+            let s = driver.state.borrow();
+            let cfg = &s.settings;
+            assert_eq!(cfg.selected, settings::Source::Rtl, "the source");
+            assert_eq!(cfg.theme, settings::Theme::Dark, "the theme");
+            assert!(cfg.logos_on, "the logo switch");
+            assert!(!cfg.release_on_sleep, "the sleep release");
+            assert!(!cfg.clock_on, "the clock switch");
+            assert!(!cfg.nav_on, "the OsmAnd switch");
+            assert!(!cfg.nav_hide_on_map, "the hide-on-map switch");
+            assert!(cfg.diag_on, "the diagnostics switch");
+            assert_eq!(
+                s.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
+                vec![88.7],
+                "and the strip"
+            );
+        }
+
+        // AND THE FILE STILL SAYS IT after the launch has finished writing.
+        let back = crate::prefs::load(&dir);
+        assert_eq!(back.selected, chosen.selected, "the source survived the launch");
+        assert_eq!(back.theme, chosen.theme, "the theme survived");
+        assert_eq!(back.logos_on, chosen.logos_on, "the logo switch survived");
+        assert_eq!(
+            back.release_on_sleep, chosen.release_on_sleep,
+            "the sleep release survived"
+        );
+        assert_eq!(back.clock_on, chosen.clock_on, "the clock switch survived");
+        assert_eq!(back.nav_on, chosen.nav_on, "the OsmAnd switch survived");
+        assert_eq!(
+            back.nav_hide_on_map, chosen.nav_hide_on_map,
+            "the hide-on-map switch survived"
+        );
+        assert_eq!(back.diag_on, chosen.diag_on, "the diagnostics switch survived");
+        assert_eq!(
+            back.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
+            vec![88.7],
+            "and so did the strip"
+        );
+
+        drop(driver);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// THE RELEASE SWITCH IS PUSHED DOWN, AT START-UP AND ON EVERY MOVE.

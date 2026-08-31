@@ -165,7 +165,9 @@ impl Session {
         if age > WARM {
             return None;
         }
-        if !(87.5..=108.0).contains(&self.dial) {
+        // The band edges come from `app`, not from a third copy of the two
+        // numbers — see [`crate::app::FM_LO`].
+        if !(crate::app::FM_LO..=crate::app::FM_HI).contains(&self.dial) {
             return None;
         }
         if self.rds == RdsState::default() {

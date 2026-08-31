@@ -150,13 +150,22 @@ export component Face inherits Rectangle {
     // at ~42% of the screen. A definite computed height keeps the vertical grid
     // scrollable while still letting the hero reclaim the freed space when there
     // are few presets, which is what kills the dead void on a real phone portrait.
+    //
+    // THE GRID'S EXTENT IS THE GRID'S TO STATE, and it is read here rather than
+    // recomputed. This used to restate the whole tile arithmetic — tile height,
+    // gap and trailing pad — from its own copies of the numbers, and the two had
+    // already drifted: 8px of trailing pad here against the 6px the grid actually
+    // leaves. `PresetsBand::grid-content-h` is now the one statement of it, read
+    // off the band the same way the clock reads `cluster-bottom` off the status
+    // bar. No loop: that extent depends on the preset count and on `Metrics`, and
+    // on nothing this height feeds.
+    //
+    // THE CAP AND THE FLOOR STAY HERE. Both are about the SCREEN, not the grid —
+    // never more than 42% of it, never less than 96 — so they do not belong to
+    // the band.
     property <length> tall-band: Math.min(
         Math.round(Metrics.h * 0.42) * 1px,
-        Math.max(Metrics.s(96),
-            root.presets.length > 0
-                ? Math.ceil(root.presets.length / 3) * (Metrics.s(128) + Metrics.s(12))
-                    - Metrics.s(12) + 8px
-                : 0px));
+        Math.max(Metrics.s(96), preset-band.grid-content-h));
     property <length> band-h: Metrics.tall ? root.tall-band : Metrics.band-height;
 
     VerticalLayout {
@@ -203,7 +212,7 @@ export component Face inherits Rectangle {
         // its own lighter one.
         hero-slot := Rectangle { vertical-stretch: 1; }
 
-        PresetsBand {
+        preset-band := PresetsBand {
             vertical-stretch: 0;
             band-height: root.band-h;
             presets: root.presets;
@@ -283,11 +292,20 @@ export component Face inherits Rectangle {
     // Part is how parley (the one text layout behind this harness's software
     // renderer AND the device's Skia renderer) seats DSEG's 90/em line gap in
     // the centred line box, part is the anchors' own whole-pixel edge
-    // snapping. Scaled here off the box's OWN centring, which the fixed-gap
-    // anchor below no longer provides on its own — kept as a ride on the
-    // painted centre of whatever height the box ends up, so enlarging the
-    // clock further does not have to re-derive this constant again.
-    property <length> clock-ink-ride: root.clock-font-size * 0.03;
+    // snapping.
+    //
+    // IT IS PINNED TO THE PRE-ENLARGEMENT SIZE ON PURPOSE, and that is why the
+    // 0.03 is written into `clock-top-gap` below against `Metrics.s(36)` /
+    // `Metrics.s(30)` rather than against the live `clock-font-size`. The whole
+    // job of `clock-top-gap` is to reproduce the ORIGINAL top edge exactly —
+    // the point the un-enlarged, box-centred formula put the clock at — so
+    // every term in it, this ride included, has to be the term that formula
+    // used. Riding the live size instead would add 0.03 × 0.2 = 0.006 of the
+    // pre-enlargement size to the top edge and defeat the anchor. So there is
+    // no standing constant here that survives another size change: enlarge the
+    // clock again and this term has to be re-derived against whatever
+    // "original" top edge is being held fixed that time.
+    //
     // THE ORIGINAL, UN-ENLARGED LINE HEIGHT — §4.8's 30sp/36sp × the same 1.2
     // leading — used ONLY to find where the top of the box sat before the 20%
     // ask, so that point can be held fixed while the real, enlarged
@@ -648,13 +666,26 @@ export component Face inherits Rectangle {
                 height: Metrics.rt-zone-h;
                 RadioTextStrip {
                     // Centred in its zone: the strip is 64 tall on every track
-                    // and the ZONE around it is what varies.
+                    // and the ZONE around it is what varies. The zone is FLOORED
+                    // at the strip's own height (tokens.slint:305), so "centred"
+                    // can never mean "overhanging" — three of the four per-track
+                    // zone figures are smaller than the strip.
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     width: Math.min(parent.width, Metrics.s(880));
                     text: root.radio-text;
                     egg: root.egg;
-                    opacity: root.dead ? 0 : 1;
+                    // `visible`, NOT `opacity: 0` — the mechanism is spelled out
+                    // at hero.slint:1769-1779. `Opacity::need_layer` returns false
+                    // only at 1.0 or for a CHILDLESS subtree, and this strip is a
+                    // whole subtree, so a zero-opacity one had Skia allocate a
+                    // `save_layer_alpha`, draw the plate, the marquee and every
+                    // synthetic-bold copy into it and composite the result at
+                    // alpha zero — for as long as audio priority stayed released.
+                    // `visible: false` lowers to an empty clip and draws nothing.
+                    // The zone Rectangle above holds the height either way, so
+                    // the column does not collapse.
+                    visible: !root.dead;
                     // §4.9's stages 2 and 3 — the strip carries the maneuver,
                     // then the turn after it once the hero card takes over.
                     nav-stage: root.nav-stage;
@@ -729,13 +760,26 @@ export component Face inherits Rectangle {
                 height: Metrics.rt-zone-h;
                 RadioTextStrip {
                     // Centred in its zone: the strip is 64 tall on every track
-                    // and the ZONE around it is what varies.
+                    // and the ZONE around it is what varies. The zone is FLOORED
+                    // at the strip's own height (tokens.slint:305), so "centred"
+                    // can never mean "overhanging" — three of the four per-track
+                    // zone figures are smaller than the strip.
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     width: Math.min(parent.width, Metrics.s(880));
                     text: root.radio-text;
                     egg: root.egg;
-                    opacity: root.dead ? 0 : 1;
+                    // `visible`, NOT `opacity: 0` — the mechanism is spelled out
+                    // at hero.slint:1769-1779. `Opacity::need_layer` returns false
+                    // only at 1.0 or for a CHILDLESS subtree, and this strip is a
+                    // whole subtree, so a zero-opacity one had Skia allocate a
+                    // `save_layer_alpha`, draw the plate, the marquee and every
+                    // synthetic-bold copy into it and composite the result at
+                    // alpha zero — for as long as audio priority stayed released.
+                    // `visible: false` lowers to an empty clip and draws nothing.
+                    // The zone Rectangle above holds the height either way, so
+                    // the column does not collapse.
+                    visible: !root.dead;
                     // §4.9's stages 2 and 3 — the strip carries the maneuver,
                     // then the turn after it once the hero card takes over.
                     nav-stage: root.nav-stage;

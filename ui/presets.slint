@@ -257,7 +257,17 @@ export component PresetTile inherits Rectangle {
     background: Pal.panel;
     border-width: root.active ? 2px : 1px;
     border-color: root.active ? Pal.blue : Pal.border;
-    opacity: root.hidden ? 0 : (touch.pressed && !root.reordering ? 0.6 : 1.0);
+    // `visible` FOR THE HIDDEN CASE, `opacity` FOR THE PRESS. A tile has
+    // children, so `Opacity::need_layer` is true and `opacity: 0` made Skia
+    // allocate a layer, draw the whole tile into it and composite it at alpha
+    // zero — every frame, for the length of every reorder drag. `visible: false`
+    // lowers to an empty clip and draws nothing at all, while keeping the tile's
+    // geometry so the grid does not reflow around the gap. See the same change
+    // on the RadioText strip in face.slint, and hero.slint's note on the
+    // mechanism. The press feedback stays on `opacity`: it is a real 0.6, which
+    // is what that property is for.
+    visible: !root.hidden;
+    opacity: touch.pressed && !root.reordering ? 0.6 : 1.0;
 
     touch := TouchArea {
         // `clicked`, not a pointer-up: once pressed, a TouchArea grabs the
@@ -360,9 +370,15 @@ export component PeekCard inherits Rectangle {
     /// what makes it animatable as a unit, where animating a width would re-lay
     /// the card out each frame and read as jitter.
     ///
-    /// 0.88 at rest, matching CarFM's `scale(0.88)` on the peek slots. The morph
-    /// starts it at `card-w(hero) / card-w(peek)` and lets it settle back here.
-    in property <float> scale: 0.88;
+    /// 0.88, matching CarFM's `scale(0.88)` on the peek slots.
+    ///
+    /// PRIVATE, AND FIXED. This used to be an `in` property whose doc said the
+    /// morph "starts it at `card-w(hero) / card-w(peek)` and lets it settle back
+    /// here" — but no caller has ever set it, and hero.slint records why: the
+    /// peeks stopped flying, and both cards stand still now. An `in` property
+    /// invites a caller to set a value the surrounding geometry (`peek-y`,
+    /// `peek-mid`, `peek-side`, `prev-blocked`) all assume is 0.88.
+    property <float> scale: 0.88;
     // Peek plate geometry: 92% of the card, capped at 184, aspect-locked 16/10 —
     // the SAME landscape box as a real logo and as the call-sign form.
     property <length> plate-w: Math.min(Math.round(root.card-w / 1px * 0.92) * 1px, Metrics.s(184));
@@ -371,7 +387,6 @@ export component PeekCard inherits Rectangle {
     // the narrow tracks, so the inset is derived from the plate instead — floor,
     // not round, or a 184dp plate clips by 1dp against 183dp of content.
     property <length> pad: Math.max(Metrics.s(4), Math.floor((root.card-w - root.plate-w) / 2 / 1px) * 1px);
-    property <length> inner-gap: Math.min(Metrics.s(12), Math.round(root.plate-h / 1px * 0.16) * 1px);
 
     width: root.card-w * root.scale;
     height: root.card-w * root.scale;
@@ -902,20 +917,44 @@ export component PresetsBand inherits Rectangle {
     changed active-index => { root.scroll-to-active(); }
     // Nav buttons plus the nearby disc plus the layout's four gaps, so `overflowing`
     // can be decided before the rail has been given a width.
+    // ONE SOURCE FOR EACH NUMBER, the rule `StatusBar` states over its own
+    // cluster: these three were restated here as literals while the elements
+    // that actually use them stated them separately — the nav button's width,
+    // the nearby disc's size and the band layout's spacing. `side-chrome` feeds
+    // `overflowing`, which decides the rail's height and whether the scrollbar
+    // is drawn, so resizing either control silently left that decision computed
+    // against the old figure.
+    property <length> nav-btn-w: Math.max(48px, Metrics.s(56));
+    property <length> nearby-disc-size: Metrics.s(92);
+    property <length> band-gap: 10px;
     property <length> side-chrome:
-        (root.show-nav ? 2 * (Math.max(48px, Metrics.s(56)) + 10px) : 0px)
-        + (root.show-nearby ? Metrics.s(92) + 10px : 0px);
+        (root.show-nav ? 2 * (root.nav-btn-w + root.band-gap) : 0px)
+        + (root.show-nearby ? root.nearby-disc-size + root.band-gap : 0px);
 
     property <length> tall-tile-w: (rail.width - 2 * root.grid-gap - 8px) / 3;
     property <length> tall-tile-h: Metrics.s(128);
+
+    /// HOW TALL THE TALL GRID'S CONTENT IS — stated HERE, where the tile height,
+    /// the gap and the trailing pad already live, and read by the face.
+    ///
+    /// ONE SOURCE FOR EACH NUMBER, the rule `StatusBar` states over
+    /// `cluster-bottom`. `face.slint`'s `tall-band` used to recompute this from
+    /// its own copies of the numbers — `Metrics.s(128)`, `Metrics.s(12)` and a
+    /// trailing pad — and the two had ALREADY drifted: the face said `+ 8px`
+    /// where the viewport below says `+ 6px`. Nothing linked them, so resizing a
+    /// tile here would have left the band sized for the old row height, either
+    /// clipping the last row or reserving dead space the hero should have had.
+    out property <length> grid-content-h:
+        Math.ceil(root.n / 3) * (root.tall-tile-h + root.grid-gap) - root.grid-gap + 6px;
     // Two rows plus the row gap inside the rail's own 2px padding.
     property <length> two-row-h: Math.max(Metrics.s(90),
         Math.round((rail.height - root.gap - 4px) / 2 / 1px) * 1px);
 
     HorizontalLayout {
-        spacing: 10px;
+        spacing: root.band-gap;
 
         if root.show-nav: NavButton {
+            width: root.nav-btn-w;
             glyph: "‹";
             clicked => { rail.viewport-x = Math.min(0px, rail.viewport-x + rail.width * 0.8); }
         }
@@ -941,9 +980,7 @@ export component PresetsBand inherits Rectangle {
                 interactive: !root.reordering;
 
                 viewport-width: Metrics.tall ? self.width : root.content-w;
-                viewport-height: Metrics.tall
-                    ? Math.ceil(root.n / 3) * (root.tall-tile-h + root.grid-gap) - root.grid-gap + 6px
-                    : self.height;
+                viewport-height: Metrics.tall ? root.grid-content-h : self.height;
 
                 // Wide strip: one row, the tuned tile emphasised and enlarged.
                 if !Metrics.tall && !Metrics.two-rows: Rectangle {
@@ -1161,10 +1198,21 @@ export component PresetsBand inherits Rectangle {
                     width: root.slot-w(root.drag-index);
                     height: root.slot-h(root.drag-index);
                     preset: root.presets[root.drag-index];
+                    // THE LIFTED TILE IS THE SAME TILE, and it was the only one
+                    // of the four call sites that forgot to say so: without
+                    // `egg` it fell back to a zeroed `EggTheme`, so the tile
+                    // under the finger lost the band theme's display face, its
+                    // `nameGhost` and its glitch for the whole drag while every
+                    // tile around it kept them — and without `active` a dragged
+                    // tuned tile dropped its blue border and underline.
+                    egg: root.egg;
+                    active: root.drag-index == root.active-index;
                     pad-top: Metrics.s(8);
                     pad-bottom: Metrics.s(12);
                     pad-h: Metrics.s(6);
-                    logo-radius: 12px;
+                    // The same expression the per-track loops use, so the tile
+                    // does not change shape at the moment it is picked up.
+                    logo-radius: root.drag-index == root.active-index ? 15px : 12px;
                     name-font: Math.max(12px, Metrics.s(15));
                     reordering: root.reordering;
                     drop-shadow-blur: 18px;
@@ -1212,6 +1260,7 @@ export component PresetsBand inherits Rectangle {
         }
 
         if root.show-nav: NavButton {
+            width: root.nav-btn-w;
             glyph: "›";
             clicked => {
                 rail.viewport-x = Math.max(rail.width - rail.viewport-width,
@@ -1223,7 +1272,7 @@ export component PresetsBand inherits Rectangle {
         if root.show-nearby: VerticalLayout {
             alignment: center;
             Rectangle {
-                width: Metrics.s(92); height: Metrics.s(92);
+                width: root.nearby-disc-size; height: root.nearby-disc-size;
                 border-radius: self.width / 2;
                 background: root.reordering ? Pal.blue : Pal.nearby-disc;
                 border-width: root.reordering ? 0px : 1px;

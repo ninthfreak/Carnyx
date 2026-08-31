@@ -501,7 +501,7 @@ public final class CarnyxStockRadio {
         }
         if (hits.isEmpty()) {
             // Silent. A no-handler action is the common case and one line each
-            // would be twenty lines of nothing in a 200-line ring.
+            // would be twenty lines of nothing in a 600-line ring.
             return 0;
         }
         String joined = join(hits, ", ");

@@ -461,8 +461,25 @@ fn android_main(android_app: slint::android::AndroidApp) {
     match unsafe { android::location::init(vm, activity) } {
         Ok(()) => {
             let listening = android::location::start();
+            // WHY IT IS NOT LISTENING, WHICH WAS ONE LINE FOR TWO DIFFERENT
+            // FAULTS. `start` answers false both for a grant nobody has tapped
+            // Allow on and for a unit whose `LocationManager` had no provider to
+            // register against — and the old line, "waiting for the permission
+            // grant", asserted the first for both. On a unit with no adb that
+            // sentence IS the diagnosis, and it sent the reading in the wrong
+            // direction: a missing provider is not something a driver can grant
+            // their way out of, and no amount of waiting produces one.
+            //
+            // `location::has_permission` is the only thing that can tell them
+            // apart, and it is answerable HERE because this arm means the class
+            // did load — "init never ran", the third case the old line also
+            // covered, is the `Err` arm below and has always had its own words.
             android::ingest_note(if listening {
                 "location: listening".into()
+            } else if android::location::has_permission() {
+                "location: no provider — the grant is there and the platform \
+                 registered nothing"
+                    .into()
             } else {
                 "location: waiting for the permission grant".into()
             });
@@ -472,8 +489,17 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // Tuner events arrive on binder and pump threads. The hop back to the UI
     // thread is `invoke_from_event_loop`; the drain itself reads the App out of
     // a thread-local, because `Rc<App>` cannot cross a `Send` boundary.
+    //
+    // POSTED ONCE PER BATCH, NOT ONCE PER EVENT — see `app::DRAIN_POSTED`, which
+    // is what decides whether this closure runs at all. The error arm is that
+    // flag's only escape hatch: a post that never lands is a drain that never
+    // runs and never clears the flag, and every later event would then find one
+    // "already posted". Saying so is the whole of the handling; there is nowhere
+    // else to deliver an event to.
     app::set_event_wake(|| {
-        let _ = slint::invoke_from_event_loop(app::drain_current);
+        if slint::invoke_from_event_loop(app::drain_current).is_err() {
+            app::drain_post_failed();
+        }
     });
     ui.run().unwrap();
 }

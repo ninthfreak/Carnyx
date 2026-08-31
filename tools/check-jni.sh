@@ -14,8 +14,9 @@
 # without reading a line of it, and a JNI mistake is found by the owner, on their
 # machine, at the end of a Gradle build. That has now happened three times with
 # the SAME mistake: `Env::get_string` and a `JObject -> JString` `.into()`, which
-# this crate's jni does not have. `location.rs:88` and `nwd.rs:386` each carry a
-# note about it. Notes did not stop the third one; this does.
+# this crate's jni does not have. `location.rs:88` and `probe.rs:106` each carry
+# a note about it.
+# Notes did not stop the third one; this does.
 #
 # ── HOW ───────────────────────────────────────────────────────────────────────
 #

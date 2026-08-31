@@ -197,11 +197,3 @@ pub fn has_permission() -> bool {
     })
     .unwrap_or(false)
 }
-
-/// Stop listening. Safe to call when nothing was started.
-pub fn stop() {
-    let _ = with_class(|env, class| {
-        env.call_static_method(class, jni_str!("stop"), jni_sig!("()V"), &[])?;
-        Ok(())
-    });
-}

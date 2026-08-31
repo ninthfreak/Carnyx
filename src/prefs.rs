@@ -193,7 +193,13 @@ fn from_json(text: &str) -> Option<Prefs> {
                 // and tuning to it would send the front end somewhere it cannot
                 // go. Filtered HERE rather than after the fact, so the call sign
                 // cannot come adrift from the dial it belongs to.
-                (87.5..=108.0).contains(&mhz).then_some(Preset { mhz: mhz as f32, call })
+                //
+                // THE BAND COMES FROM `app`, not from a fourth copy of the two
+                // numbers written out here. `f64` because the JSON reader answers
+                // in doubles and the cast to `f32` belongs on the value that is
+                // kept, not on the one that is tested.
+                let band = f64::from(crate::app::FM_LO)..=f64::from(crate::app::FM_HI);
+                band.contains(&mhz).then_some(Preset { mhz: mhz as f32, call })
             })
             .collect();
     }
