@@ -788,7 +788,9 @@ struct State {
     /// screen, against groups arriving every 90ms.
     last_nearby: Option<crate::stations::NearbyView>,
     last_presets: Option<Vec<Preset>>,
-    last_diag: Option<Vec<String>>,
+    /// The diagnostics log's revision at its last publish, NOT a copy of the
+    /// log — see `DiagLog::revision` for why the copy went.
+    last_diag_rev: Option<u64>,
     /// The settings panel's own two models, under the same rule. They were the
     /// only lists in `push_settings` without one — the diagnostics lines beside
     /// them had been guarded and these had not — so every wake from the tuner
@@ -1431,7 +1433,7 @@ impl App {
                 resolved: None,
                 last_nearby: None,
                 last_presets: None,
-                last_diag: None,
+                last_diag_rev: None,
                 last_sources: None,
                 last_diag_actions: None,
                 statics_published: false,
@@ -3311,15 +3313,16 @@ impl App {
         // one a driver leaves open while watching the radio misbehave. The cache
         // write waits until the borrow is released, at the foot of this function.
         //
-        // STILL A FULL CLONE PER CALL, and that is the known cost: `lines()`
-        // deep-copies every string just to be compared against `last_diag`, at
-        // this function's ~12 Hz. Fixing it needs a version counter inside
-        // `DiagLog` itself — nothing it exposes today changes on a push — which
-        // is a `settings.rs` change, not one that can be made from here.
-        let lines = cfg.log.lines();
-        let diag_changed = s.last_diag.as_ref() != Some(&lines);
+        // THE GUARD ASKS THE LOG, IT DOES NOT COPY IT. This used to call
+        // `lines()` — a deep copy of every string in the ring — and compare it
+        // against a kept copy: up to 624 allocations and ~40 KB spent to answer
+        // "unchanged", which is the answer nearly every time. It compares
+        // `DiagLog::revision` now, one integer, and `lines()` runs only on the
+        // rare pass that actually rebuilds the model.
+        let diag_rev = cfg.log.revision();
+        let diag_changed = s.last_diag_rev != Some(diag_rev);
         if diag_changed {
-            ui.set_settings_diag_lines(strings(&lines));
+            ui.set_settings_diag_lines(strings(&cfg.log.lines()));
         }
         // THE DIAGNOSTICS BUTTONS, same rule. The list is now fixed — the five
         // rows that came and went with the raw-capture switch and the live source
@@ -3386,7 +3389,7 @@ impl App {
         {
             let mut s = self.state.borrow_mut();
             if diag_changed {
-                s.last_diag = Some(lines);
+                s.last_diag_rev = Some(diag_rev);
             }
             if sources_changed {
                 s.last_sources = Some(sources);
