@@ -1126,8 +1126,9 @@ impl Drop for App {
 /// was `pub` they could not reach them: `prefs::from_json` drops an out-of-band
 /// preset, `callsigns::key` refuses an out-of-band dial, and
 /// `session::Session::warm_rds` refuses an out-of-band snapshot — and all three
-/// had written `(87.5..=108.0)` out again by hand. Five copies of a band edge is
-/// five places to change it and four places to forget.
+/// had written `(87.5..=108.0)` out again by hand. Four copies of a band edge —
+/// this one and those three — is four places to change it and three places to
+/// forget.
 pub const FM_LO: f32 = 87.5;
 pub const FM_HI: f32 = 108.0;
 

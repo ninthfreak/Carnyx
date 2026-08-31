@@ -214,8 +214,12 @@ pub fn path(turn: Turn) -> String {
     }
 }
 
-/// One glyph's path data, worked out from scratch. [`path`]'s table is the only
-/// caller, and it calls this once per [`Turn`].
+/// One glyph's path data, worked out from scratch.
+///
+/// [`path`] calls this thirteen times in all — once per [`Turn`], when it builds
+/// its table on first use — and once more per call on its unreachable fallback
+/// arm, for a `Turn` that is not in `TURNS`. `the_cache_holds_every_turn` is the
+/// third caller, and calls it to check the table holds what this makes.
 fn generate(turn: Turn) -> String {
     let cmds = match turn {
         // A U-TURN IS AN ARC, NOT A 179° ELBOW. The elbow construction would put
@@ -714,8 +718,12 @@ mod tests {
             assert!(TURNS.contains(&turn), "{turn:?} is missing from the cached table");
             assert_eq!(path(turn), generate(turn), "{turn:?} caches a different glyph");
             // And the same call twice is the same answer, which is the whole of
-            // what a cache promises.
-            assert_eq!(path(turn), path(turn), "{turn:?}");
+            // what a cache promises. The first result is BOUND: written as
+            // `assert_eq!(path(turn), path(turn))` this reads like an expression
+            // compared to itself, and the next person to see it deletes it as a
+            // tautology.
+            let first = path(turn);
+            assert_eq!(first, path(turn), "{turn:?} is not stable across calls");
         }
         assert_eq!(TURNS.len(), every_turn().len(), "two lists of the same thirteen");
     }

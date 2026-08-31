@@ -3002,8 +3002,8 @@ pending, and the message is the whole point on a unit with no adb. `FakeTuner`
 writes a real file too, so the host build exercises the same path.
 
 Pinned by `saving_the_log_writes_every_line_the_ring_holds` — which pushes
-`DiagLog::CAP + 10` lines and asserts the file holds exactly the 200 that survived,
-oldest first — and `saving_an_empty_log_writes_no_file`. Both go through
+`DiagLog::CAP + 10` lines and asserts the file holds exactly the `DiagLog::CAP`
+lines that survived, oldest first — and `saving_an_empty_log_writes_no_file`. Both go through
 `invoke_settings_pick_diag_action` with the row found by LABEL, so a reorder cannot
 quietly pass them, and both sabotage-checked by returning the `SaveLog` arm to the
 `_` stub.

@@ -147,15 +147,21 @@ fn with_bridge<R>(
         .map_err(|e: Error| TunerError::Java(e.to_string()))
 }
 
-/// Failures already put in the diagnostics log, keyed by the call that produced
-/// one and holding its reason. See [`call_void`].
+/// The (call, reason) pairs already put in the diagnostics log. See
+/// [`call_void`].
 ///
-/// A map rather than a flag per call site: every `what` below is a string
-/// literal, so this never grows past the ten `call_void` callers, and holding
-/// the REASON alongside the call means a second, different failure of the same
-/// call is still heard.
-static NOTED: std::sync::Mutex<std::collections::BTreeMap<&'static str, String>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
+/// A SET OF PAIRS, not a map from call to its latest reason. The map form
+/// re-logs a pair it has already logged as soon as the reason flaps back:
+/// `A` then `B` then `A` again overwrites the entry each time and lets the
+/// third failure through, which is the same line twice. Keying on the pair
+/// means each distinct line is emitted exactly once, which is what the
+/// invariant below claims.
+///
+/// The set cannot run away. `what` is one of the ten string literals passed by
+/// the callers below, and a reason is one of `with_bridge`'s two — `android::init`
+/// has not run, or there is no `JavaVM` — so the pair space is small and fixed.
+static NOTED: std::sync::Mutex<std::collections::BTreeSet<(&'static str, String)>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// Same, for the calls whose failure is not worth propagating — a broadcast that
 /// did not send, a watch that did not start.
@@ -165,8 +171,11 @@ static NOTED: std::sync::Mutex<std::collections::BTreeMap<&'static str, String>>
 /// has". THIS UNIT HAS NO ADB, so a `Log.w` reaches nobody and the settings
 /// panel's log is the only channel a driver can read — `src/lib.rs:329`,
 /// `src/app.rs:1502` and `src/android/mod.rs:1186-1189` all say so. Everything
-/// that landed here was therefore discarded: audio enable, RDS enable, the panel
-/// key, and the illumination, sleep and level watches. `location.rs:100` and
+/// that landed here was therefore discarded — all ten callers: `disconnect`,
+/// `seek`, the sleep-release setting, audio enable, RDS enable, the panel key,
+/// the level watch's start, stop and one-shot read, and the illumination watch.
+/// (The sleep WATCH is not one of them; `start_sleep_watch` propagates its own
+/// failure through `with_bridge` and never reaches here.) `location.rs:100` and
 /// `nav.rs:155` already route their notes through `super::ingest_note`; this is
 /// the busiest of the three seams and was the only one that did not.
 ///
@@ -200,12 +209,7 @@ fn call_void(
         // callback is how a deadlock gets written.
         let fresh = {
             let mut noted = NOTED.lock().unwrap_or_else(|p| p.into_inner());
-            if noted.get(what).map(String::as_str) == Some(reason.as_str()) {
-                false
-            } else {
-                noted.insert(what, reason.clone());
-                true
-            }
+            noted.insert((what, reason.clone()))
         };
         if fresh {
             super::ingest_note(format!("nwd: {what} failed — {reason}"));

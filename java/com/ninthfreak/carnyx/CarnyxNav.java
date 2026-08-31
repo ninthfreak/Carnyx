@@ -655,9 +655,15 @@ public final class CarnyxNav {
      * Register the TURNS channel and say what happened. Called with the lock held.
      *
      * <p>ITS OWN METHOD SO THE RECOVERY CAN CALL ONE HALF. Every call mints a
-     * fresh callback id upstream and adds a fresh route-data listener that
-     * nothing ever removes, so a channel that is already live must not be
-     * re-registered — see {@link #mendSubscriptions}.
+     * fresh callback id upstream and adds a fresh route-data listener. A
+     * listener CAN be removed — that is what {@link #stop} does, re-calling
+     * this same AIDL method with the id and {@code subscribeToUpdates(false)},
+     * which reaches upstream's {@code unregisterFromUpdates(id)}. But removing
+     * one needs its id, and {@link #navCallbackId} only ever holds the LATEST:
+     * re-registering a channel that is already live overwrites the id of the
+     * listener still attached and leaves it running with nothing able to name
+     * it again. So a live channel must not be re-registered — see
+     * {@link #mendSubscriptions}.
      *
      * <p>THE ID IS CLEARED ON A THROW rather than left as it was: no id came
      * back, so there is nothing for {@link #stop} to hand OsmAnd, and the
