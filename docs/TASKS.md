@@ -2744,8 +2744,63 @@ Removed with it: `Settings::autostart`, the `settings-autostart` property and
 the `on_settings_set_autostart` handler. It was already absent from `prefs`.
 
 ### 93. Find out what could keep Carnyx alive through a sleep
-**BUILT, UNANSWERED.** A DIAGNOSTICS row, "What could keep Carnyx alive through
-sleep", and the class behind it.
+**BUILT, UNANSWERED, AND WIDENED.** A DIAGNOSTICS row, "What could keep Carnyx
+alive through sleep", and the class behind it.
+
+**FOUR SECTIONS WERE ADDED AFTER THE OWNER DESCRIBED THE SYMPTOM PROPERLY**, and
+they matter more than the three that were there first. What they answer:
+
+1. **Reboot or suspend?** A boot marker taken at every launch — `elapsedRealtime`,
+   which counts deep sleep and resets only on boot, plus the derived boot instant.
+   A value LOWER than the previous launch's is unforgeable proof of a reboot. The
+   whole tree asserts this unit does not cold-boot on an ignition cycle and that
+   assertion is INHERITED FROM CarFM, never measured here — and it decides whether
+   `BOOT_COMPLETED` is in play, since that is the one action exempt from the API-26
+   ban on manifest receivers hearing implicit intents. Taken in `attach`, not in
+   `report`: `attach` runs every launch, `report` only when the row is tapped, and
+   a marker written at tap time would compare two taps weeks apart.
+2. **Who is force-stopped right now.** `ApplicationInfo.FLAG_STOPPED` is `@hide`
+   but the `flags` field is public, so this is a field read and not reflection.
+   THE DIRECT TEST OF THE THEORY THIS INVESTIGATION NOW RESTS ON: the owner reports
+   that after a sleep nothing third-party is left in the app switcher — Carnyx,
+   OsmAnd and Plexamp all gone — and an out-of-memory kill does not do that, it
+   leaves the task so a tap can relaunch. A force-stop wipes it, and a force-stopped
+   package receives NO broadcast of any kind until a human taps its icon. One
+   mechanism that would explain why the wake receiver, the sleep receiver and the
+   runtime sleep watch have all produced silence rather than any of the failure
+   lines they were written to produce.
+3. **The accessibility and notification-listener grants**, read explicitly rather
+   than left to the keyword sweep, which truncates at 120 characters. The two routes
+   the platform binds and RE-binds itself, which is a different survival story from
+   anything the app registers, and both carry the background-activity-start
+   exemption the launch needs. #96 reached the same two by a different road.
+4. **Who declares a receiver for each wake and sleep action.** Settles whether
+   `com.nwd.ACTION_OS_WAKE_UP` — a string carried across from another project's
+   notes about another unit's firmware — is real on THIS ROM. A manifest query, so
+   it says what packages declare and nothing about delivery; seeing our own receiver
+   listed proves the manifest is right and proves nothing about arrival, which is
+   exactly the gap that made three attempts look identical from the driver's seat.
+
+**A BUDGET BUG WENT WITH IT.** The keyword sweep spent one allowance across all
+three settings tables in order (`MAX_SETTINGS - found`), so `global` — the broadest,
+and a reliable match on `acc` and `background` alone — could consume the lot and
+leave `secure` and `system` reporting nothing, indistinguishable in the output from
+two tables that genuinely held nothing. Now a budget per table. The keyword list
+also gained `selfstart`, `startup`, `restrict`, `persist`, `idle`, `accessib`,
+`listener` and `recent`.
+
+**WHEN THE ROW IS TAPPED IS NOW PART OF THE MEASUREMENT**, which it never was
+before: section 2 can only see a force-stopped neighbour BEFORE the driver opens
+it, and section 1 describes the gap between the last two launches. Tapped twenty
+minutes into a drive both are empty for reasons that have nothing to do with the
+sleep, so the zero case says so in those words rather than reporting "nothing is
+force-stopped", which reads as a refutation and is not one.
+
+**Checked, not assumed:** compiles against a real API-34 framework jar
+(`org.robolectric:android-all:14-robolectric-10818077`, fetched for the check and
+not vendored) with `-Xlint:all` and ZERO diagnostics in this file. The JNI seam is
+untouched — `attach(Context)V` and `report()Ljava/lang/String;` are the same two
+methods — and `tools/check-jni.sh` passes. Host: 365 tests, clippy clean.
 
 **Why a new probe is not the thing #91 removed.** #91 dumped CarFM's diagnostics
 because they were another project's open investigations carried across as though
