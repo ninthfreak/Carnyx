@@ -149,6 +149,21 @@ fetch "$BASE/IOsmAndAidlCallback.aidl" "$TMP/cb.aidl" || true
 fetch "$BASE/navigation/ADirectionInfo.java" "$TMP/dir.java" || true
 fetch "$BASE/navigation/OnVoiceNavigationParams.java" "$TMP/voice.java" || true
 fetch "$BASE/info/AppInfoParams.java" "$TMP/appinfo.java" || true
+fetch "$BASE/customization/PreferenceParams.java" "$TMP/prefparams.java" || true
+
+# THE UNITS READ, which is the one preference Carnyx asks OsmAnd for and the
+# reason §4.9's locale guess is now only a fallback. Three separate things have
+# to stay true for it and each fails silently on its own: the preference's ID,
+# the fact that it is a PROFILE preference (a global one is refused by
+# `isExportAvailableForPref` and `getPreference` answers a bare `false`), and
+# the six enum CONSTANT NAMES, which are what `EnumStringPreference` puts on the
+# wire because its `toString` is `Enum.name()`.
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd/src/net/osmand/plus/settings/backend/OsmandSettings.java" \
+    -o "$TMP/settings.java" 2>/dev/null || true
+curl -sS --fail --max-time 45 \
+    "https://raw.githubusercontent.com/osmandapp/OsmAnd/master/OsmAnd-shared/src/commonMain/kotlin/net/osmand/shared/settings/enums/MetricsConstants.kt" \
+    -o "$TMP/metrics.kt" 2>/dev/null || true
 # The turnInfo bundle's keys are built by string concatenation in OsmAnd's own
 # writer, not declared in the api module — so they are checked against that file.
 curl -sS --fail --max-time 45 \
@@ -205,7 +220,8 @@ if len(up) != len(mine):
 else:
     print(f"  interface: {len(mine)} slots, same as upstream")
 
-for name in ("registerForNavigationUpdates", "registerForVoiceRouterMessages", "getAppInfo"):
+for name in ("registerForNavigationUpdates", "registerForVoiceRouterMessages", "getAppInfo",
+             "getPreference"):
     try:
         u = up.index(name)
     except ValueError:
@@ -241,6 +257,11 @@ KEYS = {
     "voice.java": ("OnVoiceNavigationParams", ["cmds", "played"]),
     "appinfo.java": ("AppInfoParams", ["arrivalTime", "leftTime", "leftDistance",
                                        "mapVisible", "turnInfo"]),
+    # `preferenceId` IS NOT A TYPO FOR `prefId`. Upstream's field is `prefId`
+    # and its bundle key is `preferenceId`; spelling the key after the field
+    # hands OsmAnd a null id, which `getPreference` answers with a plain
+    # `false` — a call that works and never finds anything.
+    "prefparams.java": ("PreferenceParams", ["preferenceId", "appModeKey", "value"]),
 }
 for fname, (cls, keys) in KEYS.items():
     path = os.path.join(tmp, fname)
@@ -253,6 +274,48 @@ for fname, (cls, keys) in KEYS.items():
 
     else:
         print(f"  {cls}: bundle keys {keys} all present")
+
+# ── the units preference, which is the only one Carnyx reads ─────────────────
+#
+# THREE THINGS, EACH OF WHICH FAILS SILENTLY ALONE. A renamed id, a preference
+# demoted from profile to global, or a renamed enum constant all end the same
+# way: `metricSystem` stays 0, `Units::resolve` falls through to the locale, and
+# the driver is back to reading kilometres while OsmAnd speaks miles — with
+# nothing thrown and nothing logged, because "OsmAnd did not say" is a state
+# this app is built to tolerate.
+sett = os.path.join(tmp, "settings.java")
+if os.path.exists(sett) and os.path.getsize(sett):
+    text = open(sett, encoding="utf-8", errors="replace").read()
+    m = re.search(r'METRIC_SYSTEM\s*=.*?"(\w+)".*?\.(makeProfile|makeGlobal)\(\)', text, re.S)
+    if not m:
+        fail.append("OsmandSettings.METRIC_SYSTEM is gone or reshaped — "
+                    "CarnyxNav.readMetricSystem reads it by id.")
+    elif m.group(1) != "default_metric_system":
+        fail.append(f"the units preference is now id '{m.group(1)}', not "
+                    f"'default_metric_system' — CarnyxNav asks for the old name.")
+    elif m.group(2) != "makeProfile":
+        fail.append("METRIC_SYSTEM is no longer a PROFILE preference. "
+                    "isExportAvailableForPref refuses a global one, so "
+                    "getPreference would answer false and units fall back.")
+    else:
+        print("  units: still id 'default_metric_system', still makeProfile "
+              "(so getPreference's export gate lets it through)")
+
+met = os.path.join(tmp, "metrics.kt")
+if os.path.exists(met) and os.path.getsize(met):
+    text = open(met, encoding="utf-8", errors="replace").read()
+    # Declaration order IS the encoding CarnyxNav.encodeMetrics assigns 1..6,
+    # but the wire value is the NAME, so what has to hold is the set of names
+    # and the order our table was written from.
+    want = ["KILOMETERS_AND_METERS", "MILES_AND_FEET", "MILES_AND_METERS",
+            "MILES_AND_YARDS", "NAUTICAL_MILES_AND_METERS", "NAUTICAL_MILES_AND_FEET"]
+    got = re.findall(r"^\t(\w+)\(", text, re.M)
+    if got != want:
+        fail.append(f"MetricsConstants changed.\n    upstream: {got}\n    ours:     {want}\n"
+                    f"    CarnyxNav.encodeMetrics matches these names and "
+                    f"units.rs::from_osmand maps the numbers.")
+    else:
+        print(f"  units: MetricsConstants still the same {len(want)} names in the same order")
 
 # ── every parcelable in the poll's bundle must have a vendored class ─────────
 #

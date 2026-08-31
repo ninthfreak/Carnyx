@@ -1543,10 +1543,14 @@ impl App {
         // something nobody asked for on a screen nobody is looking at.
         {
             let found = app.nav_installed_package();
-            // AND WHICH UNITS THE ROADS AROUND THIS DRIVER ARE SIGNED IN
-            // (§4.9). Same one-shot read, and for a stronger reason: this one
-            // must not change while a countdown is running.
-            let units = crate::units::Units::for_country(&crate::android::country_code());
+            // AND WHICH UNITS TO DRAW DISTANCES IN (§4.9). OsmAnd is not bound
+            // this early, so this first read can only reach the locale and the
+            // fallback; `refresh_units` takes OsmAnd's own answer the moment
+            // there is one.
+            let units = crate::units::Units::resolve(
+                crate::android::osmand_metric_system(),
+                &crate::android::country_code(),
+            );
             let mut s = app.state.borrow_mut();
             s.nav_package = found;
             s.units = units;
@@ -3563,7 +3567,41 @@ impl App {
         String::new()
     }
 
+    /// Take OsmAnd's units if it has an answer, and say so once when it changes.
+    ///
+    /// CALLED FROM [`Self::push_nav`] AND NOWHERE ELSE, which is once a second
+    /// while a route runs and never otherwise. The alternative was an event on
+    /// the connect, and this is cheaper than the event would have been: the Java
+    /// side caches the value at connect, so the call is a `jint` field read with
+    /// no allocation and no binder traffic, and `Property::set` compares before
+    /// it marks anything dirty.
+    ///
+    /// THE COUNTDOWN CAN CHANGE UNITS UNDER ITSELF, which the old one-shot read
+    /// existed to prevent — its note said this "must not change while a countdown
+    /// is running". It can now, exactly once per drive: the first publish after
+    /// OsmAnd binds swaps the locale's guess for the driver's own answer. That is
+    /// a correction and not a flap, and refusing it would mean holding the wrong
+    /// units for the whole drive to avoid one redraw in the first second of it.
+    fn refresh_units(&self) {
+        let found = crate::units::Units::resolve(
+            crate::android::osmand_metric_system(),
+            &crate::android::country_code(),
+        );
+        let before = self.state.borrow().units;
+        if before == found {
+            return;
+        }
+        self.state.borrow_mut().units = found;
+        let at = stamp();
+        self.state
+            .borrow_mut()
+            .settings
+            .log
+            .push(&at, &format!("units: {before:?} -> {found:?}"));
+    }
+
     fn push_nav(&self) {
+        self.refresh_units();
         let now = crate::session::now_unix();
         let (state, spoken, line) = {
             let s = self.state.borrow();
@@ -7088,7 +7126,12 @@ mod tests {
         driver.drain_events();
         assert!(ui.get_nav_active());
         assert_eq!(ui.get_nav_turn().to_string(), "right");
-        assert_eq!(ui.get_nav_distance().to_string(), "240 m");
+        // FEET, NOT METRES, AND THAT IS THE POINT OF `units::FALLBACK`. The host
+        // has no locale and no OsmAnd, so `Units::resolve` reaches the fallback,
+        // which is imperial. This line read "240 m" until the fallback changed,
+        // and the reason it changed is that the same empty locale on the real
+        // head unit was drawing a US drive in kilometres.
+        assert_eq!(ui.get_nav_distance().to_string(), "790 ft");
 
         // THE WORDS, which are the only place a street name can come from.
         crate::android::ingest_nav_voice(
@@ -7121,7 +7164,7 @@ mod tests {
         crate::android::ingest_nav(75, 12, false);
         driver.drain_events();
         assert_eq!(ui.get_nav_turn().to_string(), "off route");
-        assert_eq!(ui.get_nav_distance().to_string(), "75 m");
+        assert_eq!(ui.get_nav_distance().to_string(), "250 ft");
 
         // THE SWITCH CLEARS THE FACE IMMEDIATELY. Without this the last turn
         // would sit there until `Nav::EXPIRY`, twelve seconds after the driver

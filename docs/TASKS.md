@@ -1306,6 +1306,94 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 113. Read the driver's units out of OsmAnd instead of guessing them
+**DONE, AND §4.9 WAS WRONG ABOUT WHETHER IT COULD BE.** Asked for directly:
+*"OsmAnd is giving me navigation using Imperial units, which is what I want, but
+Carnyx is using Metric. Ideally I'd like Carnyx to read from OsmAnd, but if it
+can't then I'd like it to just use Imperial."* Both halves are built — the read,
+and the fallback behind it.
+
+**WHAT WAS ACTUALLY BROKEN, which is not what it looked like.** §4.9 wrote a
+locale guess and `Units::for_country` implements it, mapping an empty or
+unrecognised ISO code to `Metric` — "a wrong guess toward metric is the smaller
+error". This head unit reports NO COUNTRY AT ALL. So a US car, with OsmAnd
+speaking miles, drew every countdown in kilometres, and the table was working
+exactly as designed while being wrong on the only unit that runs it.
+
+**THE PREMISE WAS TRUE OF THE WRONG SURFACE.** §4.9 says the units cannot be
+read "because OsmAnd's own unit setting is not exposed over the API", and that
+holds for everything the navigation surface returns — `AppInfoParams` gives
+`leftDistance`, the turn bundle gives `next_turn_distance`, both bare integer
+metres, and `ExternalApiHelper.updateTurnInfo` was read to confirm the bundle
+carries no formatted string and no unit flag anywhere. What it misses is that
+OsmAnd exposes its ENTIRE settings store through a different call. `getPreference`
+takes a preference id and hands back its value, and the units live under
+`default_metric_system`.
+
+**FOUR FACTS WERE CHECKED BEFORE A LINE WAS WRITTEN**, because each one alone
+would have made this fail silently:
+
+1. `getPreference` is at slot 94 of `IOsmAndAidlInterface`, which our file
+   already held as `void reserved94(); // upstream getPreference`. That is the
+   reserved-slot design paying for itself: adding the real signature is a
+   one-line edit that cannot renumber anything.
+2. `METRIC_SYSTEM` is `.makeProfile()`. Upstream gates `getPreference` behind
+   `isExportAvailableForPref`, which refuses a GLOBAL preference — a profile one
+   passes, and a demotion would turn this into a bare `false`.
+3. `EnumStringPreference.toString` is `Enum.name()`, so what crosses the wire is
+   the CONSTANT NAME and not an ordinal. Matching on the name cannot break when
+   upstream inserts a constant; matching on an ordinal would have.
+4. `PreferenceParams`'s bundle key for its `prefId` field is `"preferenceId"`.
+   Spelling the key after the field compiles, binds, transacts, and hands OsmAnd
+   a null id, which it answers with a plain `false`.
+
+**SIX CONSTANTS INTO TWO LADDERS, and the rounding is the honest part.**
+`Units` is metric-or-imperial because §4.9 specifies exactly two. So
+`MILES_AND_METERS` and `NAUTICAL_MILES_AND_METERS` resolve METRIC despite the
+name — their SHORT leg is metres, and the short leg is what a driver reads at a
+junction, which is where a turn-by-turn display spends nearly all its time.
+`MILES_AND_YARDS` and `NAUTICAL_MILES_AND_FEET` resolve IMPERIAL. The nautical
+pair is there to be total rather than because anyone expects it: an unhandled
+arm would fall through to the guess for a driver who had answered the question.
+
+**THE FALLBACK IS NOW IMPERIAL AND THAT OVERRIDES THE TABLE'S OWN ARGUMENT.**
+`Units::MILES`'s note reasons that metric is the safer default for a driver who
+could be anywhere. This unit is not anywhere. `units::FALLBACK` applies ONLY
+where the locale is silent — a unit reporting `DE` still gets kilometres,
+because that is a real answer and the fallback stands in for no answer at all.
+
+**READ ON CONNECT, PUBLISHED ON EVERY NAV TICK.** `CarnyxNav.readMetricSystem`
+runs inside `onServiceConnected` before `subscribe`, so the units settle before
+the first turn can arrive, and caches an int. `App::refresh_units` reads that
+cached int from `push_nav` — a `jint` with no allocation and no binder traffic,
+once a second while a route runs — and logs `units: X -> Y` when it moves. The
+old one-shot read's note said units "must not change while a countdown is
+running"; they now can, exactly once per drive, when the locale's guess is
+replaced by the driver's own answer. That is a correction, not a flap.
+
+**A DISCONNECT DOES NOT CLEAR IT.** The driver's choice does not stop being true
+because the binder died, and clearing it would drop the display back to the
+guess — a units flip mid-drive on an event the driver never sees.
+
+**Evidence.** 367 tests including two new ones that walk all six constants, the
+three unknown/stray cases, and the full `resolve` precedence. Clippy clean.
+`tools/check-osmand-aidl.sh` extended with four new pins — slot 94, the
+`PreferenceParams` bundle keys, the preference id AND its `makeProfile`, and the
+six enum names in order — all passing against live upstream.
+`tools/check-jni.sh` passes. `PreferenceParams.java` compiles against a real
+API-34 framework jar with `-Xlint:all` and one `this-escape` warning, which
+`AppInfoParams` and `ALatLon` produce identically and which is inert because
+`AidlParams.readFromParcel` is `final`.
+
+**NOT VERIFIED, and it is the usual gap.** `CarnyxNav.java` cannot be compiled
+in this container — it needs the AIDL-generated interfaces, and there is no
+`aidl` binary — so the import, the `getPreference` call and the three new methods
+are unchecked until the Gradle build runs. `nwd.rs`'s header records what that
+costs: a type error shipped this way once already.
+
+**One drive settles it.** A `nav: OsmAnd units = MILES_AND_FEET (2)` line, or one
+of the two failure lines beside it, and then whether the countdown reads in feet.
+
 ### 112. The status-bar clock (§4.8)
 **DONE.** Step 1 of the handoff's build order — *"no external dependency,
 exercises the out-of-flow measuring that the ETA later reuses. Ship it, look at

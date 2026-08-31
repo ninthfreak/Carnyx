@@ -955,6 +955,19 @@ pub fn country_code() -> String {
     String::new()
 }
 
+/// Which units OsmAnd says the driver chose. See [`nav::metric_system`].
+#[cfg(target_os = "android")]
+pub fn osmand_metric_system() -> i32 {
+    nav::metric_system()
+}
+
+/// The host has no OsmAnd to ask, so every shot renders the fallback. See the
+/// Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn osmand_metric_system() -> i32 {
+    0
+}
+
 /// What the wake receiver did on the way up, and forget it. See [`wake`].
 #[cfg(target_os = "android")]
 pub fn take_wake_note() -> String {

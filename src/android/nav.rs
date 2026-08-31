@@ -292,6 +292,22 @@ pub fn installed_package() -> String {
     .unwrap_or_default()
 }
 
+/// Which units OsmAnd's own settings say the driver chose, encoded.
+///
+/// 0 when nothing is known — OsmAnd not bound, the read declined, or a build
+/// without the call. See `CarnyxNav.metricSystem` for the encoding and
+/// [`crate::units::Units::from_osmand`] for what each number means here.
+///
+/// A `jint` and no allocation, because the caller reads this on every navigation
+/// publish rather than caching an event.
+pub fn metric_system() -> i32 {
+    with_class(|env, class| {
+        env.call_static_method(class, jni_str!("metricSystem"), jni_sig!("()I"), &[])?
+            .i()
+    })
+    .unwrap_or(0)
+}
+
 /// Bind OsmAnd and subscribe. Returns a line for the diagnostics log.
 pub fn start() -> String {
     with_class(|env, class| {

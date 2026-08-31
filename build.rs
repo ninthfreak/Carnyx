@@ -82,6 +82,7 @@ const JAVA_SOURCES: &[&str] = &[
     "net/osmand/aidlapi/gpx/AGpxBitmap.java",
     "net/osmand/aidlapi/logcat/OnLogcatMessageParams.java",
     "net/osmand/aidlapi/info/AppInfoParams.java",
+    "net/osmand/aidlapi/customization/PreferenceParams.java",
     // Present for Android 10's eager Bundle.unparcel(), which constructs every
     // value in AppInfoParams's bundle whether or not it is read. See its header.
     "net/osmand/aidlapi/map/ALatLon.java",
