@@ -233,6 +233,25 @@ name = "android.permission.ACCESS_COARSE_LOCATION"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.ACCESS_FINE_LOCATION"
 
+# SAVING THE DIAGNOSTICS LOG TO Downloads, and this one is NOT Gradle-only.
+# `java/` is dexed into the .so and loaded under BOTH packagers, so
+# `NwdBridge.writeLog` runs under cargo-apk too. Its API 29+ branch goes through
+# MediaStore and needs no permission, but `min_sdk_version` above is 26 and the
+# pre-29 branch writes the public Downloads directory directly — without this
+# line a cargo-apk build on API 26-28 throws where the Gradle build succeeds, and
+# a unit with no adb loses the only way anything leaves it.
+#
+# Kept in step with android/app/src/main/AndroidManifest.xml:50-51, the same way
+# the `queries` stanza above is; `maxSdkVersion="32"` there is CarFM's own value
+# and `max_sdk_version` here is the field that emits it
+# (`ndk_build::manifest::Permission`, ndk-build-0.10.0 src/manifest.rs:268-273).
+# The four foreground/notification permissions below are a different case — they
+# are deliberately absent because cargo-apk cannot declare the service that would
+# use them.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
+max_sdk_version = 32
+
 # WHAT CANNOT BE DECLARED HERE, AND WHAT IT COSTS.
 #
 # CarFM survives being switched away from. Carnyx does not — come back and the

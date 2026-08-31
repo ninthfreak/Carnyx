@@ -30,8 +30,8 @@ import "fonts/AtkinsonHyperlegible-Bold.ttf";
 // none is ever asked for except while its own theme is showing, and the rest of
 // the face never sees any of them.
 //
-// THE NAMES BELOW ARE THE FONTS' OWN, READ OUT OF THEIR `name` TABLES, and that
-// is not a detail. CarFM registers these under the keys it passes to RN's
+// THE FAMILY NAMES ARE THE FONTS' OWN, READ OUT OF THEIR `name` TABLES, and
+// that is not a detail. CarFM registers these under the keys it passes to RN's
 // `useFonts` — `BeatlesYellowSub`, `Gridnik`, `PermanentMarker` — which are file
 // labels and not family names. Slint resolves `font-family` against the family
 // the file DECLARES, so copying CarFM's keys would have missed every one of them
@@ -42,6 +42,18 @@ import "fonts/AtkinsonHyperlegible-Bold.ttf";
 //   PermanentMarker.ttf   -> "Permanent Marker"
 //   MadieRoger.ttf        -> "Madie Roger"
 //   Kashmir.ttf / Onyx.ttf / Singothic.ttf / Squealer.otf -> their own names
+//
+// THE STRINGS THEMSELVES LIVE IN ONE PLACE, AND IT IS NOT THIS FILE. `Font`
+// below used to carry a third copy of that table as nine `egg-*` properties
+// that nothing ever read: the themes are built in `src/eggs.rs`, which owns the
+// `FACE_*` consts and `BUNDLED_FACES`, and every face reaches the .slint files
+// as a string field on `EggTheme`. A copy of a name table that nothing reads is
+// a copy nobody notices going wrong — which is the failure this whole note is
+// about — so the nine are gone. What is
+// load-bearing HERE is the `import` lines — they are what registers the
+// families with the runtime, and src/eggs.rs's
+// `every_face_a_theme_names_is_bundled_and_imported` reads this file back to
+// check that every bundled file is imported. Never drop one.
 //
 // SGTPEPPERS IS NOT BUNDLED. The registry names it for the Beatles hero, and the
 // reference then refuses to apply it — `eggHeroFont` is gated on
@@ -83,35 +95,17 @@ import "fonts/Singothic.ttf";
 // face. Mixed type on one line, not tofu, and not worth refusing the font over.
 import "fonts/SupernaturalKnight.ttf";
 
+// THE ORDINARY FACE AND THE TWO WEIGHTS IT IS ASKED FOR — nothing else. A
+// display cut never comes from here: it arrives on `EggTheme` from
+// `src/eggs.rs`, which is the one table of family names (see the note above the
+// imports). 400 is the default weight and is never named, so there is no
+// `regular` here to go stale beside `bold`.
 export global Font {
     out property <string> face: "Atkinson Hyperlegible";
-    /// AC/DC.
-    out property <string> egg-acdc: "Squealer";
-    /// The Beatles: the body face and the RadioText; the genre line droops in
-    /// Madie Roger beside it.
-    out property <string> egg-beatles: "YellowSubmarine";
-    out property <string> egg-beatles-genre: "Madie Roger";
-    /// Led Zeppelin: hero and RadioText only (`fontScope: 'hero'`).
-    out property <string> egg-zeppelin: "Kashmir";
-    /// Nirvana: the body face and the genre line; Onyx at 1.5x on the hero.
-    out property <string> egg-nirvana: "Permanent Marker";
-    out property <string> egg-nirvana-hero: "Onyx";
-    /// Nine Inch Nails: Gridnik on the hero, Singothic on the genre line, the
-    /// RadioText and every frequency readout.
-    out property <string> egg-nin: "FoundryGridnik";
-    out property <string> egg-nin-display: "Singothic";
-    /// "Carry On Wayward Son" — a SONG theme, not a band one.
-    out property <string> egg-wayward: "Supernatural Knight";
-    out property <int> regular: 400;
     out property <int> bold: 700;
     /// A band theme's genre line asks for ExtraBold. No 800 cut is bundled, so
     /// the engine resolves it to the 700 above; see `GenreText`.
     out property <int> heavy: 800;
-}
-
-export global Band {
-    out property <float> min-mhz: 87.5;
-    out property <float> max-mhz: 108.0;
 }
 
 // The palette. `dark` selects the theme; `off` is §4.7 — audio priority released,
@@ -297,8 +291,19 @@ export global Metrics {
     out property <length> star: Metrics.s(Metrics.tall ? 58 : Metrics.landscape ? 48 : 56);
 
     // The strip is 64 tall on every track; the ZONE around it is what varies.
+    //
+    // THE ZONE IS FLOORED AT THE STRIP. The zone's whole job is to RESERVE the
+    // strip's space in the column, and three of the four per-track figures below
+    // are SMALLER than the strip itself — 60 tall, 50 landscape and 56 two-rows
+    // against a 64 strip. With the strip centred in it (face.slint:674 and :768)
+    // that put the strip at y = -2, -7 and -4, hanging out of both ends of its
+    // own zone and eating the gaps above and below; landscape lost 7dp each way.
+    // Only the wide track's 76 ever had room to spare. The Math.max keeps the
+    // per-track figures meaningful wherever they are the larger of the two and
+    // stops the reservation from being smaller than what it reserves for.
     out property <length> rt-height: Metrics.s(64);
-    out property <length> rt-zone-h: Metrics.s(Metrics.tall ? 60 : Metrics.landscape ? 50 : Metrics.two-rows ? 56 : 76);
+    out property <length> rt-zone-h: Math.max(Metrics.rt-height,
+        Metrics.s(Metrics.tall ? 60 : Metrics.landscape ? 50 : Metrics.two-rows ? 56 : 76));
     out property <length> rt-font: Metrics.s(Metrics.landscape ? 26 : 30);
 
     // SIGNAL-METER.md's rendered sizes. The glyph swallowed the level number that

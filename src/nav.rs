@@ -311,10 +311,18 @@ pub struct Route {
 impl Route {
     /// Is there a route at all?
     ///
-    /// THE DESTINATION IS THE TEST, not the turn: OsmAnd answers `getAppInfo`
-    /// whether or not it is navigating and zeroes the route fields when it is
-    /// not, so a zero arrival AND a zero distance is "no route" rather than a
-    /// route that has arrived.
+    /// THE DESTINATION FIELDS ARE THE TEST: OsmAnd answers `getAppInfo` whether
+    /// or not it is navigating and zeroes the route fields when it is not — and
+    /// the seam turns those zeroes into `None` — so a missing arrival AND a
+    /// missing distance is "no route" rather than a route that has arrived.
+    ///
+    /// THE TURN IS A THIRD CLAUSE AND NOT A THIRD DESTINATION. It is belt and
+    /// braces for the tick where OsmAnd has a next turn to name before it has an
+    /// arrival time to give; without it that tick would read as "no route" and
+    /// blank the whole layer for as long as it lasted. (This comment used to say
+    /// "not the turn" with the turn sitting in the expression below it, which is
+    /// a comment describing a different function from the one it is attached
+    /// to.)
     pub fn navigating(&self) -> bool {
         self.arrival_ms.is_some() || self.left_metres.is_some() || self.turn_xml.is_some()
     }
@@ -550,14 +558,12 @@ impl Nav {
         }
     }
 
-    /// What to draw, at `now`.
-    pub fn state(&self, now: u64) -> NavState {
-        // A STALE PUSH IS NOT AN IDLE ROUTE. Falls through to the poll rather
-        // than returning `Idle` outright — see [`Nav::polled_state`].
-        let fresh = self.last.filter(|(_, _, at)| now.saturating_sub(*at) < Self::EXPIRY);
-        let Some((metres, code, _)) = fresh else {
-            return self.polled_state(now);
-        };
+    /// What the PUSH alone says — its three integers, read as one state.
+    ///
+    /// Lifted out of [`Nav::state`] with its arms unchanged, so that the two
+    /// channels can be COMPARED rather than settled by which one that function
+    /// happens to test first. See there for why the comparison exists.
+    fn pushed_state(metres: i32, code: i32) -> NavState {
         // OFF-ROUTE IS CHECKED BEFORE THE `-1` PAIR, because a deviation is a
         // real reading and the sender writes it into the same two fields.
         if code == Turn::OFF_ROUTE {
@@ -573,6 +579,104 @@ impl Nav {
         match Turn::from_osmand(code) {
             Some(turn) => NavState::Turn { turn, metres },
             None => NavState::Unknown { code, metres },
+        }
+    }
+
+    /// What one channel's reading is worth against the other's, as a key.
+    ///
+    /// NOT URGENCY, AND NOT AN ORDER ON [`NavState`] — [`Stage`] is where
+    /// urgency lives. This answers "which of these two readings should the face
+    /// be shown", in three parts, compared in this order:
+    ///
+    /// 1. WHAT IT HAS TO SAY. A channel with something to draw beats one with
+    ///    nothing, so a poll mid-turn outranks a push's `(-1, -1)` sentinel and
+    ///    a push mid-turn outranks a poll that has not filled `turn_metres` in.
+    /// 2. WHETHER IT IS OFF-ROUTE. A channel saying "you have left the route"
+    ///    knows something the other does not — the other's turn is the one just
+    ///    MISSED — so it outranks the other channel's turn even when that turn
+    ///    is newer.
+    /// 3. WHEN IT SAID IT. Between two readings of the same kind the more recent
+    ///    one is the truer one — which is the whole of the fix in [`Nav::state`].
+    ///
+    /// RULE 2 SITS ABOVE RULE 3 DELIBERATELY, and it was the other way round for
+    /// one revision. Ranked below freshness it settled only an exact dead heat,
+    /// so a deviation went: an off-route push at t=101 silences the layer, then
+    /// the 1 Hz poll lands at t=102 still carrying the LAST turn's arrow and
+    /// street, outranks it on the timestamp alone, and the face reads
+    /// "in 240 m ↱ Whitney Way" at a driver who is 75 m off the route. That is
+    /// precisely what `NavState::OffRoute => Stage::Idle` exists to prevent,
+    /// reached the long way round. Ranked above it, a deviation silences the
+    /// layer from EITHER channel.
+    ///
+    /// AND IT COSTS NOTHING ON RECOVERY, because neither channel keeps an old
+    /// reading: `update` overwrites `last` and `poll` overwrites `route`, so
+    /// off-route outranks only while a channel is STILL SAYING IT. The moment
+    /// both have moved on, rules 1 and 3 decide as before.
+    ///
+    /// A dead heat none of the three settles goes to the POLL, at the call site:
+    /// it is the 1 Hz feed, and its distance is the one [`Nav::progress`] is
+    /// already dividing.
+    fn worth(state: &NavState, at: u64) -> (u8, bool, u64) {
+        let telling = match state {
+            // NO ROUTE AT ALL — a poll that is answering with the route fields
+            // zeroed, or one that has aged out. The push never says this.
+            NavState::Idle => 0,
+            // A route, and nothing to draw for it this tick.
+            NavState::Waiting => 1,
+            // A reading the face can put on the glass.
+            NavState::OffRoute { .. } | NavState::Turn { .. } | NavState::Unknown { .. } => 2,
+        };
+        (telling, matches!(state, NavState::OffRoute { .. }), at)
+    }
+
+    /// What to draw, at `now`.
+    ///
+    /// ── THE FRESHER CHANNEL WINS, AND THE PUSH USED TO WIN BY DEFAULT ────────
+    ///
+    /// Both channels describe the same next turn and neither is a superset of
+    /// the other, so this is where one of them is chosen. It used to choose by
+    /// ORDER — ANY push inside [`Nav::EXPIRY`] was returned, and the poll was
+    /// consulted only once the push had aged out — and that was wrong twice
+    /// over, both of them visible from the driver's seat:
+    ///
+    /// * A FROZEN COUNTDOWN. The push's `metres` is a SNAPSHOT taken when the
+    ///   vehicle crossed a route geometry node — upstream fires the callback
+    ///   from one site, `RoutingHelper.java:730`, inside the `if (processed)`
+    ///   branch — while the poll carries a live `turn_metres` every second. So
+    ///   the number sat at the node-crossing value for up to twelve seconds and
+    ///   then jumped, beside a hairline ([`Nav::progress`], which reads
+    ///   `route.turn_metres`) that moved smoothly the whole time.
+    /// * A BLANKED COUNTDOWN. Upstream builds every update as
+    ///   `new ADirectionInfo(-1, -1, false)` and overwrites it only when it has
+    ///   something. That sentinel is [`NavState::Waiting`], whose distance is
+    ///   empty, and the cruise countdown is gated on a non-empty distance — so
+    ///   ONE sentinel push during a recalculation blanked the layer for a full
+    ///   twelve seconds while the poll had a turn and a distance every second.
+    ///
+    /// SO THE TWO ARE RANKED AND THEN TIMED, by [`Nav::worth`]. What that does
+    /// NOT change is written down there and pinned by the tests below: off-route
+    /// still silences the maneuver layer from EITHER channel (`stage` maps it to
+    /// [`Stage::Idle`]), a poll that is answering with no route running is still
+    /// worth `Idle` ([`Route::navigating`] is the test), escalation still comes
+    /// from the poll's `imminent` alone, and when both channels have gone stale
+    /// the answer is still `Idle`.
+    pub fn state(&self, now: u64) -> NavState {
+        // A STALE PUSH IS NOT AN IDLE ROUTE. Falls through to the poll rather
+        // than returning `Idle` outright — see [`Nav::polled_state`].
+        let fresh = self.last.filter(|(_, _, at)| now.saturating_sub(*at) < Self::EXPIRY);
+        let Some((metres, code, pushed_at)) = fresh else {
+            return self.polled_state(now);
+        };
+        let pushed = Self::pushed_state(metres, code);
+        // `polled_state` already answers `Idle` for a poll that has aged out, so
+        // the stamp beside it is only ever compared when the poll is fresh: a
+        // stale poll loses on the first part of the key, not on the second.
+        let polled = self.polled_state(now);
+        let polled_at = self.route.as_ref().map_or(0, |(_, at)| *at);
+        if Self::worth(&polled, polled_at) >= Self::worth(&pushed, pushed_at) {
+            polled
+        } else {
+            pushed
         }
     }
 
@@ -744,7 +848,8 @@ pub fn sub_line(link: &Link) -> String {
         // poll gets nulls — and "Waiting for OsmAnd to start" would be a wrong
         // diagnosis over a right one: OsmAnd is running and saying no.
         return format!(
-            "{WHAT} Waiting for permission: in OsmAnd, open the Plugins screen              and switch on Carnyx."
+            "{WHAT} Waiting for permission: in OsmAnd, open the Plugins screen \
+             and switch on Carnyx."
         );
     }
     if !link.linked {
@@ -980,6 +1085,12 @@ mod tests {
         // vaguer would leave the driver toggling OUR switch, which cannot help.
         assert!(sub_line(&refused).contains("Plugins"), "{}", sub_line(&refused));
         assert!(sub_line(&refused).contains("permission"), "{}", sub_line(&refused));
+        // AND IT READS AS ONE SENTENCE. A lost line continuation left FOURTEEN
+        // literal spaces in the middle of this one — "open the Plugins screen
+        // <14 spaces> and switch on Carnyx" — which `contains("Plugins")` could
+        // not see and a driver reading the only fix this app can offer could not
+        // miss. Any double space here is that mistake coming back.
+        assert!(!sub_line(&refused).contains("  "), "{}", sub_line(&refused));
         assert!(sub_line(&idle).contains("no route"), "{}", sub_line(&idle));
         assert!(sub_line(&behind_map).contains("map is in front"), "{}", sub_line(&behind_map));
         assert!(sub_line(&showing).contains("Showing"), "{}", sub_line(&showing));
@@ -1388,6 +1499,172 @@ mod tests {
         // WAITING IS NOT IDLE: the layer is live, so the hairline and the ETA
         // stay up and only the countdown's own text is empty.
         assert_ne!(nav.stage(100, true), Stage::Idle);
+    }
+
+    /// THE PUSH IS A SNAPSHOT AND THE POLL IS A FEED, SO THE FRESHER ONE WINS.
+    ///
+    /// The push fires once per route-node crossing (`RoutingHelper.java:730`,
+    /// the `if (processed)` branch) and carries the distance AT THAT MOMENT.
+    /// Any push inside `EXPIRY` used to win outright, so the countdown showed
+    /// the node-crossing value for up to twelve seconds — frozen, then jumping
+    /// — while the hairline beside it, which reads the poll's `turn_metres`,
+    /// ran down smoothly. Two numbers for one turn, disagreeing on the glass.
+    #[test]
+    fn a_fresher_poll_beats_a_push_that_has_not_expired_yet() {
+        let mut nav = Nav::new();
+        let leg = |m: i32| Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(m),
+            ..Route::default()
+        };
+
+        // A node crossing at 500 m out: the push's one reading for this leg.
+        nav.update(500, 5, 100);
+        assert_eq!(nav.state(100), NavState::Turn { turn: Turn::Right, metres: 500 });
+
+        // The 1 Hz poll counts down while that push sits there unexpired.
+        for (t, m) in [(101, 470), (105, 350), (111, 90)] {
+            nav.poll(leg(m), t);
+            assert_eq!(
+                nav.state(t),
+                NavState::Turn { turn: Turn::Right, metres: m },
+                "the countdown froze at the push's 500 m, {} s in",
+                t - 100
+            );
+        }
+        // AND THE HAIRLINE AGREES WITH THE NUMBER BESIDE IT, which is the whole
+        // complaint: both of them now come off `turn_metres`.
+        assert!((nav.progress(111) - (1.0 - 90.0 / 470.0)).abs() < 0.001);
+
+        // THE PUSH IS NOT BEING DEMOTED — it wins the moment it is the fresher
+        // of the two, which is what makes this a comparison and not an order.
+        nav.update(60, 5, 112);
+        assert_eq!(nav.state(112), NavState::Turn { turn: Turn::Right, metres: 60 });
+
+        // AND WITH BOTH CHANNELS QUIET THE CLOCK STILL TAKES THE TURN.
+        assert_eq!(nav.state(112 + Nav::EXPIRY), NavState::Idle);
+    }
+
+    /// A `(-1, -1)` PUSH MUST NOT BLANK A POLL THAT HAS A TURN.
+    ///
+    /// Upstream builds every update as `new ADirectionInfo(-1, -1, false)` and
+    /// overwrites it only when it has data, so a recalculation sends the bare
+    /// sentinel. Read as `Waiting`, whose distance is empty, and returned ahead
+    /// of the poll because it was inside `EXPIRY`, ONE of those blanked the
+    /// cruise countdown for twelve seconds — with a good turn and a good
+    /// distance landing on the poll every second of them.
+    #[test]
+    fn a_sentinel_push_does_not_blank_a_navigating_poll() {
+        let mut nav = Nav::new();
+        let leg = |m: i32| Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(m),
+            imminent: Some(1),
+            ..Route::default()
+        };
+        nav.poll(leg(240), 100);
+        nav.update(-1, -1, 100);
+        assert_eq!(
+            nav.state(100),
+            NavState::Turn { turn: Turn::Right, metres: 240 },
+            "the sentinel says nothing and must not outrank something"
+        );
+        assert_eq!(nav.stage(100, true), Stage::Approach, "and the layer stays up");
+
+        // NOT EVEN WHEN THE SENTINEL IS THE FRESHER OF THE TWO: nothing to draw
+        // is nothing to draw, however recently it arrived.
+        nav.update(-1, -1, 105);
+        assert_eq!(nav.state(105), NavState::Turn { turn: Turn::Right, metres: 240 });
+        nav.poll(leg(120), 106);
+        assert_eq!(nav.state(106), NavState::Turn { turn: Turn::Right, metres: 120 });
+
+        // AND THE SENTINEL IS STILL A STATE OF ITS OWN when it is all there is:
+        // it is being outranked above, not ignored.
+        let mut bare = Nav::new();
+        bare.update(-1, -1, 100);
+        assert_eq!(bare.state(100), NavState::Waiting);
+        // A poll that is navigating with nothing to say does not promote it.
+        bare.poll(Route { arrival_ms: Some(1_700_000_000_000), ..Route::default() }, 100);
+        assert_eq!(bare.state(100), NavState::Waiting);
+    }
+
+    /// A DEAD HEAT GOES TO OFF-ROUTE, WHICHEVER CHANNEL SAYS IT.
+    ///
+    /// `state` takes the fresher of the two channels and gives an exact tie to
+    /// the poll — except here. During a deviation the OTHER channel is still
+    /// carrying the turn the driver has just missed, and drawing it is the exact
+    /// failure the `NavState::OffRoute => Stage::Idle` arm exists to prevent,
+    /// reached through a tie-break instead of through an ordering.
+    #[test]
+    fn off_route_wins_a_dead_heat_from_either_channel() {
+        let missed = Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(240),
+            imminent: Some(1),
+            ..Route::default()
+        };
+
+        // The push notices first, in the same second as a poll still holding
+        // the turn that was missed.
+        let mut nav = Nav::new();
+        nav.poll(missed.clone(), 100);
+        nav.update(75, 12, 100);
+        assert_eq!(nav.state(100), NavState::OffRoute { metres: 75 });
+        assert_eq!(nav.stage(100, true), Stage::Idle, "no maneuver to draw");
+
+        // And the other way round: the poll says "OFFR" while the push is still
+        // holding the last turn it saw.
+        let mut nav = Nav::new();
+        nav.update(240, 5, 100);
+        nav.poll(
+            Route { turn_xml: Some("OFFR".into()), turn_metres: Some(75), ..missed.clone() },
+            100,
+        );
+        assert_eq!(nav.state(100), NavState::OffRoute { metres: 75 });
+        assert_eq!(nav.stage(100, true), Stage::Idle, "no maneuver to draw");
+    }
+
+    /// OFF-ROUTE OUTRANKS A **NEWER** TURN FROM THE OTHER CHANNEL, which is the
+    /// case a dead-heat test cannot reach and the one a real deviation produces.
+    ///
+    /// The poll is 1 Hz and the push fires on node crossings, so after an
+    /// off-route push the very next poll is always NEWER — and it is still
+    /// carrying the arrow and street of the turn that was just missed. Ranked
+    /// below freshness, that poll won and the face put the missed turn back up
+    /// one second into the deviation.
+    #[test]
+    fn a_later_turn_does_not_outrank_an_off_route_reading() {
+        let missed = Route {
+            turn_xml: Some("TR".into()),
+            street: Some("Whitney Way".into()),
+            turn_metres: Some(240),
+            imminent: Some(1),
+            ..Route::default()
+        };
+
+        // The push says off route; the poll keeps landing afterwards with the
+        // missed turn's leftovers.
+        let mut nav = Nav::new();
+        nav.poll(missed.clone(), 100);
+        nav.update(75, 12, 101);
+        for t in 102..=105 {
+            nav.poll(missed.clone(), t);
+            assert_eq!(
+                nav.state(t),
+                NavState::OffRoute { metres: 75 },
+                "the deviation still stands at t={t}"
+            );
+            assert_eq!(nav.stage(t, true), Stage::Idle, "no maneuver to draw at t={t}");
+        }
+
+        // RECOVERY IS NOT DELAYED BY IT. Neither channel keeps an old reading,
+        // so the moment the push carries a turn again the layer comes back.
+        nav.update(120, 2, 106);
+        nav.poll(missed, 106);
+        assert_eq!(nav.stage(106, true), Stage::Approach, "back the moment there is a turn");
     }
 
     /// THE LOG LINE IS THE ONLY EVIDENCE THIS FEATURE CAN PRODUCE ON THE UNIT.

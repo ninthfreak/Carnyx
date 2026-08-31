@@ -279,9 +279,15 @@ export component StereoCluster inherits VerticalLayout {
         // TA REPLACES TP while an announcement is running, and pulses. One slot,
         // two states: TP says the station carries traffic at all, TA says one is
         // happening now, and the second implies the first.
+        // `!root.dead` GUARDS THE `on` TOO, and it is the only one of the four
+        // tells that ever missed it. `root.ta ? true : …` lit the slot at full
+        // opacity on a released face while RDS, HD and AF all sat at 0.32 — and
+        // `dead` does not cover it, because `Tell` uses that only to drop the
+        // emboss layer. §4.7 wants every tell dim there, which face.slint states
+        // as the rule it enforces for the whole cluster.
         Tell {
             label: (root.ta && !root.dead) ? "TA" : "TP";
-            on: root.ta ? true : (!root.dead && root.tp);
+            on: !root.dead && (root.ta || root.tp);
             pulse: root.ta && !root.dead;
             dead: root.dead;
         }
@@ -796,7 +802,6 @@ export component StatusBar inherits Rectangle {
     property <length> nearby-disc-size: Metrics.s(74);
     out property <length> cluster-bottom: gear.absolute-position.y + gear.height
         + (Metrics.tall ? root.cluster-gap + root.nearby-disc-size : 0px);
-    out property <length> gear-right: gear.absolute-position.x + gear.width;
     /// Where the centred column ends — §4.9's cruise countdown hangs from this.
     ///
     /// ── COMPUTED, NOT MEASURED, AND FOR THE USUAL REASON ────────────────────

@@ -205,6 +205,8 @@ pub fn diag_actions() -> Vec<DiagAction> {
 pub struct DiagLog {
     head: Vec<String>,
     lines: VecDeque<String>,
+    /// Bumped by every mutator. See [`DiagLog::revision`].
+    revision: u64,
 }
 
 impl DiagLog {
@@ -233,6 +235,7 @@ impl DiagLog {
     /// `HH:MM:SS␣␣text` — two spaces, which is what makes the stamps read as a
     /// column in a proportional face.
     pub fn push(&mut self, stamp: &str, text: &str) {
+        self.revision += 1;
         if self.lines.len() == Self::CAP {
             self.lines.pop_front();
         }
@@ -256,15 +259,42 @@ impl DiagLog {
     /// the ring instead.
     pub fn push_head(&mut self, stamp: &str, text: &str) {
         if self.head.len() >= Self::HEAD_CAP {
+            // `push` bumps the revision itself; do not bump twice.
             self.push(stamp, text);
             return;
         }
+        self.revision += 1;
         self.head.push(format!("{stamp}  {text}"));
     }
 
     pub fn clear(&mut self) {
+        self.revision += 1;
         self.head.clear();
         self.lines.clear();
+    }
+
+    /// HOW MANY TIMES THE CONTENT HAS CHANGED, so a publisher can ask that
+    /// instead of comparing the whole log against its last copy.
+    ///
+    /// WHY THIS EXISTS. `App::push_settings` republishes the diagnostics model
+    /// only when it differs, which is right — replacing a `ModelRc` tears the
+    /// repeater down and rebuilds every row. But it used to answer "did it
+    /// differ" by calling [`DiagLog::lines`], which deep-copies EVERY string in
+    /// the ring — up to `CAP + HEAD_CAP` of them, ~40 KB — and comparing that
+    /// against the last copy. The guard that exists to avoid expensive work was
+    /// doing expensive work to decide, on a path that runs on every publish and
+    /// answers "unchanged" almost every time.
+    ///
+    /// A COUNTER, NOT A HASH: it cannot collide, and it costs an increment.
+    ///
+    /// IT COUNTS MUTATIONS, NOT CONTENT. A `clear` on an already-empty log bumps
+    /// it, and so does a `push` of a line identical to the last — both cost one
+    /// redundant republish and neither can produce a MISSED one, which is the
+    /// only direction that would matter. The bump lives in the three mutators
+    /// beside the fields they change, so a fourth cannot be added elsewhere and
+    /// forget it — this type owns its own invariant.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The head first, then the ring — which is also chronological, because the
@@ -586,6 +616,58 @@ mod tests {
         assert!(!details_open(true, false, true));
         // With no built-in tuner live, the same request does open it.
         assert!(details_open(true, false, false));
+    }
+
+    /// THE REVISION IS WHAT `push_settings` READS INSTEAD OF A COPY OF THE LOG.
+    ///
+    /// The only direction that can break the face is a mutation that does NOT
+    /// move it: the diagnostics overlay would then sit on a stale model, on a
+    /// unit whose log is the driver's only channel. So every mutator is walked
+    /// here, including the two that change nothing visible (a `clear` on an
+    /// empty log, and a `push_head` past `HEAD_CAP`, which delegates to `push`).
+    #[test]
+    fn every_mutation_moves_the_logs_revision() {
+        let mut log = DiagLog::new();
+        assert_eq!(log.revision(), 0, "a fresh log has not changed yet");
+
+        // READING DOES NOT MOVE IT — the whole point. `lines()` on an unchanged
+        // log must leave the guard's answer alone however often it is called.
+        let quiet = log.revision();
+        for _ in 0..3 {
+            let _ = log.lines();
+            let _ = log.is_empty();
+        }
+        assert_eq!(log.revision(), quiet, "reading is not a change");
+
+        let mut seen = vec![log.revision()];
+        log.push("12:00:01", "a line");
+        seen.push(log.revision());
+        log.push_head("12:00:02", "a head line");
+        seen.push(log.revision());
+        // A REPEAT OF THE SAME TEXT STILL COUNTS. The revision counts mutations,
+        // not distinct content — one redundant republish is the acceptable side,
+        // a missed one is not.
+        log.push("12:00:01", "a line");
+        seen.push(log.revision());
+        log.clear();
+        seen.push(log.revision());
+        // AND A CLEAR OF AN ALREADY-EMPTY LOG, same rule.
+        log.clear();
+        seen.push(log.revision());
+
+        for pair in seen.windows(2) {
+            assert!(pair[1] > pair[0], "every mutation moves it: {seen:?}");
+        }
+
+        // PAST `HEAD_CAP` the head delegates to the ring, and that path must
+        // move the revision exactly once rather than not at all or twice.
+        let mut full = DiagLog::new();
+        for i in 0..DiagLog::HEAD_CAP {
+            full.push_head("12:00:00", &format!("head {i}"));
+        }
+        let before = full.revision();
+        full.push_head("12:00:00", "one past the head cap");
+        assert_eq!(full.revision(), before + 1, "the delegating path bumps once");
     }
 
     #[test]

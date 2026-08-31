@@ -5,8 +5,9 @@
 //! THERE ARE TWO JAVA TREES AND THIS ONE COMPILES ONLY ITS OWN. `java/` is what
 //! is dexed and embedded here: the NWD tuner bridge, HTTPS, location, and the
 //! starter for the foreground service. `android/app/src/main/java/` is compiled
-//! by AGP into the APK's own dex instead, and holds exactly one class,
-//! `CarnyxService`.
+//! by AGP into the APK's own dex instead, and holds exactly the three
+//! manifest-declared components: `CarnyxService`, `WakeReceiver` and
+//! `SleepReceiver`.
 //!
 //! A manifest-declared component has to be constructible by the APPLICATION's
 //! class loader, which has never heard of the `InMemoryDexClassLoader` this

@@ -48,9 +48,11 @@ pub const FILE: &str = "callsigns.json";
 /// is a coin toss and a `HashMap<f32, _>` cannot be built at all.
 ///
 /// `None` for anything outside the FM band, which is not a dial this radio can
-/// have been tuned to and so is not something worth remembering.
+/// have been tuned to and so is not something worth remembering. The band edges
+/// come from [`crate::app::FM_LO`]/[`crate::app::FM_HI`] rather than being
+/// written out again here — see the comment on those constants.
 pub fn key(mhz: f32) -> Option<u32> {
-    if !mhz.is_finite() || !(87.5..=108.0).contains(&mhz) {
+    if !mhz.is_finite() || !(crate::app::FM_LO..=crate::app::FM_HI).contains(&mhz) {
         return None;
     }
     Some((mhz * 10.0).round() as u32)

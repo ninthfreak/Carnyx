@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.Log;
 
 import net.osmand.aidlapi.IOsmAndAidlCallback;
@@ -128,6 +129,17 @@ public final class CarnyxNav {
      * binder: OsmAnd holds our callback until it is told to stop, and a driver
      * who switches the feature off should stop costing OsmAnd a transaction per
      * location fix.
+     *
+     * <p>ANY NEGATIVE VALUE MEANS "NOT SUBSCRIBED", AND -1 IS NOT THE ONLY ONE.
+     * {@code OsmandAidlServiceV2}'s registration methods return -1 when
+     * {@code getApi} refuses the caller, but their catch returns
+     * {@code OsmandAidlConstants.UNKNOWN_API_ERROR}, which that file defines as
+     * {@code -2} — a registration that THREW inside OsmAnd therefore lands here
+     * looking like an ordinary id. Testing for exactly -1 made that channel dead
+     * for the rest of the run: the refusal test in {@link #subscribe} was false,
+     * the recovery test in {@link #afterPoll} was false so nothing ever retried
+     * it, and {@link #stop} sent an unsubscribe for id -2. Every test on these
+     * two is therefore {@code < 0}, never {@code == -1}.
      */
     private static long navCallbackId = -1L;
     private static long voiceCallbackId = -1L;
@@ -148,6 +160,42 @@ public final class CarnyxNav {
      * would fill the 600-line ring in ten minutes.
      */
     private static volatile boolean pollFaultReported;
+
+    /**
+     * The backoff on the missing-channel re-subscribe: when the next attempt may
+     * run ({@link SystemClock#uptimeMillis}), how long the current gap is, and
+     * whether the outage has been noted.
+     *
+     * <p>A GAP THAT DOUBLES, BECAUSE THE RETRY IS NOT FREE. The recovery in
+     * {@link #afterPoll} used to re-run {@link #subscribe} on every answered
+     * poll whenever EITHER id was missing, and {@code subscribe} re-registers
+     * BOTH channels. With one channel stuck that is one re-registration a
+     * second, and upstream mints a NEW callback id per call — {@code
+     * navUpdateCallbacks.put(id, listener)} plus {@code
+     * routingHelper.addRouteDataListener(listener)}, never removed — so a drive
+     * accumulated one live listener per second and every node crossing fired
+     * {@link IOsmAndAidlCallback#updateNavigationInfo} N times with N growing
+     * without bound, while {@link #stop} could hand back only the last pair of
+     * ids. It also wrote one {@code safeNote} a second, wiping the 600-line ring
+     * every ten minutes — the exact failure {@link #pollFaultReported} exists to
+     * prevent. So: only the missing channel is re-registered, the attempt is
+     * spaced by this backoff, and the note is edge-triggered.
+     *
+     * <p>{@code uptimeMillis} AND NOT WALL TIME, because the head unit sets its
+     * clock from GPS mid-drive and a jump backwards would freeze the retry for
+     * however far it jumped. It is also the clock {@link Handler#postDelayed}
+     * schedules the poll on, so the two agree.
+     *
+     * <p>Written and read under the class lock, like the ids whose repair they
+     * pace.
+     */
+    private static long resubscribeAt;
+    private static long resubscribeGap;
+    private static boolean resubscribeReported;
+
+    /** The first gap after a failed re-subscribe, and the ceiling it doubles to. */
+    private static final long RESUBSCRIBE_FIRST_MS = 5000L;
+    private static final long RESUBSCRIBE_MAX_MS = 120000L;
 
     private CarnyxNav() {
     }
@@ -196,10 +244,19 @@ public final class CarnyxNav {
      * How often to poll, in milliseconds.
      *
      * <p>ONE SECOND, which is the handoff's "~1 Hz while navigating". The poll is
-     * ONE binder round trip returning a small bundle; the push callback already
-     * arrives at about this rate off OsmAnd's routing updates, so this adds a
-     * comparable cost and no more. Faster would buy nothing — OsmAnd recomputes
-     * on location fixes, which are 1 Hz on this hardware.
+     * ONE binder round trip returning a small bundle. Faster would buy nothing —
+     * OsmAnd recomputes on location fixes, which are 1 Hz on this hardware.
+     *
+     * <p>THIS COMMENT USED TO ADD THAT THE PUSH CALLBACK "ALREADY ARRIVES AT
+     * ABOUT THIS RATE OFF OSMAND'S ROUTING UPDATES, SO THIS ADDS A COMPARABLE
+     * COST AND NO MORE", AND THAT WAS FALSE. {@code src/nav.rs:361-368} records
+     * the claim as the cause of the blinking maneuver layer: upstream fires
+     * {@code IRoutingDataUpdateListener} from ONE site,
+     * {@code RoutingHelper.java:730}, inside the {@code if (processed)}
+     * node-advance branch of {@code updateCurrentRouteStatus} — i.e. when the
+     * vehicle crosses a route geometry node, which on a long straight is minutes
+     * apart. The push's rate is unknown and bursty; this one is not, which is
+     * why the poll is the channel the face leans on.
      */
     private static final long POLL_MS = 1000L;
 
@@ -213,7 +270,31 @@ public final class CarnyxNav {
      * does not block.
      */
     private static HandlerThread pollThread;
-    private static Handler pollHandler;
+
+    /**
+     * VOLATILE, because {@link Poll} reads it off the poll thread to reschedule
+     * itself while {@link #startPoll}/{@link #stopPoll} write it under the class
+     * lock. It was a plain static read outside any lock, which is a data race
+     * even before the doubling {@link #pollGen} describes.
+     */
+    private static volatile Handler pollHandler;
+
+    /**
+     * Restart guard for the poll, the same one {@code NwdBridge.levelGen}
+     * (NwdBridge.java:1198-1204) uses on the level watch, and for the same
+     * reason — that comment calls the bare-boolean approach broken.
+     *
+     * <p>WITHOUT IT THE POLL DOUBLES ON EVERY TOGGLE. {@link #stopPoll} nulls
+     * the handler and quits the looper while the outgoing poll is mid-{@code
+     * run()}; {@link #startPoll} then builds a new {@code HandlerThread} and
+     * posts a poll to it; the outgoing one finishes its iteration, reads the NEW
+     * handler and posts a second poll onto it. Two messages then re-post each
+     * other for the rest of the run — 2 Hz permanently, and doubling again on
+     * the next switch-off/switch-on or OsmAnd death-and-reconnect. Each {@link
+     * Poll} captures the generation it was started for and stops rescheduling
+     * once it is no longer the current one.
+     */
+    private static volatile int pollGen;
 
     /** Hand the class the app context, as {@link CarnyxProcess#attach} does. */
     public static synchronized void attach(Context context) {
@@ -303,13 +384,15 @@ public final class CarnyxNav {
         IOsmAndAidlInterface api = osmand;
         if (api != null) {
             try {
-                if (navCallbackId != -1L) {
+                // >= 0, NOT != -1: a registration that threw inside OsmAnd is
+                // stored as -2 and is not an id to hand back. See the field.
+                if (navCallbackId >= 0L) {
                     ANavigationUpdateParams p = new ANavigationUpdateParams();
                     p.setCallbackId(navCallbackId);
                     p.setSubscribeToUpdates(false);
                     api.registerForNavigationUpdates(p, CALLBACK);
                 }
-                if (voiceCallbackId != -1L) {
+                if (voiceCallbackId >= 0L) {
                     ANavigationVoiceRouterMessageParams p = new ANavigationVoiceRouterMessageParams();
                     p.setCallbackId(voiceCallbackId);
                     p.setSubscribeToUpdates(false);
@@ -323,6 +406,10 @@ public final class CarnyxNav {
         stopPoll();
         navCallbackId = -1L;
         voiceCallbackId = -1L;
+        // The next session starts its retry clock from scratch rather than
+        // inheriting a two-minute gap this one had backed off to.
+        resubscribeGap = 0L;
+        resubscribeReported = false;
         osmand = null;
         binding = false;
         boundPackage = "";
@@ -379,8 +466,20 @@ public final class CarnyxNav {
      * means OsmAnd went away, and `onServiceDisconnected` handles that — this
      * must not also decide to stop, or a transient failure would silence the
      * poll for the rest of the run with nothing recorded.
+     *
+     * <p>BUT ONLY WHILE IT IS STILL THE CURRENT POLL. One instance per
+     * {@link #startPoll}, each carrying the generation it was started for; an
+     * outgoing one that finishes its iteration after a restart sees a newer
+     * {@link #pollGen} and lets itself end instead of seeding a second chain on
+     * the new looper. See that field for the doubling this prevents.
      */
-    private static final Runnable POLL = new Runnable() {
+    private static final class Poll implements Runnable {
+        private final int gen;
+
+        Poll(int gen) {
+            this.gen = gen;
+        }
+
         @Override
         public void run() {
             IOsmAndAidlInterface api;
@@ -414,12 +513,15 @@ public final class CarnyxNav {
                     afterPoll(answered);
                 }
             }
+            // THE GENERATION IS CHECKED AT THE POST, not at the top of the run:
+            // the restart can land at any point inside the iteration above, and
+            // it is the re-post that does the damage.
             Handler h = pollHandler;
-            if (h != null) {
+            if (h != null && gen == pollGen) {
                 h.postDelayed(this, POLL_MS);
             }
         }
-    };
+    }
 
     /**
      * Ask once and hand every field across.
@@ -497,6 +599,10 @@ public final class CarnyxNav {
                 osmand = null;
                 navCallbackId = -1L;
                 voiceCallbackId = -1L;
+                // The reconnect subscribes afresh, so it starts its retry clock
+                // afresh too rather than inheriting this session's backoff.
+                resubscribeGap = 0L;
+                resubscribeReported = false;
             }
             // THE FACE HAS TO BE TOLD, because the updates simply stop and
             // `Nav::EXPIRY` would clear the turn twelve seconds later with no
@@ -512,6 +618,10 @@ public final class CarnyxNav {
      * turn and the distance with no words in it at all, and the voice router is
      * the words with no distance. A face that shows "in 240 m" needs the first
      * and a face that shows a street name needs the second.
+     *
+     * <p>THIS IS THE FIRST-CONNECT PATH ONLY. The recovery path re-registers one
+     * channel at a time through {@link #subscribeNav}/{@link #subscribeVoice} —
+     * see {@link #mendSubscriptions} for why calling this again would be a leak.
      */
     private static String subscribe() {
         IOsmAndAidlInterface api = osmand;
@@ -519,28 +629,17 @@ public final class CarnyxNav {
             return "connected, but the binder was null";
         }
         StringBuilder out = new StringBuilder("connected to ").append(boundPackage);
-        try {
-            ANavigationUpdateParams p = new ANavigationUpdateParams();
-            p.setSubscribeToUpdates(true);
-            navCallbackId = api.registerForNavigationUpdates(p, CALLBACK);
-            out.append(", turns id ").append(navCallbackId);
-        } catch (Throwable t) {
-            out.append(", TURNS FAILED: ").append(why(t));
-        }
-        try {
-            ANavigationVoiceRouterMessageParams p = new ANavigationVoiceRouterMessageParams();
-            p.setSubscribeToUpdates(true);
-            voiceCallbackId = api.registerForVoiceRouterMessages(p, CALLBACK);
-            out.append(", voice id ").append(voiceCallbackId);
-        } catch (Throwable t) {
-            out.append(", VOICE FAILED: ").append(why(t));
-        }
-        // BOTH IDS -1 IS OSMAND SAYING NO, not a registration quirk. Per
+        subscribeNav(api, out);
+        subscribeVoice(api, out);
+        // BOTH IDS NEGATIVE IS OSMAND SAYING NO, not a registration quirk. Per
         // upstream's own source there is one common way to get here: `getApi`
         // found this package in the connected-apps list switched off — where
         // OsmAnd itself put it, disabled, on our first call. The fix is the
         // driver's one-time toggle, so the log says exactly where it is.
-        if (navCallbackId == -1L && voiceCallbackId == -1L) {
+        //
+        // < 0 AND NOT == -1: a refusal returns -1, but a throw inside OsmAnd
+        // returns UNKNOWN_API_ERROR, which is -2. See the id fields.
+        if (navCallbackId < 0L && voiceCallbackId < 0L) {
             if (!refusedReported) {
                 refusedReported = true;
                 safeRefused(true);
@@ -550,6 +649,43 @@ public final class CarnyxNav {
         }
         startPoll();
         return out.toString();
+    }
+
+    /**
+     * Register the TURNS channel and say what happened. Called with the lock held.
+     *
+     * <p>ITS OWN METHOD SO THE RECOVERY CAN CALL ONE HALF. Every call mints a
+     * fresh callback id upstream and adds a fresh route-data listener that
+     * nothing ever removes, so a channel that is already live must not be
+     * re-registered — see {@link #mendSubscriptions}.
+     *
+     * <p>THE ID IS CLEARED ON A THROW rather than left as it was: no id came
+     * back, so there is nothing for {@link #stop} to hand OsmAnd, and the
+     * recovery has to see this channel as missing.
+     */
+    private static void subscribeNav(IOsmAndAidlInterface api, StringBuilder out) {
+        try {
+            ANavigationUpdateParams p = new ANavigationUpdateParams();
+            p.setSubscribeToUpdates(true);
+            navCallbackId = api.registerForNavigationUpdates(p, CALLBACK);
+            out.append(", turns id ").append(navCallbackId);
+        } catch (Throwable t) {
+            navCallbackId = -1L;
+            out.append(", TURNS FAILED: ").append(why(t));
+        }
+    }
+
+    /** Register the VOICE channel and say what happened. See {@link #subscribeNav}. */
+    private static void subscribeVoice(IOsmAndAidlInterface api, StringBuilder out) {
+        try {
+            ANavigationVoiceRouterMessageParams p = new ANavigationVoiceRouterMessageParams();
+            p.setSubscribeToUpdates(true);
+            voiceCallbackId = api.registerForVoiceRouterMessages(p, CALLBACK);
+            out.append(", voice id ").append(voiceCallbackId);
+        } catch (Throwable t) {
+            voiceCallbackId = -1L;
+            out.append(", VOICE FAILED: ").append(why(t));
+        }
     }
 
     /**
@@ -626,14 +762,23 @@ public final class CarnyxNav {
         if (pollHandler != null) {
             return;
         }
+        // THE GENERATION IS TAKEN AFTER THE IDEMPOTENCE GUARD, so a second call
+        // that changes nothing cannot invalidate the poll that is already
+        // running. See `pollGen`.
+        int gen = ++pollGen;
         pollThread = new HandlerThread("carnyx-osmand-poll");
         pollThread.start();
         pollHandler = new Handler(pollThread.getLooper());
-        pollHandler.post(POLL);
+        pollHandler.post(new Poll(gen));
     }
 
     /** Stop it and let the thread go. Safe when it was never started. */
     private static synchronized void stopPoll() {
+        // BUMPED FIRST, AND UNCONDITIONALLY. `removeCallbacksAndMessages` clears
+        // the QUEUE, which does nothing about an iteration already running on
+        // the poll thread — that one is stopped here, by making its generation
+        // stale before it reaches its re-post.
+        pollGen++;
         Handler h = pollHandler;
         pollHandler = null;
         if (h != null) {
@@ -652,9 +797,9 @@ public final class CarnyxNav {
      * <p>THE POLL IS THE RECOVERY PATH as well as the detector. When the driver
      * flips this app on inside OsmAnd, nothing calls us — OsmAnd just starts
      * answering — so the first real answer after a refusal clears the state
-     * AND re-runs the subscriptions that returned -1 while refused. Without
-     * that, enabling Carnyx would light the tell and leave the push callbacks
-     * dead until the next toggle or reboot.
+     * AND re-registers whichever subscription came back negative while refused.
+     * Without that, enabling Carnyx would light the tell and leave the push
+     * callbacks dead until the next toggle or reboot.
      */
     private static void afterPoll(boolean answered) {
         if (!answered) {
@@ -670,15 +815,97 @@ public final class CarnyxNav {
             refusedReported = false;
             safeRefused(false);
         }
-        String note = null;
+        String note;
         synchronized (CarnyxNav.class) {
-            if (osmand != null && (navCallbackId == -1L || voiceCallbackId == -1L)) {
-                note = subscribe();
-            }
+            note = mendSubscriptions();
         }
         if (note != null) {
             safeNote("nav: " + note);
         }
+    }
+
+    /**
+     * Re-register whichever channel is missing. Called with the lock held.
+     *
+     * <p>ONE CHANNEL, NOT BOTH, AND NOT EVERY TICK. This used to call
+     * {@link #subscribe}, which re-registers BOTH channels, whenever EITHER id
+     * was missing, with no latch and no backoff. One stuck channel therefore
+     * re-registered the healthy one once a second for the rest of the session,
+     * and upstream mints a NEW id per call — {@code navUpdateCallbacks.put(id,
+     * listener)} plus {@code routingHelper.addRouteDataListener(listener)},
+     * never removed. So the listener count grew by one a second, every node
+     * crossing fired {@code updateNavigationInfo} that many times, and
+     * {@link #stop} could hand back only the last pair of ids. The
+     * once-a-second note that went with it wiped the 600-line diagnostics ring
+     * every ten minutes, which on a unit with no adb is the whole channel.
+     *
+     * <p>THE NOTE IS EDGE-TRIGGERED, like {@link #pollFaultReported}: one line
+     * when the outage opens, one when a retry mends it, nothing in between.
+     *
+     * <p>IT DOES NOT TOUCH THE REFUSED STATE, and {@link #subscribe}'s copy of
+     * that test is deliberately not carried over here. This runs only on an
+     * ANSWERED poll, which is {@code getApi} NOT refusing us; a registration
+     * that fails anyway is a different fault, and lighting the refused tell
+     * would send the driver to toggle a switch that is already on — right after
+     * {@link #afterPoll} cleared the tell two lines earlier.
+     *
+     * @return a line for the log, or null when there is nothing new to say —
+     *     which is the usual answer, once per second, for the whole of a drive.
+     */
+    private static String mendSubscriptions() {
+        IOsmAndAidlInterface api = osmand;
+        boolean navMissing = api != null && navCallbackId < 0L;
+        boolean voiceMissing = api != null && voiceCallbackId < 0L;
+        if (!navMissing && !voiceMissing) {
+            // Nothing to mend. The gap is cleared so a channel lost LATER is
+            // retried at once instead of inheriting this outage's backoff.
+            resubscribeGap = 0L;
+            resubscribeReported = false;
+            return null;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (resubscribeGap != 0L && now - resubscribeAt < 0L) {
+            return null;
+        }
+        resubscribeGap = resubscribeGap == 0L
+            ? RESUBSCRIBE_FIRST_MS
+            : Math.min(resubscribeGap * 2L, RESUBSCRIBE_MAX_MS);
+        resubscribeAt = now + resubscribeGap;
+        StringBuilder out = new StringBuilder("re-subscribing to ").append(boundPackage);
+        if (navMissing) {
+            subscribeNav(api, out);
+        }
+        if (voiceMissing) {
+            subscribeVoice(api, out);
+        }
+        boolean mended = (navMissing && navCallbackId >= 0L)
+            || (voiceMissing && voiceCallbackId >= 0L);
+        if (navCallbackId >= 0L && voiceCallbackId >= 0L) {
+            // Everything is live again: forget the backoff so a later loss is
+            // retried at once, and reopen the note for whatever that loss is.
+            resubscribeGap = 0L;
+            resubscribeReported = false;
+            // A MEND IS ALWAYS WORTH A LINE, even when the outage never got one:
+            // this is what says the driver's toggle inside OsmAnd took.
+            return out.toString();
+        }
+        if (mended) {
+            // Half of it took, and the line names which half is still dead. It
+            // can happen at most once per outage — one channel is now live and
+            // only the other can mend after it — so the ring stays safe.
+            resubscribeReported = true;
+            return out.toString();
+        }
+        if (resubscribeReported) {
+            return null;
+        }
+        resubscribeReported = true;
+        return out.append("; still missing — next try in ")
+                  .append(resubscribeGap / 1000L)
+                  .append(" s, doubling to a ")
+                  .append(RESUBSCRIBE_MAX_MS / 1000L)
+                  .append(" s ceiling")
+                  .toString();
     }
 
     /** The refused edge, delivered so it cannot break the poll. */

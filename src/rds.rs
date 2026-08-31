@@ -421,17 +421,47 @@ impl RdsDecoder {
     /// Feed one group as 16 hex chars. Returns the new state when a user-visible
     /// field changed, or `None` when nothing did — the common case, since the same
     /// group repeats many times per second.
+    ///
+    /// A VALIDATING WRAPPER, and nothing more. The body lives in
+    /// [`push_blocks`](Self::push_blocks); this is the entry for callers that
+    /// really do hold the group as text — the host's synthesised corpus in
+    /// `crate::fake::FakeRdsStream`, and every test in this file, which is
+    /// written against the wire format on purpose.
+    ///
+    /// A CALLER THAT ALREADY HAS FOUR `u16`s MUST NOT COME THROUGH HERE, and the
+    /// device path did: `android::ingest_rds_group` parses the Java bridge's
+    /// string into an `RdsGroup` at the edge, and `app.rs` then paid four
+    /// `format!`s and a `collect::<String>()` per group to build a hex string
+    /// back out of it so that this function could parse it a second time —
+    /// about eleven times a second for the length of a drive.
     pub fn push(&mut self, hex: &str) -> Option<RdsState> {
         if hex.len() != 16 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
-        if hex.bytes().all(|b| b == b'0') {
+        // The all-zero group — "no group this poll" — is refused one level down,
+        // where both entries meet it. Sixteen '0' characters parse to four zero
+        // blocks, so this needs no check of its own and must not grow one: two
+        // copies of that rule is two rules to keep in step.
+        let word = |i: usize| u16::from_str_radix(&hex[i..i + 4], 16).unwrap_or(0);
+        self.push_blocks([word(0), word(4), word(8), word(12)])
+    }
+
+    /// The same, from the four blocks themselves.
+    ///
+    /// THE REAL BODY. An all-zero group is "no group this poll" and is refused
+    /// here as well as in [`push`](Self::push), because the two entries have to
+    /// agree about what a group IS — the hex path would otherwise reject
+    /// `"0000000000000000"` while this one counted it as a well-formed group and
+    /// ran the whole consensus over it.
+    ///
+    /// There is no length or digit check to make: four `u16`s cannot be
+    /// malformed. That is the only validation the string entry adds.
+    pub fn push_blocks(&mut self, blocks: [u16; 4]) -> Option<RdsState> {
+        let [a, b, c, d] = blocks;
+        if a == 0 && b == 0 && c == 0 && d == 0 {
             return None; // "no group this poll"
         }
         self.stat_groups += 1; // well-formed and carrying something
-
-        let word = |i: usize| u16::from_str_radix(&hex[i..i + 4], 16).unwrap_or(0);
-        let (a, b, c, d) = (word(0), word(4), word(8), word(12));
 
         let before = self.st.clone();
 
@@ -1253,6 +1283,42 @@ mod tests {
         assert!(d.push("zzzz02c0e0cd2020").is_none(), "not hex");
         assert!(d.push("0000000000000000").is_none(), "no group this poll");
         assert_eq!(d.stats().groups, 0, "none of those count as a group");
+    }
+
+    /// THE TWO ENTRIES ARE ONE DECODER.
+    ///
+    /// `push` is a validating wrapper over `push_blocks`, and the device takes
+    /// the second: the vendor hands the app four `u16`s, and building a hex
+    /// string for the decoder to parse straight back cost four `format!`s and a
+    /// `collect` per group, about eleven times a second. Every test in this file
+    /// is written against the string form, so this is the one that says the form
+    /// the DEVICE uses reaches the same state — and that the all-zero refusal,
+    /// which is the one rule the string entry no longer holds itself, still
+    /// holds on both.
+    #[test]
+    fn the_hex_entry_and_the_block_entry_decode_alike() {
+        let blocks: [[u16; 4]; 4] = [
+            [0xa6ff, 0x02c0, 0xe0cd, 0x2020],
+            [0xa6ff, 0x02c5, 0xe0cd, 0x5745],
+            [0xa6ff, 0x02c2, 0xe0cd, 0x524e],
+            [0xa6ff, 0x02c7, 0xe0cd, 0x2020],
+        ];
+        let mut hexed = RdsDecoder::new();
+        let mut blocked = RdsDecoder::new();
+        for _ in 0..7 {
+            for (h, b) in PS_WERN.iter().zip(blocks.iter()) {
+                assert_eq!(hexed.push(h), blocked.push_blocks(*b), "group by group");
+            }
+        }
+        assert_eq!(hexed.state().ps, "WERN", "the replay really did decode");
+        assert_eq!(hexed.state(), blocked.state());
+        assert_eq!(hexed.stats().groups, blocked.stats().groups);
+
+        // The empty poll, on both entries and counted by neither.
+        let before = blocked.stats().groups;
+        assert!(hexed.push("0000000000000000").is_none());
+        assert!(blocked.push_blocks([0, 0, 0, 0]).is_none());
+        assert_eq!(blocked.stats().groups, before, "an empty poll is not a group");
     }
 
     /// The rolling figure stays silent until it has enough outcomes to mean

@@ -153,6 +153,29 @@ public final class CarnyxLocation {
      *  reaches nobody and a skipped provider looks exactly like a slow one. */
     private static native void nativeNote(String line);
 
+    /**
+     * EVERY CROSSING IS WRAPPED, which is the rule {@link NwdBridge} states over
+     * its own `safe*` block and applies to all fourteen of its natives, and which
+     * this file already kept for {@code nativeNote} at every call site — while
+     * the position calls beside them were the only unguarded crossings left in
+     * the Java tree.
+     *
+     * <p>They are the ones that could least afford it. The Rust side resolves an
+     * error here with a policy that THROWS a Java RuntimeException, and
+     * {@code onLocationChanged} runs on the app's MAIN thread, so an escape takes
+     * the whole face down over one position update — and says why only to logcat,
+     * which this unit cannot show. A dropped fix costs the picker's distances
+     * until the next one, two seconds later.
+     */
+    private static void safePosition(
+            double lat, double lon, boolean fix, float speedMps, boolean hasSpeed) {
+        try {
+            nativePosition(lat, lon, fix, speedMps, hasSpeed);
+        } catch (Throwable t) {
+            Log.e(TAG, "native position callback failed", t);
+        }
+    }
+
     /** Every listener currently registered, so `stop` can remove all of them.
      *
      *  ONE PER PROVIDER, and not the single shared instance this used to
@@ -172,7 +195,7 @@ public final class CarnyxLocation {
             // (`ingest_position`) — the (0, 0) a provider with nothing hands
             // back, and the speed hysteresis. Java's job is to pass on what it
             // was told.
-            nativePosition(loc.getLatitude(), loc.getLongitude(), true,
+            safePosition(loc.getLatitude(), loc.getLongitude(), true,
                 loc.hasSpeed() ? loc.getSpeed() : 0f, loc.hasSpeed());
         }
 
@@ -186,7 +209,7 @@ public final class CarnyxLocation {
             // Not necessarily a loss: the other provider may still be running.
             // Ask the manager rather than assuming.
             if (!anyProviderEnabled()) {
-                nativePosition(0, 0, false, 0f, false);
+                safePosition(0, 0, false, 0f, false);
             }
         }
         };
@@ -431,7 +454,7 @@ public final class CarnyxLocation {
                         // the line that arrives when the sky answers.
                         Location last = mgr.getLastKnownLocation(p);
                         if (last != null) {
-                            nativePosition(last.getLatitude(), last.getLongitude(), true,
+                            safePosition(last.getLatitude(), last.getLongitude(), true,
                                 last.hasSpeed() ? last.getSpeed() : 0f, last.hasSpeed());
                             try {
                                 long age = android.os.SystemClock.elapsedRealtime()
@@ -464,7 +487,7 @@ public final class CarnyxLocation {
                     nativeNote(any ? "listening on " + live : "no provider would register");
                 } catch (Throwable ignored) {}
                 if (!any) {
-                    nativePosition(0, 0, false, 0f, false);
+                    safePosition(0, 0, false, 0f, false);
                     // AND TRY AGAIN, because `start` is called exactly once from
                     // `android_main` and there is no other path back here. A unit
                     // whose location service is not up yet used to lose GPS for the

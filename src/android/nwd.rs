@@ -8,7 +8,7 @@
 //! Java side, where the generated `Stub` does it, and Rust never has to know
 //! what a `Frequency` looks like on the wire.
 //!
-//! IN (Java → Rust) is thirteen static native methods, bound with
+//! IN (Java → Rust) is fourteen static native methods, bound with
 //! `RegisterNatives`. NOT with exported `Java_…` symbols: the bridge class is
 //! loaded by a fresh `InMemoryDexClassLoader`, and JNI's automatic symbol lookup
 //! searches only the native libraries registered against the DEFINING class's
@@ -147,12 +147,69 @@ fn with_bridge<R>(
         .map_err(|e: Error| TunerError::Java(e.to_string()))
 }
 
+/// Failures already put in the diagnostics log, keyed by the call that produced
+/// one and holding its reason. See [`call_void`].
+///
+/// A map rather than a flag per call site: every `what` below is a string
+/// literal, so this never grows past the ten `call_void` callers, and holding
+/// the REASON alongside the call means a second, different failure of the same
+/// call is still heard.
+static NOTED: std::sync::Mutex<std::collections::BTreeMap<&'static str, String>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
 /// Same, for the calls whose failure is not worth propagating — a broadcast that
-/// did not send, a watch that did not start. The reason goes to logcat, which is
-/// the only channel a head unit has.
-fn call_void(what: &str, f: impl FnOnce(&mut Env, &Global<JClass<'static>>) -> Result<(), Error>) {
+/// did not send, a watch that did not start.
+///
+/// THE REASON GOES IN THE DIAGNOSTICS LOG, and this note used to say the
+/// inverse: "the reason goes to logcat, which is the only channel a head unit
+/// has". THIS UNIT HAS NO ADB, so a `Log.w` reaches nobody and the settings
+/// panel's log is the only channel a driver can read — `src/lib.rs:329`,
+/// `src/app.rs:1502` and `src/android/mod.rs:1186-1189` all say so. Everything
+/// that landed here was therefore discarded: audio enable, RDS enable, the panel
+/// key, and the illumination, sleep and level watches. `location.rs:100` and
+/// `nav.rs:155` already route their notes through `super::ingest_note`; this is
+/// the busiest of the three seams and was the only one that did not.
+///
+/// ONE LINE PER (CALL, REASON) FOR THE LIFE OF THE PROCESS, because several of
+/// these callers repeat and the log is a 600-line ring (`settings::DiagLog::CAP`).
+/// `read_level_now` fires twice per retune plus retries (`arm_level_schedule`,
+/// src/app.rs:424), `seek` fires per wheel press, and `set_audio_enabled` fires
+/// on every audio state change — a line per call would push a whole drive out of
+/// the ring in minutes and destroy the very channel this is trying to use.
+///
+/// LATCHED, RATHER THAN EDGE-TRIGGERED WITH A "recovered" LINE the way
+/// `CarnyxNav.pollFaultReported` is. That one has a once-a-second poll whose
+/// success IS the recovery edge; this has no tick, and what actually reaches
+/// here does not recover. NwdBridge's void methods swallow their own throwables
+/// (NwdBridge.java:344-356, 633-639), so a failure here is `with_bridge`'s —
+/// `android::init` never ran, or there is no `JavaVM` — and that stays true for
+/// the rest of the process. A recovery line would be for an edge that cannot
+/// arrive, and a flapping pair would be the flood this guard exists to prevent.
+///
+/// `&'static str` and not `&str`: the key outlives the call, and every caller
+/// already passes a literal.
+fn call_void(
+    what: &'static str,
+    f: impl FnOnce(&mut Env, &Global<JClass<'static>>) -> Result<(), Error>,
+) {
     if let Err(e) = with_bridge(f) {
-        warn(&format!("{what}: {e}"));
+        let reason = e.to_string();
+        warn(&format!("{what}: {reason}"));
+        // The lock is dropped BEFORE the note: `ingest_note` takes the shared
+        // state's mutex and then calls the sink, and holding two locks across a
+        // callback is how a deadlock gets written.
+        let fresh = {
+            let mut noted = NOTED.lock().unwrap_or_else(|p| p.into_inner());
+            if noted.get(what).map(String::as_str) == Some(reason.as_str()) {
+                false
+            } else {
+                noted.insert(what, reason.clone());
+                true
+            }
+        };
+        if fresh {
+            super::ingest_note(format!("nwd: {what} failed — {reason}"));
+        }
     }
 }
 
@@ -162,6 +219,13 @@ fn call_void(what: &str, f: impl FnOnce(&mut Env, &Global<JClass<'static>>) -> R
 /// NativeActivity's stderr is not connected to anything a driver or a developer
 /// can read. `android.util.Log` is on the system class loader, so this works
 /// even when the dex load itself is what failed.
+///
+/// THE SECOND CHANNEL, NOT THE ONE THAT MATTERS. This unit has no adb, so
+/// nothing written here reaches the driver; it is kept for a bench unit that
+/// does, and for the window before `set_event_sink` (src/app.rs:1488) has given
+/// `ingest_note` anywhere to put a line — until then `emit` is a no-op, as
+/// src/lib.rs:130 records. Anything a driver needs must ALSO go through
+/// `super::ingest_note` — see [`call_void`].
 fn warn(message: &str) {
     let _ = JavaVM::singleton().map(|jvm| {
         jvm.attach_current_thread(|env: &mut Env| -> Result<(), Error> {
@@ -244,6 +308,35 @@ impl Tuner for NwdTuner {
         });
     }
 
+    /// ONE CALL INTO THE BRIDGE, NOT THREE. This runs every 1.5 s for a whole
+    /// drive (see `super::start_state_poll`), so what it does NOT do matters.
+    ///
+    /// It used to call `pollPs` and `pollRt` as well, and both were pure waste.
+    /// `NwdBridge.pollPs` (NwdBridge.java:510-520) re-issues the very
+    /// `getCurrentFrequency()` binder call `pollNumbers` made microseconds
+    /// earlier, only to read `f.psName` — a field `pollNumbers` already had in
+    /// hand and threw away. `pollRt` (NwdBridge.java:522-532) reads
+    /// `getRtMessage()`, which NwdBridge.java:1232-1234 records as "a hardcoded
+    /// ''" on this firmware. Two static calls, two binder transactions and two
+    /// string marshallings per tick, for values NOTHING READS: `snap.ps` and
+    /// `snap.rt` have no consumer anywhere in `src/` or `examples/`, and
+    /// `src/app.rs:2084-2091` spells out why — the poll deliberately does not
+    /// drive PS, RadioText, PTY or the stereo pilot, because on this unit those
+    /// getters are worthless. PS and RadioText reach the face on the PUSH path
+    /// instead, through `ingest_frequency` and `ingest_radio_text`.
+    ///
+    /// THE FIELDS STAY, EMPTY, rather than leaving `TunerSnapshot`: two other
+    /// implementations construct one (`FakeTuner` at src/android/mod.rs:1502 and
+    /// `examples/pollprobe.rs:135`) and removing the fields would be a change to
+    /// them and to the struct, not to this. Empty is also the honest value, and
+    /// the one pollprobe's fake already answers with — "the three getters the
+    /// poll must ignore, answering the way this firmware answers: empty, empty,
+    /// and zero" (examples/pollprobe.rs:138-143).
+    ///
+    /// `pty` and `stereo_getter_stuck` still come across because they are two
+    /// slots of the `int[]` `pollNumbers` already returns for `raw`, `band` and
+    /// the MCU source; dropping them would need a change to the Java, not to
+    /// this.
     fn snapshot(&self) -> Option<TunerSnapshot> {
         with_bridge(|env, class| {
             let numbers = env
@@ -256,28 +349,20 @@ impl Tuner for NwdTuner {
             let mut buf = [0i32; 5];
             array.get_region(env, 0, &mut buf)?;
 
-            let ps = env
-                .call_static_method(class, jni_str!("pollPs"), jni_sig!("()Ljava/lang/String;"), &[])?
-                .l()?;
-            let ps = JString::cast_local(env, ps)?;
-            let rt = env
-                .call_static_method(class, jni_str!("pollRt"), jni_sig!("()Ljava/lang/String;"), &[])?
-                .l()?;
-            let rt = JString::cast_local(env, rt)?;
-
-            Ok(Some((buf, text(env, &ps), text(env, &rt))))
+            Ok(Some(buf))
         })
         .ok()
         .flatten()
-        .map(|(buf, ps, rt)| {
+        .map(|buf| {
             let [raw, band, pty, stereo, source] = buf;
             let band = band as i8;
             TunerSnapshot {
                 raw,
                 mhz: super::calibration().mhz_for(raw),
                 band,
-                ps,
-                rt,
+                // See above: not polled, because nothing reads them.
+                ps: String::new(),
+                rt: String::new(),
                 pty,
                 stereo_getter_stuck: stereo != 0,
                 mcu_source: (source >= 0).then_some(source),

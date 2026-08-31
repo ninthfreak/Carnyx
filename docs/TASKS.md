@@ -2601,7 +2601,7 @@ unit, which is Android 10 and filters nothing.
 
 **Output is capped and says so** — 18 activities, 12 receivers, 8 services, 12
 candidates, 4 handlers per action, and a `… N more not shown` line wherever a
-list was cut. The ring holds 200 lines and this is one of several writers.
+list was cut. The ring holds 600 lines and this is one of several writers.
 
 **What it cannot answer, in its own output:** whether the firmware resolves the
 radio app by package or by explicit component (only disabling it plus one ACC

@@ -11,8 +11,9 @@
   an APK built by cargo-apk has no service and no `CarnyxService` class, and the
   app detects that at run time rather than assuming either build.
 
-  The wake receiver is the second component only this packager can declare, and
-  it is declared at the bottom.
+  The wake and sleep receivers are the other components only this packager can
+  declare — three in all, `CarnyxService` plus `WakeReceiver` and
+  `SleepReceiver`, and all three are declared at the bottom.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -44,7 +45,7 @@
       with the code (its AndroidManifest.xml:19).
 
       This is the only way anything leaves this unit: it has no adb, the log ring
-      holds 200 lines, and a screenshot catches the handful on screen.
+      holds 600 lines, and a screenshot catches the handful on screen.
     -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

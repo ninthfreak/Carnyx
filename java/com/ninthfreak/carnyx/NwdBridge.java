@@ -35,8 +35,8 @@ import com.nwd.radio.service.data.RadioPoint;
  * not applied here, the band is not tracked here, no string is formatted here.
  * That rule is what makes the tuner logic testable in a container with no head
  * unit: every value that reaches Rust from a real device is a value the fake can
- * produce too. The one exception is stated where it happens (the level watch
- * gates itself on the MCU source, because a wrong tick COMMANDS the tuner and a
+ * produce too. The one exception is stated where it happens (the level read
+ * gates itself on the MCU source, because a wrong one COMMANDS the tuner and a
  * round trip to Rust for permission would not make it safer).
  *
  * PORTED FROM CarFM's android/app/src/main/java/com/ninthfreak/carfm/
@@ -147,6 +147,7 @@ public final class NwdBridge {
      * bind twice.
      */
     public static boolean connect() {
+        boolean stale;
         synchronized (LOCK) {
             if (bound && radio != null) {
                 reportConnected();
@@ -155,7 +156,24 @@ public final class NwdBridge {
             if (connectPending) {
                 return true;
             }
+            // BOUND WITH NO INTERFACE IS A DEAD BINDING, and re-binding on top of
+            // it is what used to cost a retry CONNECT_TIMEOUT_MS of dead face:
+            // onServiceDisconnected leaves the connection registered (see it for
+            // why), so a second bindService went out on a CONN the framework
+            // already had a record for, no onServiceConnected followed while the
+            // service was down, and the watchdog was what finally unbound. Let
+            // the binding go here instead, so the bindService below is a first
+            // bind again. The waiting auto-reconnect is what we are giving up,
+            // and only because the driver has just asked for this one explicitly.
+            stale = bound;
+            if (stale) {
+                bound = false;
+                registered = false;
+            }
             connectPending = true;
+        }
+        if (stale && ctx != null) {
+            try { ctx.unbindService(CONN); } catch (Throwable ignored) { }
         }
         if (ctx == null) {
             settleFailed("connect() before attach()");
@@ -264,9 +282,29 @@ public final class NwdBridge {
         }
 
         @Override public void onServiceDisconnected(ComponentName name) {
-            synchronized (LOCK) { radio = null; }
+            // ONLY THE INTERFACE GOES. THE BINDING STAYS, AND THAT IS THE POINT.
+            // Android keeps this ServiceConnection registered across a service
+            // death, and with BIND_AUTO_CREATE it restarts the vendor service and
+            // re-delivers onServiceConnected on this same CONN — which
+            // re-registers the callback, re-enables RDS, restarts the pump and
+            // reports connected. A vendor crash therefore SELF-HEALS with nothing
+            // asked of the driver.
+            //
+            // AN EARLIER REVISION UNBOUND HERE and gave that up. The aim was to
+            // let the settings row's "Retry tuner" start clean, but nothing in
+            // Rust calls disconnect() and connect_tuner is reachable only from
+            // startup and that row — so with the auto-reconnect thrown away a
+            // vendor crash would have cost the tuner for the rest of the drive
+            // unless the driver went looking for the row. The retry path is
+            // repaired in connect() instead; see its stale-binding branch.
+            //
+            // `bound` and `registered` stay TRUE because they are true: the
+            // binding is live and this connection is still registered.
+            synchronized (LOCK) {
+                radio = null;
+            }
             // The pump reads through NwdFmManager, not the binder, so it would
-            // keep polling a dead front end. Stop it; a re-bind re-arms it.
+            // keep polling a dead front end. Stop it; the re-delivery re-arms it.
             stopRdsPump();
             stopLevelWatch();
             safeDisconnected();
@@ -371,7 +409,8 @@ public final class NwdBridge {
      *        thing that sticks: the probe of 2026-07-26 proved EXIT_ARM_FM and
      *        app-OUT (operation=0) both left mcu_current_source=4 and the MCU
      *        re-powered FM a second later — the "comes back on" bug — while
-     *        source->0 made the audio STAY off.
+     *        source->0 made the audio STAY off. Sent by {@link #releaseSource},
+     *        and only when FM is the source it would be taking away.
      */
     public static void setAudioEnabled(boolean on) {
         if (ctx == null) return;
@@ -403,14 +442,30 @@ public final class NwdBridge {
      * guarantees the loop is scheduled again before the suspend. The release has
      * to be issued on the thread that heard the broadcast.
      *
-     * <p>The queued release still runs afterwards and is harmless: this is a
-     * re-send of the same two calls, and it is what the host tests drive.
+     * <p>The queued release still runs afterwards and is harmless: it used to be
+     * a re-send of the same two calls, and now that the source has already gone
+     * back it stops on the ownership test below. Either way it is what the host
+     * tests drive.
+     *
+     * <p>IT ONLY RELEASES WHAT THIS UNIT IS ACTUALLY ON. source→0 is a command
+     * to the MCU, not a request to give back something we hold, and it used to
+     * be sent unconditionally — including from the sleep receiver, which lists
+     * {@code ACTION_SCREEN_OFF}. A screen timeout with Bluetooth audio playing
+     * therefore switched the source away from whatever was playing. So the
+     * ownership test comes first, and when FM is not the MCU's current source
+     * there is nothing here to hand back and nothing is sent — not even
+     * setRadioBackServiceOn, because a session that is not the source is not the
+     * one to be turning the vendor's back service off either.
      *
      * @return what it managed, for the diagnostics log. Never null.
      */
     static synchronized String releaseSource() {
         if (ctx == null) {
             return "no context";
+        }
+        int src = mcuSource();
+        if (src != 4) {
+            return "skipped, FM is not the MCU source (mcu_current_source=" + src + ")";
         }
         RadioFeature r;
         synchronized (LOCK) { r = radio; }
@@ -899,6 +954,18 @@ public final class NwdBridge {
     }
 
     // There is no stopIlluminationWatch, on purpose. See disconnect().
+    //
+    // THERE IS NO stopSleepWatch EITHER, and that one needs its own reason,
+    // because unlike illumination this receiver COMMANDS the MCU. The source
+    // claim is a broadcast and not a property of the binder: a session whose
+    // tuner has dropped — a vendor-service death, a connect that timed out — can
+    // still be the reason mcu_current_source reads 4, and this watch is the only
+    // thing that hands FM back before the unit sleeps. Tearing it down with the
+    // tuner would lose exactly that release, on the runs that need it most.
+    // What made the receiver dangerous was never its lifetime but that
+    // releaseSource fired blind; it now returns early unless FM really is the
+    // MCU's source, so a SCREEN_OFF arriving while Bluetooth or Android Auto is
+    // playing touches nothing.
 
     /** Android's night flag right now, as a readable string. */
     private static String uiModeNight() {
@@ -990,8 +1057,26 @@ public final class NwdBridge {
     private static volatile boolean rdsRunning;
     private static Thread rdsThread;
 
+    /**
+     * Restart guard, the same one {@link #levelGen} carries and for the same
+     * reason. A bare boolean races: stopRdsPump sets it false and interrupts,
+     * startRdsPump sets it true again, and an outgoing thread that has not
+     * re-checked in between simply carries on. The interrupt is no help by
+     * itself here — it can land inside the vendor reflection below, whose
+     * {@code catch (Throwable)} swallows it — so the flag is the only thing that
+     * stops T1, and a re-bind flipping it back to true leaves TWO pumps polling
+     * the transport every 90ms and double-feeding the decoder. Each thread
+     * captures a generation and exits when it is no longer the current one.
+     *
+     * <p>Bumped under this class's own monitor rather than {@code LOCK}, because
+     * unlike startLevelWatch both accessors here are {@code static
+     * synchronized}.
+     */
+    private static volatile int rdsGen;
+
     private static synchronized void startRdsPump() {
         if (rdsThread != null) return;
+        final int myGen = ++rdsGen;
         rdsRunning = true;
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
@@ -1011,7 +1096,7 @@ public final class NwdBridge {
                 // a null data read is just a poll with nothing in it.
                 boolean armed = false;
                 int attempts = 0;
-                while (rdsRunning) {
+                while (rdsRunning && rdsGen == myGen) {
                     if (!armed) {
                         boolean ok;
                         try {
@@ -1053,6 +1138,7 @@ public final class NwdBridge {
 
     private static synchronized void stopRdsPump() {
         rdsRunning = false;
+        rdsGen++;
         if (rdsThread != null) rdsThread.interrupt();
         rdsThread = null;
     }
@@ -1076,14 +1162,37 @@ public final class NwdBridge {
     // invocation, at the current raw frequency.
     //
     // IT IS STILL A COMMAND, not a read. Hence: its own thread, never a shared
-    // one; a hard floor on the interval; and it stops the moment FM is not the
-    // MCU's current source, so it can never retune a front end that Bluetooth or
-    // Android Auto is using. The vendor rate-limits its own comparable read to
-    // 900ms; this runs far below that.
+    // one; a hard floor on the interval for the periodic watch; and the SOURCE
+    // GATE, which lives INSIDE seekHere rather than on the watch's tick, so it
+    // can never retune a front end that Bluetooth or Android Auto is using.
+    //
+    // IT USED TO SIT ONLY ON THE TICK, and that left the other caller wide
+    // open: readLevelNow is armed by src/app.rs on EVERY TunerEvent::Frequency
+    // — including the vendor's own retunes — with a first read at 1s and two
+    // retries a second apart. Switch the unit to Bluetooth, let the vendor move
+    // the front end, and three raw seek() commands landed on a source this app
+    // does not own. The FM_MANAGER note above records what that class of call
+    // did on this unit: it "cut the sound instantly".
+    //
+    // The vendor rate-limits its own comparable read to 900ms; this runs far
+    // below that.
     private static final long LEVEL_MIN_INTERVAL_MS = 5000L;
 
     private static volatile boolean levelRunning;
-    private static Thread levelThread;
+
+    /**
+     * VOLATILE, like the two fields either side of it. Unlike the RDS pair,
+     * neither startLevelWatch nor stopLevelWatch is {@code synchronized}, and
+     * this handle is written and read from at least three threads: the Slint
+     * native thread through Rust, the main thread through onServiceDisconnected,
+     * and whichever thread runs disconnect. A stale null read costs the
+     * {@code interrupt()}, and the outgoing thread then sleeps out its whole
+     * interval — LEVEL_POLL_MS is 20s (src/signal.rs) — before it notices.
+     * {@link #levelGen} still bounds that to one wasted sleep rather than a
+     * second thread commanding the tuner, which is why this is a latency fix
+     * and not a correctness one.
+     */
+    private static volatile Thread levelThread;
 
     /**
      * Restart guard. A bare boolean races: stop sets it false, start sets it
@@ -1105,6 +1214,13 @@ public final class NwdBridge {
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
                 while (levelRunning && levelGen == myGen) {
+                    // seekHere gates itself on the MCU source now, so this test
+                    // is not what makes the tick SAFE — it is what keeps a
+                    // parked watch QUIET. Without it, every tick on another
+                    // source would report a rejection, and each rejection costs
+                    // a line in the 600-line ring plus a retry timer in
+                    // src/app.rs. seekHere's gate is the authoritative one; if
+                    // the two ever disagree, it is the one that decides.
                     if (mcuSource() == 4) seekHere();
                     try { Thread.sleep(gap); } catch (InterruptedException e) { break; }
                 }
@@ -1126,6 +1242,10 @@ public final class NwdBridge {
     /**
      * One reading now, off the caller's thread — used on retune so the meter
      * does not sit on the previous station's level until the next tick.
+     *
+     * No gate of its own and no interval floor: it takes seekHere's source gate
+     * and SEEK_LOCK, which is what keeps a retune this app did not ask for from
+     * commanding another source's front end.
      */
     public static void readLevelNow() {
         Thread t = new Thread(new Runnable() {
@@ -1142,9 +1262,21 @@ public final class NwdBridge {
      * Reads the frequency live from the binder every time — never from cached
      * state, because a stale number would turn this into a real retune, which is
      * the one thing it must not be.
+     *
+     * Gated on the MCU source, HERE rather than at the call sites, so both the
+     * periodic watch and readLevelNow inherit it. See the block above.
      */
     private static void seekHere() {
         synchronized (SEEK_LOCK) {
+            // NOT FM'S FRONT END, NOT OUR SEEK. Taken first, inside the lock, so
+            // no caller can reach the reflection below without passing it.
+            // Reported rather than dropped: this unit has no adb, so a level
+            // that simply stops updating is indistinguishable from a broken one
+            // in the only place a driver can look.
+            if (mcuSource() != 4) {
+                safeLevel(0, 0, 0, false, "FM is not the MCU source");
+                return;
+            }
             RadioFeature r;
             synchronized (LOCK) { r = radio; }
             if (r == null) { safeLevel(0, 0, 0, false, "not connected"); return; }
