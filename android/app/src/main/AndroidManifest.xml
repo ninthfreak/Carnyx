@@ -123,6 +123,25 @@
         <package android:name="net.osmand" />
         <package android:name="net.osmand.huawei" />
         <package android:name="net.osmand.dev" />
+        <!--
+          THE OVERLAY GRANT SCREEN, declared for the probe and not for a feature.
+          The keep-alive row asks whether anything on this ROM handles
+          MANAGE_OVERLAY_PERMISSION, because a head unit with a stripped Settings
+          app gives a driver no way to grant "Display over other apps" — and the
+          overlay route, which is the one answer to both the invisible
+          notification and the toast that API 30 stops allowing, is then closed.
+
+          From API 30 `queryIntentActivities` is filtered like every other
+          package lookup, so without this the probe would report "no grant
+          screen" on a unit that has one. A false negative that reads as a
+          finding is exactly what the package entries above exist to prevent.
+
+          An <intent> rather than a <package> because the handler's package name
+          differs between ROMs; what is being asked is who answers the action.
+        -->
+        <intent>
+            <action android:name="android.settings.action.MANAGE_OVERLAY_PERMISSION" />
+        </intent>
     </queries>
 
     <application

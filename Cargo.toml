@@ -201,6 +201,23 @@ name = "net.osmand.huawei"
 [[package.metadata.android.queries.package]]
 name = "net.osmand.dev"
 
+# ── ONE DELIBERATE DIVERGENCE FROM THE GRADLE MANIFEST ───────────────────────
+#
+# That file also declares a `<queries><intent>` for
+# `android.settings.action.MANAGE_OVERLAY_PERMISSION`, which the keep-alive probe
+# needs so its "is there a grant screen" reading is not silently emptied by API
+# 30+ package visibility. There is no equivalent here, and the entry is NOT
+# guessed at: `ndk_build::manifest`'s queries type is what this stanza is
+# deserialized through, it has no `deny_unknown_fields` — the note above records
+# that a wrong key is dropped without a word — and whether it accepts an intent
+# form has not been verified the way the `package` form was.
+#
+# The cost is bounded and lands only where it does not matter. The probe is a
+# DIAGNOSTICS row, the divergence shows up only on API 30+, and the shipping
+# build is Gradle. A cargo-apk build on a newer unit would read "no grant
+# screen" when there is one — which is why the probe's own line names package
+# visibility as the alternative explanation rather than stating the finding flat.
+
 # LOCATION. The nearby-station picker sorts by distance and the face carries a
 # satellite glyph, and neither can be honest without a fix — today both run on
 # `fake::FakeLocation`, which is pinned to Madison.
