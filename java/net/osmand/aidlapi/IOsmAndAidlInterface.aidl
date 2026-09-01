@@ -14,14 +14,14 @@
 // EVERY one of which `aidl` would need declared and `javac` would need
 // implemented — for methods this app never calls. So the shape is kept and the
 // payloads are not: 99 slots, in upstream's order, with real signatures on the
-// two we invoke and `void reservedNN()` on the rest. A reserved slot generates
+// three we invoke and `void reservedNN()` on the rest. A reserved slot generates
 // a proxy method that is never called and an `onTransact` case that is never
 // reached; what it does is hold the numbering.
 //
 // ── HOW THE NUMBERING IS CHECKED ─────────────────────────────────────────────
 //
 // `tools/check-osmand-aidl.sh` re-fetches upstream's interface and asserts that
-// this file still has the same method COUNT and that our two are still at the
+// this file still has the same method COUNT and that our three are still at the
 // same indices. A method inserted upstream ABOVE ours shifts every id below it
 // and would otherwise be a silent wrong call on a head unit with no adb — which
 // is the same class of failure `tools/check-jni.sh` exists for.
@@ -47,6 +47,7 @@ import net.osmand.aidlapi.navigation.ANavigationUpdateParams;
 import net.osmand.aidlapi.navigation.ANavigationVoiceRouterMessageParams;
 import net.osmand.aidlapi.IOsmAndAidlCallback;
 import net.osmand.aidlapi.info.AppInfoParams;
+import net.osmand.aidlapi.customization.PreferenceParams;
 
 interface IOsmAndAidlInterface {
 
@@ -150,7 +151,12 @@ interface IOsmAndAidlInterface {
     void reserved91();  // upstream `getText`
     void reserved92();  // upstream `reloadIndexes`
     void reserved93();  // upstream `setPreference`
-    void reserved94();  // upstream `getPreference`
+    // THE THIRD REAL SIGNATURE, and the only `inout` one in this file — the
+    // params object goes out carrying an id and comes back carrying the value.
+    // Carnyx reads exactly one preference through it, `default_metric_system`,
+    // which is the miles-or-kilometres choice the driver already made inside
+    // OsmAnd and which §4.9 otherwise has to guess at from the phone's locale.
+    boolean getPreference(inout PreferenceParams params);
     void reserved95();  // upstream `registerForLogcatMessages`
     void reserved96();  // upstream `setZoomLimits`
     void reserved97();  // upstream `addWidgetGroup`

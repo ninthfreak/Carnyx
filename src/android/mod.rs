@@ -656,9 +656,13 @@ pub fn ingest_note(line: String) {
 /// back: the thread captures its own and exits the moment it is no longer the
 /// current one.
 ///
-/// Here it also covers the thing a `boolean` could not: this poll has no way to
-/// interrupt its own sleep, so the check has to be something the thread asks
-/// for, on every slice. See [`POLL_SLICE`].
+/// What the generation does NOT solve is the sleep. This poll has no way to
+/// interrupt its own, so whatever it checks — generation or boolean — it has to
+/// ask for it on a slice rather than be told; that is [`POLL_SLICE`]'s job, not
+/// this counter's. The two are separate fixes for separate faults and both are
+/// needed: slicing without a generation still lets a restarted poll double up,
+/// and a generation without slicing still leaves a stopped one asleep for a full
+/// interval.
 static POLL_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How finely the poll's sleep is sliced.
@@ -949,6 +953,19 @@ pub fn country_code() -> String {
 #[cfg(not(target_os = "android"))]
 pub fn country_code() -> String {
     String::new()
+}
+
+/// Which units OsmAnd says the driver chose. See [`nav::metric_system`].
+#[cfg(target_os = "android")]
+pub fn osmand_metric_system() -> i32 {
+    nav::metric_system()
+}
+
+/// The host has no OsmAnd to ask, so every shot renders the fallback. See the
+/// Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn osmand_metric_system() -> i32 {
+    0
 }
 
 /// What the wake receiver did on the way up, and forget it. See [`wake`].

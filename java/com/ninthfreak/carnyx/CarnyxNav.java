@@ -15,6 +15,7 @@ import android.util.Log;
 
 import net.osmand.aidlapi.IOsmAndAidlCallback;
 import net.osmand.aidlapi.IOsmAndAidlInterface;
+import net.osmand.aidlapi.customization.PreferenceParams;
 import net.osmand.aidlapi.gpx.AGpxBitmap;
 import net.osmand.aidlapi.info.AppInfoParams;
 import net.osmand.aidlapi.logcat.OnLogcatMessageParams;
@@ -580,6 +581,107 @@ public final class CarnyxNav {
         return b == null ? null : b.getString(key);
     }
 
+    /**
+     * OsmAnd's own miles-or-kilometres choice, encoded for {@code units.rs}.
+     *
+     * <p>0 unknown, then upstream's {@code MetricsConstants} in DECLARATION
+     * ORDER: 1 {@code KILOMETERS_AND_METERS}, 2 {@code MILES_AND_FEET},
+     * 3 {@code MILES_AND_METERS}, 4 {@code MILES_AND_YARDS},
+     * 5 {@code NAUTICAL_MILES_AND_METERS}, 6 {@code NAUTICAL_MILES_AND_FEET}.
+     *
+     * <p>AN ENCODING, NOT A DECISION, and the difference is the whole reason
+     * this is a number and not a verdict. {@code units.rs} says Java answers one
+     * fact and Rust decides what it means, because a decision written in Java
+     * cannot be tested on a machine with no head unit — so what crosses here is
+     * "which of the six constants OsmAnd named", losslessly, and every question
+     * about what {@code MILES_AND_YARDS} should draw is answered on the Rust
+     * side where there are tests.
+     *
+     * <p>An int and not the string: this is read on every navigation publish,
+     * which is once a second while a route is running, and a {@code jint} costs
+     * no allocation on either side of the seam where a {@code String} costs one
+     * per call for a value that changes about never.
+     */
+    private static volatile int metricSystem;
+
+    /**
+     * Ask OsmAnd which units the driver chose. Called with the lock held.
+     *
+     * <p>THIS IS THE THING §4.9 SAID COULD NOT BE DONE. The spec wrote the
+     * locale guess because "OsmAnd's own unit setting is not exposed over the
+     * API", and that is true of everything the navigation surface returns:
+     * {@code AppInfoParams} carries {@code leftDistance} and the turn bundle
+     * carries {@code next_turn_distance}, both bare integer metres with no unit
+     * beside them and no getter to ask. What the spec missed is that OsmAnd
+     * exposes its ENTIRE settings store separately, through
+     * {@code getPreference}, and the units live there under
+     * {@code default_metric_system}.
+     *
+     * <p>THE READ CAN LEGITIMATELY FAIL AND THAT IS NOT AN ERROR. Upstream's
+     * {@code getPreference} answers {@code false} for a preference it will not
+     * export, and older OsmAnd builds do not have the method at all — slot 94
+     * would then be whatever that build has there, which is why the interface
+     * file holds every slot. Either way {@code metricSystem} stays 0 and the
+     * Rust side falls back, so a failure costs the driver nothing but the guess
+     * they had before.
+     *
+     * <p>NO APP MODE IS SET, which means OsmAnd answers for the profile the
+     * driver is actually using rather than for one this code names. Upstream
+     * reads {@code appModeKey} and only overrides when it is non-null.
+     */
+    private static void readMetricSystem() {
+        IOsmAndAidlInterface api = osmand;
+        if (api == null) {
+            return;
+        }
+        try {
+            PreferenceParams p = new PreferenceParams("default_metric_system");
+            if (!api.getPreference(p)) {
+                safeNote("nav: OsmAnd declined the units preference; using the locale");
+                return;
+            }
+            int code = encodeMetrics(p.getValue());
+            metricSystem = code;
+            safeNote("nav: OsmAnd units = " + p.getValue() + " (" + code + ")");
+        } catch (Throwable t) {
+            // A build without slot 94, a dead binder, or a parcel this side
+            // spelled wrong. All three end the same way and all three are worth
+            // a line, because the alternative is a driver seeing kilometres and
+            // having nothing anywhere that says why.
+            safeNote("nav: could not read OsmAnd's units — " + why(t));
+        }
+    }
+
+    /**
+     * One {@code MetricsConstants} name to its number. See {@link #metricSystem}.
+     *
+     * <p>MATCHED ON THE CONSTANT'S NAME because that is what crosses the wire:
+     * upstream stores this as an {@code EnumStringPreference}, whose
+     * {@code toString} is {@code Enum.name()}, so the value is the identifier
+     * itself and not an ordinal. An ordinal would have been the fragile read —
+     * a constant inserted upstream would renumber every one after it — and this
+     * cannot break that way, it can only fail to recognise a name that is new.
+     */
+    private static int encodeMetrics(String name) {
+        if (name == null) {
+            return 0;
+        }
+        switch (name) {
+            case "KILOMETERS_AND_METERS": return 1;
+            case "MILES_AND_FEET": return 2;
+            case "MILES_AND_METERS": return 3;
+            case "MILES_AND_YARDS": return 4;
+            case "NAUTICAL_MILES_AND_METERS": return 5;
+            case "NAUTICAL_MILES_AND_FEET": return 6;
+            default: return 0;
+        }
+    }
+
+    /** What OsmAnd last said about units, or 0. See {@link #metricSystem}. */
+    public static int metricSystem() {
+        return metricSystem;
+    }
+
     private static final ServiceConnection CONN = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
@@ -587,6 +689,10 @@ public final class CarnyxNav {
             synchronized (CarnyxNav.class) {
                 binding = false;
                 osmand = IOsmAndAidlInterface.Stub.asInterface(service);
+                // BEFORE `subscribe`, so the units are settled before the first
+                // turn can arrive. A turn drawn in the wrong units and corrected
+                // a second later is worse than one drawn a beat late.
+                readMetricSystem();
                 note = subscribe();
             }
             safeNote("nav: " + note);
@@ -603,6 +709,12 @@ public final class CarnyxNav {
                 // afresh too rather than inheriting this session's backoff.
                 resubscribeGap = 0L;
                 resubscribeReported = false;
+                // `metricSystem` IS DELIBERATELY NOT CLEARED HERE. The driver's
+                // choice of miles or kilometres does not stop being true because
+                // the binder died, and clearing it would drop the display back
+                // to the locale guess — a units flip mid-drive, on a disconnect
+                // the driver never sees. Replaced on the next connect, or it
+                // stands.
             }
             // THE FACE HAS TO BE TOLD, because the updates simply stop and
             // `Nav::EXPIRY` would clear the turn twelve seconds later with no
@@ -655,9 +767,15 @@ public final class CarnyxNav {
      * Register the TURNS channel and say what happened. Called with the lock held.
      *
      * <p>ITS OWN METHOD SO THE RECOVERY CAN CALL ONE HALF. Every call mints a
-     * fresh callback id upstream and adds a fresh route-data listener that
-     * nothing ever removes, so a channel that is already live must not be
-     * re-registered — see {@link #mendSubscriptions}.
+     * fresh callback id upstream and adds a fresh route-data listener. A
+     * listener CAN be removed — that is what {@link #stop} does, re-calling
+     * this same AIDL method with the id and {@code subscribeToUpdates(false)},
+     * which reaches upstream's {@code unregisterFromUpdates(id)}. But removing
+     * one needs its id, and {@link #navCallbackId} only ever holds the LATEST:
+     * re-registering a channel that is already live overwrites the id of the
+     * listener still attached and leaves it running with nothing able to name
+     * it again. So a live channel must not be re-registered — see
+     * {@link #mendSubscriptions}.
      *
      * <p>THE ID IS CLEARED ON A THROW rather than left as it was: no id came
      * back, so there is nothing for {@link #stop} to hand OsmAnd, and the

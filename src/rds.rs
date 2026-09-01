@@ -448,11 +448,12 @@ impl RdsDecoder {
 
     /// The same, from the four blocks themselves.
     ///
-    /// THE REAL BODY. An all-zero group is "no group this poll" and is refused
-    /// here as well as in [`push`](Self::push), because the two entries have to
-    /// agree about what a group IS — the hex path would otherwise reject
-    /// `"0000000000000000"` while this one counted it as a well-formed group and
-    /// ran the whole consensus over it.
+    /// THE REAL BODY, and the ONLY place an all-zero group — "no group this
+    /// poll" — is refused. [`push`](Self::push) deliberately has no check of its
+    /// own: sixteen `'0'` characters parse to four zero blocks and arrive here,
+    /// so both entries meet the rule by passing through this one. A second copy
+    /// in the hex path would be a second rule to keep in step, and the two could
+    /// then disagree about what a group IS.
     ///
     /// There is no length or digit check to make: four `u16`s cannot be
     /// malformed. That is the only validation the string entry adds.
