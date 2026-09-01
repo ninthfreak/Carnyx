@@ -88,6 +88,27 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+      DISPLAY OVER OTHER APPS, for the station pop-up's overlay rendering.
+      `CarnyxOverlay` draws a TYPE_APPLICATION_OVERLAY window because the other
+      two renderings have ceilings it does not: this ROM never displays the
+      notification, and the custom toast stops being allowed at API 30 and could
+      never carry the logo at all.
+
+      A "SPECIAL" PERMISSION AND NOT A RUNTIME ONE, so the note above about
+      nobody being there to tap Allow does not apply — there is no dialog to
+      raise. From API 23 the driver switches Carnyx on at Settings' "Display over
+      other apps" screen and nowhere else.
+
+      DECLARING IT HERE GRANTS NOTHING, and it is still load-bearing: without the
+      declaration the app does not appear on that screen at all and
+      `Settings.canDrawOverlays()` can never answer true. The settings row "Allow
+      drawing over other apps" is what sends the driver there, and the
+      keep-alive probe's `overlay:` lines say whether the screen exists on a
+      given ROM.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
       PACKAGE VISIBILITY, load-bearing rather than defensive. From targetSdk 30
       a package cannot see another it has not declared, and the filtering is
       SILENT: `resolveService` returns null and `bindService` returns false on a

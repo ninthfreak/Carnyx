@@ -290,7 +290,35 @@ public final class CarnyxAlert {
         } catch (Throwable t) {
             posted = "notify threw: " + why(t);
         }
-        return posted + ", " + toast(title, text);
+        // THE OVERLAY FIRST, THE TOAST AS THE FALLBACK, and only ONE of the two
+        // is ever raised. Both draw the same card in the same place, so showing
+        // both would stack two identical pop-ups on top of each other.
+        //
+        // The overlay is preferred because it has neither of the toast's
+        // ceilings: it carries the logo, and it keeps its size and its position
+        // on API 30+, where a custom toast is refused and the platform's own is
+        // small, grey and at the bottom. It is also the only one of the three
+        // renderings that works when the driver has never granted a permission
+        // this app cannot ask for with a dialog — which is why the toast stays
+        // rather than being replaced.
+        String seen = CarnyxOverlay.show(ctx, title, text, logoPath);
+        if (seen.startsWith("no overlay")) {
+            seen = seen + ", " + toast(title, text);
+        }
+        return posted + ", " + seen;
+    }
+
+    /**
+     * Send the driver to Android's "Display over other apps" screen.
+     *
+     * <p>See {@link CarnyxOverlay} for what the permission buys and why no
+     * dialog can ask for it. Routed through this class because it is the pop-up's
+     * single entry point from Rust — the JNI seam knows one class, not three.
+     *
+     * @return one line for the diagnostics log, never null.
+     */
+    public static synchronized String requestOverlayPermission() {
+        return CarnyxOverlay.requestPermission(ctx, activity == null ? null : activity.get());
     }
 
     /**
@@ -508,6 +536,11 @@ public final class CarnyxAlert {
                 // Cancelling something that is not there is not a fault.
             }
         }
+        // AND THE OVERLAY, which the toast never needed. A toast expires on its
+        // own and there is no handle to take it down early; this window sits
+        // there until its timer runs out, and the driver coming back to the face
+        // is the one case where the answer is already on screen behind it.
+        CarnyxOverlay.hide(ctx);
     }
 
     /**
@@ -551,7 +584,20 @@ public final class CarnyxAlert {
      * dial regardless, and the mark was only ever beside them.
      */
     private static Bitmap decode(String path) {
-        if (path == null || path.isEmpty()) {
+        return decodeLogo(path, ICON_DP);
+    }
+
+    /**
+     * The same, at a caller's own target size.
+     *
+     * <p>PACKAGE-PRIVATE FOR {@link CarnyxOverlay}, which draws the mark beside
+     * 28sp words on a card of its own rather than into the fixed square a
+     * notification's large icon gets, and so wants a different {@code targetDp}.
+     * Splitting the size out beat copying thirty lines of two-pass decoding into
+     * a second class, which is where the two would have drifted.
+     */
+    static Bitmap decodeLogo(String path, float targetDp) {
+        if (path == null || path.isEmpty() || ctx == null) {
             return null;
         }
         try {
@@ -562,7 +608,7 @@ public final class CarnyxAlert {
             if (longest <= 0) {
                 return null;
             }
-            int want = Math.round(ICON_DP * ctx.getResources().getDisplayMetrics().density);
+            int want = Math.round(targetDp * ctx.getResources().getDisplayMetrics().density);
             int sample = 1;
             while (longest / (sample * 2) >= want) {
                 sample *= 2;

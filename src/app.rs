@@ -5337,6 +5337,20 @@ impl App {
                     s.diag_status = line;
                     None
                 }
+                // ── ALLOW DRAWING OVER OTHER APPS ─────────────────────────────
+                //
+                // Inline for the same reason as the row above, and it opens a
+                // Settings screen rather than raising a dialog: there IS no
+                // dialog for a special permission. The app comes back to the
+                // foreground when the driver returns, and nothing here waits for
+                // that — the next station change either draws an overlay or says
+                // "not permitted", which is the answer either way.
+                settings::Action::AskOverlayPermission => {
+                    let line = crate::android::request_overlay_permission();
+                    s.settings.log.push(&stamp(), &line);
+                    s.diag_status = line;
+                    None
+                }
                 // ── WHAT COULD KEEP US ALIVE THROUGH A SLEEP ──────────────────
                 //
                 // The report is a handful of lines and they go into the log
@@ -7800,6 +7814,7 @@ mod tests {
             settings::Action::ProbeKeepAlive,
             settings::Action::ProbeStockRadio,
             settings::Action::AskNotifyPermission,
+            settings::Action::AskOverlayPermission,
         ] {
             assert!(seen.contains(&action), "{action:?} has no row");
         }
@@ -7832,6 +7847,28 @@ mod tests {
         let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
         assert!(
             last.contains("notification permission"),
+            "the tap has to leave its own line, and left: {last:?}"
+        );
+    }
+
+    /// THE OVERLAY ROW LEAVES A LINE TOO, AND ON EVERY BUILD.
+    ///
+    /// Its sibling above covers a permission that does not exist below API 33;
+    /// this one covers a permission that exists on every Android this app
+    /// supports and that NO version will show a dialog for. So there is no
+    /// "not needed" answer here — the row either opens a screen or says the ROM
+    /// has none, and on the host it says neither, which still has to be a line.
+    #[test]
+    fn the_overlay_row_leaves_a_line_even_where_there_is_no_window_manager() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("overlayperm");
+        driver.drain_events();
+
+        ui.invoke_settings_pick_diag_action(row_index(&driver, "Allow drawing over other apps"));
+
+        let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
+        assert!(
+            last.contains("overlay permission"),
             "the tap has to leave its own line, and left: {last:?}"
         );
     }

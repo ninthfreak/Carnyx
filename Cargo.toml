@@ -269,6 +269,23 @@ name = "android.permission.ACCESS_FINE_LOCATION"
 name = "android.permission.WRITE_EXTERNAL_STORAGE"
 max_sdk_version = 32
 
+# DISPLAY OVER OTHER APPS, and it IS declared here — unlike the four below, which
+# are not. The difference is that the overlay needs no manifest component:
+# `CarnyxOverlay` lives in the runtime dex, adds its window through
+# `WindowManager` from a plain `Context`, and works identically under both
+# packagers. The foreground permissions are absent because cargo-apk cannot
+# declare the SERVICE that would use them, which is a fact about this packager
+# rather than a policy about permissions.
+#
+# It grants nothing on its own. From API 23 no dialog can request this, and the
+# driver switches Carnyx on at Settings' "Display over other apps" screen; what
+# the declaration buys is appearing on that screen at all, and letting
+# `Settings.canDrawOverlays()` ever answer true. So it is NOT the dead permission
+# the note below warns about: there is code that uses it, and a settings row that
+# sends the driver to grant it.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.SYSTEM_ALERT_WINDOW"
+
 # WHAT CANNOT BE DECLARED HERE, AND WHAT IT COSTS.
 #
 # CarFM survives being switched away from. Carnyx does not — come back and the

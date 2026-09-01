@@ -188,6 +188,16 @@ pub enum Action {
     /// one. Present on every unit rather than hidden below 33, because a row
     /// that only appears on hardware nobody here owns is a row nobody can check.
     AskNotifyPermission,
+    /// Send the driver to Android's "Display over other apps" screen. See
+    /// `CarnyxOverlay`.
+    ///
+    /// THE SAME SHAPE AS [`Action::AskNotifyPermission`] AND A DIFFERENT REASON.
+    /// That one covers a permission this unit does not have and a newer one
+    /// would; this covers one EVERY Android since 23 needs and none of them will
+    /// show a dialog for. There is no version at which the overlay pop-up works
+    /// without the driver visiting a Settings screen, so this row is not a
+    /// contingency — it is how the feature is turned on.
+    AskOverlayPermission,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -220,6 +230,14 @@ pub fn diag_actions() -> Vec<DiagAction> {
             label: "Ask for notification permission".into(),
             divider_above: false,
             action: Action::AskNotifyPermission,
+        },
+        // Beside the notification request because the two are the same errand —
+        // a permission the app cannot grant itself — and this one is what the
+        // station pop-up actually needs on every Android, not just a newer one.
+        DiagAction {
+            label: "Allow drawing over other apps".into(),
+            divider_above: false,
+            action: Action::AskOverlayPermission,
         },
         DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
     ]
@@ -600,12 +618,13 @@ mod tests {
                 "What could keep Carnyx alive through sleep",
                 "Where the stock radio app can be intercepted",
                 "Ask for notification permission",
+                "Allow drawing over other apps",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, false, true],
+            [false, true, false, false, false, true],
             "the log well runs into the first row; rules open the platform rows and close them"
         );
         // THE ONLY ROW THAT CHANGES ANYTHING SITS LAST OF THE THREE, so a
