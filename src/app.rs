@@ -5318,6 +5318,25 @@ impl App {
                     s.settings.log.clear();
                     None
                 }
+                // ── ASK FOR THE NOTIFICATION PERMISSION ───────────────────────
+                //
+                // INLINE, NOT DEFERRED LIKE THE TWO PROBES. Those hop to a timer
+                // because they walk the package manager and would hitch the
+                // panel; this is one `checkSelfPermission` and at most one
+                // `requestPermissions`, neither of which reads anything.
+                //
+                // THE ANSWER IS ALWAYS A LINE, including the three that are not a
+                // dialog — below API 33, already granted, and no Activity to ask
+                // with. A row that can silently do nothing is the failure the
+                // five removed diagnostics rows had, and this one CAN do nothing
+                // on the unit it was written on, where the permission does not
+                // exist.
+                settings::Action::AskNotifyPermission => {
+                    let line = crate::android::request_notification_permission();
+                    s.settings.log.push(&stamp(), &line);
+                    s.diag_status = line;
+                    None
+                }
                 // ── WHAT COULD KEEP US ALIVE THROUGH A SLEEP ──────────────────
                 //
                 // The report is a handful of lines and they go into the log
@@ -7780,9 +7799,41 @@ mod tests {
             settings::Action::ClearLog,
             settings::Action::ProbeKeepAlive,
             settings::Action::ProbeStockRadio,
+            settings::Action::AskNotifyPermission,
         ] {
             assert!(seen.contains(&action), "{action:?} has no row");
         }
+    }
+
+    /// THE PERMISSION ROW LEAVES A LINE ON A BUILD THAT CANNOT ASK.
+    ///
+    /// The host has no permission model and the row still has to say something —
+    /// a tap that writes nothing reads as a broken row, which is the failure the
+    /// five removed diagnostics rows had and the reason
+    /// `the_keep_alive_probe_leaves_a_line_even_where_it_cannot_run` exists
+    /// beside this.
+    ///
+    /// It also pins the row as INLINE. The two probes defer through
+    /// `pending_probe` and a timer, so their line is not there when the tap
+    /// returns; this one's must be, and asserting on the log immediately after
+    /// the tap is what says so.
+    #[test]
+    fn the_permission_row_leaves_a_line_even_where_it_cannot_ask() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("notifyperm");
+        driver.drain_events();
+
+        ui.invoke_settings_pick_diag_action(row_index(&driver, "Ask for notification permission"));
+
+        // IMMEDIATELY, WITH NO `drain_events` AND NO TIMER. That is the half of
+        // this that pins the row as inline: the two probes defer through
+        // `pending_probe`, and if this one were ever moved onto that path its
+        // line would not be here yet.
+        let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
+        assert!(
+            last.contains("notification permission"),
+            "the tap has to leave its own line, and left: {last:?}"
+        );
     }
 
     /// Where a labelled diagnostics row currently sits, so a test names the row

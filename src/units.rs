@@ -159,15 +159,22 @@ impl Units {
 /// What to draw when nothing can be read: not [`Units::Metric`], which is what
 /// an unreadable locale used to mean.
 ///
-/// ── CHOSEN BY THE OWNER, AND IT OVERRIDES THE TABLE'S OWN REASONING ─────────
+/// ── THIS APP IS NORTH AMERICAN BY DESIGN, WHICH SETTLES IT ──────────────────
 ///
 /// [`Units::MILES`]'s note argues metric is the safer default because a wrong
-/// guess toward metric is the smaller error. That argument is about a driver who
-/// could be anywhere. This unit is not anywhere: it is one head unit, in one
-/// car, in the United States, whose owner asked for imperial in as many words
-/// after watching it draw kilometres for a drive OsmAnd was calling in miles.
-/// A "safer" default that is wrong on the only unit running the code is not
-/// safer.
+/// guess toward metric is the smaller error. That argument is about an app whose
+/// driver could be anywhere. This one's cannot: the station database is the
+/// FCC's, and `crate::stations` can only answer questions about the United
+/// States, so a Carnyx running anywhere else has already lost a larger feature
+/// than this one. A default that is wrong for every user the app can actually
+/// serve is not the safer default.
+///
+/// NOT A STATEMENT ABOUT ONE HEAD UNIT. An earlier draft of this note justified
+/// the same constant as "one head unit, in one car, in the United States", which
+/// is the wrong reason for a right answer and the kind of reasoning that ends up
+/// designing for a single device. The app targets Android head units generally;
+/// what narrows it to imperial is the FCC dependency, not whose dashboard it is
+/// sitting in.
 ///
 /// It applies ONLY where the locale is silent. A unit that reports `DE` still
 /// gets kilometres, because that is a real answer and this is what stands in for

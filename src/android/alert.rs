@@ -145,6 +145,35 @@ pub fn post(title: &str, text: &str, logo: &str) -> String {
     .unwrap_or_else(|e| format!("JNI failure: {e}"))
 }
 
+/// Ask for the notification permission API 33 introduced.
+///
+/// ON DEMAND AND NEVER AT START-UP. `CarnyxAlert.requestPostNotifications` has
+/// the reasoning: the standing rule against raising a dialog on a dashboard is
+/// about asking unprompted, mid-drive, and this is a settings row a parked
+/// driver taps. Below API 33 the Java side answers "not needed" without doing
+/// anything, so calling it on any unit is safe.
+pub fn request_post_notifications() -> String {
+    let Some(class) = CLASS_REF.get() else {
+        return "no alert class in this build".into();
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return "no JVM".into();
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
+        let out = env
+            .call_static_method(
+                class,
+                jni_str!("requestPostNotifications"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let out = JString::cast_local(env, out)?;
+        out.try_to_string(env)
+    })
+    .unwrap_or_else(|e| format!("JNI failure: {e}"))
+}
+
 /// Take the pop-up down — the driver is back on the face and can see the dial.
 pub fn clear() {
     let Some(class) = CLASS_REF.get() else {

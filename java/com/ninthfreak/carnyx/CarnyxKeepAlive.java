@@ -325,13 +325,25 @@ public final class CarnyxKeepAlive {
             // drive has already opened the neighbours, which clears the flag on
             // every one of them, and the reading is then empty for a reason that
             // has nothing to do with the sleep.
+            // AND THE API-30 BLIND SPOT IS NAMED, not left to be inferred from a
+            // zero. From API 30 `getInstalledApplications` returns only what the
+            // manifest's <queries> already names, which here is the tuner, the
+            // stock radio and OsmAnd — so on a newer unit `third` collapses to a
+            // handful and a zero below means "cannot see" rather than "nothing
+            // is stopped". The section beside this one carries the same warning
+            // and this one shipped without it.
+            String blind = Build.VERSION.SDK_INT >= 30
+                    ? " NOTE: API 30+ hides every package this app has not declared,"
+                      + " so this count is only over what <queries> names."
+                    : "";
             out.add("  stopped: " + stopped + " of " + third + " third-party packages"
                     + (stopped == 0
                         ? " — none right now, which only means something if this is"
                           + " the first launch after a wake and nothing else has been"
                           + " opened yet. Otherwise it is too late to tell."
                         : " — the vendor cleaner force-stops packages, which is why"
-                          + " no broadcast of any kind reaches them"));
+                          + " no broadcast of any kind reaches them")
+                    + blind);
         } catch (Throwable t) {
             out.add("  stopped: unreadable (" + t.getClass().getSimpleName() + ")");
         }
