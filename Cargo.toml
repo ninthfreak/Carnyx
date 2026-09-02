@@ -201,6 +201,23 @@ name = "net.osmand.huawei"
 [[package.metadata.android.queries.package]]
 name = "net.osmand.dev"
 
+# ── ONE DELIBERATE DIVERGENCE FROM THE GRADLE MANIFEST ───────────────────────
+#
+# That file also declares a `<queries><intent>` for
+# `android.settings.action.MANAGE_OVERLAY_PERMISSION`, which the keep-alive probe
+# needs so its "is there a grant screen" reading is not silently emptied by API
+# 30+ package visibility. There is no equivalent here, and the entry is NOT
+# guessed at: `ndk_build::manifest`'s queries type is what this stanza is
+# deserialized through, it has no `deny_unknown_fields` — the note above records
+# that a wrong key is dropped without a word — and whether it accepts an intent
+# form has not been verified the way the `package` form was.
+#
+# The cost is bounded and lands only where it does not matter. The probe is a
+# DIAGNOSTICS row, the divergence shows up only on API 30+, and the shipping
+# build is Gradle. A cargo-apk build on a newer unit would read "no grant
+# screen" when there is one — which is why the probe's own line names package
+# visibility as the alternative explanation rather than stating the finding flat.
+
 # LOCATION. The nearby-station picker sorts by distance and the face carries a
 # satellite glyph, and neither can be honest without a fix — today both run on
 # `fake::FakeLocation`, which is pinned to Madison.
@@ -251,6 +268,23 @@ name = "android.permission.ACCESS_FINE_LOCATION"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.WRITE_EXTERNAL_STORAGE"
 max_sdk_version = 32
+
+# DISPLAY OVER OTHER APPS, and it IS declared here — unlike the four below, which
+# are not. The difference is that the overlay needs no manifest component:
+# `CarnyxOverlay` lives in the runtime dex, adds its window through
+# `WindowManager` from a plain `Context`, and works identically under both
+# packagers. The foreground permissions are absent because cargo-apk cannot
+# declare the SERVICE that would use them, which is a fact about this packager
+# rather than a policy about permissions.
+#
+# It grants nothing on its own. From API 23 no dialog can request this, and the
+# driver switches Carnyx on at Settings' "Display over other apps" screen; what
+# the declaration buys is appearing on that screen at all, and letting
+# `Settings.canDrawOverlays()` ever answer true. So it is NOT the dead permission
+# the note below warns about: there is code that uses it, and a settings row that
+# sends the driver to grant it.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.SYSTEM_ALERT_WINDOW"
 
 # WHAT CANNOT BE DECLARED HERE, AND WHAT IT COSTS.
 #

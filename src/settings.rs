@@ -169,13 +169,42 @@ pub enum Action {
     /// that is left: what an UNPRIVILEGED app can do about the stock radio
     /// launching itself on ACC-on.
     ProbeStockRadio,
+    /// Ask Android for the notification permission. See
+    /// `CarnyxAlert.requestPostNotifications`.
+    ///
+    /// NOT A PROBE. It reports nothing and changes something, so it runs inline
+    /// like [`Action::SaveLog`] rather than through `pending_probe`.
+    ///
+    /// A ROW RATHER THAN A START-UP CALL, and that is the whole reason it may
+    /// exist at all. The manifest's standing note refuses to raise a permission
+    /// dialog unprompted, because one on a dashboard at night "needs someone to
+    /// tap Allow, which is nobody". A row a parked driver taps is the opposite
+    /// of unprompted.
+    ///
+    /// IT IS FOR A UNIT THIS ONE IS NOT. Below API 33 the permission does not
+    /// exist and the row says so. From API 33 an ungranted one makes the
+    /// platform DROP the station pop-up in silence, and until this existed there
+    /// was no way to fix that from inside the app on any unit newer than this
+    /// one. Present on every unit rather than hidden below 33, because a row
+    /// that only appears on hardware nobody here owns is a row nobody can check.
+    AskNotifyPermission,
+    /// Send the driver to Android's "Display over other apps" screen. See
+    /// `CarnyxOverlay`.
+    ///
+    /// THE SAME SHAPE AS [`Action::AskNotifyPermission`] AND A DIFFERENT REASON.
+    /// That one covers a permission this unit does not have and a newer one
+    /// would; this covers one EVERY Android since 23 needs and none of them will
+    /// show a dialog for. There is no version at which the overlay pop-up works
+    /// without the driver visiting a Settings screen, so this row is not a
+    /// contingency — it is how the feature is turned on.
+    AskOverlayPermission,
 }
 
 /// The rows that exist right now, in order, with their dividers.
 ///
 /// No longer conditional on anything. The old list grew and shrank with the
 /// capture flag and the live source, because four of its rows only meant
-/// anything against the vendor tuner; with those gone both rows always apply.
+/// anything against the vendor tuner; with those gone every row always applies.
 pub fn diag_actions() -> Vec<DiagAction> {
     vec![
         DiagAction { label: "Save to file".into(), divider_above: false, action: Action::SaveLog },
@@ -191,6 +220,24 @@ pub fn diag_actions() -> Vec<DiagAction> {
             label: "Where the stock radio app can be intercepted".into(),
             divider_above: false,
             action: Action::ProbeStockRadio,
+        },
+        // With them rather than beside "Clear log", because like the two above it
+        // is a question about the platform and not about the log. It differs in
+        // that it can CHANGE something, which is why it is last of the three: a
+        // mis-tap on the row above costs a wasted read, and a mis-tap here can
+        // put a dialog on the screen.
+        DiagAction {
+            label: "Ask for notification permission".into(),
+            divider_above: false,
+            action: Action::AskNotifyPermission,
+        },
+        // Beside the notification request because the two are the same errand —
+        // a permission the app cannot grant itself — and this one is what the
+        // station pop-up actually needs on every Android, not just a newer one.
+        DiagAction {
+            label: "Allow drawing over other apps".into(),
+            divider_above: false,
+            action: Action::AskOverlayPermission,
         },
         DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
     ]
@@ -562,7 +609,7 @@ mod tests {
     /// the app that wakes instead, and a rule between them would read as two
     /// unrelated tools.
     #[test]
-    fn the_action_rows_are_the_mechanism_and_two_probes() {
+    fn the_action_rows_are_the_mechanism_two_probes_and_one_request() {
         let rows = diag_actions();
         assert_eq!(
             rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
@@ -570,13 +617,22 @@ mod tests {
                 "Save to file",
                 "What could keep Carnyx alive through sleep",
                 "Where the stock radio app can be intercepted",
+                "Ask for notification permission",
+                "Allow drawing over other apps",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, true],
-            "the log well runs into the first row; rules open the probes and close them"
+            [false, true, false, false, false, true],
+            "the log well runs into the first row; rules open the platform rows and close them"
+        );
+        // THE ONLY ROW THAT CHANGES ANYTHING SITS LAST OF THE THREE, so a
+        // mis-tap on the row above it costs a wasted read rather than a dialog.
+        assert_eq!(
+            rows[3].action,
+            Action::AskNotifyPermission,
+            "the request must stay below both probes"
         );
     }
 

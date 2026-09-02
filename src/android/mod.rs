@@ -812,6 +812,30 @@ pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> String {
     "no notification shade in this build".into()
 }
 
+/// Ask for the notification permission API 33 added. See `alert`.
+#[cfg(target_os = "android")]
+pub fn request_notification_permission() -> String {
+    alert::request_post_notifications()
+}
+
+/// The host has no permission model. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn request_notification_permission() -> String {
+    "notification permission: nothing to ask on this build".into()
+}
+
+/// Send the driver to the "Display over other apps" screen. See `alert`.
+#[cfg(target_os = "android")]
+pub fn request_overlay_permission() -> String {
+    alert::request_overlay_permission()
+}
+
+/// The host has no overlay windows. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn request_overlay_permission() -> String {
+    "overlay permission: nothing to grant on this build".into()
+}
+
 /// What could keep this app alive through a sleep. See `probe`.
 #[cfg(target_os = "android")]
 pub fn keep_alive_report() -> Vec<String> {

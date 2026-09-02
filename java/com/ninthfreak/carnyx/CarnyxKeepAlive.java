@@ -206,6 +206,7 @@ public final class CarnyxKeepAlive {
         bootMarker(out);
         stoppedApps(out);
         survivable(out);
+        overlay(out);
         autoStart(out);
         battery(out);
         settings(out);
@@ -325,13 +326,25 @@ public final class CarnyxKeepAlive {
             // drive has already opened the neighbours, which clears the flag on
             // every one of them, and the reading is then empty for a reason that
             // has nothing to do with the sleep.
+            // AND THE API-30 BLIND SPOT IS NAMED, not left to be inferred from a
+            // zero. From API 30 `getInstalledApplications` returns only what the
+            // manifest's <queries> already names, which here is the tuner, the
+            // stock radio and OsmAnd — so on a newer unit `third` collapses to a
+            // handful and a zero below means "cannot see" rather than "nothing
+            // is stopped". The section beside this one carries the same warning
+            // and this one shipped without it.
+            String blind = Build.VERSION.SDK_INT >= 30
+                    ? " NOTE: API 30+ hides every package this app has not declared,"
+                      + " so this count is only over what <queries> names."
+                    : "";
             out.add("  stopped: " + stopped + " of " + third + " third-party packages"
                     + (stopped == 0
                         ? " — none right now, which only means something if this is"
                           + " the first launch after a wake and nothing else has been"
                           + " opened yet. Otherwise it is too late to tell."
                         : " — the vendor cleaner force-stops packages, which is why"
-                          + " no broadcast of any kind reaches them"));
+                          + " no broadcast of any kind reaches them")
+                    + blind);
         } catch (Throwable t) {
             out.add("  stopped: unreadable (" + t.getClass().getSimpleName() + ")");
         }
@@ -361,6 +374,114 @@ public final class CarnyxKeepAlive {
         read(out, cr, "accessibility_enabled", me);
         read(out, cr, "enabled_accessibility_services", me);
         read(out, cr, "enabled_notification_listeners", me);
+    }
+
+    /**
+     * Whether the OVERLAY route is open on this ROM, in three readings.
+     *
+     * <p>WHY IT IS WORTH ASKING. A {@code TYPE_APPLICATION_OVERLAY} window is
+     * drawn by the app itself over whatever is in front, and it answers two
+     * separate dead ends at once: the station pop-up, whose notification this ROM
+     * never displays and whose custom toast stops being allowed at API 30, and
+     * possibly the wake problem, since holding this permission is understood to
+     * exempt an app from the background-activity-start restriction. Unlike a
+     * notification it needs no shade, and unlike a toast it is not deprecated out
+     * from under the app.
+     *
+     * <p>THE COST IS A MANUAL GRANT, AND THAT IS EXACTLY WHAT CANNOT BE ASSUMED
+     * HERE. This is a "special" permission: from API 23 no dialog can request it
+     * and the driver has to switch it on at Settings' "Display over other apps"
+     * screen. Head-unit ROMs ship stripped Settings apps — the owner already went
+     * looking for an auto-start or protected-apps screen on this one and found
+     * nothing — so whether that screen EXISTS is the question that decides the
+     * whole route, and it is a reading rather than a thing to hope for.
+     *
+     * <p>Three lines, because the first two answers only make sense together:
+     *
+     * <ol>
+     *   <li>IS IT DECLARED. {@code canDrawOverlays} is false for an app that
+     *       never asked for the permission, and Settings will not list such an
+     *       app on the grant screen at all. Reporting "not granted" without this
+     *       line would read as a refusal when it is really a manifest that has
+     *       not requested it — Carnyx does not, today, and that is deliberate:
+     *       nothing draws an overlay yet, and a permission in the list that
+     *       nothing uses is a question the driver cannot answer.
+     *   <li>IS IT HELD, which is the answer that matters once it is declared.
+     *   <li>IS THERE A SCREEN TO GRANT IT ON. No handler means no route, however
+     *       the first two read.
+     * </ol>
+     */
+    private static void overlay(List<String> out) {
+        String me = ctx.getPackageName();
+        String perm = "android.permission.SYSTEM_ALERT_WINDOW";
+
+        // 1 — declared in the manifest?
+        try {
+            PackageInfo p = ctx.getPackageManager()
+                    .getPackageInfo(me, PackageManager.GET_PERMISSIONS);
+            boolean declared = false;
+            if (p != null && p.requestedPermissions != null) {
+                for (String r : p.requestedPermissions) {
+                    if (perm.equals(r)) {
+                        declared = true;
+                        break;
+                    }
+                }
+            }
+            out.add("  overlay: SYSTEM_ALERT_WINDOW " + (declared
+                    ? "is declared in the manifest"
+                    : "is NOT declared — nothing can grant it until it is, and"
+                      + " canDrawOverlays below is false for that reason alone"));
+        } catch (Throwable t) {
+            out.add("  overlay: manifest permissions unreadable ("
+                    + t.getClass().getSimpleName() + ")");
+        }
+
+        // 2 — held right now?
+        if (Build.VERSION.SDK_INT < 23) {
+            out.add("  overlay: below API 23 this is granted at install, no screen needed");
+        } else {
+            try {
+                out.add("  overlay: canDrawOverlays = " + Settings.canDrawOverlays(ctx));
+            } catch (Throwable t) {
+                out.add("  overlay: canDrawOverlays unreadable ("
+                        + t.getClass().getSimpleName() + ")");
+            }
+        }
+
+        // 3 — is there anywhere to send the driver?
+        //
+        // THE PLAIN ACTION AND NO `package:` DATA. The grant screen is normally
+        // launched with a package URI so it opens on this app's own row, but the
+        // question here is only whether a handler EXISTS, and matching an intent
+        // filter that declares no data scheme is more reliable without it.
+        try {
+            Intent grant = new Intent("android.settings.action.MANAGE_OVERLAY_PERMISSION");
+            List<ResolveInfo> r = ctx.getPackageManager().queryIntentActivities(grant, 0);
+            if (r == null || r.isEmpty()) {
+                out.add("  overlay: NO SETTINGS SCREEN handles"
+                        + " MANAGE_OVERLAY_PERMISSION — this ROM has no way for the"
+                        + " driver to grant it, so the overlay route is closed"
+                        + (Build.VERSION.SDK_INT >= 30
+                            ? " (or API 30+ package visibility is hiding it; the"
+                              + " manifest declares this intent to avoid that)"
+                            : ""));
+            } else {
+                StringBuilder b = new StringBuilder("  overlay: grant screen exists — ");
+                int shown = 0;
+                for (ResolveInfo i : r) {
+                    if (shown >= MAX_HANDLERS || i == null || i.activityInfo == null) {
+                        continue;
+                    }
+                    b.append(shown == 0 ? "" : ", ").append(i.activityInfo.packageName);
+                    shown++;
+                }
+                out.add(b.toString());
+            }
+        } catch (Throwable t) {
+            out.add("  overlay: grant screen unreadable ("
+                    + t.getClass().getSimpleName() + ")");
+        }
     }
 
     /** One {@code Settings.Secure} row, saying whether we are in it. */

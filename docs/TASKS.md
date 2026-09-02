@@ -1306,6 +1306,71 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 114. Draw the station pop-up in a window this app owns
+**BUILT, UNRUN ON THE UNIT.** A third rendering of the station pop-up, tried
+before the toast and falling back to it. Asked for directly, and with the frame
+that decided its shape: *"this isn't an app I'm targeting to just a single device
+but an app I just happen to be running on a single device"*, then *"I'd like to
+implement the feature and then we can troubleshoot if it isn't working."*
+
+**THE OTHER TWO RENDERINGS EACH HAVE A CEILING.** The notification posts cleanly
+and this ROM displays nothing — a drive produced two `posted, channel importance
+4` lines with no banner and no shade entry — and from API 33 an ungranted
+`POST_NOTIFICATIONS` makes the platform drop it outright. The custom toast stops
+being allowed at API 30, which deprecated `setView`, blocked custom toasts from
+the background and made `setGravity` a no-op, so the large top-placed card
+degrades to a small grey box at the bottom and could never have carried a logo.
+A `TYPE_APPLICATION_OVERLAY` window has neither ceiling: no channel, no shade, no
+SystemUI cooperation, nothing deprecated, and it is the only one of the three
+that can draw an image on every Android this app supports.
+
+**ONE OF THE TWO IS RAISED, NEVER BOTH.** They draw the same card in the same
+place, so showing both would stack two identical pop-ups. The overlay is tried
+first and the toast runs only when it answers `no overlay`.
+
+**IT MUST NEVER EAT A TOUCH**, which is the most important property in the file.
+`FLAG_NOT_TOUCHABLE | FLAG_NOT_FOCUSABLE`: this window appears unbidden over a
+maps app while the car is moving, and one that swallowed a tap meant for the road
+ahead would be a hazard rather than a feature. The consequence is that it cannot
+be dismissed by tapping it, hence a 5s timer — longer than a toast's `LENGTH_LONG`
+because it is for a driver who looked away and needs the answer when they look
+back — and `clear()` now takes it down when the driver returns to the face.
+
+**`TYPE_APPLICATION_OVERLAY` UNCONDITIONALLY.** It arrived at API 26 and
+`minSdk` is 26 in both packagers, so the deprecated `TYPE_PHONE` branch every
+guide still carries would be dead code here.
+
+**THE PERMISSION IS THE WHOLE COST AND NO DIALOG CAN ASK FOR IT.**
+`SYSTEM_ALERT_WINDOW` is "special": from API 23 the driver switches Carnyx on at
+Settings' "Display over other apps" screen and nowhere else. So there is a second
+settings row, "Allow drawing over other apps", beside the notification one. The
+two look alike and differ in kind: that one covers a permission THIS unit does not
+have and a newer one would, this one covers a permission every Android since 23
+needs and none will prompt for. Declared in BOTH manifests, unlike the foreground
+permissions — the overlay needs no manifest component, `CarnyxOverlay` is in the
+runtime dex and adds its window from a plain `Context`, so it works under
+cargo-apk too.
+
+**A SEPARATE CLASS, AND RUST STILL TALKS TO ONE.** `CarnyxOverlay` owns the
+window lifecycle; `CarnyxAlert` stays the single JNI entry point and delegates.
+The bitmap is decoded on the CALLING thread, not inside the posted `Runnable`,
+because decoding is the one expensive step and this is reached from the poll —
+putting file I/O on the UI thread of an app drawing a radio face is the mistake
+that was available here. `decode` split into `decodeLogo(path, targetDp)` so the
+overlay can size its mark against 28sp words rather than a notification's fixed
+square, instead of copying thirty lines of two-pass decoding into a second class.
+
+**Evidence.** 369 tests, two of them new: each permission row leaves a line even
+on a build that cannot perform it, asserted immediately after the tap with no
+timer, which is what pins both rows as INLINE rather than deferred like the two
+probes. Clippy clean, JNI seam checks, both manifests parse. `CarnyxOverlay` and
+`CarnyxAlert` compile against a real API-34 framework jar with `-Xlint:all` and
+zero diagnostics.
+
+**What one drive settles.** Whether the grant screen exists on this ROM — the
+keep-alive probe's `overlay:` lines answer that without a drive — and then
+whether the card appears, with the logo, over OsmAnd.
+
 ### 113. Read the driver's units out of OsmAnd instead of guessing them
 **DONE, AND §4.9 WAS WRONG ABOUT WHETHER IT COULD BE.** Asked for directly:
 *"OsmAnd is giving me navigation using Imperial units, which is what I want, but

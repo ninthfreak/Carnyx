@@ -135,13 +135,110 @@ public final class CarnyxAlert {
     private static Context ctx;
     private static boolean channelMade;
 
+    /**
+     * The Activity, kept ONLY so a permission can be asked for. See
+     * {@link #requestPostNotifications}.
+     *
+     * <p>A WEAK REFERENCE, because this is a static field on a class that lives
+     * as long as the process and an Activity does not. A strong one would pin a
+     * destroyed Activity, its window and its whole view tree for the life of the
+     * app — the textbook Android leak, and a real cost on units shipping the RAM
+     * these do.
+     *
+     * <p>{@link #ctx} stays the APPLICATION context and everything else keeps
+     * using it. Posting a notification and raising a toast both outlive any one
+     * Activity and neither should hold one.
+     */
+    private static java.lang.ref.WeakReference<android.app.Activity> activity;
+
     private CarnyxAlert() {
     }
 
-    /** Hand the class the app context, as {@link CarnyxProcess#attach} does. */
+    /**
+     * Hand the class the app context, as {@link CarnyxProcess#attach} does.
+     *
+     * <p>What Rust passes is the {@code NativeActivity} itself — {@code
+     * alert::init} hands over the pointer `AndroidApp` gave it — so this takes
+     * the application context for its own use AND keeps the Activity weakly,
+     * because asking for a runtime permission needs one and an application
+     * context cannot do it.
+     */
     public static synchronized void attach(Context context) {
-        if (ctx == null && context != null) {
+        if (context == null) {
+            return;
+        }
+        if (ctx == null) {
             ctx = context.getApplicationContext();
+        }
+        if (context instanceof android.app.Activity) {
+            activity = new java.lang.ref.WeakReference<>((android.app.Activity) context);
+        }
+    }
+
+    /**
+     * Ask the driver for the notification permission, where this Android needs
+     * one and does not already have it.
+     *
+     * <p>WHY THIS EXISTS, given the standing note that a permission dialog
+     * "needs someone to tap Allow, which on a dashboard at night is nobody".
+     * That note is about asking UNPROMPTED, at start-up, mid-drive, and it still
+     * holds — nothing calls this on its own. What it never justified was having
+     * no way to ask AT ALL, which left the station pop-up silently dead on any
+     * unit running API 33 or newer with no route to fix it from inside the app.
+     * This is that route: a row the driver taps deliberately, parked, already
+     * looking at the settings panel.
+     *
+     * <p>THE ANSWERS THAT ARE NOT A DIALOG all come back as a line rather than
+     * as silence, because a row that appears to do nothing is the exact failure
+     * the five removed diagnostics rows had:
+     *
+     * <ul>
+     *   <li>BELOW API 33 there is no such permission and the manifest
+     *       declaration is the whole story. That is the common case for the
+     *       low-end Android 8-to-10 units this app is built for, and this one.
+     *   <li>ALREADY GRANTED. Asking again shows nothing on modern Android, so
+     *       reporting it is the only way the tap is legible.
+     *   <li>PERMANENTLY DENIED IS NOT DISTINGUISHABLE FROM HERE and this does
+     *       not pretend otherwise. After two refusals Android stops showing the
+     *       dialog and {@code requestPermissions} returns having done nothing at
+     *       all. So the line says the request went out and that a dialog may not
+     *       have appeared, rather than claiming the driver was asked.
+     * </ul>
+     *
+     * <p>NO RESULT CALLBACK IS WIRED, and none is needed.
+     * {@code onRequestPermissionsResult} lands on the Activity, which is Slint's
+     * {@code NativeActivity} and not ours to override. The next {@link #post}
+     * reads {@code areNotificationsEnabled()} and logs what it found, so the
+     * answer arrives on the next station change through a channel that already
+     * exists.
+     *
+     * @return one line for the diagnostics log, never null.
+     */
+    public static synchronized String requestPostNotifications() {
+        if (Build.VERSION.SDK_INT < 33) {
+            return "notification permission: not needed below API 33 (this unit is API "
+                    + Build.VERSION.SDK_INT + ")";
+        }
+        if (ctx == null) {
+            return "notification permission: no context — attach() has not run";
+        }
+        try {
+            String perm = "android.permission.POST_NOTIFICATIONS";
+            int granted = android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (ctx.checkSelfPermission(perm) == granted) {
+                return "notification permission: already granted";
+            }
+            android.app.Activity a = activity == null ? null : activity.get();
+            if (a == null) {
+                return "notification permission: NOT granted, and no Activity to ask with"
+                        + " — grant it in Android's own app settings";
+            }
+            a.requestPermissions(new String[] { perm }, 1);
+            return "notification permission: asked. Tap Allow if a dialog appeared;"
+                    + " Android stops showing it after two refusals, and then it has"
+                    + " to be granted in Android's own app settings";
+        } catch (Throwable t) {
+            return "notification permission: request failed — " + why(t);
         }
     }
 
@@ -193,7 +290,35 @@ public final class CarnyxAlert {
         } catch (Throwable t) {
             posted = "notify threw: " + why(t);
         }
-        return posted + ", " + toast(title, text);
+        // THE OVERLAY FIRST, THE TOAST AS THE FALLBACK, and only ONE of the two
+        // is ever raised. Both draw the same card in the same place, so showing
+        // both would stack two identical pop-ups on top of each other.
+        //
+        // The overlay is preferred because it has neither of the toast's
+        // ceilings: it carries the logo, and it keeps its size and its position
+        // on API 30+, where a custom toast is refused and the platform's own is
+        // small, grey and at the bottom. It is also the only one of the three
+        // renderings that works when the driver has never granted a permission
+        // this app cannot ask for with a dialog — which is why the toast stays
+        // rather than being replaced.
+        String seen = CarnyxOverlay.show(ctx, title, text, logoPath);
+        if (seen.startsWith("no overlay")) {
+            seen = seen + ", " + toast(title, text);
+        }
+        return posted + ", " + seen;
+    }
+
+    /**
+     * Send the driver to Android's "Display over other apps" screen.
+     *
+     * <p>See {@link CarnyxOverlay} for what the permission buys and why no
+     * dialog can ask for it. Routed through this class because it is the pop-up's
+     * single entry point from Rust — the JNI seam knows one class, not three.
+     *
+     * @return one line for the diagnostics log, never null.
+     */
+    public static synchronized String requestOverlayPermission() {
+        return CarnyxOverlay.requestPermission(ctx, activity == null ? null : activity.get());
     }
 
     /**
@@ -411,6 +536,11 @@ public final class CarnyxAlert {
                 // Cancelling something that is not there is not a fault.
             }
         }
+        // AND THE OVERLAY, which the toast never needed. A toast expires on its
+        // own and there is no handle to take it down early; this window sits
+        // there until its timer runs out, and the driver coming back to the face
+        // is the one case where the answer is already on screen behind it.
+        CarnyxOverlay.hide(ctx);
     }
 
     /**
@@ -454,7 +584,20 @@ public final class CarnyxAlert {
      * dial regardless, and the mark was only ever beside them.
      */
     private static Bitmap decode(String path) {
-        if (path == null || path.isEmpty()) {
+        return decodeLogo(path, ICON_DP);
+    }
+
+    /**
+     * The same, at a caller's own target size.
+     *
+     * <p>PACKAGE-PRIVATE FOR {@link CarnyxOverlay}, which draws the mark beside
+     * 28sp words on a card of its own rather than into the fixed square a
+     * notification's large icon gets, and so wants a different {@code targetDp}.
+     * Splitting the size out beat copying thirty lines of two-pass decoding into
+     * a second class, which is where the two would have drifted.
+     */
+    static Bitmap decodeLogo(String path, float targetDp) {
+        if (path == null || path.isEmpty() || ctx == null) {
             return null;
         }
         try {
@@ -465,7 +608,7 @@ public final class CarnyxAlert {
             if (longest <= 0) {
                 return null;
             }
-            int want = Math.round(ICON_DP * ctx.getResources().getDisplayMetrics().density);
+            int want = Math.round(targetDp * ctx.getResources().getDisplayMetrics().density);
             int sample = 1;
             while (longest / (sample * 2) >= want) {
                 sample *= 2;
