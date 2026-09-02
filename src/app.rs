@@ -3128,12 +3128,16 @@ impl App {
         let art: Vec<Option<(slint::Image, LogoPlate)>> =
             bases.iter().map(|b| self.art_for(b, Some(TILE_BOX_DP))).collect();
 
+        // BEFORE THE BORROW, like the art above and for the same reason: reading
+        // a Slint global goes through the window, and this method holds the
+        // state's `RefCell` for the rest of its body.
+        let theme_text = ui.global::<crate::Pal>().get_text();
         let s = self.state.borrow();
         let rows: Vec<Preset> = s
             .presets
             .iter()
             .zip(art.iter())
-            .map(|(p, a)| to_preset(p, a.clone()))
+            .map(|(p, a)| to_preset(p, a.clone(), theme_text))
             .collect();
         // Same rule as `push_nearby`: an identical model is still a repeater
         // rebuilt, and the preset band is on screen the whole time.
@@ -3166,8 +3170,8 @@ impl App {
         };
         // The peek cards reuse the tiles' art — same plate, same ladder rung, and
         // it is already decoded.
-        ui.set_prev_preset(to_preset(&s.presets[prev as usize], art[prev as usize].clone()));
-        ui.set_next_preset(to_preset(&s.presets[next as usize], art[next as usize].clone()));
+        ui.set_prev_preset(to_preset(&s.presets[prev as usize], art[prev as usize].clone(), theme_text));
+        ui.set_next_preset(to_preset(&s.presets[next as usize], art[next as usize].clone(), theme_text));
         ui.set_has_prev(true);
         ui.set_has_next(true);
     }
@@ -6180,7 +6184,16 @@ fn step_anchor(asserted: Option<f32>, dial: f32, presets: &[Slot]) -> i32 {
 /// a chip decodes a 128 px PNG rather than a 512 px one.
 const TILE_BOX_DP: f32 = 128.0;
 
-fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
+/// One slot as the band and the peek cards need it.
+///
+/// `theme_text` is the palette's own ink and is used ONLY for the unbranded
+/// plate — see `station::plate_ink`. It is passed in rather than read here
+/// because this is a free function with no window to ask.
+fn to_preset(
+    slot: &Slot,
+    logo: Option<(slint::Image, LogoPlate)>,
+    theme_text: slint::Color,
+) -> Preset {
     let call = slot.call();
     Preset {
         name: slot.name().into(),
@@ -6188,6 +6201,10 @@ fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
         // The colour hashes from the CORE letters, so `WWHG` and `WWHG-FM` are
         // one station and get one fill.
         brand: brand_color(&call),
+        // ON the fill, not on the theme. `brand_color` is total so the fill is
+        // always there; see `station::plate_ink` for why the `None` arm exists
+        // anyway and what would make it reachable.
+        ink: crate::station::plate_ink(Some(brand_color(&call)), theme_text),
         freq_mhz: slot.mhz,
         freq_label: format_mhz(slot.mhz).into(),
         has_logo: logo.is_some(),
@@ -8396,21 +8413,21 @@ mod tests {
     fn a_tile_claims_a_logo_only_when_it_was_handed_one() {
         let slot = Slot { mhz: 88.7, row: None, saved_call: None };
 
-        let bare = to_preset(&slot, None);
+        let bare = to_preset(&slot, None, slint::Color::from_rgb_u8(0, 0, 0));
         assert!(!bare.has_logo);
         assert_eq!(bare.freq_label, "88.7");
 
         // A 1×1 image is enough: what is under test is that the flag follows the
         // Option, not what the pixels are.
         let px = crate::logos::ui::to_image(&Raster { w: 1, h: 1, rgba: vec![0, 0, 0, 255] });
-        let dressed = to_preset(&slot, Some((px.clone(), LogoPlate::Plate)));
+        let dressed = to_preset(&slot, Some((px.clone(), LogoPlate::Plate)), slint::Color::from_rgb_u8(0, 0, 0));
         assert!(dressed.has_logo);
         // AND THE BACKING RIDES WITH THE ART. A tile that took the picture and
         // dropped the answer to "what goes behind it" would put a keyed `plate`
         // mark on a transparent plate — a dark logo on a dark card.
         assert_eq!(dressed.plate, LogoPlate::Plate);
         assert_eq!(
-            to_preset(&slot, Some((px, LogoPlate::Bare))).plate,
+            to_preset(&slot, Some((px, LogoPlate::Bare)), slint::Color::from_rgb_u8(0, 0, 0)).plate,
             LogoPlate::Bare,
             "the tile reports what it was handed, not a constant"
         );

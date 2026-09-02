@@ -17,6 +17,11 @@ import { GlitchText } from "glitch.slint";
 component CallSignBox inherits Rectangle {
     in property <string> label;
     in property <color> brand;
+    /// The ink, CHOSEN IN RUST by measured contrast against `brand` — handoff
+    /// v3.3.0 §5, `station::plate_ink`. This was `#FFFFFF`, which fails AA on
+    /// the lighter brand fills; the guard is not a preference and the value must
+    /// not be second-guessed here.
+    in property <color> ink: #FFFFFF;
     in property <length> radius: 12px;
     /// The band theme's BODY face, when it has one that reaches this far. Empty
     /// is the ordinary face — which is what Led Zeppelin gives these, because it
@@ -75,7 +80,7 @@ component CallSignBox inherits Rectangle {
         width: parent.width;
         height: parent.height;
         text: root.shown;
-        ink: #FFFFFF;
+        ink: root.ink;
         ground: Pal.flat(root.brand);
         face: root.face != "" ? root.face : Font.face;
         weight: Font.bold;
@@ -149,6 +154,7 @@ component PlateBox inherits Rectangle {
         width: parent.width;
         height: parent.height;
         label: root.preset.call;
+        ink: root.preset.ink;
         brand: root.preset.brand;
         radius: root.radius;
         face: root.egg.body-face;

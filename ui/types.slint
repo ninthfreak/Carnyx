@@ -59,6 +59,12 @@ export struct Preset {
     /// Station colour for the no-logo box, hashed from the callsign in Rust
     /// (CarFM `brandColor`).
     brand: color,
+    /// The ink to print `call` and `freq-label` in, ON `brand`. Chosen in Rust by
+    /// MEASURED CONTRAST (handoff v3.3.0 §5, `station::plate_ink`), never here:
+    /// this was a hard-coded white, which fails AA on the lighter brand fills.
+    /// It follows the station's fill and NOT the theme, so it does not change
+    /// when the face does — §11a's dark-theme screenshot is that check.
+    ink: color,
     /// A real logo asset. Empty unless `has-logo`.
     logo: image,
     has-logo: bool,

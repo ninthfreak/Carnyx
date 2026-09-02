@@ -1306,6 +1306,50 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 117. Handoff v3.3.0 §5 — plate ink chosen by measured contrast
+**DONE.** First of the v3.3.0 bundle, taken first because it is pure Rust with
+tests and no visual risk. `CallSignBox` printed its call sign in a hard-coded
+`#FFFFFF`; the ink is now chosen in Rust by WCAG contrast against the station's
+own fill and handed over on `Preset`.
+
+**SCORED, NEVER THRESHOLDED.** §5 is emphatic and gives the reason: a luminance
+cutoff always lands arbitrarily close to a real fill, and WZEE's cyan sits at
+0.3095 where a 0.32 threshold misses it by 0.01 and inks white at 2.92:1.
+`ink_on` scores both candidates — `#141821` and `#FFFFFF` — and takes the winner,
+which has no edge to land on.
+
+**THE INK FOLLOWS THE FILL AND NOT THE THEME.** A station's colour is its own, so
+the two candidates are §11's fixed pair rather than the palette's `text`/`bg`.
+§11a's dark-theme screenshot is the check: "plate inks unchanged by theme".
+
+**TWO LUMINANCES THAT LOOK ALIKE AND ANSWER DIFFERENT QUESTIONS.** `rel_lum` here
+linearises sRGB before weighting, because contrast is a ratio of physical light.
+`Pal.flat` next door uses Rec.709 luma on the RAW channels to desaturate the dead
+face. Neither can be used for the other's job.
+
+**WHAT WAS PORTED, AND ONE BRANCH THAT WAS NOT.** §5's `plateInk` honours a
+station's authored `logoFg` while it clears 4.5:1. Nothing in this tree has one:
+fills come from `brand_color`, a hash into ten fixed values, and no station record
+carries an ink. The branch is documented where it would go rather than written as
+an arm nothing can reach. The `None` arm of `plate_ink` is kept — it is §5's rule
+and makes the function total — with its doc corrected to say plainly that
+`brand_color` is total so no preset in this tree lacks a fill. An earlier draft of
+that comment repeated §5's "reachable through the app's own save flow", which is
+true of the prototype and NOT of this code.
+
+**Evidence.** 375 tests, four new. The first asserts the handoff's own measured
+ratios to two decimals — WZEE 6.09, WMHX 4.96, WMGN 5.58, WORT 7.38, WJJO 16.52 —
+which pins the linearisation, not just the winner: a `rel_lum` using Rec.601
+weights or skipping the sRGB knee still picks the right ink on most of these and
+gets every ratio wrong. Another walks all ten `BRAND_BGS` exhaustively, which the
+handoff could not do with arbitrary station data and this tree can, so a future
+fill that cannot be read fails here rather than on a dashboard. Clippy clean, all
+93 shots re-render.
+
+**Still to do from v3.3.0:** §4 plate and type fitting, §6 ETA pill, §7 hero
+no-logo scale, §7a.2 hold-to-unstar, §8 looping rail, §9.1 touch-first rail,
+§9.2 hero flick.
+
 ### 116. Ask for the pop-up's permissions on first launch, once
 **BUILT, UNRUN ON THE UNIT.** The owner had to find the overlay grant by hand in
 Android's settings and asked the obvious question: *"isn't the norm for an
