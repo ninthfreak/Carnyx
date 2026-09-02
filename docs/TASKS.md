@@ -1306,6 +1306,42 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 123. Handoff v3.3.0 §13.4 (flick half) — flick the hero to change preset
+**BUILT, UNVERIFIED BY TOUCH.** A horizontal flick on the hero card steps preset:
+left for next, right for previous.
+
+**IT REUSES `step`, WHICH IS THE POINT.** §13.4 asks for "the existing card-snap
+animation, so a flick and a peek-card tap produce identical motion". The peek
+cards call `HeroRow.step(±1)`; the flick calls the same one, so the morph comes
+along whole rather than being reproduced.
+
+**THE THRESHOLDS ARE THE SPEC'S AND ARE STRICTER THAN A SCROLL ON PURPOSE:** 56dp
+of travel, horizontal at least 1.4x vertical, inside 700ms — "a hesitant touch on
+the card must never tune the radio." The 700ms window is a Timer that clears the
+gesture if it expires with the finger still down: what follows is a slow drag, not
+a flick.
+
+**THE STAR IS EXCLUDED BY DECLARATION ORDER.** §13.4's "excluded origin: anything
+inside the star target" is a hit-test question, and Slint resolves overlapping
+siblings to the LAST declared — so the card-wide TouchArea goes first and never
+sees a press that starts on the star or the power button. That also preserves
+§7a.2's hold, which the star owns.
+
+**AND THE PEEK CARDS STAY TAPPABLE, measured rather than hoped.** `PeekCard`'s own
+note records the experiment: "with a full-size TouchArea on the hero,
+examples/tapprobe.rs reported the defect completely unchanged". §13.4 requires
+this — the peeks are the only visible affordance that the flick exists.
+
+**TWO OF §13.4'S WARNINGS DO NOT APPLY HERE, and saying so is part of the port.**
+The 320ms click guard is for a DOM pointer sequence ending in a synthesised click
+on the element underneath; this TouchArea answers no clicks at all, so there is
+nothing to guard. And the text-selection warning is moot because Slint's `Text` is
+not selectable. Both are the same class of free win as the rail's drag handler.
+
+**NOT VERIFIED: the gesture itself.** The shot harness renders static frames and
+there is no interactive pass in this container. Compiles, tests and lints are
+green; the thresholds and the wiring were read rather than exercised.
+
 ### 122. Handoff v3.3.0 §7a.2 — hold 650ms to un-star
 **BUILT, THE RING UNVERIFIED ON A SCREEN.** The bundle lists this as shipped in
 v3.2.0; this tree never got it. The star was `clicked => toggle-save()`, a plain

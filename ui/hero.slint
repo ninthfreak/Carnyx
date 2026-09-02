@@ -747,6 +747,32 @@ export component HeroCard inherits Rectangle {
 
     callback toggle-save();
     callback toggle-audio();
+    /// A horizontal flick on the card: -1 previous, +1 next (v3.3.0 §13.4).
+    /// Wired to the same `step` the peek cards call, so a flick and a peek tap
+    /// produce identical motion — the spec's own requirement.
+    callback flick(int);
+
+    // ── FLICK THE CARD TO CHANGE PRESET (v3.3.0 §13.4) ───────────────────────
+    //
+    // "Left for next, right for previous." The thresholds are deliberately
+    // stricter than a scroll gesture — 56dp of travel, horizontal at least 1.4x
+    // vertical, inside 700ms — because "a hesitant touch on the card must never
+    // tune the radio."
+    property <length> flick-x0;
+    property <length> flick-y0;
+    property <bool> flick-live: false;
+
+    flick-window := Timer {
+        interval: 700ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            // THE WINDOW CLOSED WITH THE FINGER STILL DOWN. What follows is a
+            // slow drag, not a flick, and §13.4 wants it ignored rather than
+            // honoured late.
+            root.flick-live = false;
+        }
+    }
 
     property <bool> tall: Metrics.tall;
     property <length> pad-v: Metrics.s(root.tall ? 30 : 24) * root.scale;
@@ -874,6 +900,57 @@ export component HeroCard inherits Rectangle {
     drop-shadow-blur: root.dead ? 0px : 22px * root.scale;
     drop-shadow-offset-y: root.dead ? 0px : 14px * root.scale;
     drop-shadow-color: #0000002E;
+
+    // DECLARED BEFORE THE STAR AND THE POWER BUTTON, which is what excludes them.
+    // §13.4's "excluded origin: anything inside the star target" is a hit-test
+    // question, and in Slint overlapping siblings resolve to the LAST one
+    // declared — so this sits underneath both and never sees a press that starts
+    // on either.
+    //
+    // A CARD-WIDE TOUCHAREA HERE DOES NOT STEAL THE PEEK CARDS' TAPS, and that is
+    // measured rather than hoped: `presets.slint`'s PeekCard note records the
+    // experiment — "with a full-size TouchArea on the hero, examples/tapprobe.rs
+    // reported the defect completely unchanged". The peeks stay tappable, which
+    // §13.4 requires because they are the only visible affordance the flick has.
+    //
+    // NO `clicked` HANDLER, so there is nothing to suppress after a flick. §13.4
+    // asks for a 320ms click guard; that is a DOM problem — a pointer sequence
+    // ending in a synthesised click on the element underneath. A Slint TouchArea
+    // grabs on press and this one answers no clicks at all, so the guard has
+    // nothing to guard. Same class of free win as the rail's drag handler.
+    //
+    // TEXT SELECTION is the other §13.4 warning that does not apply here: Slint's
+    // `Text` is not selectable, so there is no native selection drag to abort.
+    flick-touch := TouchArea {
+        enabled: !root.inert;
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                root.flick-x0 = self.mouse-x;
+                root.flick-y0 = self.mouse-y;
+                root.flick-live = true;
+                flick-window.running = false;
+                flick-window.running = true;
+            }
+            if (ev.kind == PointerEventKind.up) {
+                flick-window.running = false;
+                if (root.flick-live) {
+                    root.flick-live = false;
+                    if (Math.abs(self.mouse-x - root.flick-x0) >= Metrics.s(56)
+                        && Math.abs(self.mouse-x - root.flick-x0)
+                           >= 1.4 * Math.abs(self.mouse-y - root.flick-y0)) {
+                        // LEFT IS NEXT. A leftward flick carries the card off to
+                        // the left and brings the next one in behind it, which is
+                        // the direction every card stack moves.
+                        root.flick(self.mouse-x < root.flick-x0 ? 1 : -1);
+                    }
+                }
+            }
+            if (ev.kind == PointerEventKind.cancel) {
+                flick-window.running = false;
+                root.flick-live = false;
+            }
+        }
+    }
 
     // ── THE TAKEOVER EDGE (§4.9) ─────────────────────────────────────────────
     //
@@ -1963,6 +2040,12 @@ export component HeroRow inherits Rectangle {
         nav-distance: root.nav-distance;
         nav-street: root.nav-street;
         toggle-save => { root.toggle-save(); }
+        // THE SAME `step` THE PEEK CARDS CALL, which is what makes a flick and a
+        // peek tap "produce identical motion" (§13.4) — the card-snap morph is
+        // driven from Rust off `step`, so reusing it reuses the animation whole.
+        // Wired on the LIVE card only: the two morph ghosts above and below are
+        // `inert` and must not tune anything.
+        flick(d) => { root.step(d); }
         toggle-audio => { root.toggle-audio(); }
     }
 
