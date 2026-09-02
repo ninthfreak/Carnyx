@@ -1438,6 +1438,13 @@ impl App {
                     selected: saved.selected,
                     theme: saved.theme,
                     logos_on: saved.logos_on,
+                    // FROM THE FILE, which is the entire point of the flag: an
+                    // offer already made must not be made again on the next
+                    // ignition. Hard-coding `false` here persisted it correctly
+                    // and then ignored it on the way back in, which is a nag that
+                    // saves its own state — caught by
+                    // `the_permissions_offer_is_made_once_and_survives_a_restart`.
+                    permissions_asked: saved.permissions_asked,
                     release_on_sleep: saved.release_on_sleep,
                     clock_on: saved.clock_on,
                     nav_on: saved.nav_on,
@@ -1605,6 +1612,10 @@ impl App {
         app.connect_tuner();
         app.install_callbacks(ui);
         app.push_all();
+        // LAST, AFTER `push_all`. The panel sets `overlay`, and `push_all` pushes
+        // the whole face including that property — raising it first would have
+        // the start-up push close it again.
+        app.offer_permissions();
         app
     }
 
@@ -3625,6 +3636,70 @@ impl App {
         String::new()
     }
 
+    /// The one-time offer, made at launch and never again.
+    ///
+    /// ── WHY THIS IS NOT "CHECK AND ASK", WHICH IS THE ANDROID NORM ──────────
+    ///
+    /// For an ordinary runtime permission it would be. `SYSTEM_ALERT_WINDOW` is
+    /// a SPECIAL one: there is no in-app dialog for it on any Android, the only
+    /// route is a full Settings screen, and — the part that decides this design —
+    /// there is no readable "the user said no". `shouldShowRequestPermissionRationale`
+    /// does not cover a special permission, so an app that asks whenever the
+    /// permission is missing asks on EVERY launch, for ever, of a driver who has
+    /// already refused. `Settings::permissions_asked` is the state Android
+    /// declines to keep.
+    ///
+    /// THE FLAG IS SET WHEN THE PANEL IS RAISED, not when it is answered. A
+    /// process killed with the panel on screen has still spent the offer, which
+    /// is the safe direction: the two DIAGNOSTICS rows are the way back, and
+    /// they always work.
+    ///
+    /// NOTIFICATIONS ARE ASKED FOR HERE TOO AND WITHOUT A PANEL, because that one
+    /// IS an ordinary runtime permission with a real dialog of its own — there is
+    /// nothing to explain that the dialog does not say. Below API 33 the Java
+    /// side answers "not needed" and does nothing, which is this unit.
+    ///
+    /// -1 FROM `overlay_permission_state` IS NOT "NOT GRANTED". It means the
+    /// question does not apply — a host build, or `attach` never ran — and
+    /// treating it as a refusal would raise this panel over every screenshot.
+    fn offer_permissions(self: &Rc<App>) {
+        if self.state.borrow().settings.permissions_asked {
+            return;
+        }
+        let note = crate::android::request_notification_permission();
+        let overlay = crate::android::overlay_permission_state();
+        {
+            let mut s = self.state.borrow_mut();
+            s.settings.permissions_asked = true;
+            let at = stamp();
+            s.settings.log.push_head(&at, &format!("permissions: first launch — {note}"));
+        }
+        self.save_prefs();
+        if overlay != 0 {
+            return;
+        }
+        let ui = self.ui();
+        ui.set_permissions_body(
+            "Carnyx can show the station over other apps when you change it from \
+             the steering wheel. Android needs you to allow that on its own \
+             screen — Carnyx cannot grant it for you.\n\nYou can also do this \
+             later from Settings › Diagnostics."
+                .into(),
+        );
+        ui.set_permissions_primary("Open Android settings".into());
+        ui.set_permissions_dismiss("Not now".into());
+        ui.set_overlay(Overlay::Permissions);
+    }
+
+    /// The panel's affirmative button: out to the Settings screen.
+    fn grant_permissions(self: &Rc<App>) {
+        self.ui().set_overlay(Overlay::None);
+        let line = crate::android::request_overlay_permission();
+        let at = stamp();
+        self.state.borrow_mut().settings.log.push(&at, &line);
+        self.push_settings();
+    }
+
     /// Take OsmAnd's units if it has an answer, and say so once when it changes.
     ///
     /// CALLED FROM [`Self::push_nav`] AND NOWHERE ELSE, which is once a second
@@ -4487,6 +4562,20 @@ impl App {
         on!(on_settings_pick_diag_action, |app, i| {
             app.run_diag_action(i);
         });
+        on!(on_permissions_grant, |app| {
+            app.grant_permissions();
+        });
+        on!(on_permissions_not_now, |app| {
+            // NOTHING TO RECORD BEYOND CLOSING IT. `permissions_asked` was set
+            // when the panel was RAISED, not here, so "Not now" and a process
+            // killed with the panel still up mean the same thing: the one offer
+            // has been made. Anything else re-asks on the next launch, which is
+            // exactly the nag this design exists to prevent.
+            app.ui().set_overlay(Overlay::None);
+            let at = stamp();
+            app.state.borrow_mut().settings.log.push(&at, "permissions: offer declined");
+            app.push_settings();
+        });
         on!(on_open_logo_search, |app, i| {
             app.open_logo_search(i);
         });
@@ -4763,6 +4852,7 @@ impl App {
             selected: s.settings.selected,
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
+            permissions_asked: s.settings.permissions_asked,
             release_on_sleep: s.settings.release_on_sleep,
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
@@ -6308,6 +6398,81 @@ mod tests {
         (ui, driver)
     }
 
+    /// THE OFFER IS MADE ONCE PER INSTALL, AND THE FLAG OUTLIVES THE PROCESS.
+    ///
+    /// This is the whole difference between "ask on launch", which is the Android
+    /// norm and what was asked for, and a nag. `SYSTEM_ALERT_WINDOW` has no
+    /// readable "the user declined" — `shouldShowRequestPermissionRationale` does
+    /// not cover a special permission — so if this flag failed to persist, a
+    /// driver who said no would be sent to Settings on every single launch and
+    /// nothing in the platform would ever tell the app to stop.
+    #[test]
+    fn the_permissions_offer_is_made_once_and_survives_a_restart() {
+        let _ui_lock = harness::ui_lock();
+        let dir = std::env::temp_dir().join("carnyx-apptest-permonce");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let make = || {
+            let ui = AppWindow::new().expect("window");
+            let driver = App::with_tuner(
+                &ui,
+                &host_db_path(),
+                &dir,
+                Box::new(crate::android::FakeTuner::new()),
+                false,
+                None,
+                fake::FakeLocation::default(),
+            );
+            (ui, driver)
+        };
+
+        let (_ui, first) = make();
+        assert!(
+            first.state.borrow().settings.permissions_asked,
+            "the first launch spends the offer"
+        );
+        let asked = |d: &Rc<App>| {
+            d.state
+                .borrow()
+                .settings
+                .log
+                .lines()
+                .iter()
+                .filter(|l| l.contains("permissions: first launch"))
+                .count()
+        };
+        assert_eq!(asked(&first), 1, "and says so once");
+        drop(first);
+
+        // A SECOND PROCESS OVER THE SAME PREFERENCES FILE, which is what an
+        // ignition cycle is. Not a second call on the same App — that would pass
+        // on the in-memory flag alone and prove nothing about the file.
+        let (_ui2, second) = make();
+        assert!(second.state.borrow().settings.permissions_asked, "still spent");
+        assert_eq!(asked(&second), 0, "and the second launch says nothing at all");
+    }
+
+    /// AND IT NEVER OPENS WHERE THERE IS NOTHING TO GRANT.
+    ///
+    /// `overlay_permission_state` answers -1 off Android — the question does not
+    /// apply — and -1 is deliberately NOT "not granted". Getting that wrong would
+    /// raise a modal panel over every one of the 81 screenshots and over every
+    /// other test in this file, which is a loud enough failure to be worth its
+    /// own test rather than being left to whichever one broke first.
+    #[test]
+    fn the_permissions_panel_never_opens_on_a_build_with_nothing_to_grant() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("permpanel");
+        driver.drain_events();
+        assert_eq!(
+            ui.get_overlay(),
+            Overlay::None,
+            "the host has no permission model, so there is nothing to offer"
+        );
+        assert_eq!(crate::android::overlay_permission_state(), -1, "and it says so as -1");
+    }
+
     /// ONE WAKE PER BATCH — AND AN EVENT THAT ARRIVES MID-DRAIN STILL GETS ONE.
     ///
     /// THE SECOND HALF IS THE ONE THAT BITES. Making the wake idempotent is easy
@@ -6490,6 +6655,7 @@ mod tests {
             selected: settings::Source::Rtl,
             theme: settings::Theme::Dark,
             logos_on: true,
+            permissions_asked: false,
             release_on_sleep: false,
             clock_on: false,
             nav_on: false,

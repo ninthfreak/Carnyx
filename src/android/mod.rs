@@ -848,6 +848,19 @@ pub fn request_notification_permission() -> String {
     "notification permission: nothing to ask on this build".into()
 }
 
+/// Can the pop-up draw over other apps? See [`alert::overlay_state`].
+#[cfg(target_os = "android")]
+pub fn overlay_permission_state() -> i32 {
+    alert::overlay_state()
+}
+
+/// The host has no overlay windows, so the question does not apply — which is
+/// -1 and not 0. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn overlay_permission_state() -> i32 {
+    -1
+}
+
 /// Send the driver to the "Display over other apps" screen. See `alert`.
 #[cfg(target_os = "android")]
 pub fn request_overlay_permission() -> String {

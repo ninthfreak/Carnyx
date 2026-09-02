@@ -198,6 +198,24 @@ pub fn request_post_notifications() -> String {
     .unwrap_or_else(|e| format!("JNI failure: {e}"))
 }
 
+/// Can the pop-up draw over other apps? 1 yes, 0 no, -1 cannot tell.
+///
+/// THE LAUNCH OFFER ASKS THIS BEFORE IT DECIDES ANYTHING. -1 means the question
+/// does not apply on this build — no class, no context — and is NOT "no": a host
+/// build would otherwise raise a permissions panel over every screenshot.
+pub fn overlay_state() -> i32 {
+    let Some(class) = CLASS_REF.get() else {
+        return -1;
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return -1;
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<i32, jni::errors::Error> {
+        env.call_static_method(class, jni_str!("overlayState"), jni_sig!("()I"), &[])?.i()
+    })
+    .unwrap_or(-1)
+}
+
 /// Send the driver to Android's "Display over other apps" screen.
 ///
 /// ON DEMAND, from a settings row. `CarnyxOverlay` has the reasoning: this is a

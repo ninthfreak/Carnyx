@@ -320,6 +320,26 @@ public final class CarnyxAlert {
      *
      * @return one line for the diagnostics log, never null.
      */
+    /**
+     * Can the overlay be drawn right now? 1 yes, 0 no, -1 cannot tell.
+     *
+     * <p>A QUERY AND NOT THE REQUEST, because the launch decision has to be able
+     * to ask WITHOUT doing anything. {@link #requestOverlayPermission} opens a
+     * Settings screen; this only reads an app-op, so the caller can decide
+     * whether the one-time offer is even warranted.
+     *
+     * <p>-1 IS ITS OWN ANSWER. On a host build there is no class at all and the
+     * Rust side answers -1 without ever reaching here; from here it means
+     * {@code attach} has not run. Neither is "not granted", and treating them as
+     * such would put the offer on a screen that has nothing to grant.
+     */
+    public static synchronized int overlayState() {
+        if (ctx == null) {
+            return -1;
+        }
+        return CarnyxOverlay.permitted(ctx) ? 1 : 0;
+    }
+
     public static synchronized String requestOverlayPermission() {
         return CarnyxOverlay.requestPermission(ctx, activity == null ? null : activity.get());
     }

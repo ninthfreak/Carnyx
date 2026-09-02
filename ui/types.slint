@@ -105,6 +105,10 @@ export enum Overlay {
     settings,
     /// §6.4 preset logo-search window.
     logo-search,
+    /// The one-time permissions offer. Not a §6 overlay — nothing in the design
+    /// bundle covers it, because the pop-up it is for did not exist then. It
+    /// borrows §6's chrome and opens ITSELF, which no other value here does.
+    permissions,
 }
 
 /// A band theme, resolved in Rust from what is playing (Design EASTER-EGGS §12).

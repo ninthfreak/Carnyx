@@ -1306,6 +1306,61 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 116. Ask for the pop-up's permissions on first launch, once
+**BUILT, UNRUN ON THE UNIT.** The owner had to find the overlay grant by hand in
+Android's settings and asked the obvious question: *"isn't the norm for an
+Android application with a feature like this to check if it has permissions on
+launch, and then ask for them if it doesn't? Possibly with a backup to in
+settings to re-ask if permissions were denied."* It is, and the standing note in
+the manifest refusing to ask unprompted was too broad — it is sound about asking
+repeatedly mid-drive and wrong as "never ask", especially now that nothing
+auto-starts the app, so a launch is a driver tapping the icon while parked.
+
+**THE TWO PERMISSIONS ARE NOT THE SAME KIND OF THING, and only one fits the
+norm cleanly.** `POST_NOTIFICATIONS` is an ordinary runtime permission: a real
+in-app dialog, and `shouldShowRequestPermissionRationale` to tell "never asked"
+from "declined". `SYSTEM_ALERT_WINDOW` is SPECIAL — no in-app dialog on any
+Android, the only route a full Settings screen, and **no readable declined
+state**. Android answers granted or not granted and nothing else.
+
+**WHICH IS WHY THE FLAG EXISTS.** An app that asks whenever the special
+permission is missing opens Settings on EVERY launch, for ever, of a driver who
+has already refused, and nothing in the platform will ever tell it to stop. So
+`Settings::permissions_asked` keeps the state Android declines to: asked once,
+never automatically again. Persisted through `prefs`, so "once" means once per
+install rather than once per launch. Set when the panel is RAISED and not when it
+is answered — a process killed with it on screen has still spent the offer, which
+is the safe direction because both DIAGNOSTICS rows always work as the way back.
+
+**A PANEL FOR THE OVERLAY, NOTHING FOR THE NOTIFICATION.** `ui/permissions.slint`
+is two sentences and two buttons on §6's shared chrome: sending a driver into a
+system screen unannounced is an app dumping them somewhere with no idea why. The
+notification permission gets no panel because it has a real dialog of its own and
+there is nothing to explain that the dialog does not say — and below API 33 the
+Java side answers "not needed" and does nothing, which is this unit.
+
+**THE PANEL REFUSES THE SCRIM.** Every other overlay is something the driver
+opened and can tap away; this one opened itself, and a stray tap would spend the
+single answer it is ever going to get. No close button either. Both buttons are
+explicit.
+
+**-1 IS NOT "NOT GRANTED", and that distinction has its own test.**
+`overlay_permission_state` answers -1 where the question does not apply — a host
+build, or `attach` never having run. Treating it as a refusal would raise a modal
+over all 93 screenshots and over every other test in the file.
+
+**A BUG THE TESTS CAUGHT.** The flag was written to the preferences file
+correctly and then read back as a hard-coded `false` at start-up, so it persisted
+its own state and ignored it — a nag that saves a flag it never consults. Caught
+by the restart half of `the_permissions_offer_is_made_once_and_survives_a_restart`,
+which deliberately builds a SECOND `App` over the same directory rather than
+calling twice on one, because the in-memory flag alone would have passed.
+
+**Evidence.** 371 tests, two new. Clippy clean, JNI seam checks, all 93 shots
+re-render. NOTE: `shots/` is gitignored, so a `git status` over it proves nothing
+about drift — the panel's absence from the host is pinned by the test, not by the
+renders.
+
 ### 115. Give the pop-up the peek card's form and the face's palette
 **BUILT, UNRUN ON THE UNIT.** #114's window landed and the owner saw it on the
 road with a station logo in it. Two changes on top, both asked for directly:
