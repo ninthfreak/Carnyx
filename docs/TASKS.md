@@ -1306,6 +1306,43 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 122. Handoff v3.3.0 §7a.2 — hold 650ms to un-star
+**BUILT, THE RING UNVERIFIED ON A SCREEN.** The bundle lists this as shipped in
+v3.2.0; this tree never got it. The star was `clicked => toggle-save()`, a plain
+tap that both saved AND removed — the stray-tap deletion §7a.2 exists to stop.
+
+**THE TWO DIRECTIONS ARE NOW DIFFERENT GESTURES.** A tap on an unsaved star saves.
+A tap on a SAVED one removes nothing and shows `HOLD TO REMOVE` for 1.6s, because
+an early release IS the accident, and the teaching mechanism is deliberate: "the
+rule is learned from the first accident, not from documentation the driver would
+have to read."
+
+**THE COMMIT IS AT THE RING'S CLOSE, UNDER THE FINGER**, not on release — the
+650ms timer fires whether or not the driver has lifted, which is the spec's own
+wording.
+
+**THE RING IS A DECLARATIVE ANIMATION, WHICH §7a.2 SPENT REAL DEBUGGING TIME ON.**
+Its note: a timer-driven progress value did not re-render in the prototype's
+runtime and committed the removal with ZERO visual feedback, and it asks the
+porter to "verify the animation is driven by the compositor or an explicit
+animation API rather than assumed re-renders". Slint's `animate` is exactly that,
+so the engine draws the ring and the timer only decides the outcome. `toggle-save`
+in Rust is unchanged — the guards live in the gesture.
+
+**A DEGENERATE ARC DRAWS NOTHING, and both ends of the sweep depend on it.** At
+progress 0 start meets end and the ring is absent rather than a dot. At the other
+end 360 would meet the start again and vanish at the one moment it should read as
+complete, so the sweep stops at 359.9.
+
+**A DRIFTING THUMB DOES NOT CANCEL, and Slint gives that for free.** §7a.2 needs
+pointer capture so only a lift aborts; a Slint `TouchArea` keeps its grab once
+pressed, so `pressed` survives the finger moving outside it. Nothing to build.
+
+**NOT VERIFIED: the ring on a screen.** It exists only during a press, and the
+shot harness renders static frames — there is no interactive pass here. What is
+checked is that it compiles, that the arc string interpolates, and that the state
+machine is right by reading. The behaviour needs a drive.
+
 ### 121. Handoff v3.3.0 §6 + §7a.1 — the ETA becomes a pill, and moves
 **DONE.** Two changes that only make sense together: the ETA leaves the clock's
 column and becomes the tail of the nav countdown line, set in a filled pill.

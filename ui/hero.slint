@@ -1243,6 +1243,53 @@ export component HeroCard inherits Rectangle {
 
     // The star ALWAYS sits in the card's top-right corner, on both tracks — never
     // inline with the station identity. It is not part of the centred group.
+    // ── HOLD 650ms TO UN-STAR (v3.3.0 §7a.2) ─────────────────────────────────
+    //
+    // "Saving a station is a tap. Removing a favorite takes a 650ms
+    // press-and-hold." The star sits where a thumb reaching for the card lands,
+    // and a stray tap used to delete a preset silently. The teaching mechanism is
+    // deliberate: the rule is learned from the first accident.
+    //
+    // TAP ON AN UNSAVED STAR SAVES. Tap on a SAVED one removes nothing and says
+    // why — an early release IS the accident this exists to catch, so it gets the
+    // hint rather than silence.
+    //
+    // THE COMMIT IS AT THE RING'S CLOSE, UNDER THE FINGER, not on release. The
+    // timer below fires at 650ms whether or not the driver has lifted, which is
+    // the spec's own wording, and the ring reaching full is the same instant.
+    property <bool> unstar-running: false;
+    /// 0..1, DRIVEN BY A DECLARATIVE ANIMATION and not by a per-frame redraw.
+    /// §7a.2 spent real debugging time on this: a timer-driven progress value did
+    /// not re-render in the prototype's runtime and committed the removal with
+    /// ZERO visual feedback. Slint's `animate` is compositor-driven, so the ring
+    /// is drawn by the engine and the timer below only decides the outcome.
+    property <float> unstar-progress: 0.0;
+    animate unstar-progress { duration: 650ms; easing: linear; }
+    /// Shown for 1.6s after an early release. The star is restored with it.
+    property <bool> unstar-hint: false;
+    /// The ring's sweep in degrees. Stops at 359.9 rather than 360 — see the
+    /// Path's own note on why a full turn draws nothing.
+    property <float> unstar-sweep: Math.min(359.9, root.unstar-progress * 360);
+
+    unstar-timer := Timer {
+        interval: 650ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.unstar-running = false;
+            root.unstar-progress = 0;
+            root.toggle-save();
+        }
+    }
+    unstar-hint-timer := Timer {
+        interval: 1600ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.unstar-hint = false;
+        }
+    }
+
     if !root.scanning: Rectangle {
         x: root.width - root.corner - Metrics.star * root.scale;
         y: root.corner;
@@ -1252,17 +1299,88 @@ export component HeroCard inherits Rectangle {
         background: root.saved ? Pal.blue-fill : transparent;
         border-width: root.saved ? 0px : 1px * root.scale;
         border-color: Pal.border;
-        opacity: star-touch.pressed ? 0.55 : 1.0;
+        // THE FILL FADES DURING THE HOLD, which is §7a.2's own cue: "star during
+        // hold — fill fades out, glyph shrinks 16%". The press dim stays for an
+        // ordinary tap.
+        opacity: root.unstar-running
+            ? 1.0 - root.unstar-progress * 0.65
+            : (star-touch.pressed ? 0.55 : 1.0);
+
         star-touch := TouchArea {
             enabled: !root.inert;
-            clicked => { root.toggle-save(); }
+            // A DRIFTING THUMB MUST NOT CANCEL — §7a.2 is explicit, and Slint
+            // gives it for free: a TouchArea keeps the grab once pressed, so
+            // `pressed` stays true while the finger moves inside or outside it.
+            // Only a real lift clears it. That is the same grab the strip's own
+            // note at `presets.slint` describes.
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    if (root.saved) {
+                        root.unstar-running = true;
+                        root.unstar-progress = 1.0;
+                        unstar-timer.running = true;
+                    }
+                }
+                if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                    if (root.unstar-running) {
+                        // EARLY RELEASE: nothing is removed, the star comes back,
+                        // and the hint says what to do instead.
+                        unstar-timer.running = false;
+                        root.unstar-running = false;
+                        root.unstar-progress = 0;
+                        root.unstar-hint = true;
+                        unstar-hint-timer.running = false;
+                        unstar-hint-timer.running = true;
+                    }
+                }
+            }
+            clicked => {
+                // SAVE ONLY. Removing is the hold's job, and a `clicked` that
+                // called `toggle-save` unconditionally is exactly the stray tap
+                // §7a.2 exists to stop.
+                if (!root.saved) {
+                    root.toggle-save();
+                }
+            }
         }
+
+        // THE RING, drawn by the engine from the animated progress above.
+        //
+        // A DEGENERATE ARC DRAWS NOTHING, which is what makes the two ends work:
+        // at progress 0 the sweep is 0 and start meets end, and the ring is
+        // absent rather than a dot. The sweep is clamped just short of a full
+        // turn for the same reason at the other end — 360 would meet the start
+        // again and vanish at the one moment it should be complete.
+        if root.unstar-running: Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 100;
+            viewbox-height: 100;
+            stroke: Pal.amber;
+            stroke-width: 7px;
+            commands: "M 50 8 A 42 42 0 \{root.unstar-sweep > 180 ? 1 : 0} 1 \{50 + 42 * Math.sin(root.unstar-sweep * 1deg)} \{50 - 42 * Math.cos(root.unstar-sweep * 1deg)}";
+        }
+
         StarIcon {
-            size: Metrics.s(30) * root.scale;
+            // GLYPH SHRINKS 16% ACROSS THE HOLD — §7a.2's second cue.
+            size: Metrics.s(30) * root.scale * (1.0 - root.unstar-progress * 0.16);
             filled: root.saved;
             color: Pal.amber;
             outline: Pal.dim;
         }
+    }
+
+    // "HOLD TO REMOVE", under the star, for 1.6s after an early release.
+    if root.unstar-hint: Text {
+        x: root.width - root.corner - Metrics.star * root.scale * 2.6;
+        y: root.corner + Metrics.star * root.scale + Metrics.s(4) * root.scale;
+        width: Metrics.star * root.scale * 2.6;
+        horizontal-alignment: right;
+        text: "HOLD TO REMOVE";
+        font-family: Font.face; font-weight: Font.bold;
+        font-size: Metrics.s(12) * root.scale;
+        letter-spacing: 1.2px;
+        color: Pal.dim;
     }
 
     // §4.7: a light grey veil over the hero card when priority is released. The
