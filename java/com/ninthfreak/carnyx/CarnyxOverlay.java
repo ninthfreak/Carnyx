@@ -87,23 +87,58 @@ final class CarnyxOverlay {
     private static final long SHOW_MS = 5000L;
 
     /** Matching {@link CarnyxAlert}'s toast, so the two read as one design. */
-    private static final float TEXT_SP = 28f;
     private static final float PAD_X_DP = 28f;
     private static final float PAD_Y_DP = 18f;
     private static final float RADIUS_DP = 18f;
 
     /**
-     * The logo's height in the card, in dp.
+     * THE PEEK CARD'S PLATE, and these are its numbers rather than new ones.
      *
-     * <p>Larger than the notification's {@code ICON_DP} of 64 and sized against
-     * the TEXT rather than against a system slot: a notification's large icon is
-     * a fixed square the platform chooses, and this is a mark sitting beside
-     * 28sp words on a card this class draws itself. Height-constrained with the
-     * width left to follow, because station logos are landscape — the
-     * notification's own note records a logo-only banner failing for exactly the
-     * reason a square crop would.
+     * <p>{@code ui/presets.slint} caps a peek plate at 184 and scales the card by
+     * 0.88, giving 162 wide; the box is aspect-locked 16:10, so 101 tall. Asked
+     * for directly — <i>"roughly the same size as they are on the prev/next peek
+     * cards"</i> — and taken from the source rather than eyeballed, so the two
+     * stay the same size if either moves.
+     *
+     * <p>The plate's own corner is 0.14 of its SHORT side, which is the peek's
+     * rule too and is tighter than the card's radius: the slab is a smaller
+     * rounded rectangle sitting inside the card, not the card itself.
      */
-    private static final float LOGO_DP = 52f;
+    private static final float PLATE_W_DP = 162f;
+    private static final float PLATE_H_DP = 101f;
+    private static final float PLATE_RADIUS_FRAC = 0.14f;
+
+    /**
+     * The plated logo's inset, as a fraction of the plate's long side.
+     *
+     * <p>0.09, which is `PlateBox`'s own figure, and it applies ONLY to
+     * {@link #PLATE_GREY} art — a mark keyed to a grey slab is drawn expecting
+     * that slab to show around it. Everything else fills the plate.
+     */
+    private static final float PLATED_PAD_FRAC = 0.09f;
+
+    /**
+     * Type for the no-logo card, in sp.
+     *
+     * <p>NOT THE PEEK CARD'S 14, AND THAT IS DELIBERATE. The peek label is sized
+     * for a card on Carnyx's own screen, which the driver has opened and is
+     * looking straight at. This lands unannounced over a maps app and has to be
+     * read in one glance before the eyes go back to the road, which is the same
+     * brief the 28sp toast was raised to meet. So the peek's LAYOUT is copied and
+     * its type size is not: the call sign at 34, the dial under it at 24.
+     *
+     * <p>The call sign is the larger of the two because it is the identity; the
+     * dial is the fallback fact beside it. On the peek card the same pair is a
+     * box and a label, and this is that relationship at a readable size.
+     */
+    private static final float CALL_SP = 34f;
+    private static final float DIAL_SP = 24f;
+
+    /** {@code LogoPlate}, as `app::plate_code` numbers it. */
+    private static final int PLATE_LIGHT = 0;
+    private static final int PLATE_FALLBACK = 1;
+    private static final int PLATE_BARE = 2;
+    private static final int PLATE_GREY = 3;
 
     /** The live window, or null. Touched only on the main thread. */
     private static View shown;
@@ -173,15 +208,16 @@ final class CarnyxOverlay {
      *
      * @return one clause for the diagnostics log, never null.
      */
-    static String show(Context ctx, String title, String text, String logoPath) {
+    static String show(Context ctx, String title, String text, String logoPath,
+            int brand, int ground, int ink, int edge, int logoFallback, int logoPlate,
+            int plate) {
         if (ctx == null) {
             return "no overlay: no context";
         }
         if (!permitted(ctx)) {
             return "no overlay: not permitted";
         }
-        final String message = message(title, text);
-        if (message.isEmpty()) {
+        if (title == null || title.isEmpty()) {
             return "no overlay: nothing to say";
         }
         Looper looper = Looper.getMainLooper();
@@ -192,7 +228,9 @@ final class CarnyxOverlay {
         // the poll's thread and decoding is the one expensive step in the whole
         // path; doing it inside the posted Runnable would put file I/O on the UI
         // thread of an app that is drawing a radio face.
-        final Bitmap logo = CarnyxAlert.decodeLogo(logoPath, LOGO_DP);
+        // AT THE PLATE'S SIZE NOW, not a 52dp strip. The mark IS the pop-up when
+        // there is one, so it is decoded for a 162x101 box.
+        final Bitmap logo = CarnyxAlert.decodeLogo(logoPath, PLATE_W_DP);
         if (main == null) {
             main = new Handler(looper);
         }
@@ -201,7 +239,8 @@ final class CarnyxOverlay {
             @Override public void run() {
                 try {
                     removeNow(app);
-                    View card = card(app, message, logo);
+                    View card = card(app, title, text, logo,
+                            brand, ground, ink, edge, logoFallback, logoPlate, plate);
                     WindowManager wm = app.getSystemService(WindowManager.class);
                     if (wm == null) {
                         return;
@@ -256,66 +295,113 @@ final class CarnyxOverlay {
         }
     }
 
-    /** The same one line the toast shows, so the two never disagree. */
-    private static String message(String title, String text) {
-        if (title == null || title.isEmpty()) {
-            return text == null ? "" : text;
-        }
-        if (text == null || text.isEmpty()) {
-            return title;
-        }
-        return title + "  ·  " + text;
-    }
-
     /**
-     * The card: the mark on the left when there is one, the words beside it.
+     * The card: the mark alone when there is one, the call sign and dial when
+     * there is not.
      *
-     * <p>BESIDE AND NOT ABOVE, and not alone. {@link CarnyxAlert#build}'s note
-     * records that a logo-only banner was tried and does not work — the driver
-     * needs the call sign and the dial, and the mark is what makes them findable
-     * at a glance rather than what replaces them.
+     * <h2>The logo stands by itself</h2>
+     *
+     * <p>Asked for directly — <i>"show the station logo … and not bother with the
+     * call sign or frequency as text"</i> — and it is right here even though
+     * {@link CarnyxAlert#build}'s note says a logo-only banner was tried and
+     * failed. THAT NOTE IS ABOUT THE NOTIFICATION and does not carry over: there
+     * the mark went through {@code setLargeIcon}, which draws into a small square
+     * at the card's right edge, and a landscape wordmark in a square slot is
+     * unreadable. Here the plate is a 16:10 box this class sizes itself, which is
+     * the shape the art was made for. An earlier version of this file repeated
+     * the notification's conclusion as if it applied; it did not.
+     *
+     * <h2>And the fallback is the peek card's own form</h2>
+     *
+     * <p>No logo means the brand-filled box with the call sign in it and the dial
+     * beneath, which is exactly what a peek card draws for a station with no art.
+     * The layout is copied; the type size is not — see {@link #CALL_SP}.
+     *
+     * <h2>What goes behind the art</h2>
+     *
+     * <p>The four-state {@code LogoPlate} decision, made in Rust and spent here.
+     * A mark adapted for a dark face needs a KNOWN ground rather than whatever
+     * the card happens to be: {@link #PLATE_FALLBACK} is un-adapted light art
+     * that needs white paper under it, {@link #PLATE_GREY} is keyed to a grey
+     * slab and insets itself so the slab shows, and {@link #PLATE_BARE} and
+     * {@link #PLATE_LIGHT} need nothing. Getting this wrong is a logo that
+     * vanishes into the card, which is why it travels rather than being guessed
+     * from the card colour.
      */
-    private static View card(Context ctx, String message, Bitmap logo) {
+    private static View card(Context ctx, String call, String dial, Bitmap logo,
+            int brand, int ground, int ink, int edge, int logoFallback, int logoPlate,
+            int plate) {
         float density = ctx.getResources().getDisplayMetrics().density;
         int padX = Math.round(PAD_X_DP * density);
         int padY = Math.round(PAD_Y_DP * density);
+        int plateW = Math.round(PLATE_W_DP * density);
+        int plateH = Math.round(PLATE_H_DP * density);
+        int plateRadius = Math.round(Math.min(plateW, plateH) * PLATE_RADIUS_FRAC);
 
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(padX, padY, padX, padY);
+        LinearLayout col = new LinearLayout(ctx);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(padX, padY, padX, padY);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
         bg.setCornerRadius(RADIUS_DP * density);
-        bg.setColor(0xF00E0E10);
-        bg.setStroke(Math.max(1, Math.round(2f * density)), 0xFF4A9EFF);
-        row.setBackground(bg);
+        bg.setColor(ground);
+        bg.setStroke(Math.max(1, Math.round(2f * density)), edge);
+        col.setBackground(bg);
 
         if (logo != null) {
+            int slab = plate == PLATE_FALLBACK ? logoFallback
+                    : plate == PLATE_GREY ? logoPlate
+                    : 0;
             ImageView mark = new ImageView(ctx);
             mark.setImageBitmap(logo);
-            // FIT_CENTER WITH A FIXED HEIGHT AND A FREE WIDTH. Station logos are
-            // landscape and vary widely in ratio; constraining both axes would
-            // either letterbox them into a square or stretch them, and the whole
-            // value of a mark is that it is recognised without being read.
+            // CONTAIN, NEVER CROP (§4.5): the art scales to the largest size that
+            // fits and is never cut, because half a wordmark is not a wordmark.
             mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            mark.setAdjustViewBounds(true);
-            int h = Math.round(LOGO_DP * density);
-            LinearLayout.LayoutParams lp =
-                    new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, h);
-            lp.rightMargin = Math.round(16f * density);
-            row.addView(mark, lp);
+            if (slab != 0) {
+                GradientDrawable under = new GradientDrawable();
+                under.setShape(GradientDrawable.RECTANGLE);
+                under.setCornerRadius(plateRadius);
+                under.setColor(slab);
+                mark.setBackground(under);
+            }
+            if (plate == PLATE_GREY) {
+                int inset = Math.round(Math.max(plateW, plateH) * PLATED_PAD_FRAC);
+                mark.setPadding(inset, inset, inset, inset);
+            }
+            col.addView(mark, new LinearLayout.LayoutParams(plateW, plateH));
+            return col;
         }
 
-        TextView tv = new TextView(ctx);
-        tv.setText(message);
-        tv.setTextColor(0xFFFFFFFF);
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, TEXT_SP);
-        tv.setGravity(Gravity.CENTER_VERTICAL);
-        tv.setMaxLines(2);
-        row.addView(tv);
-        return row;
+        // NO ART: the brand-coloured box with the call letters in it, then the
+        // dial. `Pal.flat` has already desaturated the brand upstream if the face
+        // is dead, so this spends the colour rather than deciding it.
+        TextView box = new TextView(ctx);
+        box.setText(call);
+        box.setTextColor(0xFFFFFFFF);
+        box.setTextSize(TypedValue.COMPLEX_UNIT_SP, CALL_SP);
+        box.setGravity(Gravity.CENTER);
+        box.setMaxLines(1);
+        GradientDrawable plateBg = new GradientDrawable();
+        plateBg.setShape(GradientDrawable.RECTANGLE);
+        plateBg.setCornerRadius(plateRadius);
+        plateBg.setColor(brand);
+        box.setBackground(plateBg);
+        col.addView(box, new LinearLayout.LayoutParams(plateW, plateH));
+
+        TextView under = new TextView(ctx);
+        under.setText(dial);
+        under.setTextColor(ink);
+        under.setTextSize(TypedValue.COMPLEX_UNIT_SP, DIAL_SP);
+        under.setGravity(Gravity.CENTER);
+        under.setMaxLines(1);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        // The peek card's own gap: a third of its label's size.
+        lp.topMargin = Math.round(DIAL_SP * 0.34f * density);
+        col.addView(under, lp);
+        return col;
     }
 
     /**

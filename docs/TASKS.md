@@ -1306,6 +1306,62 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 115. Give the pop-up the peek card's form and the face's palette
+**BUILT, UNRUN ON THE UNIT.** #114's window landed and the owner saw it on the
+road with a station logo in it. Two changes on top, both asked for directly:
+*"I'd like popup to show the station logo at roughly the same size as they are on
+the prev/next peek cards, and not bother with the call sign or frequency as
+text. If there is no station logo, then the call sign and frequency should be
+shown, again roughly the way they are shown on peek cards"* and *"I want these
+popups to follow the light/dark of whatever mode Carnyx is in."*
+
+**THE LOGO NOW STANDS ALONE, AND THE NOTE THAT SAID IT COULD NOT WAS ABOUT
+SOMETHING ELSE.** `CarnyxAlert.build` records that a logo-only banner was tried
+and failed, and #114's own file repeated that conclusion as though it applied
+here. It does not: there the mark went through `setLargeIcon`, which draws into a
+small square at a notification's right edge, and a landscape wordmark in a square
+slot is unreadable. The overlay sizes its own 16:10 plate, which is the shape the
+art was made for. The stale comment is corrected rather than left to mislead the
+next reader.
+
+**THE NUMBERS ARE THE PEEK CARD'S, TAKEN FROM ITS SOURCE.** `ui/presets.slint`
+caps a peek plate at 184 and scales the card by 0.88 — 162 wide, aspect-locked
+16:10, so 101 tall — with a corner of 0.14 of the short side and a 0.09 inset on
+plated art. All four are copied rather than eyeballed, so the two stay the same
+size if either moves. The logo is decoded at the plate's width now instead of the
+52dp strip it was.
+
+**THE TYPE IS NOT THE PEEK CARD'S, AND THAT WAS PUT TO THE OWNER.** A peek label
+is about 14dp, sized for a card on Carnyx's own screen that the driver opened and
+is looking straight at. This lands unannounced over a maps app and has to be read
+in one glance before the eyes go back to the road — the same brief that took the
+toast from the platform's 14 to 28. So the peek's LAYOUT is copied and its size
+is not: call sign 34sp in the brand box, dial 24sp beneath it, gap a third of the
+dial's size as the peek's own spacing rule gives.
+
+**COLOURS TRAVEL, NOT A `dark` FLAG.** The seam carries six ARGB ints read off
+`Pal` at the announce site — brand, ground, ink, edge, and the two logo grounds —
+plus the four-state `LogoPlate` as an int. Handing Java a boolean would have meant
+a second copy of the palette in hex, drifting from `ui/tokens.slint` the moment
+either was touched, and it would still have missed two things `Pal` folds into
+the same tokens: the desaturated dead face, and a band theme's page tint. Read
+from the palette rather than from `settings.theme`, because `Theme::System` sets
+neither flag — the setting can say one thing while the face shows another, which
+is the trap `art_for` already documents.
+
+**THE TOAST WAS THEMED TOO.** It had a hard-coded near-black ground and blue
+edge, so a driver on the light theme got a dark pop-up from a light app. It takes
+the same ground/ink/edge now, and the fallback matches what it falls back from.
+
+**Evidence.** 369 tests, clippy clean, `tools/check-jni.sh` green against the
+widened descriptor — ten parameters now, and that checker is the only thing in
+this container that type-checks it. Both changed Java classes compile against a
+real API-34 framework jar with `-Xlint:all` and zero diagnostics.
+
+**What one drive settles.** Whether the logo reads at plate size over OsmAnd,
+whether the no-logo card is legible at a glance, and whether a light-theme drive
+gets a light pop-up.
+
 ### 114. Draw the station pop-up in a window this app owns
 **BUILT, UNRUN ON THE UNIT.** A third rendering of the station pop-up, tried
 before the toast and falling back to it. Asked for directly, and with the frame

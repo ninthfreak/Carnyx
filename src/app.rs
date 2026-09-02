@@ -287,6 +287,34 @@ struct DarkPick {
     selected: usize,
 }
 
+/// A Slint colour as the packed ARGB int Android wants.
+///
+/// THE SEAM CARRIES COLOURS AND NOT A THEME FLAG. Handing Java a `dark` boolean
+/// would mean a second copy of the palette over there, in hex, drifting from
+/// `ui/tokens.slint` the moment either is touched — and the pop-up would still
+/// miss the desaturated dead face and a band theme's page tint, both of which
+/// `Pal` folds into these same tokens. Reading the live values costs one call
+/// per station change and cannot go stale.
+fn argb(c: slint::Color) -> i32 {
+    (u32::from(c.alpha()) << 24
+        | u32::from(c.red()) << 16
+        | u32::from(c.green()) << 8
+        | u32::from(c.blue())) as i32
+}
+
+/// [`LogoPlate`] as the int the pop-up reads. See `CarnyxOverlay.card`.
+///
+/// Declaration order of the Slint enum, and `light` is 0 because it is also what
+/// a station with no art at all gets — the arm that draws no plate treatment.
+fn plate_code(p: LogoPlate) -> i32 {
+    match p {
+        LogoPlate::Light => 0,
+        LogoPlate::Fallback => 1,
+        LogoPlate::Bare => 2,
+        LogoPlate::Plate => 3,
+    }
+}
+
 /// What a probe calls itself in the log. One place, so the "reading…" line, the
 /// footer and the unavailable line cannot drift apart.
 fn probe_name(action: settings::Action) -> &'static str {
@@ -3008,7 +3036,37 @@ impl App {
             // hero lettering follows above.
             let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
             let logo = self.notification_logo(&base);
-            let outcome = crate::android::announce_station(&title, &format!("{dial} FM"), &logo);
+            // THE POP-UP IS DRAWN BY THIS APP AND HAS TO MATCH THIS APP. It is a
+            // window Carnyx owns (`CarnyxOverlay`), not a system template, so it
+            // gets the live palette rather than a copy of one: read straight off
+            // `Pal`, which is where light/dark actually resolves — `Theme::System`
+            // sets neither flag, so `settings.theme` can say one thing while the
+            // face shows another. `art_for`'s own note makes the same point.
+            //
+            // The two logo grounds travel with them because a mark adapted for a
+            // dark face needs a KNOWN surface behind it, not whatever the card is.
+            let plate = self
+                .art_for(&base, Some(TILE_BOX_DP))
+                .map_or(LogoPlate::Light, |(_, p)| p);
+            let brand = brand_color(&base);
+            let (ground, ink, edge, logo_fallback, logo_plate) = {
+                let ui = self.ui();
+                let pal = ui.global::<crate::Pal>();
+                (pal.get_panel(), pal.get_text(), pal.get_border(),
+                 pal.get_logo_fallback(), pal.get_logo_plate())
+            };
+            let outcome = crate::android::announce_station(
+                &title,
+                &format!("{dial} FM"),
+                &logo,
+                argb(brand),
+                argb(ground),
+                argb(ink),
+                argb(edge),
+                argb(logo_fallback),
+                argb(logo_plate),
+                plate_code(plate),
+            );
             // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
             // wheel press retunes at all depends on the Slint event loop pumping
             // while the activity is stopped, which cannot be tested off the unit

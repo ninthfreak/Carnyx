@@ -802,13 +802,37 @@ pub fn ingest_panel_key(code: i32, action: String) {
 /// rule on every target, so it is tested on the host like everything else. Only
 /// the posting is platform work, and off Android there is nothing to post to.
 #[cfg(target_os = "android")]
-pub fn announce_station(title: &str, text: &str, logo: &str) -> String {
-    alert::post(title, text, logo)
+#[allow(clippy::too_many_arguments)]
+pub fn announce_station(
+    title: &str,
+    text: &str,
+    logo: &str,
+    brand: i32,
+    ground: i32,
+    ink: i32,
+    edge: i32,
+    logo_fallback: i32,
+    logo_plate: i32,
+    plate: i32,
+) -> String {
+    alert::post(title, text, logo, brand, ground, ink, edge, logo_fallback, logo_plate, plate)
 }
 
 /// The host has no notification shade. See the Android arm.
 #[cfg(not(target_os = "android"))]
-pub fn announce_station(_title: &str, _text: &str, _logo: &str) -> String {
+#[allow(clippy::too_many_arguments)]
+pub fn announce_station(
+    _title: &str,
+    _text: &str,
+    _logo: &str,
+    _brand: i32,
+    _ground: i32,
+    _ink: i32,
+    _edge: i32,
+    _logo_fallback: i32,
+    _logo_plate: i32,
+    _plate: i32,
+) -> String {
     "no notification shade in this build".into()
 }
 

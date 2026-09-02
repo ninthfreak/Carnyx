@@ -118,7 +118,19 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// notifications off is a Settings toggle, a downgraded channel needs a new
 /// channel id and cannot be fixed from code, and a clean "posted" with no banner
 /// on screen is SystemUI's.
-pub fn post(title: &str, text: &str, logo: &str) -> String {
+#[allow(clippy::too_many_arguments)]
+pub fn post(
+    title: &str,
+    text: &str,
+    logo: &str,
+    brand: i32,
+    ground: i32,
+    ink: i32,
+    edge: i32,
+    logo_fallback: i32,
+    logo_plate: i32,
+    plate: i32,
+) -> String {
     let Some(class) = CLASS_REF.get() else {
         return "no alert class in this build".into();
     };
@@ -134,9 +146,21 @@ pub fn post(title: &str, text: &str, logo: &str) -> String {
                 class,
                 jni_str!("post"),
                 jni_sig!(
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIII)\
+                     Ljava/lang/String;"
                 ),
-                &[(&t).into(), (&x).into(), (&l).into()],
+                &[
+                    (&t).into(),
+                    (&x).into(),
+                    (&l).into(),
+                    brand.into(),
+                    ground.into(),
+                    ink.into(),
+                    edge.into(),
+                    logo_fallback.into(),
+                    logo_plate.into(),
+                    plate.into(),
+                ],
             )?
             .l()?;
         let out = JString::cast_local(env, out)?;
