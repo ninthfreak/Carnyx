@@ -601,26 +601,6 @@ component DashedBox inherits Rectangle {
     }
 }
 
-// The band's ‹ / › page buttons and the NEARBY disc, wide tracks only.
-component NavButton inherits Rectangle {
-    in property <string> glyph;
-    callback clicked();
-    width: Math.max(48px, Metrics.s(56));
-    border-radius: 14px;
-    border-width: 1px;
-    border-color: Pal.border;
-    background: Pal.raised;
-    opacity: touch.pressed ? 0.55 : 1.0;
-    touch := TouchArea { clicked => { root.clicked(); } }
-    Text {
-        text: root.glyph;
-        font-family: Font.face;
-        font-weight: 700;
-        font-size: Metrics.s(30);
-        color: Pal.text;
-    }
-}
-
 export component PresetsBand inherits Rectangle {
     in property <[Preset]> presets;
     /// The band theme, for its body face. Three of the five put their display
@@ -632,7 +612,7 @@ export component PresetsBand inherits Rectangle {
     in property <length> band-height;
     /// Nav buttons and the in-band nearby disc are hidden on the tall track,
     /// where nearby lives in the status bar instead.
-    in property <bool> show-nav: true;
+
     in property <bool> show-nearby: true;
 
     callback select(int);
@@ -1043,12 +1023,14 @@ export component PresetsBand inherits Rectangle {
     // `overflowing`, which decides the rail's height and whether the scrollbar
     // is drawn, so resizing either control silently left that decision computed
     // against the old figure.
-    property <length> nav-btn-w: Math.max(48px, Metrics.s(56));
     property <length> nearby-disc-size: Metrics.s(92);
     property <length> band-gap: 10px;
+    // THE ARROW BUTTONS USED TO RESERVE THEIR WIDTH HERE (v3.3.0 §13.4 removed
+    // them). The rail is swipe/drag only now, so the only side chrome left is the
+    // NEARBY disc — and the tiles get the width the two 56dp buttons and their
+    // gaps were holding.
     property <length> side-chrome:
-        (root.show-nav ? 2 * (root.nav-btn-w + root.band-gap) : 0px)
-        + (root.show-nearby ? root.nearby-disc-size + root.band-gap : 0px);
+        root.show-nearby ? root.nearby-disc-size + root.band-gap : 0px;
 
     property <length> tall-tile-w: (rail.width - 2 * root.grid-gap - 8px) / 3;
     property <length> tall-tile-h: Metrics.s(128);
@@ -1071,12 +1053,6 @@ export component PresetsBand inherits Rectangle {
 
     HorizontalLayout {
         spacing: root.band-gap;
-
-        if root.show-nav: NavButton {
-            width: root.nav-btn-w;
-            glyph: "‹";
-            clicked => { rail.viewport-x = Math.min(0px, rail.viewport-x + rail.width * 0.8); }
-        }
 
         // The scroll surface. Deliberately ONE Flickable with absolutely-placed
         // tiles rather than a layout per track: tile positions are pure arithmetic
@@ -1340,7 +1316,14 @@ export component PresetsBand inherits Rectangle {
                 }
             }
 
-            // The thin drag scrollbar beneath both horizontal layouts.
+            // The position indicator beneath both horizontal layouts.
+            //
+            // AN INDICATOR AND NOT A DRAG TARGET, which v3.3.0 §13.4 requires
+            // ("the position bar below it is a passive indicator, not a drag
+            // target"). It holds no `TouchArea`, and in Slint an element without
+            // one does not take input at all — so the rule holds by construction
+            // rather than by a flag. It was called a "drag scrollbar" here, which
+            // it never was.
             if !Metrics.tall: Rectangle {
                 x: 0;
                 y: parent.height - 6px;
@@ -1375,15 +1358,6 @@ export component PresetsBand inherits Rectangle {
                     font-size: 17px;
                     color: Pal.dim;
                 }
-            }
-        }
-
-        if root.show-nav: NavButton {
-            width: root.nav-btn-w;
-            glyph: "›";
-            clicked => {
-                rail.viewport-x = Math.max(rail.width - rail.viewport-width,
-                    rail.viewport-x - rail.width * 0.8);
             }
         }
 

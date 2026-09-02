@@ -1306,6 +1306,32 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 120. Handoff v3.3.0 §13.4 (rail half) — the arrow buttons go
+**DONE.** The preset band is swipe/drag only now. Gone: the `NavButton`
+component, both call sites, the `show-nav` property, its binding in
+`ui/face.slint`, and the `nav-btn-w` width the two 56dp buttons and their gaps
+reserved out of `side-chrome`.
+
+**THE VISIBLE WIN IS THE WIDTH THEY WERE HOLDING.** At 1280x720 the rail showed
+five tiles and clipped the sixth; with the buttons gone all six fit. The buttons
+were reserving 132dp of a band whose whole job is showing stations.
+
+**§13.4'S DRAG HANDLER IS NOT NEEDED HERE, and that is a real finding rather than
+a skipped requirement.** Every warning in §9.1 — capture lazily, do not retarget
+the click, suppress the click for 260ms after a drag — is about DOM pointer
+capture stealing a tap from the tile underneath. This rail is a Slint `Flickable`,
+which does touch dragging and scroll-versus-tap disambiguation itself; the tree
+already carries a note about tiles answering at ~650ms because of exactly that
+disambiguation. There is nothing to build and nothing lost.
+
+**The position bar already satisfies its half.** §13.4 wants a passive indicator,
+not a drag target. It is a plain `Rectangle` with no `TouchArea`, and in Slint an
+element without one takes no input — so the rule holds by construction. Its
+comment called it "the thin drag scrollbar", which it never was; corrected.
+
+**Evidence.** 378 tests, clippy clean, 93 shots re-render, `head-unit-light`
+inspected: no arrows, six tiles where five fitted before.
+
 ### 119. Handoff v3.3.0 §13.1 — one plate, two lines, type that fits itself
 **DONE.** The largest item in the bundle, and the one carrying a STANDING rule:
 "the peek cards carry the same look and style as the preset-rail tiles for station
