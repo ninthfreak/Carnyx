@@ -1306,6 +1306,47 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 121. Handoff v3.3.0 §6 + §7a.1 — the ETA becomes a pill, and moves
+**DONE.** Two changes that only make sense together: the ETA leaves the clock's
+column and becomes the tail of the nav countdown line, set in a filled pill.
+
+**THE MOVE SUPERSEDES A DIRECT INSTRUCTION, WITH THE OWNER'S CONFIRMATION.** The
+ETA sat under the clock and was made 60% larger there on a direct ask. §7a.1 says
+it "never appears under the clock in any stage — that would put it directly above
+the clock, which is the wrong priority while navigating." Asked about the
+conflict, the owner confirmed the move was their own instruction to Claude Design
+and the awkward wording was the design tool's. So the 1.6x multiplier is gone and
+§6's sizes apply — 24sp, 26 on the tall track. Superseded, not ignored.
+
+**DISTANCE-LEFT STAYED BEHIND.** §7a.1 in the same breath: "Distance-left keeps
+its place under the clock on the tall track in every stage, cruising included.
+Only the ETA moves." So the block under the clock survives with one child.
+
+**THE LINE IS NO LONGER CRUISE-ONLY.** It was gated on `NavStage.cruise` because
+the countdown text is. §7a.1: "On approach and turn now the countdown text drops
+away and the ETA stays in that same line, alone, at the same size. The line is not
+cruise-only; only its countdown text is." The gate is now "not idle and there is
+something to show"; each countdown child carries its own `cruise` test.
+
+**THE LIGHT FILL IS NOT THE THEME'S AMBER, AND THAT IS THE POINT.** White on
+`Pal.amber` (`#C9760A`) fails AA; `#A85E06` clears it. Computed here rather than
+trusted: 4.92:1, which is §6's own published figure to the decimal, against 3.45:1
+for the theme value. Dark side is 8.67:1. Acceptance check 4 satisfied in both
+themes. No opacity on the label — §6 records that it was 0.82 and failed.
+
+**A WIDENING I TRIED AND REVERTED, RECORDED BECAUSE THE REASONING WAS HALF
+RIGHT.** With the ETA out of the clock's column the tall track's 62% width budget
+looked too tight — the street had elided to a bare "…". Widening to 68% put the
+pill straight through the segment clock. The missed half: the ETA did not leave
+the SCREEN, it moved into this row, so the row grew by a whole pill at the same
+moment the column shrank. 62% stands and the street elides, which is what the
+budget has always done and the better of the two failures.
+
+**Evidence.** 378 tests, clippy clean, 93 shots re-render. Inspected directly:
+`nav-cruise` (pill as the tail of `IN 790 ft ↱ Whitney Way`), `nav-approach`
+(countdown gone, pill alone, same size), `nav-cruise-portrait` and
+`nav-turn-now-portrait` (distance-left still under the clock, no overlap).
+
 ### 120. Handoff v3.3.0 §13.4 (rail half) — the arrow buttons go
 **DONE.** The preset band is swipe/drag only now. Gone: the `NavButton`
 component, both call sites, the `show-nav` property, its binding in

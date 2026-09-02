@@ -232,6 +232,20 @@ export global Pal {
     // REACH THEM EITHER: "Back in Black" turns the accent silver and the card
     // near-black, and a logo's paper is not part of that — it is the ground the
     // artwork was drawn against.
+    // ── THE NAV ETA PILL (v3.3.0 §6) ──────────────────────────────────────
+    //
+    // THE LIGHT FILL IS DELIBERATELY NOT `Pal.amber`, and §6 is explicit: white
+    // 13sp bold on the theme's light amber `#C9760A` measures 2.85:1 and fails
+    // AA. `#A85E06` gives 4.92:1. "Darken the fill rather than fading the type —
+    // this is the safety colour family." There is also a standing instruction not
+    // to put opacity on the label; it was 0.82 and failed.
+    //
+    // The dark side IS the theme's amber on the theme's ground, inverted: near-
+    // black type on `#FFB833`, which is the highest-contrast element on the nav
+    // line and is meant to be.
+    out property <color> eta-pill: Pal.flat(Pal.dark ? #FFB833 : #A85E06);
+    out property <color> on-eta-pill: Pal.flat(Pal.dark ? #24272C : #FFFFFF);
+
     out property <color> logo-fallback: #FFFFFF;
     out property <color> logo-plate: #E6E6E6;
     // The power button is the ONE element that keeps its colour when the face is
