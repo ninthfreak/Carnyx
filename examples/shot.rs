@@ -96,6 +96,14 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     // oldest preset to make room, so nothing had ever rendered more than six.
     ("many-presets", 1024, 614, false, State::ManyPresets),
     ("many-presets-portrait", 360, 800, false, State::ManyPresets),
+    // §8's looping rail, and the pair is the point: the same switch, one strip
+    // long enough for §8.1 to honour it and one that is not.
+    ("preset-loop", 1024, 614, false, State::PresetLoop),
+    // DARK IS THE CASE §8.3 WAS DESIGNED FOR: "an inset-shadow-only cue
+    // disappears at low ambient brightness", which is why both of the seam's
+    // rules stay solid. This is the shot that says whether they do.
+    ("preset-loop-dark", 1024, 614, true, State::PresetLoop),
+    ("preset-loop-declined", 1024, 614, false, State::PresetLoopDeclined),
     ("tuned", 1024, 614, false, State::Tuned),
     ("tuned-portrait", 360, 800, false, State::Tuned),
     ("out-of-band", 1024, 614, false, State::OutOfBand),
@@ -348,6 +356,18 @@ enum State {
     /// says so: the band has to scroll rather than overflow, and the tall
     /// track's three-column grid has to wrap and stay inside its own height cap.
     ManyPresets,
+    /// EIGHTEEN PRESETS AND THE RAIL SET TO WRAP (§8), nudged sideways so a seam
+    /// is on screen.
+    ///
+    /// THE NUDGE IS A REAL GESTURE, for the reason `Dragging` gives: the loop
+    /// lives inside the Flickable and is reachable only by scrolling it. A shot
+    /// that set `viewport-x` would prove the copies can be drawn, not that a
+    /// finger can reach them.
+    PresetLoop,
+    /// The same switch on a strip that does not overflow. §8.1 refuses, so this
+    /// is an ordinary bounded rail with its position bar — the shot that says
+    /// turning the setting on does not by itself change the face.
+    PresetLoopDeclined,
     /// Reorder mode with a DRAG IN FLIGHT.
     ///
     /// The only state produced by synthetic input rather than by setting a
@@ -543,6 +563,32 @@ fn main() {
             // order and quietly invalidate every comparison against it.
         }
 
+        if state == State::PresetLoop {
+            // NUDGE THE RAIL SIDEWAYS so a seam is on screen.
+            //
+            // The loop parks the window at the first tile of a turn, which puts
+            // the seam that precedes that turn 9px off the left edge — the copies
+            // are seamless in the middle and the mark is only ever at a boundary.
+            // Dragging the content 60px to the right brings it inside.
+            //
+            // ONE MOVE OF 60px, which clears the Flickable's 8px capture
+            // threshold in a single event, so the gesture is a scroll and never a
+            // press on the tile underneath.
+            let press = LogicalPosition::new(DRAG_FROM_X, DRAG_Y);
+            ui.window().dispatch_event(WindowEvent::PointerPressed {
+                position: press,
+                button: slint::platform::PointerEventButton::Left,
+            });
+            ui.window().dispatch_event(WindowEvent::PointerMoved {
+                position: LogicalPosition::new(DRAG_FROM_X + 60.0, DRAG_Y),
+            });
+            slint::platform::update_timers_and_animations();
+            render(&mut buffer);
+            // NO RELEASE, for `Dragging`'s reason and one of its own: a release
+            // hands the viewport a momentum animation, and where that animation
+            // has reached at the moment the shot is taken is a race.
+        }
+
         if state == State::Stepping {
             // The REAL callback, so the tune, the republish and the arming all
             // run in the shipping order.
@@ -684,6 +730,23 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             }
             driver.settle_meter_for_test();
         }
+        State::PresetLoop => {
+            // The same eighteen dials as `ManyPresets`, through the same save
+            // path, on top of the strip the app seeds — enough to overflow the
+            // rail by a wide margin, which is what §8.1 needs before it looks at
+            // the switch at all.
+            for step in 0..18 {
+                let mhz = 88.1 + (step as f32) * 1.1;
+                driver.save_dial_for_test(mhz);
+            }
+            driver.settle_meter_for_test();
+            // THROUGH THE SETTINGS CALLBACK, not the window property: the
+            // property is republished from Rust's own state on every
+            // `push_settings`, so a shot that set it directly would have it
+            // overwritten by the next push and render a rail that does not loop.
+            ui.invoke_settings_set_preset_loop(true);
+        }
+        State::PresetLoopDeclined => ui.invoke_settings_set_preset_loop(true),
         State::Tuned => {
             ui.invoke_select_preset(2);
             driver.settle_meter_for_test();

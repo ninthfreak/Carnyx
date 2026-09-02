@@ -615,6 +615,73 @@ component DashedBox inherits Rectangle {
     }
 }
 
+// The mark that says the rail has started over (handoff v3.3.0 §8.3).
+//
+// TWO RULES WITH A CHANNEL BETWEEN THEM, not one line. A single rule is what
+// sits between two ITEMS; a splice is what sits between the end of a list and
+// its beginning, and the design asks for a shape that cannot be mistaken for the
+// first. Its whole footprint is 29px — 11px of container with 9px clear either
+// side — which is a third of a tile, so it never reads as an empty slot the
+// driver could tune.
+//
+// ── THE DEBOSS IS TWO SHADOWS AND SLINT HAS NEITHER ─────────────────────────
+//
+// §8.3 asks for `inset 1px 0 0 rgba(0,0,0,0.16), 1px 0 0 rgba(255,255,255,0.2)`.
+// Slint has no inset shadow at all, and its `drop-shadow-*` DREW NOTHING at zero
+// blur — the first cut of this used one and the rendered seam came back with the
+// highlight column identical to the background. So both are rectangles:
+//
+//   · the inset is a 1px child down the rule's left edge, clipped so it follows
+//     the 2px radius;
+//   · the highlight is a 1px sibling one pixel to the rule's right, which is all
+//     of an unblurred offset shadow that a solid box does not cover.
+//
+// THE HIGHLIGHT'S ENDS ARE SQUARE where a real shadow's would be rounded. At
+// 1px wide against a 2px radius that is a difference of a quarter of a pixel at
+// each corner, and it is stated here rather than left to be discovered.
+//
+// BOTH RULES STAY SOLID, which §8.3 states and gives the reason for: an
+// inset-shadow-only cue disappears at low ambient brightness, and low ambient
+// brightness is a car at night.
+component SeamRule inherits Rectangle {
+    /// The rail row this sits in. The seam is 78% of it, centred.
+    in property <length> row-h;
+    width: 11px;
+    height: Math.round(root.row-h / 1px * 0.78) * 1px;
+
+    // TWO RULES, `space-between` — flush left and flush right of the 11px
+    // container, which leaves the 5px channel that makes this read as a splice.
+    for side in 2: Rectangle {
+        property <length> rule-x: side == 0 ? 0px : parent.width - 3px;
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+
+        Rectangle {
+            x: parent.rule-x;
+            y: 0;
+            width: 3px;
+            height: parent.height;
+            border-radius: 2px;
+            clip: true;
+            background: Pal.dim.with-alpha(0.5);
+            Rectangle {
+                x: 0; y: 0;
+                width: 1px;
+                height: parent.height;
+                background: #00000029;
+            }
+        }
+        Rectangle {
+            x: parent.rule-x + 3px;
+            y: 0;
+            width: 1px;
+            height: parent.height;
+            background: #FFFFFF33;
+        }
+    }
+}
+
 export component PresetsBand inherits Rectangle {
     in property <[Preset]> presets;
     /// The band theme, for its body face. Three of the five put their display
@@ -622,6 +689,10 @@ export component PresetsBand inherits Rectangle {
     /// here too.
     in property <EggTheme> egg;
     in property <int> active-index: -1;
+    /// Settings ▸ APPEARANCE ▸ Wrap the preset rail (§8). A REQUEST AND NOT AN
+    /// INSTRUCTION: `looping` below decides whether the conditions to honour it
+    /// hold, and with a short strip they do not.
+    in property <bool> preset-loop: false;
     in property <bool> reordering: false;
     in property <length> band-height;
     /// Nav buttons and the in-band nearby disc are hidden on the tall track,
@@ -975,6 +1046,157 @@ export component PresetsBand inherits Rectangle {
         : root.n * (root.strip-w-off + root.gap) - root.gap + root.strip-delta;
     property <bool> overflowing: root.n > 0 && root.content-w > root.width - root.side-chrome;
 
+    // ── §8 THE LOOPING RAIL ──────────────────────────────────────────────────
+    //
+    // Off unless the driver asks for it, and refused even then unless it would
+    // actually read as a loop. See `crate::settings::Settings::preset_loop` for
+    // why it is opt-in; §8.1 for the six conditions; and the block below the
+    // conditions for what this port does DIFFERENTLY from §8.2, and why.
+
+    /// §8.3's whole footprint: an 11px mark with 9px clear either side.
+    property <length> seam-slot: 29px;
+    /// One turn of the rail — a copy of the list, plus the seam that precedes
+    /// the next one. `content-w` already ends at the last tile's right edge, so
+    /// the seam slot is the entire distance between two copies.
+    property <length> span: root.content-w + root.seam-slot;
+
+    /// §8.1, all six, in the order the handoff states them.
+    ///
+    /// THE LAST TWO ARE THE ONES THAT MATTER, and the handoff says so: a list
+    /// narrower than the rail shows every station twice at once with two seams
+    /// on screen, which reads as a duplicated list rather than a loop. Four
+    /// presets do not overflow at all, so the switch can be on and this false,
+    /// which is correct and is what the settings row's sub-line warns about.
+    ///
+    /// `rail.width` and not `root.width - root.side-chrome`: the rail is the
+    /// viewport the conditions are about, and reading it here closes no loop —
+    /// the rail's width comes from its parent and its height from `overflowing`,
+    /// neither of which is this.
+    property <bool> looping:
+        root.preset-loop
+        && !Metrics.tall && !Metrics.two-rows
+        && !root.reordering
+        && root.n > 2
+        && root.content-w > rail.width
+        && root.span >= rail.width;
+
+    // ── WHAT THIS DOES DIFFERENTLY FROM §8.2, AND WHY ────────────────────────
+    //
+    // §8.2 renders three copies, parks the viewport in the middle one, and
+    // shifts `scrollLeft` by a copy-width inside the scroll handler whenever it
+    // drifts past 0.5 or 1.5 spans. Two of the three defects it warns about
+    // CANNOT HAPPEN in Slint, and one hazard it never had DOES:
+    //
+    // 1. "Rebase an in-flight drag." Not possible here. Slint's Flickable reads
+    //    `viewport_x` FRESH on every move and adds the pointer's delta to it —
+    //    i-slint-core-1.17.1/items/flickable.rs:857-871, with the crate's own
+    //    comment that "the viewport_y might not be stable, and might jump around
+    //    wildly", written for exactly this. There is no captured origin to
+    //    rebase, so a shift mid-drag is absorbed.
+    //
+    // 2. "Suppress re-entrancy." Not needed. `flicked` is declared as "invoked
+    //    when viewport-x or viewport-y is changed BY A USER ACTION", and it is:
+    //    all four of its call sites are inside `process_wheel_event`,
+    //    `handle_mouse` and the release's `animate` (flickable.rs:536, 560, 645,
+    //    874). A property write reaches none of them, so writing `viewport-x`
+    //    from a handler never calls the handler again.
+    //
+    // 3. THE ONE THAT IS REAL: momentum. After a release, Slint gives
+    //    `viewport-x` a physics ANIMATION BINDING (flickable.rs:620-648), and an
+    //    imperative write REMOVES that binding — the glide stops dead. `flicked`
+    //    fires once when the glide starts and not again while it runs, so the
+    //    obvious hook cannot even see the frames a wrap would be needed on. A
+    //    literal §8.2 port therefore has a real defect on a touchscreen, which is
+    //    the only way this rail is ever driven: a hard flick past the threshold
+    //    either stops dead at the wrap or runs to the true end of the third copy
+    //    and stalls there — which is acceptance check 6, verbatim.
+    //
+    // So the viewport is not wrapped while anything is moving. Instead the
+    // COPIES CHASE THE VIEWPORT: `loop-turn` is which turn of the rail the
+    // window is on, and the three drawn copies are always turns `loop-turn`,
+    // `+1` and `+2`. Every copy renders the same list, so when the window
+    // crosses a boundary and `loop-turn` steps, the picture is unchanged — the
+    // three drawn positions become the same set minus one off the left and plus
+    // one off the right. Nothing is written, so nothing can fight the drag or
+    // the glide.
+    //
+    // The viewport is then given `loop-copies` turns of room rather than three,
+    // and the middle is re-taken only when the rail has been still for long
+    // enough that no glide can be running. That write is invisible for the same
+    // reason: it moves the window a whole number of identical turns.
+
+    /// How many turns of room the viewport gets. Seven each side of home, which
+    /// no single flick can spend — Slint decelerates at 2000px/s², so even a
+    /// 3000px/s throw covers 2250px, and one turn is a rail-width or more.
+    property <int> loop-copies: 15;
+    property <float> loop-half: Math.floor(root.loop-copies / 2);
+    property <length> loop-home: 0px - root.span * root.loop-half;
+    /// Which turn the window's left edge is on. The drawn copies chase this.
+    property <float> loop-turn: root.looping
+        ? Math.floor((0px - rail.viewport-x) / root.span)
+        : 0;
+    /// Three while looping, one otherwise — and it is the SAME repeater either
+    /// way, deliberately. A separate `if root.looping:` block would destroy and
+    /// rebuild every tile at the moment reorder mode opens, which is a long
+    /// press, which means destroying the TouchArea that is holding the gesture
+    /// the mode was opened by.
+    property <int> strip-copies: root.looping ? 3 : 1;
+
+    /// Where turn `c` of the rail starts.
+    pure function copy-x(c: int) -> length {
+        return root.looping ? (root.loop-turn + c) * root.span : 0px;
+    }
+
+    /// Take the middle of the viewport back, if the rail has wandered far enough
+    /// from it to be worth the write.
+    ///
+    /// A WHOLE NUMBER OF TURNS, which is what makes it invisible: the tiles are
+    /// drawn from `loop-turn`, so shifting the window by a turn shifts every
+    /// tile by the same amount and the screen does not change.
+    ///
+    /// TWO TURNS OF SLACK before it does anything. A write cancels a momentum
+    /// glide, and although the timer that calls this is longer than any ordinary
+    /// glide, this way an ordinary glide never reaches the code at all.
+    function recentre-loop() {
+        if (!root.looping) {
+            return;
+        }
+        if (Math.abs((root.loop-home - rail.viewport-x) / root.span) < 2) {
+            return;
+        }
+        rail.viewport-x = rail.viewport-x
+            + Math.round((root.loop-home - rail.viewport-x) / root.span) * root.span;
+    }
+
+    /// 2000ms, and the number is the deceleration. Slint's glide runs for
+    /// `velocity / 2000px/s²`, so this outlasts every throw up to 4000px/s — and
+    /// each `flicked` restarts it, so a rail still being worked never reaches it.
+    loop-settle := Timer {
+        interval: 2000ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.recentre-loop();
+        }
+    }
+
+    /// Entering and leaving the loop, keeping the same stations on screen.
+    ///
+    /// ENTERING is a shift to home: the bounded position `p` becomes
+    /// `home + p`, which is the same tiles a whole number of turns along.
+    /// LEAVING folds the position back into one turn and clamps it — §8.1 drops
+    /// looping the moment reorder mode opens, and the reorder drag's hit-testing
+    /// is bounded arithmetic that a wrapped viewport would answer wrongly.
+    changed looping => {
+        if (root.looping) {
+            rail.viewport-x = root.loop-home + rail.viewport-x;
+        } else {
+            rail.viewport-x = 0px - Math.min(
+                Math.max(0px, root.content-w - rail.width),
+                Math.mod((0px - rail.viewport-x) / 1px, root.span / 1px) * 1px);
+        }
+    }
+
     // ── Keep the tuned tile on screen ────────────────────────────────────────
     //
     // `viewport-x` was written in exactly two places, both nav buttons, and
@@ -1022,7 +1244,15 @@ export component PresetsBand inherits Rectangle {
             return;
         }
         if (rail.viewport-width <= rail.width) { return; }
-        rail.viewport-x = root.scroll-off(root.slot-x(root.active-index),
+        // WHILE LOOPING, THE TUNED STATION IS IN THREE PLACES. Scrolling to the
+        // one at `slot-x` would drive the rail back to turn zero from wherever
+        // the driver left it; the copy to move to is the NEAREST one, which is
+        // the same rule as the bounded track's "move the minimum".
+        rail.viewport-x = root.scroll-off(
+            root.looping
+                ? root.slot-x(root.active-index) + root.span * Math.round(
+                    ((0px - rail.viewport-x) - root.slot-x(root.active-index)) / root.span)
+                : root.slot-x(root.active-index),
             root.slot-w(root.active-index), rail.width, rail.viewport-width,
             rail.viewport-x);
     }
@@ -1088,71 +1318,99 @@ export component PresetsBand inherits Rectangle {
                     : parent.height - 12px;
                 interactive: !root.reordering;
 
-                viewport-width: Metrics.tall ? self.width : root.content-w;
+                viewport-width: Metrics.tall ? self.width
+                    : (root.looping ? root.span * root.loop-copies : root.content-w);
                 viewport-height: Metrics.tall ? root.grid-content-h : self.height;
 
+                // THE ONLY THING THE LOOP LISTENS TO. `flicked` fires on user
+                // scrolling and never on a write from here, so restarting the
+                // settle timer from it can neither re-enter nor be triggered by
+                // the re-centre it eventually schedules.
+                flicked => {
+                    if (root.looping) {
+                        loop-settle.running = false;
+                        loop-settle.running = true;
+                    }
+                }
+
                 // Wide strip: one row, the tuned tile emphasised and enlarged.
+                //
+                // ONE COPY, OR THREE WHILE THE RAIL LOOPS (§8.2). The outer
+                // repeater is present in both states rather than gated on the
+                // loop, so that copy 0's tiles keep their identity — and with it
+                // the TouchArea holding the press — when a long press opens
+                // reorder mode and §8.1 drops looping under the finger.
                 if !Metrics.tall && !Metrics.two-rows: Rectangle {
-                    for p[i] in root.presets: PresetTile {
-                        // The slot this tile is DRAWN in: `splice(from, 1)`
-                        // then `splice(to, 0)`, written without an array
-                        // because Slint has none. Every tile between the two
-                        // indices shifts one place towards the one it passes.
-                        //
-                        // Inline, and every read direct — see "Slots" above for
-                        // why a function here silently half-works.
-                        property <int> slot:
-                            (root.drag-index < 0 || root.drop-index < 0) ? i
-                            // THE HELD TILE DOES NOT MOVE, and that is the fix
-                            // for a drag that started and then froze. It is
-                            // hidden, so its position is invisible — but its
-                            // TouchArea is the one holding the gesture, and
-                            // `mouse-x` is measured RELATIVE TO THAT TOUCHAREA.
-                            // Sending it to `drop-index` moved the coordinate
-                            // origin by a whole tile the instant the drop index
-                            // changed, so the very next move reported a finger
-                            // that had apparently jumped 128px backwards, which
-                            // put the drop index back, which moved the origin
-                            // back. A drag that fights itself to a standstill
-                            // within a few pixels.
+                    for c in root.strip-copies: Rectangle {
+                        // The seam that marks where this copy starts over: the 11px
+                        // mark centred in the 29px before the copy's first tile,
+                        // which leaves §8.3's 9px clear on each side.
+                        if root.looping: SeamRule {
+                            x: root.copy-x(c) - root.seam-slot + 9px;
+                            y: (rail.height - self.height) / 2;
+                            row-h: rail.height;
+                        }
+                        for p[i] in root.presets: PresetTile {
+                            // The slot this tile is DRAWN in: `splice(from, 1)`
+                            // then `splice(to, 0)`, written without an array
+                            // because Slint has none. Every tile between the two
+                            // indices shifts one place towards the one it passes.
                             //
-                            // Leaving it at `i` costs nothing: the gap is opened
-                            // by the OTHER tiles stepping aside, and the lifted
-                            // copy is what the driver actually sees move.
-                            : (i == root.drag-index) ? i
-                            : (root.drag-index < root.drop-index)
-                                ? ((i > root.drag-index && i <= root.drop-index) ? i - 1 : i)
-                                : ((i >= root.drop-index && i < root.drag-index) ? i + 1 : i);
-                        property <bool> big: i == root.active-index && !root.reordering;
-                        x: self.slot * (root.strip-w-off + root.gap)
-                            + ((root.strip-grow && self.slot > root.active-index)
-                                ? root.strip-delta : 0px);
-                        y: 2px;
-                        width: self.big ? root.strip-w-on : root.strip-w-off;
-                        height: Math.round(rail.height / 1px * (self.big ? 1.0 : 0.8)) * 1px;
-                        // 160ms out-quad, CarFM's gap-opening timing. Zero
-                        // when nothing is being dragged, so a retune still
-                        // snaps — sliding the strip on every tune would change
-                        // a face that is already right.
-                        animate x, y { duration: root.dragging ? 160ms : 0ms; easing: ease-out; }
-                        hidden: root.dragging && i == root.drag-index;
-                        preset: p;
-                        egg: root.egg;
-                        active: i == root.active-index;
-                        pad-top: Metrics.s(self.big ? 12 : 8);
-                        pad-bottom: Metrics.s(self.big ? 16 : 12);
-                        pad-h: Metrics.s(self.big ? 8 : 6);
-                        logo-radius: self.big ? 15px : 12px;
-                        name-font: Math.max(12px, Metrics.s(self.big
-                            ? (Metrics.landscape ? 16 : 18)
-                            : (Metrics.landscape ? 13 : 15)));
-                        reordering: root.reordering;
-                        selected => { root.tile-tapped(i); }
-                        press-began(mx, my) => { root.hold-begin(i, mx, my); }
-                        press-moved(mx, my) => { root.hold-move(i, mx, my); }
-                        press-ended => { root.hold-stop(); }
-                        press-cancelled => { root.hold-cancel(); }
-                        logo-badge => { root.open-logo-search(i); }
+                            // Inline, and every read direct — see "Slots" above for
+                            // why a function here silently half-works.
+                            property <int> slot:
+                                (root.drag-index < 0 || root.drop-index < 0) ? i
+                                // THE HELD TILE DOES NOT MOVE, and that is the fix
+                                // for a drag that started and then froze. It is
+                                // hidden, so its position is invisible — but its
+                                // TouchArea is the one holding the gesture, and
+                                // `mouse-x` is measured RELATIVE TO THAT TOUCHAREA.
+                                // Sending it to `drop-index` moved the coordinate
+                                // origin by a whole tile the instant the drop index
+                                // changed, so the very next move reported a finger
+                                // that had apparently jumped 128px backwards, which
+                                // put the drop index back, which moved the origin
+                                // back. A drag that fights itself to a standstill
+                                // within a few pixels.
+                                //
+                                // Leaving it at `i` costs nothing: the gap is opened
+                                // by the OTHER tiles stepping aside, and the lifted
+                                // copy is what the driver actually sees move.
+                                : (i == root.drag-index) ? i
+                                : (root.drag-index < root.drop-index)
+                                    ? ((i > root.drag-index && i <= root.drop-index) ? i - 1 : i)
+                                    : ((i >= root.drop-index && i < root.drag-index) ? i + 1 : i);
+                            property <bool> big: i == root.active-index && !root.reordering;
+                            x: root.copy-x(c) + self.slot * (root.strip-w-off + root.gap)
+                                + ((root.strip-grow && self.slot > root.active-index)
+                                    ? root.strip-delta : 0px);
+                            y: 2px;
+                            width: self.big ? root.strip-w-on : root.strip-w-off;
+                            height: Math.round(rail.height / 1px * (self.big ? 1.0 : 0.8)) * 1px;
+                            // 160ms out-quad, CarFM's gap-opening timing. Zero
+                            // when nothing is being dragged, so a retune still
+                            // snaps — sliding the strip on every tune would change
+                            // a face that is already right.
+                            animate x, y { duration: root.dragging ? 160ms : 0ms; easing: ease-out; }
+                            hidden: root.dragging && i == root.drag-index;
+                            preset: p;
+                            egg: root.egg;
+                            active: i == root.active-index;
+                            pad-top: Metrics.s(self.big ? 12 : 8);
+                            pad-bottom: Metrics.s(self.big ? 16 : 12);
+                            pad-h: Metrics.s(self.big ? 8 : 6);
+                            logo-radius: self.big ? 15px : 12px;
+                            name-font: Math.max(12px, Metrics.s(self.big
+                                ? (Metrics.landscape ? 16 : 18)
+                                : (Metrics.landscape ? 13 : 15)));
+                            reordering: root.reordering;
+                            selected => { root.tile-tapped(i); }
+                            press-began(mx, my) => { root.hold-begin(i, mx, my); }
+                            press-moved(mx, my) => { root.hold-move(i, mx, my); }
+                            press-ended => { root.hold-stop(); }
+                            press-cancelled => { root.hold-cancel(); }
+                            logo-badge => { root.open-logo-search(i); }
+                        }
                     }
                 }
 
@@ -1338,7 +1596,11 @@ export component PresetsBand inherits Rectangle {
             // one does not take input at all — so the rule holds by construction
             // rather than by a flag. It was called a "drag scrollbar" here, which
             // it never was.
-            if !Metrics.tall: Rectangle {
+            // HIDDEN WHILE THE RAIL LOOPS, which §8.2 requires: "the position
+            // indicator bar is hidden — position is meaningless in a loop." A
+            // thumb that slides to an end and jumps back would be reporting a
+            // boundary the rail no longer has.
+            if !Metrics.tall && !root.looping: Rectangle {
                 x: 0;
                 y: parent.height - 6px;
                 width: parent.width;

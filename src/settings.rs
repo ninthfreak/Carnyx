@@ -440,6 +440,21 @@ pub fn logos_sub(on: bool) -> &'static str {
     }
 }
 
+/// What the "Wrap the preset rail" row says underneath.
+///
+/// THE OFF LINE NAMES THE COST, and the on line names the CONDITION rather than
+/// promising the behaviour. §8.1 refuses to engage unless the rail overflows and
+/// one copy of the list is at least as wide as the rail, so a driver with four
+/// presets can turn this on, see nothing change, and be right to wonder whether
+/// it works. The row tells them before they wonder.
+pub fn preset_loop_sub(on: bool) -> &'static str {
+    if on {
+        "On \u{2014} takes effect once the rail is long enough to scroll"
+    } else {
+        "Off \u{2014} the rail stops at its ends, so a station keeps its place"
+    }
+}
+
 pub fn clear_logos_label(clearing: bool) -> &'static str {
     if clearing {
         "Clearing\u{2026}"
@@ -543,6 +558,25 @@ pub struct Settings {
     /// looking at the turn on OsmAnd's own screen, and repeating it on the
     /// radio behind it is a second copy of one instruction.
     pub nav_hide_on_map: bool,
+    /// Let the preset rail wrap around instead of stopping at its ends (§8).
+    ///
+    /// ── DEFAULT OFF, AND THE DESIGN SAYS WHY ────────────────────────────────
+    ///
+    /// The handoff's own note: *"there is **no industry convention** for an
+    /// infinite-loop cue in automotive HMI — the convention is to avoid looping,
+    /// because a hard edge is itself a cue and a seam that can land anywhere
+    /// destroys positional memory."* A driver who has learnt that the rail stops
+    /// after WORT knows where WORT is by feel; a looping rail takes that away.
+    /// So it is offered, and it is not the default.
+    ///
+    /// TURNING IT ON DOES NOT GUARANTEE IT ENGAGES. §8.1 gates it on the rail
+    /// actually overflowing and on one copy of the list being at least as wide
+    /// as the viewport, both of which the band measures at layout time. With a
+    /// handful of presets the switch is on and the rail still has ends, which is
+    /// correct: a list narrower than the rail would show every station twice at
+    /// once with two seams on screen, which reads as a duplicated list rather
+    /// than a loop.
+    pub preset_loop: bool,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
     /// testing mode — were CarFM's investigation tools and are gone.
@@ -566,6 +600,9 @@ impl Default for Settings {
             clock_on: true,
             nav_on: true,
             nav_hide_on_map: true,
+            // OFF. See the field's own note: looping costs positional memory,
+            // and the design bundle asks for it opt-in.
+            preset_loop: false,
             diag_on: false,
             log: DiagLog::new(),
         }
