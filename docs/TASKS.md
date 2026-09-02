@@ -1306,6 +1306,55 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 118. Handoff v3.3.0 §13.5 — hero type grows when there is no logo
+**DONE.** Call sign x1.51 and frequency x1.28 with no logo tile, stacking on the
+per-track and per-theme scales.
+
+**IT COULD NOT BE APPLIED LITERALLY, AND FINDING OUT WHY WAS THE WORK.** The
+spec's bases are 66/50/52 (call) and 60/48/58 (frequency); this tree carried
+94/60/62 and 78/56/64, unchanged since the original port (`c7c9584`, checked).
+Multiplying 94 by 1.51 gives 142 against a handoff checkpoint of ~100 — a 42%
+overshoot. So the four cells were resolved first:
+
+| | tree before | spec |
+|---|---|---|
+| call, with logo | 26 (own constant) | 66 |
+| call, no logo | 94 | 100 |
+| freq, with logo | 78 | 60 |
+| freq, no logo | 78 | 77 |
+
+The original port had ALREADY grown the call sign for the no-logo card by its own
+route — 26 beside a logo, 94 without — landing within 6% of where §13.5 wants it.
+What it never did was grow the FREQUENCY, which was 78 either way. Adopting the
+spec's bases is what lets the multiplier mean what the spec says; all four cells
+now match.
+
+**THE VISIBLE CONSEQUENCE, STATED RATHER THAN BURIED:** the frequency beside a
+logo drops 78 -> 60. Its blast radius is small — `show-call`/`show-freq` default
+OFF for a station with art (§4.2), so it shows only where the driver switched it
+on — but it is a real change and it is the handoff's number.
+
+**THE CONDITION IS THE LOGO TILE'S OWN, NEGATED.** `HeroCard.logo-tile` is now a
+property and the tile's `if` reads it, so the size rule and the thing it is a rule
+about cannot drift. §13.5's "scanning || no logo || logos hidden" is exactly the
+three ways this card ends up with no art.
+
+**"logos hidden" IS `egg.suppress-logo`, NOT THE SETTINGS SWITCH.**
+`settings.logos_on` governs auto-DOWNLOAD; `app::art_for`'s note records gating
+display on it as a bug that shipped, because a driver could assign a logo by hand
+and never see it. A theme suppressing the art is the real "the logo exists and is
+not drawn".
+
+**THE MULTIPLIER IS ON THE GAUGES TOO**, and that is not decoration. `fit` is
+`fit-plain / fit-natural` and is applied to `call-size-nat`, which now carries the
+factor; measuring the plain reference without it would compute a shrink ratio
+against text 51% smaller than what is drawn, and the card would overflow exactly
+where the fit guard exists to prevent it.
+
+**Evidence.** 375 tests, clippy clean, all 93 shots re-render; `head-unit-light`
+inspected directly — WERN over 88.7 at the new proportions. Resolved sizes
+confirmed at 66x1.51 = 100 and 60x1.28 = 77, the handoff's own checkpoints.
+
 ### 117. Handoff v3.3.0 §5 — plate ink chosen by measured contrast
 **DONE.** First of the v3.3.0 bundle, taken first because it is pure Rust with
 tests and no visual risk. `CallSignBox` printed its call sign in a hard-coded

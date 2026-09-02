@@ -575,13 +575,41 @@ export component HeroCard inherits Rectangle {
     /// comparison — thirty-seven unthemed shots moved for a change that should
     /// have touched five.
     property <float> hero-mul: root.egg.hero-scale > 0 ? root.egg.hero-scale : 1.0;
+
+    /// Is there NO logo tile in the card's stack? (v3.3.0 §13.5.)
+    ///
+    /// THE NEGATION OF THE LOGO TILE'S OWN CONDITION, and bound to the same
+    /// property rather than restated — the tile below reads `!root.logo-tile`, so
+    /// the size rule and the thing it is a rule about cannot drift apart. §13.5's
+    /// wording is "scanning || no logo || logos hidden", which is exactly the
+    /// three ways this card ends up with no art to show.
+    ///
+    /// `egg.suppress-logo` IS THIS TREE'S "logos hidden" and the settings switch
+    /// is NOT. `settings.logos_on` governs auto-DOWNLOAD — `app::art_for`'s note
+    /// records gating the display on it as a bug that shipped, because a driver
+    /// could assign a logo by hand and never see it. A theme suppressing the art
+    /// is the real "the logo exists and is not being drawn".
+    property <bool> logo-tile: !root.scanning && root.has-logo && !root.egg.suppress-logo;
+
+    /// §13.5's two multipliers: with no logo tile the type IS the identity, so it
+    /// takes the space the tile would have used.
+    ///
+    /// THEY STACK, they do not replace — the per-track base, the theme's
+    /// `hero-scale` and `Metrics.k` all still apply, and these ride on top. That
+    /// is §7's own wording and it is why they are separate factors here rather
+    /// than a second set of base constants.
+    property <float> no-logo-call-mul: root.logo-tile ? 1.0 : 1.51;
+    property <float> no-logo-freq-mul: root.logo-tile ? 1.0 : 1.28;
+
     /// The call sign's size BEFORE the fit and after it. See `fit`.
-    property <length> call-size-nat: Metrics.call-size * root.scale * root.hero-mul;
+    property <length> call-size-nat:
+        Metrics.call-size * root.scale * root.hero-mul * root.no-logo-call-mul;
     property <length> call-size: root.call-size-nat * root.fit;
     /// The frequency's, likewise. `freqScale` is stated by Nine Inch Nails alone,
     /// at 0.95; zero is "unstated" for the same reason `hero-scale` is.
     property <length> freq-size-nat: Metrics.freq-size * root.scale
-        * (root.egg.freq-scale > 0 ? root.egg.freq-scale : 1.0);
+        * (root.egg.freq-scale > 0 ? root.egg.freq-scale : 1.0)
+        * root.no-logo-freq-mul;
     property <length> freq-size: root.freq-size-nat * root.fit;
     /// `heroTrack` — stated only by Nine Inch Nails, at 9dp. Everything else
     /// keeps the -1 the ordinary call sign has always had.
@@ -824,14 +852,19 @@ export component HeroCard inherits Rectangle {
         visible: false;
         text: root.ident;
         font-family: Font.face; font-weight: Font.bold;
-        font-size: Metrics.call-size * root.scale;
+        // THE MULTIPLIER BELONGS ON THE GAUGE TOO. `fit` is `fit-plain /
+        // fit-natural`, and it is applied to `call-size-nat` — which now carries
+        // §13.5's factor. Measuring the plain reference WITHOUT it would compute
+        // a shrink ratio against text 51% smaller than what is drawn, and the
+        // card would overflow exactly where the fit guard exists to stop it.
+        font-size: Metrics.call-size * root.scale * root.no-logo-call-mul;
     }
     freq-plain := Text {
         x: 0px; y: 0px; width: 0px; height: 0px;
         visible: false;
         text: root.freq-label;
         font-family: Font.face; font-weight: Font.bold;
-        font-size: Metrics.freq-size * root.scale;
+        font-size: Metrics.freq-size * root.scale * root.no-logo-freq-mul;
     }
 
     border-width: 1px * root.scale;
@@ -954,7 +987,9 @@ export component HeroCard inherits Rectangle {
                 horizontal-alignment: center;
                 font-family: Font.face; font-weight: Font.bold;
                 font-italic: true;
-                font-size: Metrics.call-size * root.scale;
+                // SCANNING IS ONE OF §13.5's THREE CASES, so this grows with the
+                // rest: "scanning || no logo || logos hidden".
+                font-size: Metrics.call-size * root.scale * root.no-logo-call-mul;
                 letter-spacing: root.call-track;
                 color: Pal.dim;
             }
@@ -964,7 +999,7 @@ export component HeroCard inherits Rectangle {
             // THE THEME CAN HIDE A REAL LOGO, and must be able to: AC/DC's whole
             // card is the lettering, and a station that has art would otherwise never
             // show a call sign for the bolt to split. CarFM's `suppressLogos`.
-            if !root.scanning && root.has-logo && !root.egg.suppress-logo: VerticalLayout {
+            if root.logo-tile: VerticalLayout {
                 spacing: 8px * root.scale;
                 alignment: center;
                 HorizontalLayout {

@@ -286,8 +286,26 @@ export global Metrics {
     out property <length> pad-v: Metrics.s(Metrics.tall ? 14 : 18);
     out property <length> gap: Metrics.s(Metrics.tall ? 10 : 12);
 
-    out property <length> freq-size: Metrics.s(Metrics.tall ? 64 : Metrics.landscape ? 56 : 78);
-    out property <length> call-size: Metrics.s(Metrics.tall ? 62 : Metrics.landscape ? 60 : 94);
+    // ── THE HERO'S TWO LINES, AS v3.3.0 §7 STATES THEM ──────────────────────
+    //
+    // These are BASES now, not finished sizes. `HeroCard.no-logo-mul` multiplies
+    // them by 1.51 / 1.28 when the card carries no logo tile, which is what §13.5
+    // asks for and what makes the resolved numbers land on the handoff's own
+    // checkpoint of ~100 / ~77 at 1280x720.
+    //
+    // THEY WERE 94 AND 78, AND THAT IS WHY THE MULTIPLIER COULD NOT SIMPLY BE
+    // ADDED. The original port arrived at a single large call size for the
+    // no-logo card by its own route, so the tree already grew the call sign — 26
+    // beside a logo, 94 without it — and multiplying 94 by 1.51 would have
+    // overshot the design by 42%. The frequency, meanwhile, never grew at all:
+    // 78 with a logo and 78 without. Adopting the spec's bases is what lets the
+    // multiplier mean what §13.5 says it means.
+    //
+    // The visible consequence, stated rather than buried: the frequency BESIDE A
+    // LOGO drops from 78 to 60. That is the handoff's number and this tree has
+    // always been louder than it.
+    out property <length> freq-size: Metrics.s(Metrics.tall ? 58 : Metrics.landscape ? 48 : 60);
+    out property <length> call-size: Metrics.s(Metrics.tall ? 52 : Metrics.landscape ? 50 : 66);
     out property <length> star: Metrics.s(Metrics.tall ? 58 : Metrics.landscape ? 48 : 56);
 
     // The strip is 64 tall on every track; the ZONE around it is what varies.
