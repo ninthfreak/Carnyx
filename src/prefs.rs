@@ -74,6 +74,9 @@ pub struct Prefs {
     pub selected: Source,
     pub theme: Theme,
     pub logos_on: bool,
+    /// See `settings::Settings::permissions_asked`. Defaults OFF, so an install
+    /// that predates the key gets the one offer and then never again.
+    pub permissions_asked: bool,
     pub release_on_sleep: bool,
     /// See `settings::Settings::clock_on`. Defaults ON.
     pub clock_on: bool,
@@ -95,6 +98,7 @@ impl Default for Prefs {
             selected: s.selected,
             theme: s.theme,
             logos_on: s.logos_on,
+            permissions_asked: s.permissions_asked,
             release_on_sleep: s.release_on_sleep,
             clock_on: s.clock_on,
             nav_on: s.nav_on,
@@ -223,6 +227,7 @@ fn from_json(text: &str) -> Option<Prefs> {
     // FALLS BACK THROUGH `p`, which already holds `Settings::default`'s true —
     // so a file written before this key existed comes back with the feature ON
     // rather than silently off.
+    p.permissions_asked = flag("permissionsAsked", p.permissions_asked);
     p.release_on_sleep = flag("releaseOnSleep", p.release_on_sleep);
     p.clock_on = flag("clockOn", p.clock_on);
     p.nav_on = flag("navOn", p.nav_on);
@@ -252,13 +257,15 @@ pub fn to_json(p: &Prefs) -> String {
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
-            "\"logosOn\":{},\"releaseOnSleep\":{},\"clockOn\":{},\"navOn\":{},",
+            "\"logosOn\":{},\"permissionsAsked\":{},\"releaseOnSleep\":{},",
+            "\"clockOn\":{},\"navOn\":{},",
             "\"navHideOnMap\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
         json::quote(theme_name(p.theme)),
         p.logos_on,
+        p.permissions_asked,
         p.release_on_sleep,
         p.clock_on,
         p.nav_on,
@@ -352,6 +359,7 @@ mod tests {
             selected: Source::Auto,
             theme: Theme::Dark,
             logos_on: true,
+            permissions_asked: false,
             release_on_sleep: false,
             clock_on: false,
             nav_on: true,

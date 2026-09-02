@@ -51,6 +51,155 @@ pub fn clean_call(s: &str) -> String {
     t.trim().to_string()
 }
 
+// ── Self-fitting plate type (handoff v3.3.0 §13.1) ──────────────────────────
+
+/// The WORST-CASE advance width per character of Atkinson Hyperlegible at
+/// 700-800, as a fraction of the type size.
+///
+/// DELIBERATELY ABOVE THE ~0.61 AVERAGE, and §13.1 says why: the widest
+/// four-character signs — WMGN, WMHX, WZEE — run about 15% wider than the mean,
+/// and the peek plate has no clipping backstop. A cap built on the average would
+/// fit the average sign and clip the ones that matter.
+///
+/// TIED TO THE TYPEFACE. `Font.face` is "Atkinson Hyperlegible"
+/// (`ui/tokens.slint`), which is what this was measured against, and only the 700
+/// cut is bundled — the same file records that an 800 request resolves back to
+/// 700. Change the face and this must be re-measured; §13.1 says so in as many
+/// words.
+pub const CALL_ADVANCE: f32 = 0.82;
+
+/// The advance of a five-character frequency (`101.5`) in tabular figures, in the
+/// same units as [`CALL_ADVANCE`]. §13.1.
+///
+/// FIVE AND NOT FOUR, so `88.7` is over-provisioned rather than clipped. Tabular
+/// figures make every digit the same width, which is what lets one constant cover
+/// every dial.
+pub const FREQ_ADVANCE: f32 = 3.2;
+
+/// §13.1's per-length ramp for a call sign's INTENDED size.
+///
+/// A short sign is set larger because it has the room; a long one is set smaller
+/// so it still fits before the width cap has to intervene. The ramp and the cap
+/// are two different mechanisms and both are needed — the ramp is a design
+/// preference about how a four-letter sign should look, the cap is a guarantee
+/// that nothing clips.
+///
+/// ZERO CHARACTERS TAKES THE SHORTEST RUNG rather than a rung of its own: an
+/// empty sign draws nothing, so its size is unobservable, and giving it a case
+/// would be a branch no test could distinguish.
+pub fn call_ramp(chars: usize) -> f32 {
+    match chars {
+        0..=4 => 1.55,
+        5 => 1.32,
+        6 => 1.14,
+        7 => 1.00,
+        _ => 0.90,
+    }
+}
+
+/// The divisor of §13.1's width cap: `CALL_ADVANCE * characters`.
+///
+/// Handed to Slint precomputed because it is a pure function of the call sign and
+/// this side is where such things are tested. Slint still owns the width — a
+/// plate's measured width is layout, which only the layout knows — so the cap is
+/// `available / call_cap_div(chars)` there.
+///
+/// FLOORED AT ONE CHARACTER. An empty call sign would otherwise divide by zero
+/// and hand Slint an infinite cap, which `min` would then happily choose.
+pub fn call_cap_div(chars: usize) -> f32 {
+    CALL_ADVANCE * chars.max(1) as f32
+}
+
+// ── Plate ink (handoff v3.3.0 §5) ───────────────────────────────────────────
+
+/// The two candidates a brand fill is scored against.
+///
+/// v3.3.0 §11 names them: near-black `#141821` and white. NOT the theme's `text`
+/// and `bg` — a station's fill is its own and does not change with the theme, so
+/// the ink that sits on it must not either. §11a's third screenshot is the check:
+/// "plate inks unchanged by theme — they follow the station's fill".
+const INK_DARK: u32 = 0x141821;
+const INK_LIGHT: u32 = 0xFFFFFF;
+
+/// WCAG relative luminance, with the sRGB linearisation §5 spells out.
+///
+/// The `0.03928` knee and the `2.4` exponent are the standard's, and the weights
+/// are Rec.709's. NOT the Rec.709 luma used by `Pal.flat` next door: that one
+/// desaturates a colour for the dead face and operates on the raw channels, this
+/// one linearises first because contrast is a physical-light ratio. The two look
+/// similar and answer different questions.
+fn rel_lum(c: Color) -> f64 {
+    let ch = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+}
+
+/// The WCAG contrast ratio between two colours, 1.0 to 21.0.
+///
+/// Alpha is ignored: everything this scores is opaque ink on an opaque plate.
+pub fn contrast(a: Color, b: Color) -> f64 {
+    let (x, y) = (rel_lum(a), rel_lum(b));
+    let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Whichever of the two candidates actually scores higher on `bg`.
+///
+/// ── SCORED, NEVER THRESHOLDED, AND §5 IS EMPHATIC ABOUT WHY ─────────────────
+///
+/// The obvious implementation is "light fill gets dark ink" against a luminance
+/// cutoff, and a cutoff always lands arbitrarily close to some real fill: §5
+/// gives WZEE's cyan at luminance 0.3095, which a 0.32 threshold misses by 0.01
+/// and inks white at 2.92:1. Comparing the two ratios has no such edge — it is
+/// exactly as right at 0.3095 as anywhere else.
+pub fn ink_on(bg: Color) -> Color {
+    let dark = Color::from_rgb_u8((INK_DARK >> 16) as u8, (INK_DARK >> 8) as u8, INK_DARK as u8);
+    let light = Color::from_rgb_u8((INK_LIGHT >> 16) as u8, (INK_LIGHT >> 8) as u8, INK_LIGHT as u8);
+    if contrast(bg, dark) >= contrast(bg, light) {
+        dark
+    } else {
+        light
+    }
+}
+
+/// The ink for a station plate: `bg` is the station's fill, or [`None`] when it
+/// has none and the plate is the theme's `raised`.
+///
+/// ── THE `None` ARM IS NOT REACHABLE FROM TODAY'S PRESET PATH ────────────────
+///
+/// §5 describes it as reachable through the app's own save flow, and in the
+/// prototype it is: there, a station saved from an unknown frequency has no
+/// `logoBg` and lands on `raised` with white ink at 1.08:1. HERE IT CANNOT
+/// HAPPEN, and that was checked rather than assumed — `app::to_preset` fills
+/// every preset with `brand_color(&call)`, and that function is total: it hashes
+/// into ten fixed values and answers for the empty string as readily as for
+/// `WMGN`. There is no station in this tree without a fill.
+///
+/// The arm stays because it is §5's rule and because the function should be
+/// total over what it is handed, not because a caller needs it today. What would
+/// make it live is a plate drawn on `Pal.raised` — an empty slot growing a label,
+/// or a fill made optional so an authored one can be absent.
+///
+/// NO AUTHORED-INK BRANCH, and that is a difference from §5 rather than an
+/// omission of it. The spec honours a station's `logoFg` while it clears 4.5:1
+/// and overrides it otherwise — but nothing in this tree has a `logoFg` to
+/// honour. Fills come from [`brand_color`], a hash into ten fixed values, and no
+/// station record carries an authored ink. If one ever does, the branch goes
+/// here: `if let Some(fg) = fg { if contrast(bg, fg) >= 4.5 { return fg } }`
+/// before the call below, and nowhere else.
+pub fn plate_ink(bg: Option<Color>, theme_text: Color) -> Color {
+    match bg {
+        None => theme_text,
+        Some(bg) => ink_on(bg),
+    }
+}
+
 /// The label a preset tile or peek card prints inside its colour box.
 ///
 /// `base` is the call sign resolved from the station database, when one resolved.
@@ -85,6 +234,152 @@ pub fn format_mhz(mhz: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rgb(r: u8, g: u8, b: u8) -> Color {
+        Color::from_rgb_u8(r, g, b)
+    }
+
+    /// §13.1's RAMP, EVERY RUNG AND BOTH EDGES.
+    ///
+    /// The boundaries are where a table like this goes wrong, so 4/5, 6/7 and
+    /// 7/8 are all asserted either side rather than sampled in the middle.
+    #[test]
+    fn the_call_ramp_matches_the_handoffs_table() {
+        for chars in [0usize, 1, 2, 3, 4] {
+            assert_eq!(call_ramp(chars), 1.55, "{chars} characters takes the short rung");
+        }
+        assert_eq!(call_ramp(5), 1.32);
+        assert_eq!(call_ramp(6), 1.14);
+        assert_eq!(call_ramp(7), 1.00);
+        for chars in [8usize, 9, 12, 40] {
+            assert_eq!(call_ramp(chars), 0.90, "{chars} characters takes the long rung");
+        }
+    }
+
+    /// THE CAP DIVISOR, AND THE DIVIDE-BY-ZERO IT REFUSES.
+    #[test]
+    fn the_cap_divisor_is_the_advance_times_the_length() {
+        assert!((call_cap_div(4) - 3.28).abs() < 1e-6, "WMGN: 0.82 x 4");
+        assert!((call_cap_div(6) - 4.92).abs() < 1e-6, "a translator: 0.82 x 6");
+        // AN EMPTY SIGN MUST NOT PRODUCE AN INFINITE CAP. `min(intended, avail/0)`
+        // is `min(intended, inf)`, which silently returns the intended size and
+        // defeats the guard on the one input that has no width at all.
+        assert_eq!(call_cap_div(0), CALL_ADVANCE, "floored at one character");
+        assert!(call_cap_div(0) > 0.0);
+    }
+
+    /// THE CAP ACTUALLY STOPS THE SIGNS §13.1 NAMES FROM CLIPPING.
+    ///
+    /// This is the acceptance check (§11: "no call sign clips on any surface —
+    /// check WMGN and WMHX") expressed as arithmetic: at the handoff's own
+    /// resolved plate widths, the chosen size times the worst-case advance must
+    /// fit the available width.
+    #[test]
+    fn the_widest_four_character_signs_fit_their_plates() {
+        // (surface, base, available width, the handoff's resolved checkpoint)
+        let cases: [(&str, f32, f32, f32); 3] = [
+            ("resting tile, 1280x720", 19.0, 118.0 - 8.0, 29.0),
+            ("active tile, 1280x720", 24.0, 150.0 - 8.0, 37.0),
+            // 159 IS §1's OWN RESOLVED FIGURE for the peek box at this aspect, not
+            // `184 * 0.92`. 184 is the CAP the plate never exceeds; the resolved
+            // width at 1280x720 is smaller, and using the cap here computed a
+            // 48sp sign against a 45sp checkpoint — the arithmetic was right and
+            // the input was wrong.
+            ("peek, 1280x720", 32.0, 159.0 - 12.0, 45.0),
+        ];
+        for (what, base, avail, checkpoint) in cases {
+            let chars = 4usize; // WMGN / WMHX / WZEE
+            let intended = base * call_ramp(chars);
+            let cap = avail / call_cap_div(chars);
+            let size = intended.min(cap);
+            assert!(
+                size * call_cap_div(chars) <= avail + 0.001,
+                "{what}: {size:.1}sp x {:.2} exceeds {avail:.1}",
+                call_cap_div(chars)
+            );
+            // And it lands where the handoff says it lands, within a point.
+            assert!(
+                (size - checkpoint).abs() < 1.5,
+                "{what}: got {size:.1}sp, handoff checkpoint {checkpoint:.0}sp"
+            );
+        }
+    }
+
+    /// THE RATIOS §5 MEASURED, TO TWO DECIMALS.
+    ///
+    /// Every one of these is a real station from the handoff's own table, with
+    /// the fill and the ratio it published. They pin the linearisation as much as
+    /// the choice: a `rel_lum` that skipped the sRGB knee, or used Rec.601
+    /// weights, still picks the right ink on most of these and gets every ratio
+    /// wrong — so the numbers are asserted, not just the winners.
+    #[test]
+    fn the_ink_guard_reproduces_the_handoffs_measured_ratios() {
+        let dark = rgb(0x14, 0x18, 0x21);
+        let white = rgb(0xFF, 0xFF, 0xFF);
+        let cases: [(&str, Color, Color, f64); 5] = [
+            ("WZEE cyan", rgb(14, 165, 196), dark, 6.09),
+            ("WMHX orange", rgb(232, 89, 12), dark, 4.96),
+            ("WMGN magenta", rgb(194, 30, 122), white, 5.58),
+            ("WORT purple", rgb(107, 63, 160), white, 7.38),
+            ("WJJO near-black", rgb(28, 31, 36), white, 16.52),
+        ];
+        for (what, fill, want_ink, want_ratio) in cases {
+            assert_eq!(ink_on(fill), want_ink, "{what}: wrong ink");
+            let got = contrast(fill, want_ink);
+            assert!(
+                (got - want_ratio).abs() < 0.01,
+                "{what}: ratio {got:.2}, handoff measured {want_ratio:.2}"
+            );
+        }
+    }
+
+    /// THE TWO THAT A LUMINANCE THRESHOLD GETS WRONG.
+    ///
+    /// §5: "WZEE's cyan sits at luminance 0.3095, which a 0.32 threshold misses
+    /// by 0.01." This is that sentence as a test — the cyan and the orange both
+    /// take DARK ink despite reading as mid-to-bright colours, which is the exact
+    /// pair a "light fill gets dark ink" cutoff inverts.
+    #[test]
+    fn a_mid_bright_fill_still_takes_dark_ink() {
+        for (what, fill) in [("WZEE cyan", rgb(14, 165, 196)), ("WMHX orange", rgb(232, 89, 12))] {
+            let ink = ink_on(fill);
+            assert_eq!(ink, rgb(0x14, 0x18, 0x21), "{what} must not take white");
+            assert!(
+                contrast(fill, ink) >= 4.5,
+                "{what} clears AA at {:.2}",
+                contrast(fill, ink)
+            );
+        }
+    }
+
+    /// EVERY FILL THIS APP CAN ACTUALLY PRODUCE CLEARS AA.
+    ///
+    /// `brand_color` hashes into ten fixed values, so unlike the handoff's
+    /// arbitrary station data this set is CLOSED and can be checked exhaustively.
+    /// A future edit to `BRAND_BGS` that added an unreadable fill would fail here
+    /// rather than on a dashboard.
+    #[test]
+    fn every_brand_fill_clears_aa_with_the_ink_the_guard_picks() {
+        for rgb_u32 in BRAND_BGS {
+            let fill = rgb((rgb_u32 >> 16) as u8, (rgb_u32 >> 8) as u8, rgb_u32 as u8);
+            let ratio = contrast(fill, ink_on(fill));
+            assert!(ratio >= 4.5, "fill #{rgb_u32:06X} only reaches {ratio:.2}:1");
+        }
+    }
+
+    /// AN UNBRANDED PLATE TAKES THE THEME'S INK, NOT WHITE.
+    ///
+    /// The case §5 calls out as reachable through the app's own save flow: a
+    /// station saved from a dial with no call sign has no fill, and white on the
+    /// theme's `raised` measures 1.08:1.
+    #[test]
+    fn a_plate_with_no_fill_takes_the_themes_own_ink() {
+        let theme_text = rgb(0x1B, 0x22, 0x2C);
+        assert_eq!(plate_ink(None, theme_text), theme_text);
+        // And a fill still overrides it, in both directions.
+        assert_eq!(plate_ink(Some(rgb(28, 31, 36)), theme_text), rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(plate_ink(Some(rgb(14, 165, 196)), theme_text), rgb(0x14, 0x18, 0x21));
+    }
 
     #[test]
     fn clean_call_only_strips_a_separated_trailing_suffix() {

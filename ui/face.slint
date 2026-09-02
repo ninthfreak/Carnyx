@@ -219,7 +219,6 @@ export component Face inherits Rectangle {
             egg: root.egg;
             active-index: root.active-index;
             reordering: root.reordering;
-            show-nav: !Metrics.tall;
             show-nearby: !Metrics.tall;
             select(i) => { root.select-preset(i); }
             open-nearby => { root.open-nearby(); }
@@ -424,52 +423,43 @@ export component Face inherits Rectangle {
     // it "in the empty space right of the hero card", which is BELOW that line —
     // and a guard demanding it stay above the anchor hid it on the head unit
     // itself. The clock takes the same liberty with the same anchor.
-    property <bool> eta-showing:
-        root.nav-eta != "" && root.nav-stage != NavStage.idle && root.clock-measured;
-    // 60% LARGER, A DIRECT ASK — "the ETA display should be 60% larger". Only
-    // the READOUT itself (`root.nav-eta`'s own text): the "ETA" caption and the
-    // tall track's distance-left figure are labels beside it, not the display
-    // named in the ask, and stay their own size so the readout still reads as
-    // the loudest thing in the row rather than three same-sized numbers.
-    property <length> eta-font-size: (Metrics.tall ? Metrics.s(17) : Metrics.s(15)) * 1.6;
-    property <length> eta-line-h: root.eta-font-size * 1.4;
-    if root.eta-showing: Rectangle {
+    // ── WHAT STAYS UNDER THE CLOCK, AND WHAT LEFT (v3.3.0 §7a.1) ────────────
+    //
+    // THE ETA MOVED OUT and is now the tail of the countdown line below — §7a.1:
+    // "The ETA never appears under the clock in any stage — that would put it
+    // directly above the clock, which is the wrong priority while navigating."
+    // The owner confirms the move was their instruction to Claude Design.
+    //
+    // The 1.6x multiplier that used to size it here went with it. That was a
+    // direct ask against the OLD placement ("the ETA display should be 60%
+    // larger"), and §6 supersedes it with the pill's own sizes — 24sp, 26 on the
+    // tall track. Superseded, not ignored.
+    //
+    // DISTANCE-LEFT STAYS, and §7a.1 says so in the same breath: "Distance-left
+    // keeps its place under the clock on the tall track in every stage, cruising
+    // included. Only the ETA moves." So this block survives with one child, on
+    // the tall track alone, in every stage.
+    property <bool> left-distance-showing: Metrics.tall
+        && root.nav-left-distance != ""
+        && root.nav-stage != NavStage.idle
+        && root.clock-measured;
+    property <length> left-distance-line-h: Metrics.s(15) * 1.4;
+    if root.left-distance-showing: Rectangle {
         x: 0;
         y: root.clock-line-bottom + Metrics.s(7);
         width: root.width;
-        height: root.eta-line-h;
+        height: root.left-distance-line-h;
 
         HorizontalLayout {
             alignment: end;
-            spacing: Metrics.s(6);
             // The same right padding the clock uses, so the two share an edge.
             padding-right: Metrics.pad-h;
             cross-axis-alignment: center;
 
-            // DISTANCE LEFT JOINS IT ON THE TALL TRACK ONLY, where §4.9 says
-            // there is room. It goes to the LEFT of the ETA so the ETA keeps the
-            // flush right edge it shares with the clock.
-            if Metrics.tall && root.nav-left-distance != "": Text {
+            Text {
                 text: root.nav-left-distance;
                 font-family: Font.face; font-weight: Font.bold;
                 font-size: Metrics.s(15);
-                color: Pal.dim;
-            }
-            Text {
-                text: "ETA";
-                font-family: Font.face; font-weight: Font.bold;
-                font-size: Metrics.s(11);
-                letter-spacing: 0.5px;
-                color: Pal.dim;
-            }
-            Text {
-                // NO MERIDIEM, SPELLED OUT OR ABBREVIATED — a direct ask: "it
-                // doesn't need an am/pm (or A/P) readout". `crate::clock::eta`
-                // no longer appends one in 12-hour mode; 24-hour mode never
-                // had one to begin with.
-                text: root.nav-eta;
-                font-family: Font.face; font-weight: Font.bold;
-                font-size: root.eta-font-size;
                 color: Pal.dim;
             }
         }
@@ -508,7 +498,19 @@ export component Face inherits Rectangle {
     // above the anchor hid the countdown on exactly the track it was built
     // for. The y below is order-safe instead.
     property <bool> countdown-measured: root.countdown-bottom > root.countdown-top;
-    if root.nav-stage == NavStage.cruise && root.nav-distance != "" && root.countdown-measured:
+    // ── THE LINE RUNS IN EVERY STAGE NOW (v3.3.0 §7a.1) ──────────────────────
+    //
+    // It was cruise-only, because the countdown text is. The ETA lives here now
+    // and §7a.1 is explicit that it does not leave when the countdown does: "On
+    // approach and turn now the countdown text drops away and the ETA stays in
+    // that same line, alone, at the same size. The line is not cruise-only; only
+    // its countdown text is."
+    //
+    // So the gate is "not idle, and there is something to put in it", and the
+    // COUNTDOWN half carries its own `cruise` test below.
+    property <bool> countdown-content: root.nav-stage == NavStage.cruise
+        && root.nav-distance != "";
+    if (root.countdown-content || root.nav-eta != "") && root.countdown-measured:
     Rectangle {
         // ── THE RECTANGLE IS THE BUDGET *AND* THE CLIP ───────────────────────
         //
@@ -522,6 +524,20 @@ export component Face inherits Rectangle {
         // which is the RadioText strip's own precedent — "the references show
         // edge-clipped text".
         x: Metrics.tall ? Metrics.pad-h : 0;
+        // 0.62 STAYS, AND WIDENING IT WAS TRIED AND REVERTED. The reasoning that
+        // said it could widen is sound as far as it goes — the ETA left the
+        // clock's column (v3.3.0 §7a.1), so what stacks under the clock now is
+        // distance-left alone at 15sp instead of a 24sp x 1.6 readout, and the
+        // column IS narrower. What that reasoning missed is that the ETA did not
+        // leave the SCREEN: it moved into this row, so the row grew by a whole
+        // pill at the same time the column shrank. At 0.68 the pill ran straight
+        // into the segment clock — `shots/nav-cruise-portrait.png` showed it.
+        //
+        // So the street elides on the tall track, which is what an elide is for
+        // and what this budget has always done. Of the two, an elided street
+        // beats a pill overlapping the clock: §6 makes the ETA "the
+        // highest-contrast element on the nav line", and a street name is the one
+        // part of the line a driver can also read off the road.
         width: Metrics.tall ? root.width * 0.62 - Metrics.pad-h : root.width;
         height: root.countdown-line-h;
         // `max(min(…))` RATHER THAN `clamp`, because the bounds can cross: a
@@ -566,14 +582,14 @@ export component Face inherits Rectangle {
             // 16-17sp lowercase it competed with the distance beside it.
             // s(13)/700/1.5px/uppercase reads as a tag the way the ETA
             // label and the `THEN` blocks above it do.
-            Text {
+            if root.countdown-content: Text {
                 text: "IN";
                 font-family: Font.face; font-weight: Font.bold;
                 font-size: Metrics.s(13);
                 letter-spacing: 1.5px;
                 color: Pal.dim;
             }
-            Text {
+            if root.countdown-content: Text {
                 text: root.nav-distance;
                 font-family: Font.face; font-weight: Font.bold;
                 font-size: Metrics.tall ? Metrics.s(26) : Metrics.s(24);
@@ -585,7 +601,7 @@ export component Face inherits Rectangle {
             // in the middle of the line. The distance and street still show,
             // which is `NavState::Unknown`'s own rule: the distance is good
             // and the glyph is not.
-            if root.nav-arrow != "": TurnArrow {
+            if root.countdown-content && root.nav-arrow != "": TurnArrow {
                 // The tall-track step the v3.0.1 correction found missing.
                 size: Metrics.s(Metrics.tall ? 28 : 26);
                 color: Pal.amber;
@@ -596,13 +612,63 @@ export component Face inherits Rectangle {
             }
             // THE STREET COLLAPSES WHEN IT IS MISSING rather than leaving a gap
             // — the handoff's rule for every field the poll may not carry.
-            if root.nav-street != "": Text {
+            if root.countdown-content && root.nav-street != "": Text {
                 text: root.nav-street;
                 font-family: Font.face;
                 // The tall-track step the v3.0.1 correction found missing.
                 font-size: Metrics.s(Metrics.tall ? 19 : 18);
                 color: Pal.dim;
                 overflow: elide;
+            }
+
+            // ── THE ETA PILL (v3.3.0 §6) ─────────────────────────────────────
+            //
+            // "The highest-contrast element on the nav line", and the tail of the
+            // countdown when there is one — `in · 1.4 km · ↱ · Whitney Way ·
+            // ETA 4:52`. On approach and turn it is the only thing left in the
+            // line, at the same size.
+            //
+            // THE FILL AND INK ARE `Pal.eta-pill` / `Pal.on-eta-pill`, which are
+            // NOT the theme's amber on the light side — see their note: white on
+            // `Pal.amber` fails AA and the fill is darkened rather than the type
+            // faded. NO OPACITY ON THE LABEL either; §6 says it was tried at 0.82
+            // and failed.
+            if root.nav-eta != "": Rectangle {
+                border-radius: Metrics.s(11);
+                background: Pal.eta-pill;
+                // WRAPPED TO THE ROW'S CONTENT. A Rectangle in a layout takes the
+                // space offered, so the pill states its own size from the text
+                // inside it — which is what the prototype's `inline-flex` and
+                // `flex-shrink: 0` do.
+                horizontal-stretch: 0;
+                width: pill.preferred-width;
+                height: pill.preferred-height;
+
+                pill := HorizontalLayout {
+                    padding-left: Metrics.s(Metrics.tall ? 12 : 11);
+                    padding-right: Metrics.s(Metrics.tall ? 12 : 11);
+                    padding-top: Metrics.s(Metrics.tall ? 7 : 6);
+                    padding-bottom: Metrics.s(Metrics.tall ? 8 : 7);
+                    spacing: Metrics.s(6);
+                    cross-axis-alignment: end;
+
+                    Text {
+                        text: "ETA";
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.s(13);
+                        letter-spacing: 1.5px;
+                        color: Pal.on-eta-pill;
+                    }
+                    Text {
+                        // NO MERIDIEM, SPELLED OUT OR ABBREVIATED — a direct ask
+                        // that survives the move: `crate::clock::eta` appends
+                        // none in 12-hour mode and 24-hour never had one.
+                        text: root.nav-eta;
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.s(Metrics.tall ? 26 : 24);
+                        color: Pal.on-eta-pill;
+                    }
+                }
             }
         }
     }

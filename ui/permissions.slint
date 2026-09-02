@@ -1,0 +1,123 @@
+// The one-time permissions offer.
+//
+// WHY THIS EXISTS AS A PANEL AND NOT AS A BARE JUMP TO SETTINGS. The station
+// pop-up needs `SYSTEM_ALERT_WINDOW`, which is a "special" permission: there is
+// no in-app dialog for it on any Android, and the only way to get it is to send
+// the driver out of Carnyx into a full Settings screen. Doing that unannounced,
+// on first launch, is an app throwing someone into a system screen with no idea
+// why they are there. So the explanation is here, the jump is a button, and
+// "Not now" is a real answer.
+//
+// IT IS SHOWN ONCE PER INSTALL. `settings::Settings::permissions_asked` carries
+// the state Android will not: a special permission has no "user declined" that
+// an app can read — `shouldShowRequestPermissionRationale` covers ordinary
+// runtime permissions and not this one — so an app that simply asks whenever the
+// permission is missing would open Settings on every launch for ever. Both
+// DIAGNOSTICS rows stay as the deliberate way back.
+//
+// The chrome is `overlay.slint`'s, like every other modal on the face. The card
+// is small: this is two sentences and two buttons, not a scrolling body, so the
+// design height is well under the 576 the others use.
+
+import { Pal, Metrics, Font } from "tokens.slint";
+import { OverlayCard, OverlayHeader } from "overlay.slint";
+
+/// One of the two buttons on the footer.
+///
+/// Not `overlay.slint`'s `OverlayFooter`, which lays out the logo window's
+/// specific pair. This is a plain pill and there are two of them; giving the
+/// affirmative one the accent and the other a border is the same weighting the
+/// rest of the face uses for a primary/secondary pair.
+component PromptButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: Math.max(48px, Metrics.s(56));
+    horizontal-stretch: 1;
+    border-radius: Metrics.s(14);
+    border-width: root.primary ? 0px : 1px;
+    border-color: Pal.border;
+    background: root.primary ? Pal.blue : Pal.raised;
+    opacity: touch.pressed ? 0.6 : 1.0;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.label;
+        font-family: Font.face;
+        font-weight: Font.bold;
+        font-size: Metrics.s(19);
+        // WHITE ON THE ACCENT, and not a token: there is no `on-accent` in the
+        // palette because nothing else in the face puts type on a filled blue
+        // pill. White is what the accent is chosen to carry, in both themes —
+        // `Pal.blue` is #4A9EFF dark and #2E86FF light, and both are dark enough
+        // for white to clear contrast at this size.
+        color: root.primary ? #FFFFFF : Pal.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component PermissionsPrompt inherits OverlayCard {
+    /// What the pop-up is and what it needs, decided in Rust so the wording can
+    /// be tested and so a build that cannot grant anything says so instead.
+    in property <string> body;
+    in property <string> primary-label;
+    in property <string> dismiss-label;
+
+    callback grant();
+    callback dismiss();
+
+    design-width: 620;
+    design-height: 380;
+    // THE SCRIM DOES NOT DISMISS THIS ONE. Every other overlay is something the
+    // driver opened and can close by tapping away; this one opened itself, and a
+    // stray tap on the scrim would count as the single answer this is ever going
+    // to get. Both buttons are explicit.
+    dismiss-on-scrim: false;
+    close => { root.dismiss(); }
+
+    VerticalLayout {
+        padding: Metrics.s(28);
+        spacing: Metrics.s(22);
+
+        OverlayHeader {
+            // NO CLOSE BUTTON, for `dismiss-on-scrim`'s reason: the answer is one
+            // of the two below and not a dismissal that means neither.
+            show-close: false;
+
+            Text {
+                text: "Show what's playing";
+                font-family: Font.face;
+                font-weight: Font.bold;
+                font-size: Metrics.s(26);
+                color: Pal.text;
+            }
+        }
+
+        Text {
+            text: root.body;
+            font-family: Font.face;
+            font-size: Metrics.s(20);
+            color: Pal.dim;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+        }
+
+        HorizontalLayout {
+            spacing: Metrics.s(14);
+            PromptButton {
+                label: root.dismiss-label;
+                clicked => { root.dismiss(); }
+            }
+            PromptButton {
+                label: root.primary-label;
+                primary: true;
+                clicked => { root.grant(); }
+            }
+        }
+    }
+}

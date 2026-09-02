@@ -118,7 +118,19 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// notifications off is a Settings toggle, a downgraded channel needs a new
 /// channel id and cannot be fixed from code, and a clean "posted" with no banner
 /// on screen is SystemUI's.
-pub fn post(title: &str, text: &str, logo: &str) -> String {
+#[allow(clippy::too_many_arguments)]
+pub fn post(
+    title: &str,
+    text: &str,
+    logo: &str,
+    brand: i32,
+    ground: i32,
+    ink: i32,
+    edge: i32,
+    logo_fallback: i32,
+    logo_plate: i32,
+    plate: i32,
+) -> String {
     let Some(class) = CLASS_REF.get() else {
         return "no alert class in this build".into();
     };
@@ -134,9 +146,21 @@ pub fn post(title: &str, text: &str, logo: &str) -> String {
                 class,
                 jni_str!("post"),
                 jni_sig!(
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIII)\
+                     Ljava/lang/String;"
                 ),
-                &[(&t).into(), (&x).into(), (&l).into()],
+                &[
+                    (&t).into(),
+                    (&x).into(),
+                    (&l).into(),
+                    brand.into(),
+                    ground.into(),
+                    ink.into(),
+                    edge.into(),
+                    logo_fallback.into(),
+                    logo_plate.into(),
+                    plate.into(),
+                ],
             )?
             .l()?;
         let out = JString::cast_local(env, out)?;
@@ -172,6 +196,24 @@ pub fn request_post_notifications() -> String {
         out.try_to_string(env)
     })
     .unwrap_or_else(|e| format!("JNI failure: {e}"))
+}
+
+/// Can the pop-up draw over other apps? 1 yes, 0 no, -1 cannot tell.
+///
+/// THE LAUNCH OFFER ASKS THIS BEFORE IT DECIDES ANYTHING. -1 means the question
+/// does not apply on this build — no class, no context — and is NOT "no": a host
+/// build would otherwise raise a permissions panel over every screenshot.
+pub fn overlay_state() -> i32 {
+    let Some(class) = CLASS_REF.get() else {
+        return -1;
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return -1;
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<i32, jni::errors::Error> {
+        env.call_static_method(class, jni_str!("overlayState"), jni_sig!("()I"), &[])?.i()
+    })
+    .unwrap_or(-1)
 }
 
 /// Send the driver to Android's "Display over other apps" screen.

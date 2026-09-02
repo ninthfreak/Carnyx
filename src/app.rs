@@ -287,6 +287,34 @@ struct DarkPick {
     selected: usize,
 }
 
+/// A Slint colour as the packed ARGB int Android wants.
+///
+/// THE SEAM CARRIES COLOURS AND NOT A THEME FLAG. Handing Java a `dark` boolean
+/// would mean a second copy of the palette over there, in hex, drifting from
+/// `ui/tokens.slint` the moment either is touched — and the pop-up would still
+/// miss the desaturated dead face and a band theme's page tint, both of which
+/// `Pal` folds into these same tokens. Reading the live values costs one call
+/// per station change and cannot go stale.
+fn argb(c: slint::Color) -> i32 {
+    (u32::from(c.alpha()) << 24
+        | u32::from(c.red()) << 16
+        | u32::from(c.green()) << 8
+        | u32::from(c.blue())) as i32
+}
+
+/// [`LogoPlate`] as the int the pop-up reads. See `CarnyxOverlay.card`.
+///
+/// Declaration order of the Slint enum, and `light` is 0 because it is also what
+/// a station with no art at all gets — the arm that draws no plate treatment.
+fn plate_code(p: LogoPlate) -> i32 {
+    match p {
+        LogoPlate::Light => 0,
+        LogoPlate::Fallback => 1,
+        LogoPlate::Bare => 2,
+        LogoPlate::Plate => 3,
+    }
+}
+
 /// What a probe calls itself in the log. One place, so the "reading…" line, the
 /// footer and the unavailable line cannot drift apart.
 fn probe_name(action: settings::Action) -> &'static str {
@@ -1410,6 +1438,13 @@ impl App {
                     selected: saved.selected,
                     theme: saved.theme,
                     logos_on: saved.logos_on,
+                    // FROM THE FILE, which is the entire point of the flag: an
+                    // offer already made must not be made again on the next
+                    // ignition. Hard-coding `false` here persisted it correctly
+                    // and then ignored it on the way back in, which is a nag that
+                    // saves its own state — caught by
+                    // `the_permissions_offer_is_made_once_and_survives_a_restart`.
+                    permissions_asked: saved.permissions_asked,
                     release_on_sleep: saved.release_on_sleep,
                     clock_on: saved.clock_on,
                     nav_on: saved.nav_on,
@@ -1577,6 +1612,10 @@ impl App {
         app.connect_tuner();
         app.install_callbacks(ui);
         app.push_all();
+        // LAST, AFTER `push_all`. The panel sets `overlay`, and `push_all` pushes
+        // the whole face including that property — raising it first would have
+        // the start-up push close it again.
+        app.offer_permissions();
         app
     }
 
@@ -3008,7 +3047,37 @@ impl App {
             // hero lettering follows above.
             let title = if ident.is_empty() { dial.clone() } else { ident.clone() };
             let logo = self.notification_logo(&base);
-            let outcome = crate::android::announce_station(&title, &format!("{dial} FM"), &logo);
+            // THE POP-UP IS DRAWN BY THIS APP AND HAS TO MATCH THIS APP. It is a
+            // window Carnyx owns (`CarnyxOverlay`), not a system template, so it
+            // gets the live palette rather than a copy of one: read straight off
+            // `Pal`, which is where light/dark actually resolves — `Theme::System`
+            // sets neither flag, so `settings.theme` can say one thing while the
+            // face shows another. `art_for`'s own note makes the same point.
+            //
+            // The two logo grounds travel with them because a mark adapted for a
+            // dark face needs a KNOWN surface behind it, not whatever the card is.
+            let plate = self
+                .art_for(&base, Some(TILE_BOX_DP))
+                .map_or(LogoPlate::Light, |(_, p)| p);
+            let brand = brand_color(&base);
+            let (ground, ink, edge, logo_fallback, logo_plate) = {
+                let ui = self.ui();
+                let pal = ui.global::<crate::Pal>();
+                (pal.get_panel(), pal.get_text(), pal.get_border(),
+                 pal.get_logo_fallback(), pal.get_logo_plate())
+            };
+            let outcome = crate::android::announce_station(
+                &title,
+                &format!("{dial} FM"),
+                &logo,
+                argb(brand),
+                argb(ground),
+                argb(ink),
+                argb(edge),
+                argb(logo_fallback),
+                argb(logo_plate),
+                plate_code(plate),
+            );
             // THE LINE THAT SETTLES THE OPEN QUESTION. Whether a backgrounded
             // wheel press retunes at all depends on the Slint event loop pumping
             // while the activity is stopped, which cannot be tested off the unit
@@ -3059,12 +3128,16 @@ impl App {
         let art: Vec<Option<(slint::Image, LogoPlate)>> =
             bases.iter().map(|b| self.art_for(b, Some(TILE_BOX_DP))).collect();
 
+        // BEFORE THE BORROW, like the art above and for the same reason: reading
+        // a Slint global goes through the window, and this method holds the
+        // state's `RefCell` for the rest of its body.
+        let theme_text = ui.global::<crate::Pal>().get_text();
         let s = self.state.borrow();
         let rows: Vec<Preset> = s
             .presets
             .iter()
             .zip(art.iter())
-            .map(|(p, a)| to_preset(p, a.clone()))
+            .map(|(p, a)| to_preset(p, a.clone(), theme_text))
             .collect();
         // Same rule as `push_nearby`: an identical model is still a repeater
         // rebuilt, and the preset band is on screen the whole time.
@@ -3097,8 +3170,8 @@ impl App {
         };
         // The peek cards reuse the tiles' art — same plate, same ladder rung, and
         // it is already decoded.
-        ui.set_prev_preset(to_preset(&s.presets[prev as usize], art[prev as usize].clone()));
-        ui.set_next_preset(to_preset(&s.presets[next as usize], art[next as usize].clone()));
+        ui.set_prev_preset(to_preset(&s.presets[prev as usize], art[prev as usize].clone(), theme_text));
+        ui.set_next_preset(to_preset(&s.presets[next as usize], art[next as usize].clone(), theme_text));
         ui.set_has_prev(true);
         ui.set_has_next(true);
     }
@@ -3565,6 +3638,70 @@ impl App {
     #[cfg(not(target_os = "android"))]
     fn launch_osmand(&self) -> String {
         String::new()
+    }
+
+    /// The one-time offer, made at launch and never again.
+    ///
+    /// ── WHY THIS IS NOT "CHECK AND ASK", WHICH IS THE ANDROID NORM ──────────
+    ///
+    /// For an ordinary runtime permission it would be. `SYSTEM_ALERT_WINDOW` is
+    /// a SPECIAL one: there is no in-app dialog for it on any Android, the only
+    /// route is a full Settings screen, and — the part that decides this design —
+    /// there is no readable "the user said no". `shouldShowRequestPermissionRationale`
+    /// does not cover a special permission, so an app that asks whenever the
+    /// permission is missing asks on EVERY launch, for ever, of a driver who has
+    /// already refused. `Settings::permissions_asked` is the state Android
+    /// declines to keep.
+    ///
+    /// THE FLAG IS SET WHEN THE PANEL IS RAISED, not when it is answered. A
+    /// process killed with the panel on screen has still spent the offer, which
+    /// is the safe direction: the two DIAGNOSTICS rows are the way back, and
+    /// they always work.
+    ///
+    /// NOTIFICATIONS ARE ASKED FOR HERE TOO AND WITHOUT A PANEL, because that one
+    /// IS an ordinary runtime permission with a real dialog of its own — there is
+    /// nothing to explain that the dialog does not say. Below API 33 the Java
+    /// side answers "not needed" and does nothing, which is this unit.
+    ///
+    /// -1 FROM `overlay_permission_state` IS NOT "NOT GRANTED". It means the
+    /// question does not apply — a host build, or `attach` never ran — and
+    /// treating it as a refusal would raise this panel over every screenshot.
+    fn offer_permissions(self: &Rc<App>) {
+        if self.state.borrow().settings.permissions_asked {
+            return;
+        }
+        let note = crate::android::request_notification_permission();
+        let overlay = crate::android::overlay_permission_state();
+        {
+            let mut s = self.state.borrow_mut();
+            s.settings.permissions_asked = true;
+            let at = stamp();
+            s.settings.log.push_head(&at, &format!("permissions: first launch — {note}"));
+        }
+        self.save_prefs();
+        if overlay != 0 {
+            return;
+        }
+        let ui = self.ui();
+        ui.set_permissions_body(
+            "Carnyx can show the station over other apps when you change it from \
+             the steering wheel. Android needs you to allow that on its own \
+             screen — Carnyx cannot grant it for you.\n\nYou can also do this \
+             later from Settings › Diagnostics."
+                .into(),
+        );
+        ui.set_permissions_primary("Open Android settings".into());
+        ui.set_permissions_dismiss("Not now".into());
+        ui.set_overlay(Overlay::Permissions);
+    }
+
+    /// The panel's affirmative button: out to the Settings screen.
+    fn grant_permissions(self: &Rc<App>) {
+        self.ui().set_overlay(Overlay::None);
+        let line = crate::android::request_overlay_permission();
+        let at = stamp();
+        self.state.borrow_mut().settings.log.push(&at, &line);
+        self.push_settings();
     }
 
     /// Take OsmAnd's units if it has an answer, and say so once when it changes.
@@ -4429,6 +4566,20 @@ impl App {
         on!(on_settings_pick_diag_action, |app, i| {
             app.run_diag_action(i);
         });
+        on!(on_permissions_grant, |app| {
+            app.grant_permissions();
+        });
+        on!(on_permissions_not_now, |app| {
+            // NOTHING TO RECORD BEYOND CLOSING IT. `permissions_asked` was set
+            // when the panel was RAISED, not here, so "Not now" and a process
+            // killed with the panel still up mean the same thing: the one offer
+            // has been made. Anything else re-asks on the next launch, which is
+            // exactly the nag this design exists to prevent.
+            app.ui().set_overlay(Overlay::None);
+            let at = stamp();
+            app.state.borrow_mut().settings.log.push(&at, "permissions: offer declined");
+            app.push_settings();
+        });
         on!(on_open_logo_search, |app, i| {
             app.open_logo_search(i);
         });
@@ -4705,6 +4856,7 @@ impl App {
             selected: s.settings.selected,
             theme: s.settings.theme,
             logos_on: s.settings.logos_on,
+            permissions_asked: s.settings.permissions_asked,
             release_on_sleep: s.settings.release_on_sleep,
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
@@ -6032,7 +6184,16 @@ fn step_anchor(asserted: Option<f32>, dial: f32, presets: &[Slot]) -> i32 {
 /// a chip decodes a 128 px PNG rather than a 512 px one.
 const TILE_BOX_DP: f32 = 128.0;
 
-fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
+/// One slot as the band and the peek cards need it.
+///
+/// `theme_text` is the palette's own ink and is used ONLY for the unbranded
+/// plate — see `station::plate_ink`. It is passed in rather than read here
+/// because this is a free function with no window to ask.
+fn to_preset(
+    slot: &Slot,
+    logo: Option<(slint::Image, LogoPlate)>,
+    theme_text: slint::Color,
+) -> Preset {
     let call = slot.call();
     Preset {
         name: slot.name().into(),
@@ -6040,6 +6201,15 @@ fn to_preset(slot: &Slot, logo: Option<(slint::Image, LogoPlate)>) -> Preset {
         // The colour hashes from the CORE letters, so `WWHG` and `WWHG-FM` are
         // one station and get one fill.
         brand: brand_color(&call),
+        // ON the fill, not on the theme. `brand_color` is total so the fill is
+        // always there; see `station::plate_ink` for why the `None` arm exists
+        // anyway and what would make it reachable.
+        ink: crate::station::plate_ink(Some(brand_color(&call)), theme_text),
+        // COUNTED IN CHARACTERS, NOT BYTES. A call sign is ASCII in every record
+        // this ships with, but `len()` would be a latent trap the first time one
+        // is not, and the advance table is per glyph.
+        call_ramp: crate::station::call_ramp(call.chars().count()),
+        call_cap_div: crate::station::call_cap_div(call.chars().count()),
         freq_mhz: slot.mhz,
         freq_label: format_mhz(slot.mhz).into(),
         has_logo: logo.is_some(),
@@ -6250,6 +6420,81 @@ mod tests {
         (ui, driver)
     }
 
+    /// THE OFFER IS MADE ONCE PER INSTALL, AND THE FLAG OUTLIVES THE PROCESS.
+    ///
+    /// This is the whole difference between "ask on launch", which is the Android
+    /// norm and what was asked for, and a nag. `SYSTEM_ALERT_WINDOW` has no
+    /// readable "the user declined" — `shouldShowRequestPermissionRationale` does
+    /// not cover a special permission — so if this flag failed to persist, a
+    /// driver who said no would be sent to Settings on every single launch and
+    /// nothing in the platform would ever tell the app to stop.
+    #[test]
+    fn the_permissions_offer_is_made_once_and_survives_a_restart() {
+        let _ui_lock = harness::ui_lock();
+        let dir = std::env::temp_dir().join("carnyx-apptest-permonce");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let make = || {
+            let ui = AppWindow::new().expect("window");
+            let driver = App::with_tuner(
+                &ui,
+                &host_db_path(),
+                &dir,
+                Box::new(crate::android::FakeTuner::new()),
+                false,
+                None,
+                fake::FakeLocation::default(),
+            );
+            (ui, driver)
+        };
+
+        let (_ui, first) = make();
+        assert!(
+            first.state.borrow().settings.permissions_asked,
+            "the first launch spends the offer"
+        );
+        let asked = |d: &Rc<App>| {
+            d.state
+                .borrow()
+                .settings
+                .log
+                .lines()
+                .iter()
+                .filter(|l| l.contains("permissions: first launch"))
+                .count()
+        };
+        assert_eq!(asked(&first), 1, "and says so once");
+        drop(first);
+
+        // A SECOND PROCESS OVER THE SAME PREFERENCES FILE, which is what an
+        // ignition cycle is. Not a second call on the same App — that would pass
+        // on the in-memory flag alone and prove nothing about the file.
+        let (_ui2, second) = make();
+        assert!(second.state.borrow().settings.permissions_asked, "still spent");
+        assert_eq!(asked(&second), 0, "and the second launch says nothing at all");
+    }
+
+    /// AND IT NEVER OPENS WHERE THERE IS NOTHING TO GRANT.
+    ///
+    /// `overlay_permission_state` answers -1 off Android — the question does not
+    /// apply — and -1 is deliberately NOT "not granted". Getting that wrong would
+    /// raise a modal panel over every one of the 81 screenshots and over every
+    /// other test in this file, which is a loud enough failure to be worth its
+    /// own test rather than being left to whichever one broke first.
+    #[test]
+    fn the_permissions_panel_never_opens_on_a_build_with_nothing_to_grant() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("permpanel");
+        driver.drain_events();
+        assert_eq!(
+            ui.get_overlay(),
+            Overlay::None,
+            "the host has no permission model, so there is nothing to offer"
+        );
+        assert_eq!(crate::android::overlay_permission_state(), -1, "and it says so as -1");
+    }
+
     /// ONE WAKE PER BATCH — AND AN EVENT THAT ARRIVES MID-DRAIN STILL GETS ONE.
     ///
     /// THE SECOND HALF IS THE ONE THAT BITES. Making the wake idempotent is easy
@@ -6432,6 +6677,7 @@ mod tests {
             selected: settings::Source::Rtl,
             theme: settings::Theme::Dark,
             logos_on: true,
+            permissions_asked: false,
             release_on_sleep: false,
             clock_on: false,
             nav_on: false,
@@ -8172,21 +8418,21 @@ mod tests {
     fn a_tile_claims_a_logo_only_when_it_was_handed_one() {
         let slot = Slot { mhz: 88.7, row: None, saved_call: None };
 
-        let bare = to_preset(&slot, None);
+        let bare = to_preset(&slot, None, slint::Color::from_rgb_u8(0, 0, 0));
         assert!(!bare.has_logo);
         assert_eq!(bare.freq_label, "88.7");
 
         // A 1×1 image is enough: what is under test is that the flag follows the
         // Option, not what the pixels are.
         let px = crate::logos::ui::to_image(&Raster { w: 1, h: 1, rgba: vec![0, 0, 0, 255] });
-        let dressed = to_preset(&slot, Some((px.clone(), LogoPlate::Plate)));
+        let dressed = to_preset(&slot, Some((px.clone(), LogoPlate::Plate)), slint::Color::from_rgb_u8(0, 0, 0));
         assert!(dressed.has_logo);
         // AND THE BACKING RIDES WITH THE ART. A tile that took the picture and
         // dropped the answer to "what goes behind it" would put a keyed `plate`
         // mark on a transparent plate — a dark logo on a dark card.
         assert_eq!(dressed.plate, LogoPlate::Plate);
         assert_eq!(
-            to_preset(&slot, Some((px, LogoPlate::Bare))).plate,
+            to_preset(&slot, Some((px, LogoPlate::Bare)), slint::Color::from_rgb_u8(0, 0, 0)).plate,
             LogoPlate::Bare,
             "the tile reports what it was handed, not a constant"
         );

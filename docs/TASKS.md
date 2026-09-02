@@ -1306,6 +1306,436 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 124. Fix the plate's line proportions against the handoff's own capture
+**DONE, AND THE OWNER CAUGHT IT.** *"Those call sign and frequency positions and
+proportions do not look correct in your screenshots... compare those proportions
+to the handoff you got."* They were right, and #119 shipped the defect.
+
+**MEASURED RATHER THAN EYEBALLED.** Both captures were reduced to ink-row bands
+inside the WQLF plate — find the fill colour, mark every row far from it, group
+the runs:
+
+| | handoff | #119 shipped | now |
+|---|---|---|---|
+| call-sign band | 26.8% of plate | 19.5% | 24.4% |
+| frequency band | 17.0% | 15.9% | 15.9% |
+| call : frequency | 1.58 | 1.23 | 1.54 |
+| frequency starts at | 63.8% | 72.0% | 64.6% |
+
+**THE CAUSE WAS A BOX I INVENTED.** `PlateBox.call-line-h: height * 0.56` gave the
+call line a fixed share of the plate. Nothing in §13.1 says that — it states a
+centred column with a `gap` and no heights at all — and the effect was to stretch
+the call line, strand the call sign small inside an oversized box, and push the
+frequency 8 points down the plate.
+
+**THE TYPE SIZE WAS NEVER WRONG**, which is why the tests kept passing: the
+resting tile resolved to 29 design px throughout, the handoff's own checkpoint,
+and `the_widest_four_character_signs_fit_their_plates` asserts exactly that. The
+formula was right and the CONTAINER was wrong, which no arithmetic test could see.
+
+**THE FIX IS TO LET THE LINES SIZE THEMSELVES.** `CallSignBox`'s height is now its
+own type's line box (1.15x the font size) and the layout centres the pair. The
+0.52 height guard reads a new `avail-h` — the plate's height, passed in — because
+the box's own height now derives from the size and reading it there would be a
+size depending on a height depending on the size.
+
+**WHAT REMAINS AND WHY.** The call band is 24.4% against the handoff's 26.8%
+because this tree's tiles are larger than §1's table (a plate ~132x102 design px
+where the handoff's is ~104x75), which predates this bundle. Same type, bigger
+plate, so the same glyphs occupy a smaller share. The RATIO and the POSITION —
+the two things the owner could see were wrong — now match within 3% and 1 point.
+
+**Method note for the next person:** the handoff ships 3x captures, so a band
+measured there divides by 3 to reach design px, and this tree's shots render at
+1024 wide against a 1280 design, so `Metrics.k` is 0.8. Comparing raw pixel
+heights between the two is meaningless; comparing each as a PERCENTAGE OF ITS OWN
+PLATE is what makes them commensurable.
+
+### 123. Handoff v3.3.0 §13.4 (flick half) — flick the hero to change preset
+**BUILT, UNVERIFIED BY TOUCH.** A horizontal flick on the hero card steps preset:
+left for next, right for previous.
+
+**IT REUSES `step`, WHICH IS THE POINT.** §13.4 asks for "the existing card-snap
+animation, so a flick and a peek-card tap produce identical motion". The peek
+cards call `HeroRow.step(±1)`; the flick calls the same one, so the morph comes
+along whole rather than being reproduced.
+
+**THE THRESHOLDS ARE THE SPEC'S AND ARE STRICTER THAN A SCROLL ON PURPOSE:** 56dp
+of travel, horizontal at least 1.4x vertical, inside 700ms — "a hesitant touch on
+the card must never tune the radio." The 700ms window is a Timer that clears the
+gesture if it expires with the finger still down: what follows is a slow drag, not
+a flick.
+
+**THE STAR IS EXCLUDED BY DECLARATION ORDER.** §13.4's "excluded origin: anything
+inside the star target" is a hit-test question, and Slint resolves overlapping
+siblings to the LAST declared — so the card-wide TouchArea goes first and never
+sees a press that starts on the star or the power button. That also preserves
+§7a.2's hold, which the star owns.
+
+**AND THE PEEK CARDS STAY TAPPABLE, measured rather than hoped.** `PeekCard`'s own
+note records the experiment: "with a full-size TouchArea on the hero,
+examples/tapprobe.rs reported the defect completely unchanged". §13.4 requires
+this — the peeks are the only visible affordance that the flick exists.
+
+**TWO OF §13.4'S WARNINGS DO NOT APPLY HERE, and saying so is part of the port.**
+The 320ms click guard is for a DOM pointer sequence ending in a synthesised click
+on the element underneath; this TouchArea answers no clicks at all, so there is
+nothing to guard. And the text-selection warning is moot because Slint's `Text` is
+not selectable. Both are the same class of free win as the rail's drag handler.
+
+**NOT VERIFIED: the gesture itself.** The shot harness renders static frames and
+there is no interactive pass in this container. Compiles, tests and lints are
+green; the thresholds and the wiring were read rather than exercised.
+
+### 122. Handoff v3.3.0 §7a.2 — hold 650ms to un-star
+**BUILT, THE RING UNVERIFIED ON A SCREEN.** The bundle lists this as shipped in
+v3.2.0; this tree never got it. The star was `clicked => toggle-save()`, a plain
+tap that both saved AND removed — the stray-tap deletion §7a.2 exists to stop.
+
+**THE TWO DIRECTIONS ARE NOW DIFFERENT GESTURES.** A tap on an unsaved star saves.
+A tap on a SAVED one removes nothing and shows `HOLD TO REMOVE` for 1.6s, because
+an early release IS the accident, and the teaching mechanism is deliberate: "the
+rule is learned from the first accident, not from documentation the driver would
+have to read."
+
+**THE COMMIT IS AT THE RING'S CLOSE, UNDER THE FINGER**, not on release — the
+650ms timer fires whether or not the driver has lifted, which is the spec's own
+wording.
+
+**THE RING IS A DECLARATIVE ANIMATION, WHICH §7a.2 SPENT REAL DEBUGGING TIME ON.**
+Its note: a timer-driven progress value did not re-render in the prototype's
+runtime and committed the removal with ZERO visual feedback, and it asks the
+porter to "verify the animation is driven by the compositor or an explicit
+animation API rather than assumed re-renders". Slint's `animate` is exactly that,
+so the engine draws the ring and the timer only decides the outcome. `toggle-save`
+in Rust is unchanged — the guards live in the gesture.
+
+**A DEGENERATE ARC DRAWS NOTHING, and both ends of the sweep depend on it.** At
+progress 0 start meets end and the ring is absent rather than a dot. At the other
+end 360 would meet the start again and vanish at the one moment it should read as
+complete, so the sweep stops at 359.9.
+
+**A DRIFTING THUMB DOES NOT CANCEL, and Slint gives that for free.** §7a.2 needs
+pointer capture so only a lift aborts; a Slint `TouchArea` keeps its grab once
+pressed, so `pressed` survives the finger moving outside it. Nothing to build.
+
+**NOT VERIFIED: the ring on a screen.** It exists only during a press, and the
+shot harness renders static frames — there is no interactive pass here. What is
+checked is that it compiles, that the arc string interpolates, and that the state
+machine is right by reading. The behaviour needs a drive.
+
+### 121. Handoff v3.3.0 §6 + §7a.1 — the ETA becomes a pill, and moves
+**DONE.** Two changes that only make sense together: the ETA leaves the clock's
+column and becomes the tail of the nav countdown line, set in a filled pill.
+
+**THE MOVE SUPERSEDES A DIRECT INSTRUCTION, WITH THE OWNER'S CONFIRMATION.** The
+ETA sat under the clock and was made 60% larger there on a direct ask. §7a.1 says
+it "never appears under the clock in any stage — that would put it directly above
+the clock, which is the wrong priority while navigating." Asked about the
+conflict, the owner confirmed the move was their own instruction to Claude Design
+and the awkward wording was the design tool's. So the 1.6x multiplier is gone and
+§6's sizes apply — 24sp, 26 on the tall track. Superseded, not ignored.
+
+**DISTANCE-LEFT STAYED BEHIND.** §7a.1 in the same breath: "Distance-left keeps
+its place under the clock on the tall track in every stage, cruising included.
+Only the ETA moves." So the block under the clock survives with one child.
+
+**THE LINE IS NO LONGER CRUISE-ONLY.** It was gated on `NavStage.cruise` because
+the countdown text is. §7a.1: "On approach and turn now the countdown text drops
+away and the ETA stays in that same line, alone, at the same size. The line is not
+cruise-only; only its countdown text is." The gate is now "not idle and there is
+something to show"; each countdown child carries its own `cruise` test.
+
+**THE LIGHT FILL IS NOT THE THEME'S AMBER, AND THAT IS THE POINT.** White on
+`Pal.amber` (`#C9760A`) fails AA; `#A85E06` clears it. Computed here rather than
+trusted: 4.92:1, which is §6's own published figure to the decimal, against 3.45:1
+for the theme value. Dark side is 8.67:1. Acceptance check 4 satisfied in both
+themes. No opacity on the label — §6 records that it was 0.82 and failed.
+
+**A WIDENING I TRIED AND REVERTED, RECORDED BECAUSE THE REASONING WAS HALF
+RIGHT.** With the ETA out of the clock's column the tall track's 62% width budget
+looked too tight — the street had elided to a bare "…". Widening to 68% put the
+pill straight through the segment clock. The missed half: the ETA did not leave
+the SCREEN, it moved into this row, so the row grew by a whole pill at the same
+moment the column shrank. 62% stands and the street elides, which is what the
+budget has always done and the better of the two failures.
+
+**Evidence.** 378 tests, clippy clean, 93 shots re-render. Inspected directly:
+`nav-cruise` (pill as the tail of `IN 790 ft ↱ Whitney Way`), `nav-approach`
+(countdown gone, pill alone, same size), `nav-cruise-portrait` and
+`nav-turn-now-portrait` (distance-left still under the clock, no overlap).
+
+### 120. Handoff v3.3.0 §13.4 (rail half) — the arrow buttons go
+**DONE.** The preset band is swipe/drag only now. Gone: the `NavButton`
+component, both call sites, the `show-nav` property, its binding in
+`ui/face.slint`, and the `nav-btn-w` width the two 56dp buttons and their gaps
+reserved out of `side-chrome`.
+
+**THE VISIBLE WIN IS THE WIDTH THEY WERE HOLDING.** At 1280x720 the rail showed
+five tiles and clipped the sixth; with the buttons gone all six fit. The buttons
+were reserving 132dp of a band whose whole job is showing stations.
+
+**§13.4'S DRAG HANDLER IS NOT NEEDED HERE, and that is a real finding rather than
+a skipped requirement.** Every warning in §9.1 — capture lazily, do not retarget
+the click, suppress the click for 260ms after a drag — is about DOM pointer
+capture stealing a tap from the tile underneath. This rail is a Slint `Flickable`,
+which does touch dragging and scroll-versus-tap disambiguation itself; the tree
+already carries a note about tiles answering at ~650ms because of exactly that
+disambiguation. There is nothing to build and nothing lost.
+
+**The position bar already satisfies its half.** §13.4 wants a passive indicator,
+not a drag target. It is a plain `Rectangle` with no `TouchArea`, and in Slint an
+element without one takes no input — so the rule holds by construction. Its
+comment called it "the thin drag scrollbar", which it never was; corrected.
+
+**Evidence.** 378 tests, clippy clean, 93 shots re-render, `head-unit-light`
+inspected: no arrows, six tiles where five fitted before.
+
+### 119. Handoff v3.3.0 §13.1 — one plate, two lines, type that fits itself
+**DONE.** The largest item in the bundle, and the one carrying a STANDING rule:
+"the peek cards carry the same look and style as the preset-rail tiles for station
+display... treat a change that lands on one and misses the other as a bug."
+
+**BOTH LINES ARE INSIDE THE PLATE NOW.** The tree drew the plate and then a
+CAPTION below it — the call sign for a logo'd station, the frequency for a bare
+one — so the fill and border wrapped only half the identity. The prototype's own
+tile template settles the target shape: the tile IS the plate, holding either the
+image or the two lines, with nothing beneath. The caption is gone, and a station
+with a logo now shows neither line: the logo is the identity.
+
+**THE TYPE FITS ITSELF, WHICH IS THE POINT OF THE ITEM.** Call size is
+`min(base * ramp(chars), (width - inset) / (0.82 * chars))`. The ramp and the
+divisor are pure functions of the call sign, so they are computed in Rust
+(`station::call_ramp` / `call_cap_div`) and ride on `Preset`; the WIDTH stays in
+Slint because a plate's measured width is layout and only the layout knows it.
+
+**IT REPLACED A PREDECESSOR THAT WAS SUBTLY DIFFERENT.** `CallSignBox` already
+capped by width — `(width * 0.82) / chars * 1.55` — which is `1.271 * width/chars`
+where §13.1 asks for `width / (0.82 * chars)` = `1.220 * width/chars`. Worse, it
+applied 1.55 to EVERY length instead of the five-rung ramp, so a six-character
+translator was set at a four-character size and only the cap saved it from
+clipping. The height guard (`0.52 * height`) is kept and is NOT in §13.1: a tile
+plate is a flex-grow child whose height the width cap knows nothing about. It does
+not bite at any documented aspect and §13.1's own principle covers it.
+
+**A TEST CAUGHT ME USING THE CAP AS THE WIDTH.** The peek checkpoint failed at
+48sp against the handoff's 45. `184` is the maximum a peek plate may reach; §1's
+aspect table gives the RESOLVED width at 1280x720 as `159`. The arithmetic was
+right and the input was wrong.
+
+**Evidence.** 378 tests, three new: the ramp at every rung and both edges, the cap
+divisor including the divide-by-zero an empty sign would otherwise produce, and
+the acceptance check from §11 as arithmetic — at the handoff's own plate widths a
+four-character sign must fit AND land on the published checkpoint. All three
+surfaces do: 29sp resting tile, 37sp active, 45sp peek. Clippy clean, 93 shots
+re-render, `head-unit-light` and `the-who-portrait` inspected directly: both lines
+inside every plate on tiles and peeks alike, active tile visibly larger, WMGN and
+WJJO uncllipped on the 3-column tall track.
+
+### 118. Handoff v3.3.0 §13.5 — hero type grows when there is no logo
+**DONE.** Call sign x1.51 and frequency x1.28 with no logo tile, stacking on the
+per-track and per-theme scales.
+
+**IT COULD NOT BE APPLIED LITERALLY, AND FINDING OUT WHY WAS THE WORK.** The
+spec's bases are 66/50/52 (call) and 60/48/58 (frequency); this tree carried
+94/60/62 and 78/56/64, unchanged since the original port (`c7c9584`, checked).
+Multiplying 94 by 1.51 gives 142 against a handoff checkpoint of ~100 — a 42%
+overshoot. So the four cells were resolved first:
+
+| | tree before | spec |
+|---|---|---|
+| call, with logo | 26 (own constant) | 66 |
+| call, no logo | 94 | 100 |
+| freq, with logo | 78 | 60 |
+| freq, no logo | 78 | 77 |
+
+The original port had ALREADY grown the call sign for the no-logo card by its own
+route — 26 beside a logo, 94 without — landing within 6% of where §13.5 wants it.
+What it never did was grow the FREQUENCY, which was 78 either way. Adopting the
+spec's bases is what lets the multiplier mean what the spec says; all four cells
+now match.
+
+**THE VISIBLE CONSEQUENCE, STATED RATHER THAN BURIED:** the frequency beside a
+logo drops 78 -> 60. Its blast radius is small — `show-call`/`show-freq` default
+OFF for a station with art (§4.2), so it shows only where the driver switched it
+on — but it is a real change and it is the handoff's number.
+
+**THE CONDITION IS THE LOGO TILE'S OWN, NEGATED.** `HeroCard.logo-tile` is now a
+property and the tile's `if` reads it, so the size rule and the thing it is a rule
+about cannot drift. §13.5's "scanning || no logo || logos hidden" is exactly the
+three ways this card ends up with no art.
+
+**"logos hidden" IS `egg.suppress-logo`, NOT THE SETTINGS SWITCH.**
+`settings.logos_on` governs auto-DOWNLOAD; `app::art_for`'s note records gating
+display on it as a bug that shipped, because a driver could assign a logo by hand
+and never see it. A theme suppressing the art is the real "the logo exists and is
+not drawn".
+
+**THE MULTIPLIER IS ON THE GAUGES TOO**, and that is not decoration. `fit` is
+`fit-plain / fit-natural` and is applied to `call-size-nat`, which now carries the
+factor; measuring the plain reference without it would compute a shrink ratio
+against text 51% smaller than what is drawn, and the card would overflow exactly
+where the fit guard exists to prevent it.
+
+**Evidence.** 375 tests, clippy clean, all 93 shots re-render; `head-unit-light`
+inspected directly — WERN over 88.7 at the new proportions. Resolved sizes
+confirmed at 66x1.51 = 100 and 60x1.28 = 77, the handoff's own checkpoints.
+
+### 117. Handoff v3.3.0 §5 — plate ink chosen by measured contrast
+**DONE.** First of the v3.3.0 bundle, taken first because it is pure Rust with
+tests and no visual risk. `CallSignBox` printed its call sign in a hard-coded
+`#FFFFFF`; the ink is now chosen in Rust by WCAG contrast against the station's
+own fill and handed over on `Preset`.
+
+**SCORED, NEVER THRESHOLDED.** §5 is emphatic and gives the reason: a luminance
+cutoff always lands arbitrarily close to a real fill, and WZEE's cyan sits at
+0.3095 where a 0.32 threshold misses it by 0.01 and inks white at 2.92:1.
+`ink_on` scores both candidates — `#141821` and `#FFFFFF` — and takes the winner,
+which has no edge to land on.
+
+**THE INK FOLLOWS THE FILL AND NOT THE THEME.** A station's colour is its own, so
+the two candidates are §11's fixed pair rather than the palette's `text`/`bg`.
+§11a's dark-theme screenshot is the check: "plate inks unchanged by theme".
+
+**TWO LUMINANCES THAT LOOK ALIKE AND ANSWER DIFFERENT QUESTIONS.** `rel_lum` here
+linearises sRGB before weighting, because contrast is a ratio of physical light.
+`Pal.flat` next door uses Rec.709 luma on the RAW channels to desaturate the dead
+face. Neither can be used for the other's job.
+
+**WHAT WAS PORTED, AND ONE BRANCH THAT WAS NOT.** §5's `plateInk` honours a
+station's authored `logoFg` while it clears 4.5:1. Nothing in this tree has one:
+fills come from `brand_color`, a hash into ten fixed values, and no station record
+carries an ink. The branch is documented where it would go rather than written as
+an arm nothing can reach. The `None` arm of `plate_ink` is kept — it is §5's rule
+and makes the function total — with its doc corrected to say plainly that
+`brand_color` is total so no preset in this tree lacks a fill. An earlier draft of
+that comment repeated §5's "reachable through the app's own save flow", which is
+true of the prototype and NOT of this code.
+
+**Evidence.** 375 tests, four new. The first asserts the handoff's own measured
+ratios to two decimals — WZEE 6.09, WMHX 4.96, WMGN 5.58, WORT 7.38, WJJO 16.52 —
+which pins the linearisation, not just the winner: a `rel_lum` using Rec.601
+weights or skipping the sRGB knee still picks the right ink on most of these and
+gets every ratio wrong. Another walks all ten `BRAND_BGS` exhaustively, which the
+handoff could not do with arbitrary station data and this tree can, so a future
+fill that cannot be read fails here rather than on a dashboard. Clippy clean, all
+93 shots re-render.
+
+**Still to do from v3.3.0:** §4 plate and type fitting, §6 ETA pill, §7 hero
+no-logo scale, §7a.2 hold-to-unstar, §8 looping rail, §9.1 touch-first rail,
+§9.2 hero flick.
+
+### 116. Ask for the pop-up's permissions on first launch, once
+**BUILT, UNRUN ON THE UNIT.** The owner had to find the overlay grant by hand in
+Android's settings and asked the obvious question: *"isn't the norm for an
+Android application with a feature like this to check if it has permissions on
+launch, and then ask for them if it doesn't? Possibly with a backup to in
+settings to re-ask if permissions were denied."* It is, and the standing note in
+the manifest refusing to ask unprompted was too broad — it is sound about asking
+repeatedly mid-drive and wrong as "never ask", especially now that nothing
+auto-starts the app, so a launch is a driver tapping the icon while parked.
+
+**THE TWO PERMISSIONS ARE NOT THE SAME KIND OF THING, and only one fits the
+norm cleanly.** `POST_NOTIFICATIONS` is an ordinary runtime permission: a real
+in-app dialog, and `shouldShowRequestPermissionRationale` to tell "never asked"
+from "declined". `SYSTEM_ALERT_WINDOW` is SPECIAL — no in-app dialog on any
+Android, the only route a full Settings screen, and **no readable declined
+state**. Android answers granted or not granted and nothing else.
+
+**WHICH IS WHY THE FLAG EXISTS.** An app that asks whenever the special
+permission is missing opens Settings on EVERY launch, for ever, of a driver who
+has already refused, and nothing in the platform will ever tell it to stop. So
+`Settings::permissions_asked` keeps the state Android declines to: asked once,
+never automatically again. Persisted through `prefs`, so "once" means once per
+install rather than once per launch. Set when the panel is RAISED and not when it
+is answered — a process killed with it on screen has still spent the offer, which
+is the safe direction because both DIAGNOSTICS rows always work as the way back.
+
+**A PANEL FOR THE OVERLAY, NOTHING FOR THE NOTIFICATION.** `ui/permissions.slint`
+is two sentences and two buttons on §6's shared chrome: sending a driver into a
+system screen unannounced is an app dumping them somewhere with no idea why. The
+notification permission gets no panel because it has a real dialog of its own and
+there is nothing to explain that the dialog does not say — and below API 33 the
+Java side answers "not needed" and does nothing, which is this unit.
+
+**THE PANEL REFUSES THE SCRIM.** Every other overlay is something the driver
+opened and can tap away; this one opened itself, and a stray tap would spend the
+single answer it is ever going to get. No close button either. Both buttons are
+explicit.
+
+**-1 IS NOT "NOT GRANTED", and that distinction has its own test.**
+`overlay_permission_state` answers -1 where the question does not apply — a host
+build, or `attach` never having run. Treating it as a refusal would raise a modal
+over all 93 screenshots and over every other test in the file.
+
+**A BUG THE TESTS CAUGHT.** The flag was written to the preferences file
+correctly and then read back as a hard-coded `false` at start-up, so it persisted
+its own state and ignored it — a nag that saves a flag it never consults. Caught
+by the restart half of `the_permissions_offer_is_made_once_and_survives_a_restart`,
+which deliberately builds a SECOND `App` over the same directory rather than
+calling twice on one, because the in-memory flag alone would have passed.
+
+**Evidence.** 371 tests, two new. Clippy clean, JNI seam checks, all 93 shots
+re-render. NOTE: `shots/` is gitignored, so a `git status` over it proves nothing
+about drift — the panel's absence from the host is pinned by the test, not by the
+renders.
+
+### 115. Give the pop-up the peek card's form and the face's palette
+**BUILT, UNRUN ON THE UNIT.** #114's window landed and the owner saw it on the
+road with a station logo in it. Two changes on top, both asked for directly:
+*"I'd like popup to show the station logo at roughly the same size as they are on
+the prev/next peek cards, and not bother with the call sign or frequency as
+text. If there is no station logo, then the call sign and frequency should be
+shown, again roughly the way they are shown on peek cards"* and *"I want these
+popups to follow the light/dark of whatever mode Carnyx is in."*
+
+**THE LOGO NOW STANDS ALONE, AND THE NOTE THAT SAID IT COULD NOT WAS ABOUT
+SOMETHING ELSE.** `CarnyxAlert.build` records that a logo-only banner was tried
+and failed, and #114's own file repeated that conclusion as though it applied
+here. It does not: there the mark went through `setLargeIcon`, which draws into a
+small square at a notification's right edge, and a landscape wordmark in a square
+slot is unreadable. The overlay sizes its own 16:10 plate, which is the shape the
+art was made for. The stale comment is corrected rather than left to mislead the
+next reader.
+
+**THE NUMBERS ARE THE PEEK CARD'S, TAKEN FROM ITS SOURCE.** `ui/presets.slint`
+caps a peek plate at 184 and scales the card by 0.88 — 162 wide, aspect-locked
+16:10, so 101 tall — with a corner of 0.14 of the short side and a 0.09 inset on
+plated art. All four are copied rather than eyeballed, so the two stay the same
+size if either moves. The logo is decoded at the plate's width now instead of the
+52dp strip it was.
+
+**THE TYPE IS NOT THE PEEK CARD'S, AND THAT WAS PUT TO THE OWNER.** A peek label
+is about 14dp, sized for a card on Carnyx's own screen that the driver opened and
+is looking straight at. This lands unannounced over a maps app and has to be read
+in one glance before the eyes go back to the road — the same brief that took the
+toast from the platform's 14 to 28. So the peek's LAYOUT is copied and its size
+is not: call sign 34sp in the brand box, dial 24sp beneath it, gap a third of the
+dial's size as the peek's own spacing rule gives.
+
+**COLOURS TRAVEL, NOT A `dark` FLAG.** The seam carries six ARGB ints read off
+`Pal` at the announce site — brand, ground, ink, edge, and the two logo grounds —
+plus the four-state `LogoPlate` as an int. Handing Java a boolean would have meant
+a second copy of the palette in hex, drifting from `ui/tokens.slint` the moment
+either was touched, and it would still have missed two things `Pal` folds into
+the same tokens: the desaturated dead face, and a band theme's page tint. Read
+from the palette rather than from `settings.theme`, because `Theme::System` sets
+neither flag — the setting can say one thing while the face shows another, which
+is the trap `art_for` already documents.
+
+**THE TOAST WAS THEMED TOO.** It had a hard-coded near-black ground and blue
+edge, so a driver on the light theme got a dark pop-up from a light app. It takes
+the same ground/ink/edge now, and the fallback matches what it falls back from.
+
+**Evidence.** 369 tests, clippy clean, `tools/check-jni.sh` green against the
+widened descriptor — ten parameters now, and that checker is the only thing in
+this container that type-checks it. Both changed Java classes compile against a
+real API-34 framework jar with `-Xlint:all` and zero diagnostics.
+
+**What one drive settles.** Whether the logo reads at plate size over OsmAnd,
+whether the no-logo card is legible at a glance, and whether a light-theme drive
+gets a light pop-up.
+
 ### 114. Draw the station pop-up in a window this app owns
 **BUILT, UNRUN ON THE UNIT.** A third rendering of the station pop-up, tried
 before the toast and falling back to it. Asked for directly, and with the frame

@@ -766,6 +766,16 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
                 name: call.into(),
                 call: call.into(),
                 brand: slint::Color::from_rgb_u8(0x3B, 0x6E, 0x4A),
+                // THE GUARD'S ANSWER, not a constant. These tiles all carry a
+                // logo, so the ink is never printed here — but hard-coding white
+                // would make this shot the one place a fill and its ink could
+                // disagree, which is exactly what §5 exists to prevent.
+                ink: carnyx::station::ink_on(slint::Color::from_rgb_u8(0x3B, 0x6E, 0x4A)),
+                // §13.1's two precomputed numbers, from the real functions rather
+                // than literals — a shot that fitted its type by a different rule
+                // than the face would be a shot of something that does not ship.
+                call_ramp: carnyx::station::call_ramp(call.chars().count()),
+                call_cap_div: carnyx::station::call_cap_div(call.chars().count()),
                 freq_mhz: mhz,
                 freq_label: format!("{mhz:.1}").into(),
                 has_logo: true,

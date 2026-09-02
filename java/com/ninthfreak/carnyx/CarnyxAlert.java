@@ -268,7 +268,9 @@ public final class CarnyxAlert {
      *     SystemUI's. THE LAST CLAUSE IS THE TOAST, which on this ROM is the
      *     half the driver actually sees; see {@link #toast}.
      */
-    public static synchronized String post(String title, String text, String logoPath) {
+    public static synchronized String post(String title, String text, String logoPath,
+            int brand, int ground, int ink, int edge, int logoFallback, int logoPlate,
+            int plate) {
         if (ctx == null) {
             return "post() before attach()";
         }
@@ -301,9 +303,10 @@ public final class CarnyxAlert {
         // renderings that works when the driver has never granted a permission
         // this app cannot ask for with a dialog — which is why the toast stays
         // rather than being replaced.
-        String seen = CarnyxOverlay.show(ctx, title, text, logoPath);
+        String seen = CarnyxOverlay.show(ctx, title, text, logoPath,
+                brand, ground, ink, edge, logoFallback, logoPlate, plate);
         if (seen.startsWith("no overlay")) {
-            seen = seen + ", " + toast(title, text);
+            seen = seen + ", " + toast(title, text, ground, ink, edge);
         }
         return posted + ", " + seen;
     }
@@ -317,6 +320,26 @@ public final class CarnyxAlert {
      *
      * @return one line for the diagnostics log, never null.
      */
+    /**
+     * Can the overlay be drawn right now? 1 yes, 0 no, -1 cannot tell.
+     *
+     * <p>A QUERY AND NOT THE REQUEST, because the launch decision has to be able
+     * to ask WITHOUT doing anything. {@link #requestOverlayPermission} opens a
+     * Settings screen; this only reads an app-op, so the caller can decide
+     * whether the one-time offer is even warranted.
+     *
+     * <p>-1 IS ITS OWN ANSWER. On a host build there is no class at all and the
+     * Rust side answers -1 without ever reaching here; from here it means
+     * {@code attach} has not run. Neither is "not granted", and treating them as
+     * such would put the offer on a screen that has nothing to grant.
+     */
+    public static synchronized int overlayState() {
+        if (ctx == null) {
+            return -1;
+        }
+        return CarnyxOverlay.permitted(ctx) ? 1 : 0;
+    }
+
     public static synchronized String requestOverlayPermission() {
         return CarnyxOverlay.requestPermission(ctx, activity == null ? null : activity.get());
     }
@@ -380,7 +403,7 @@ public final class CarnyxAlert {
      * @return one clause for the diagnostics log, so the drive after this one
      *     says which of the two the driver was actually shown.
      */
-    private static String toast(String title, String text) {
+    private static String toast(String title, String text, int ground, int ink, int edge) {
         if (ctx == null) {
             return "no toast: no context";
         }
@@ -401,7 +424,7 @@ public final class CarnyxAlert {
                     try {
                         Toast t = Toast.makeText(ctx, message, Toast.LENGTH_LONG);
                         if (custom) {
-                            t.setView(toastView(message));
+                            t.setView(toastView(message, ground, ink, edge));
                             // TOP AND CENTRED, one sixteenth of the screen down.
                             // With TOP gravity the offset is from the screen's top
                             // edge to the toast's, so a sixteenth leaves room for a
@@ -451,11 +474,11 @@ public final class CarnyxAlert {
      * theme's egg accent — this draws while another app is in front, where a
      * band's colours would be unexplained.
      */
-    private static android.view.View toastView(String message) {
+    private static android.view.View toastView(String message, int ground, int ink, int edge) {
         float density = ctx.getResources().getDisplayMetrics().density;
         android.widget.TextView tv = new android.widget.TextView(ctx);
         tv.setText(message);
-        tv.setTextColor(0xFFFFFFFF);
+        tv.setTextColor(ink);
         tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, TOAST_SP);
         tv.setGravity(Gravity.CENTER);
         tv.setMaxLines(2);
@@ -467,8 +490,13 @@ public final class CarnyxAlert {
                 new android.graphics.drawable.GradientDrawable();
         bg.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
         bg.setCornerRadius(TOAST_RADIUS_DP * density);
-        bg.setColor(0xF00E0E10);
-        bg.setStroke(Math.max(1, Math.round(2f * density)), 0xFF4A9EFF);
+        // THE FACE'S OWN PALETTE, not two hard-coded colours. This used to be a
+        // near-black ground and a blue edge whatever Carnyx was set to, so a
+        // driver on the light theme got a dark pop-up from a light app. The
+        // values are read off `Pal` at the announce site — see `app::argb` for
+        // why the colours travel rather than a `dark` flag.
+        bg.setColor(ground);
+        bg.setStroke(Math.max(1, Math.round(2f * density)), edge);
         tv.setBackground(bg);
         return tv;
     }

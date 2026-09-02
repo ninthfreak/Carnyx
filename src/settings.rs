@@ -480,6 +480,26 @@ pub struct Settings {
     pub theme: Theme,
     pub battery: Battery,
     pub logos_on: bool,
+    /// Has the app already offered to set up the pop-up's permissions ONCE?
+    ///
+    /// ── THE ONLY THING STANDING BETWEEN "ASK ON LAUNCH" AND A NAG ───────────
+    ///
+    /// `SYSTEM_ALERT_WINDOW` has no in-app dialog and no "user declined" state:
+    /// Android answers granted or not granted and nothing else, so an app that
+    /// simply asks whenever the permission is missing throws a driver who does
+    /// not want it into Settings on EVERY launch, for ever, with no way to learn
+    /// otherwise. `shouldShowRequestPermissionRationale`, which solves this for
+    /// ordinary runtime permissions, does not exist for a special one.
+    ///
+    /// So the app keeps the state Android will not: asked once, never
+    /// automatically again. Both DIAGNOSTICS rows stay as the deliberate way
+    /// back, and neither of them reads this.
+    ///
+    /// PERSISTED, because "once" has to mean once per install and not once per
+    /// launch. A preferences file written before this key existed comes back
+    /// `false` through `Settings::default`, which is right: an existing install
+    /// gets the offer on its next launch and never again.
+    pub permissions_asked: bool,
     pub clearing_logos: bool,
     pub details_open: bool,
     /// Hand the FM source back when the head unit says it is going to sleep
@@ -537,6 +557,9 @@ impl Default for Settings {
             theme: Theme::System,
             battery: Battery::NotExempt,
             logos_on: false,
+            // FALSE, so the one offer happens on the next launch — of a fresh
+            // install, and of an existing one whose file predates the key.
+            permissions_asked: false,
             clearing_logos: false,
             details_open: false,
             release_on_sleep: true,
