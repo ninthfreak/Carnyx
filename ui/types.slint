@@ -65,6 +65,16 @@ export struct Preset {
     /// It follows the station's fill and NOT the theme, so it does not change
     /// when the face does — §11a's dark-theme screenshot is that check.
     ink: color,
+    /// §13.1's per-length ramp for the call sign's INTENDED size, and the divisor
+    /// of its width CAP (0.82 x characters). Both are pure functions of the call
+    /// sign, so both are computed in Rust where they are tested —
+    /// `station::call_ramp` / `station::call_cap_div`.
+    ///
+    /// THE WIDTH ITSELF STAYS HERE, because a plate's measured width is layout and
+    /// only the layout knows it. The rule is
+    /// `min(base * ramp, available / cap-div)`.
+    call-ramp: float,
+    call-cap-div: float,
     /// A real logo asset. Empty unless `has-logo`.
     logo: image,
     has-logo: bool,

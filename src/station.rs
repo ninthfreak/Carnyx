@@ -51,6 +51,65 @@ pub fn clean_call(s: &str) -> String {
     t.trim().to_string()
 }
 
+// ── Self-fitting plate type (handoff v3.3.0 §13.1) ──────────────────────────
+
+/// The WORST-CASE advance width per character of Atkinson Hyperlegible at
+/// 700-800, as a fraction of the type size.
+///
+/// DELIBERATELY ABOVE THE ~0.61 AVERAGE, and §13.1 says why: the widest
+/// four-character signs — WMGN, WMHX, WZEE — run about 15% wider than the mean,
+/// and the peek plate has no clipping backstop. A cap built on the average would
+/// fit the average sign and clip the ones that matter.
+///
+/// TIED TO THE TYPEFACE. `Font.face` is "Atkinson Hyperlegible"
+/// (`ui/tokens.slint`), which is what this was measured against, and only the 700
+/// cut is bundled — the same file records that an 800 request resolves back to
+/// 700. Change the face and this must be re-measured; §13.1 says so in as many
+/// words.
+pub const CALL_ADVANCE: f32 = 0.82;
+
+/// The advance of a five-character frequency (`101.5`) in tabular figures, in the
+/// same units as [`CALL_ADVANCE`]. §13.1.
+///
+/// FIVE AND NOT FOUR, so `88.7` is over-provisioned rather than clipped. Tabular
+/// figures make every digit the same width, which is what lets one constant cover
+/// every dial.
+pub const FREQ_ADVANCE: f32 = 3.2;
+
+/// §13.1's per-length ramp for a call sign's INTENDED size.
+///
+/// A short sign is set larger because it has the room; a long one is set smaller
+/// so it still fits before the width cap has to intervene. The ramp and the cap
+/// are two different mechanisms and both are needed — the ramp is a design
+/// preference about how a four-letter sign should look, the cap is a guarantee
+/// that nothing clips.
+///
+/// ZERO CHARACTERS TAKES THE SHORTEST RUNG rather than a rung of its own: an
+/// empty sign draws nothing, so its size is unobservable, and giving it a case
+/// would be a branch no test could distinguish.
+pub fn call_ramp(chars: usize) -> f32 {
+    match chars {
+        0..=4 => 1.55,
+        5 => 1.32,
+        6 => 1.14,
+        7 => 1.00,
+        _ => 0.90,
+    }
+}
+
+/// The divisor of §13.1's width cap: `CALL_ADVANCE * characters`.
+///
+/// Handed to Slint precomputed because it is a pure function of the call sign and
+/// this side is where such things are tested. Slint still owns the width — a
+/// plate's measured width is layout, which only the layout knows — so the cap is
+/// `available / call_cap_div(chars)` there.
+///
+/// FLOORED AT ONE CHARACTER. An empty call sign would otherwise divide by zero
+/// and hand Slint an infinite cap, which `min` would then happily choose.
+pub fn call_cap_div(chars: usize) -> f32 {
+    CALL_ADVANCE * chars.max(1) as f32
+}
+
 // ── Plate ink (handoff v3.3.0 §5) ───────────────────────────────────────────
 
 /// The two candidates a brand fill is scored against.
@@ -178,6 +237,72 @@ mod tests {
 
     fn rgb(r: u8, g: u8, b: u8) -> Color {
         Color::from_rgb_u8(r, g, b)
+    }
+
+    /// §13.1's RAMP, EVERY RUNG AND BOTH EDGES.
+    ///
+    /// The boundaries are where a table like this goes wrong, so 4/5, 6/7 and
+    /// 7/8 are all asserted either side rather than sampled in the middle.
+    #[test]
+    fn the_call_ramp_matches_the_handoffs_table() {
+        for chars in [0usize, 1, 2, 3, 4] {
+            assert_eq!(call_ramp(chars), 1.55, "{chars} characters takes the short rung");
+        }
+        assert_eq!(call_ramp(5), 1.32);
+        assert_eq!(call_ramp(6), 1.14);
+        assert_eq!(call_ramp(7), 1.00);
+        for chars in [8usize, 9, 12, 40] {
+            assert_eq!(call_ramp(chars), 0.90, "{chars} characters takes the long rung");
+        }
+    }
+
+    /// THE CAP DIVISOR, AND THE DIVIDE-BY-ZERO IT REFUSES.
+    #[test]
+    fn the_cap_divisor_is_the_advance_times_the_length() {
+        assert!((call_cap_div(4) - 3.28).abs() < 1e-6, "WMGN: 0.82 x 4");
+        assert!((call_cap_div(6) - 4.92).abs() < 1e-6, "a translator: 0.82 x 6");
+        // AN EMPTY SIGN MUST NOT PRODUCE AN INFINITE CAP. `min(intended, avail/0)`
+        // is `min(intended, inf)`, which silently returns the intended size and
+        // defeats the guard on the one input that has no width at all.
+        assert_eq!(call_cap_div(0), CALL_ADVANCE, "floored at one character");
+        assert!(call_cap_div(0) > 0.0);
+    }
+
+    /// THE CAP ACTUALLY STOPS THE SIGNS §13.1 NAMES FROM CLIPPING.
+    ///
+    /// This is the acceptance check (§11: "no call sign clips on any surface —
+    /// check WMGN and WMHX") expressed as arithmetic: at the handoff's own
+    /// resolved plate widths, the chosen size times the worst-case advance must
+    /// fit the available width.
+    #[test]
+    fn the_widest_four_character_signs_fit_their_plates() {
+        // (surface, base, available width, the handoff's resolved checkpoint)
+        let cases: [(&str, f32, f32, f32); 3] = [
+            ("resting tile, 1280x720", 19.0, 118.0 - 8.0, 29.0),
+            ("active tile, 1280x720", 24.0, 150.0 - 8.0, 37.0),
+            // 159 IS §1's OWN RESOLVED FIGURE for the peek box at this aspect, not
+            // `184 * 0.92`. 184 is the CAP the plate never exceeds; the resolved
+            // width at 1280x720 is smaller, and using the cap here computed a
+            // 48sp sign against a 45sp checkpoint — the arithmetic was right and
+            // the input was wrong.
+            ("peek, 1280x720", 32.0, 159.0 - 12.0, 45.0),
+        ];
+        for (what, base, avail, checkpoint) in cases {
+            let chars = 4usize; // WMGN / WMHX / WZEE
+            let intended = base * call_ramp(chars);
+            let cap = avail / call_cap_div(chars);
+            let size = intended.min(cap);
+            assert!(
+                size * call_cap_div(chars) <= avail + 0.001,
+                "{what}: {size:.1}sp x {:.2} exceeds {avail:.1}",
+                call_cap_div(chars)
+            );
+            // And it lands where the handoff says it lands, within a point.
+            assert!(
+                (size - checkpoint).abs() < 1.5,
+                "{what}: got {size:.1}sp, handoff checkpoint {checkpoint:.0}sp"
+            );
+        }
     }
 
     /// THE RATIOS §5 MEASURED, TO TWO DECIMALS.

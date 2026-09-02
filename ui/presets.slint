@@ -46,18 +46,47 @@ component CallSignBox inherits Rectangle {
     /// same treatment holds from a 99sp hero down to a 13sp tile label", which
     /// is this label. See `ui/glitch.slint`.
     in property <bool> glitch;
+    /// §13.1's per-surface base: 19 resting tile / 24 active tile / 32 peek
+    /// (20 on the tall track).
+    in property <length> base: 19px;
+    /// What the plate's padding takes off the usable width before the cap: 8 on a
+    /// tile, 12 on a peek. §4.2's "available width".
+    in property <length> inset: 8px;
+    /// `preset.call-ramp` and `preset.call-cap-div`, forwarded. Passed as plain
+    /// floats rather than the whole struct so this component stays a LINE and not
+    /// a station.
+    in property <float> preset-ramp: 1.55;
+    in property <float> preset-cap-div: 3.28;
 
     /// Hoisted so both impressions are set from ONE expression. Two copies of
     /// this arithmetic is two things to keep in step, and a ghost at a different
     /// size from its letters is not a ghost.
+    /// §13.1's rule: the SMALLER of an intended size and a width cap.
+    ///
+    /// intended = `base * ramp(characters)`; cap = `available / (0.82 * characters)`.
+    /// The ramp and the divisor arrive precomputed on the preset
+    /// (`station::call_ramp` / `call_cap_div`) because they are pure functions of
+    /// the call sign; the WIDTH is layout and only this side knows it.
+    ///
+    /// THIS REPLACES A PREDECESSOR THAT WAS ARRANGED DIFFERENTLY. It read
+    /// `(width * 0.82) / chars * 1.55`, which is `1.271 * width/chars` where
+    /// §13.1 asks for `width / (0.82 * chars)` = `1.220 * width/chars` — and it
+    /// applied 1.55 to every length instead of the five-rung ramp, so a
+    /// six-character translator was set at a four-character size and only the cap
+    /// saved it.
+    ///
+    /// THE HEIGHT GUARD IS KEPT AND IS NOT IN §13.1. A tile plate is a
+    /// flex-grow child whose height is whatever the chip has left, so a short
+    /// track can hand this a box the width cap knows nothing about. It does not
+    /// bite at any documented aspect — 0.52 of a 99dp peek plate is 51sp against
+    /// a 45sp answer — and §13.1's own principle covers it: a smaller sign always
+    /// beats a truncated one.
     property <length> size: Math.max(11px, Math.round(Math.min(
         root.height / 1px * 0.52,
-        (root.width / 1px * 0.82) / Math.max(root.label.character-count, 1) * 1.55)) * 1px);
+        Math.min(
+            root.base / 1px * root.preset-ramp,
+            (root.width / 1px - root.inset / 1px) / Math.max(root.preset-cap-div, 0.01)))) * 1px);
     property <string> shown: root.label == "" ? "·" : root.label;
-
-    border-radius: root.radius;
-    clip: true;
-    background: Pal.flat(root.brand);
 
     // CENTRED BY ARITHMETIC, not by the parent. A bare child of a Rectangle is
     // centred for you, and the live line below still is — but a centred child
@@ -97,6 +126,19 @@ component PlateBox inherits Rectangle {
     in property <Preset> preset;
     in property <EggTheme> egg;
     in property <length> radius: 12px;
+    /// §13.1's per-surface type rules. The defaults are the RESTING TILE's; an
+    /// active tile and a peek card state their own. One component, two surfaces —
+    /// the standing rule in §13.1 is that a station-display change cannot land on
+    /// the tiles and miss the peeks, and the only way to guarantee that is for
+    /// both to be this.
+    in property <length> call-base: 19px;
+    in property <length> call-inset: 8px;
+    in property <length> freq-base: 19px;
+    in property <length> freq-inset: 10px;
+    in property <length> stack-gap: 5px;
+    /// The call line's share of the plate. The frequency takes what is left, and
+    /// both are centred as a group.
+    in property <length> call-line-h: root.height * 0.56;
     /// Preset chips (`fill`) pad a plate by a FLAT 8dp; peek cards pad by a
     /// fraction of their own box. Both are the reference's numbers — see `pad`.
     in property <bool> fill: false;
@@ -150,13 +192,33 @@ component PlateBox inherits Rectangle {
         width: parent.width - root.pad * 2;
         height: parent.height - root.pad * 2;
     }
-    if !root.preset.has-logo: CallSignBox {
+    // ── THE TWO LINES, BOTH INSIDE THE PLATE (v3.3.0 §13.1) ──────────────────
+    //
+    // They used to be one line in here and one CAPTION below the plate, so the
+    // fill and border wrapped only half the station's identity. §13.1 puts both
+    // inside: "one plate holding two centred lines — call sign over frequency —
+    // so the plate's fill and border wrap both."
+    //
+    // THE FREQUENCY INHERITS THE PLATE'S INK and must never carry a colour of its
+    // own. It sits on an arbitrary brand fill, so any fixed value fails on some
+    // station — the same argument §5 makes for the call sign, and the reason both
+    // read `preset.ink`.
+    if !root.preset.has-logo: VerticalLayout {
         width: parent.width;
         height: parent.height;
+        alignment: center;
+        spacing: root.stack-gap;
+
+        CallSignBox {
+        height: root.call-line-h;
         label: root.preset.call;
         ink: root.preset.ink;
         brand: root.preset.brand;
         radius: root.radius;
+        base: root.call-base;
+        inset: root.call-inset;
+        preset-ramp: root.preset.call-ramp;
+        preset-cap-div: root.preset.call-cap-div;
         face: root.egg.body-face;
         // The tiles take the theme's ghost as the hero does. Scaled by nothing:
         // a chip and a peek card are both drawn at their own size and the offset
@@ -165,6 +227,24 @@ component PlateBox inherits Rectangle {
         ghost-dx: root.egg.ghost-dx;
         ghost-dy: root.egg.ghost-dy;
         glitch: root.egg.hero-glitch;
+        }
+
+        // §13.1: `min(base, (plate width - inset) / 3.2)`, where 3.2 is the
+        // advance of a five-character frequency in tabular figures
+        // (`station::FREQ_ADVANCE`). Tabular figures are what let one constant
+        // cover every dial.
+        Text {
+            text: root.preset.freq-label;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            color: root.preset.ink;
+            font-family: root.egg.body-face != "" ? root.egg.body-face : Font.face;
+            font-weight: Font.bold;
+            letter-spacing: 0.3px;
+            font-size: Math.max(9px, Math.round(Math.min(
+                root.freq-base / 1px,
+                (parent.width / 1px - root.freq-inset / 1px) / 3.2)) * 1px);
+        }
     }
 }
 
@@ -186,16 +266,38 @@ export component PresetPlate inherits VerticalLayout {
     /// fixed dp height — the size falls out of the chip's own layout, which is
     /// what makes the tuned chip's bigger box follow automatically.
     in property <bool> fill: false;
+    /// §13.1's per-surface type rules, forwarded to the plate. Defaults are the
+    /// resting tile's.
+    in property <length> call-base: 19px;
+    in property <length> call-inset: 8px;
+    in property <length> freq-base: 19px;
+    in property <length> freq-inset: 10px;
+    in property <length> stack-gap: 5px;
 
-    spacing: root.fill ? 4px : Math.max(3px, Math.round(root.freq-size / 1px * 0.34) * 1px);
     alignment: root.fill ? LayoutAlignment.stretch : LayoutAlignment.center;
 
+    // ── NO CAPTION BELOW THE PLATE ANY MORE (v3.3.0 §13.1) ───────────────────
+    //
+    // There was a `Text` here printing the call sign for a logo'd station and the
+    // frequency for a bare one. Both lines now live INSIDE the plate, and a
+    // station WITH a logo shows neither — §4.1: "Stations with a logo put the
+    // logo image in the plate instead, and no frequency line." The prototype's
+    // own tile template confirms it: the tile is the plate and nothing else, with
+    // the image or the two lines inside it.
+    //
+    // The logo IS the identity when there is one; a caption under it was this
+    // tree's own addition and the handoff removes it.
     if root.fill: PlateBox {
         vertical-stretch: 1;
         preset: root.preset;
         egg: root.egg;
         radius: root.radius;
         fill: true;
+        call-base: root.call-base;
+        call-inset: root.call-inset;
+        freq-base: root.freq-base;
+        freq-inset: root.freq-inset;
+        stack-gap: root.stack-gap;
     }
     if !root.fill: PlateBox {
         width: root.plate-w;
@@ -204,17 +306,13 @@ export component PresetPlate inherits VerticalLayout {
         preset: root.preset;
         egg: root.egg;
         radius: root.radius;
+        call-base: root.call-base;
+        call-inset: root.call-inset;
+        freq-base: root.freq-base;
+        freq-inset: root.freq-inset;
+        stack-gap: root.stack-gap;
     }
 
-    Text {
-        text: root.preset.has-logo ? root.preset.call : root.preset.freq-label;
-        horizontal-alignment: center;
-        color: Pal.text;
-        font-family: root.egg.body-face != "" ? root.egg.body-face : Font.face;
-        font-weight: Font.bold;
-        font-size: root.freq-size;
-        letter-spacing: 0.3px;
-    }
 }
 
 /// One preset chip in the band.
@@ -309,7 +407,14 @@ export component PresetTile inherits Rectangle {
             preset: root.preset;
             fill: true;
             radius: root.logo-radius;
-            freq-size: root.name-font;
+            // §13.1's tile column: base 19 resting / 24 active, frequency 19 / 22,
+            // gap 5 / 6. The active tile is bigger in every dimension already —
+            // its plate is wider and its radius larger — and the type follows.
+            call-base: Metrics.s(root.active ? 24 : 19);
+            freq-base: Metrics.s(root.active ? 22 : 19);
+            stack-gap: Metrics.s(root.active ? 6 : 5);
+            call-inset: Metrics.s(8);
+            freq-inset: Metrics.s(10);
         }
     }
 
@@ -450,7 +555,15 @@ export component PeekCard inherits Rectangle {
             plate-w: root.plate-w * root.scale;
             plate-h: root.plate-h * root.scale;
             radius: Metrics.s(12) * root.scale;
-            freq-size: Math.max(13px, Metrics.s(16)) * root.scale;
+            // §13.1's peek column: base 32, and 20 on the TALL track where the
+            // card is a third of a narrow screen. Frequency 27, gap 6, insets 12
+            // and 16. Scaled by the card's own 0.88 like every other dimension
+            // here — see `scale`'s note on why a peek is scaled by arithmetic.
+            call-base: Metrics.s(Metrics.tall ? 20 : 32) * root.scale;
+            freq-base: Metrics.s(27) * root.scale;
+            stack-gap: Metrics.s(6) * root.scale;
+            call-inset: Metrics.s(12) * root.scale;
+            freq-inset: Metrics.s(16) * root.scale;
         }
     }
 

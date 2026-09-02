@@ -1306,6 +1306,47 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 119. Handoff v3.3.0 §13.1 — one plate, two lines, type that fits itself
+**DONE.** The largest item in the bundle, and the one carrying a STANDING rule:
+"the peek cards carry the same look and style as the preset-rail tiles for station
+display... treat a change that lands on one and misses the other as a bug."
+
+**BOTH LINES ARE INSIDE THE PLATE NOW.** The tree drew the plate and then a
+CAPTION below it — the call sign for a logo'd station, the frequency for a bare
+one — so the fill and border wrapped only half the identity. The prototype's own
+tile template settles the target shape: the tile IS the plate, holding either the
+image or the two lines, with nothing beneath. The caption is gone, and a station
+with a logo now shows neither line: the logo is the identity.
+
+**THE TYPE FITS ITSELF, WHICH IS THE POINT OF THE ITEM.** Call size is
+`min(base * ramp(chars), (width - inset) / (0.82 * chars))`. The ramp and the
+divisor are pure functions of the call sign, so they are computed in Rust
+(`station::call_ramp` / `call_cap_div`) and ride on `Preset`; the WIDTH stays in
+Slint because a plate's measured width is layout and only the layout knows it.
+
+**IT REPLACED A PREDECESSOR THAT WAS SUBTLY DIFFERENT.** `CallSignBox` already
+capped by width — `(width * 0.82) / chars * 1.55` — which is `1.271 * width/chars`
+where §13.1 asks for `width / (0.82 * chars)` = `1.220 * width/chars`. Worse, it
+applied 1.55 to EVERY length instead of the five-rung ramp, so a six-character
+translator was set at a four-character size and only the cap saved it from
+clipping. The height guard (`0.52 * height`) is kept and is NOT in §13.1: a tile
+plate is a flex-grow child whose height the width cap knows nothing about. It does
+not bite at any documented aspect and §13.1's own principle covers it.
+
+**A TEST CAUGHT ME USING THE CAP AS THE WIDTH.** The peek checkpoint failed at
+48sp against the handoff's 45. `184` is the maximum a peek plate may reach; §1's
+aspect table gives the RESOLVED width at 1280x720 as `159`. The arithmetic was
+right and the input was wrong.
+
+**Evidence.** 378 tests, three new: the ramp at every rung and both edges, the cap
+divisor including the divide-by-zero an empty sign would otherwise produce, and
+the acceptance check from §11 as arithmetic — at the handoff's own plate widths a
+four-character sign must fit AND land on the published checkpoint. All three
+surfaces do: 29sp resting tile, 37sp active, 45sp peek. Clippy clean, 93 shots
+re-render, `head-unit-light` and `the-who-portrait` inspected directly: both lines
+inside every plate on tiles and peeks alike, active tile visibly larger, WMGN and
+WJJO uncllipped on the 3-column tall track.
+
 ### 118. Handoff v3.3.0 §13.5 — hero type grows when there is no logo
 **DONE.** Call sign x1.51 and frequency x1.28 with no logo tile, stacking on the
 per-track and per-theme scales.

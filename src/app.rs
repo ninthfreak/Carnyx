@@ -6205,6 +6205,11 @@ fn to_preset(
         // always there; see `station::plate_ink` for why the `None` arm exists
         // anyway and what would make it reachable.
         ink: crate::station::plate_ink(Some(brand_color(&call)), theme_text),
+        // COUNTED IN CHARACTERS, NOT BYTES. A call sign is ASCII in every record
+        // this ships with, but `len()` would be a latent trap the first time one
+        // is not, and the advance table is per glyph.
+        call_ramp: crate::station::call_ramp(call.chars().count()),
+        call_cap_div: crate::station::call_cap_div(call.chars().count()),
         freq_mhz: slot.mhz,
         freq_label: format_mhz(slot.mhz).into(),
         has_logo: logo.is_some(),
