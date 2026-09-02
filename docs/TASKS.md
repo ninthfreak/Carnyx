@@ -1306,6 +1306,51 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 124. Fix the plate's line proportions against the handoff's own capture
+**DONE, AND THE OWNER CAUGHT IT.** *"Those call sign and frequency positions and
+proportions do not look correct in your screenshots... compare those proportions
+to the handoff you got."* They were right, and #119 shipped the defect.
+
+**MEASURED RATHER THAN EYEBALLED.** Both captures were reduced to ink-row bands
+inside the WQLF plate — find the fill colour, mark every row far from it, group
+the runs:
+
+| | handoff | #119 shipped | now |
+|---|---|---|---|
+| call-sign band | 26.8% of plate | 19.5% | 24.4% |
+| frequency band | 17.0% | 15.9% | 15.9% |
+| call : frequency | 1.58 | 1.23 | 1.54 |
+| frequency starts at | 63.8% | 72.0% | 64.6% |
+
+**THE CAUSE WAS A BOX I INVENTED.** `PlateBox.call-line-h: height * 0.56` gave the
+call line a fixed share of the plate. Nothing in §13.1 says that — it states a
+centred column with a `gap` and no heights at all — and the effect was to stretch
+the call line, strand the call sign small inside an oversized box, and push the
+frequency 8 points down the plate.
+
+**THE TYPE SIZE WAS NEVER WRONG**, which is why the tests kept passing: the
+resting tile resolved to 29 design px throughout, the handoff's own checkpoint,
+and `the_widest_four_character_signs_fit_their_plates` asserts exactly that. The
+formula was right and the CONTAINER was wrong, which no arithmetic test could see.
+
+**THE FIX IS TO LET THE LINES SIZE THEMSELVES.** `CallSignBox`'s height is now its
+own type's line box (1.15x the font size) and the layout centres the pair. The
+0.52 height guard reads a new `avail-h` — the plate's height, passed in — because
+the box's own height now derives from the size and reading it there would be a
+size depending on a height depending on the size.
+
+**WHAT REMAINS AND WHY.** The call band is 24.4% against the handoff's 26.8%
+because this tree's tiles are larger than §1's table (a plate ~132x102 design px
+where the handoff's is ~104x75), which predates this bundle. Same type, bigger
+plate, so the same glyphs occupy a smaller share. The RATIO and the POSITION —
+the two things the owner could see were wrong — now match within 3% and 1 point.
+
+**Method note for the next person:** the handoff ships 3x captures, so a band
+measured there divides by 3 to reach design px, and this tree's shots render at
+1024 wide against a 1280 design, so `Metrics.k` is 0.8. Comparing raw pixel
+heights between the two is meaningless; comparing each as a PERCENTAGE OF ITS OWN
+PLATE is what makes them commensurable.
+
 ### 123. Handoff v3.3.0 §13.4 (flick half) — flick the hero to change preset
 **BUILT, UNVERIFIED BY TOUCH.** A horizontal flick on the hero card steps preset:
 left for next, right for previous.

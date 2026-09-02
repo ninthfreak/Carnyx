@@ -57,6 +57,10 @@ component CallSignBox inherits Rectangle {
     /// a station.
     in property <float> preset-ramp: 1.55;
     in property <float> preset-cap-div: 3.28;
+    /// The PLATE's height, for the guard above. Passed in rather than read off
+    /// `root.height`, which is now derived from `size` — reading it there would be
+    /// a size that depends on a height that depends on the size.
+    in property <length> avail-h: 0px;
 
     /// Hoisted so both impressions are set from ONE expression. Two copies of
     /// this arithmetic is two things to keep in step, and a ghost at a different
@@ -82,10 +86,22 @@ component CallSignBox inherits Rectangle {
     /// a 45sp answer — and §13.1's own principle covers it: a smaller sign always
     /// beats a truncated one.
     property <length> size: Math.max(11px, Math.round(Math.min(
-        root.height / 1px * 0.52,
+        root.avail-h / 1px * 0.52,
         Math.min(
             root.base / 1px * root.preset-ramp,
             (root.width / 1px - root.inset / 1px) / Math.max(root.preset-cap-div, 0.01)))) * 1px);
+    // THE BOX IS THE TYPE, not a share of the plate. It was `height * 0.56` of the
+    // plate, which stretched this line and pushed the frequency down the plate —
+    // measured against the handoff's own capture, the frequency started at 72% of
+    // the plate where the design puts it at 64%, and the call sign filled 19.5%
+    // of the plate where the design fills 26.8%. §13.1 states a centred column
+    // with a gap and no heights at all, so the two lines size themselves and the
+    // LAYOUT centres the pair.
+    //
+    // 1.15 is a line box around the glyphs — Atkinson's ascender-to-descender at
+    // this weight — so the two lines sit on their own metrics rather than on a
+    // fraction of a plate whose height varies per track.
+    height: Math.round(root.size / 1px * 1.15) * 1px;
     property <string> shown: root.label == "" ? "·" : root.label;
 
     // CENTRED BY ARITHMETIC, not by the parent. A bare child of a Rectangle is
@@ -136,9 +152,7 @@ component PlateBox inherits Rectangle {
     in property <length> freq-base: 19px;
     in property <length> freq-inset: 10px;
     in property <length> stack-gap: 5px;
-    /// The call line's share of the plate. The frequency takes what is left, and
-    /// both are centred as a group.
-    in property <length> call-line-h: root.height * 0.56;
+
     /// Preset chips (`fill`) pad a plate by a FLAT 8dp; peek cards pad by a
     /// fraction of their own box. Both are the reference's numbers — see `pad`.
     in property <bool> fill: false;
@@ -210,7 +224,7 @@ component PlateBox inherits Rectangle {
         spacing: root.stack-gap;
 
         CallSignBox {
-        height: root.call-line-h;
+        avail-h: parent.height;
         label: root.preset.call;
         ink: root.preset.ink;
         brand: root.preset.brand;
