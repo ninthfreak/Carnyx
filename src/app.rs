@@ -3066,6 +3066,12 @@ impl App {
                 .art_for(&base, Some(TILE_BOX_DP))
                 .map_or(LogoPlate::Light, |(_, p)| p);
             let brand = brand_color(&base);
+            // THE INK FOR TYPE ON THE BRAND PLATE, by measured contrast — §5's
+            // rule, the same `ink_on` the face's plates use. The pop-up hard-coded
+            // white here, which on WZEE's teal or WMHX's light brand is the very
+            // defect §5 was written to remove; it went unnoticed while the words
+            // card was small, and the card is not small any more.
+            let plate_ink = crate::station::ink_on(brand);
             let (ground, ink, edge, logo_fallback, logo_plate) = {
                 let ui = self.ui();
                 let pal = ui.global::<crate::Pal>();
@@ -3077,6 +3083,7 @@ impl App {
                 &format!("{dial} FM"),
                 &logo,
                 argb(brand),
+                argb(plate_ink),
                 argb(ground),
                 argb(ink),
                 argb(edge),

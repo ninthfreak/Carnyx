@@ -1306,6 +1306,37 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 127. The words pop-up matches the logo pop-up
+**DONE.** *"Make the no-logo popup bigger to match the logo one."* The words
+card is now a 240x150 brand plate inside the same 10dp frame the mark gets — the
+exact box a 16:10 mark would be given — so a station with art and one without
+raise a card of one size. It was a 162x101 plate with 28x18 of margin and the
+dial in a line beneath.
+
+**BOTH LINES GO INSIDE THE PLATE.** The old card put the dial UNDER the plate in
+the card's ink, which was the peek card's form before v3.3.0 §13.1 moved the
+frequency into the plate. The face's plates all hold both lines now, so this is
+what "the way they are shown on peek cards" means today — and it is the only way
+the words card can be the mark card's height, since a line beneath the plate
+makes it taller than any mark.
+
+**THE TYPE IS A SHARE OF THE PLATE, FROM §13.1's CAPTURE.** Measured there (see
+#124): the call sign's ink band is 29% of the plate and the dial's 18%. Over a
+0.72 cap height that is 0.40 and 0.25 of the plate — 60 and 38 on 150dp, against
+the old 34 and 24 sp. Set in px as a fraction of a plate already in px.
+
+**AND THE INK IS §5's, NOT WHITE.** The call sign was hard-coded white. On WZEE's
+teal or WMHX's light brand that is the defect §5 exists to remove, unnoticed
+while the plate was small. `station::ink_on(brand)` now crosses the JNI seam as
+an eighth int, `plateInk`, through `announce_station`, `alert::post`,
+`CarnyxAlert.post` and `CarnyxOverlay.show`, and both lines are set in it.
+
+**GONE FROM THE JAVA:** the peek card's 162x101 and the toast's 28x18 margin as
+constants, and the 34/24 sp pair, with every doc that cited them rewritten.
+
+**NOT VERIFIED ON THE UNIT.** Syntax-checked with `javac` against no SDK; not
+drawn on glass.
+
 ### 126. What one drive log said: probes with no feedback, a log that stopped following, a pop-up too small, and an offer that spent itself on nothing
 **DONE, FROM THE OWNER'S OWN LOG.** Four defects, three of them reported and one
 found in the same file. *"Probes pressed multiple times because I wasn't sure if
@@ -1364,6 +1395,9 @@ this unit the overlay was already granted by hand so nothing was lost; on a
 fresh install the only offer would have gone silently. The offer is called from
 `android_main` now, after `alert::init`, and the host test calls it in the same
 position.
+
+**THE WORDS CARD WAS LEFT AT THE OLD SIZE HERE, AND #127 CHANGED THAT** the
+moment the owner saw the two side by side.
 
 **NOT DONE, AND WHY.** The offer still spends the flag when it cannot tell
 (`overlay_state() == -1`). Guarding that would make the flag unreachable on a
