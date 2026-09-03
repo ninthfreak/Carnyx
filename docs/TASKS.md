@@ -1306,6 +1306,63 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 128. Review of #125–#127: two loop defects measured and fixed, one guard added
+**DONE.** *"Time to look for bugs, problems, and wasteful code."* Reviewed the
+three commits since #124 by reading every hunk against the Slint and Android
+sources they lean on, and by measuring the two suspicions that reading raised.
+The `code-review` skill was tried first and reviewed the wrong repository — it
+ran in the CarFM checkout and reported ten findings about `SettingsPanel.tsx` —
+so none of that is here.
+
+**1. THE SETTLE TIMER NEVER RESTARTED.** `flicked` wrote `running = false;
+running = true;` to re-arm the 2000ms settle. Slint watches a Timer's `running`
+through a change callback (`lower_timers.rs:111`), which compares the value
+after the handler with the value before — true and true — and re-arms nothing.
+So the timer fired 2000ms after the FIRST flick of a burst, not the last, which
+on a long drag is mid-drag; #125's text said the opposite and is corrected below.
+Now `restart()` when running, `running = true` when not.
+
+**2. THE COPIES COMPOUNDED THE TUNED TILE'S WIDTH ACROSS EVERY TURN.** `span`
+carries `strip-delta`, the tuned tile's extra ~32px, and each copy is drawn at
+`(loop-turn + c) * span`. The window sits on turn seven or beyond, so a retune
+between a preset and an unsaved station moved the whole rail by the turn times
+32. Measured in the harness with the seam as the ruler, tuning from preset 0 to
+107.5:
+
+| distance from home | seam moved, before | after the fix |
+|---|---|---|
+| 0.8 turns | −256px | −32px |
+| 3.8 turns | −352px | −32px |
+
+−32 is the tuned tile's own shrink, which the bounded rail does too. The fix is
+a `changed span` handler that re-anchors `viewport-x` by the turn under the
+window's left edge, taken against the old width, times the change.
+
+**3. THE START-UP PARK WAS SUSPECTED AND IS CLEARED.** Read: a non-delayed
+`ChangeTracker::init` evaluates at component init and seeds its baseline
+silently (`change_tracker.rs:204-208`), so `changed looping` fires only on a
+later transition. Measured: with `presetLoop` already true in the file at
+build, the first frame loops and 600px of backward scrolling moves it, so the
+window had been parked with room behind it.
+
+**4. THE WORDS POP-UP'S CALL SIGN HAD NO FIT.** `setMaxLines(1)` with nothing
+else cuts a sign wider than the plate mid-glyph. Four letters at 0.40 of the
+plate are ~150dp of a 240dp plate and never reach it; a seven-character sign
+would. Platform auto-size (API 26, this app's floor) now shrinks it to fit, no
+smaller than a third of the plate.
+
+**LOOKED AT AND LEFT.** `SeamRule`'s per-side wrapper Rectangle is full-size
+and empty, but replacing it saves no elements — the rule needs `clip` for its
+inset and the highlight has to sit outside that clip, so a wrapper is needed
+either way. The mark decode target is the long side for tall art too, decoding
+up to 2x what a 150dp box needs; a few hundred kilobytes once per station
+change, not worth a second code path. The two identical `changed rows` and
+`changed revision` writes in `DiagLog` both fire on most appends; one property
+set each, and the second is the one that matters past the cap.
+
+**NOT VERIFIED ON THE UNIT:** the auto-size, and the feel of the corrected
+settle — the harness has no momentum.
+
 ### 127. The words pop-up matches the logo pop-up
 **DONE.** *"Make the no-logo popup bigger to match the logo one."* The words
 card is now a 240x150 brand plate inside the same 10dp frame the mark gets — the
@@ -1458,6 +1515,11 @@ fight a drag or a glide. The viewport gets 15 turns of room, and the middle is
 re-taken only after 2000ms with no `flicked` — longer than any glide Slint's
 2000px/s² deceleration can produce below 4000px/s — and only when the rail has
 drifted two whole turns, so an ordinary glide never reaches the code at all.
+*(As shipped here the "with no `flicked`" half was false: the re-arm was
+coalesced away and the timer ran from the first flick. #128 found and fixed
+it, and found a second defect in this mechanism — the copies compounding the
+tuned tile's width across turns — that this entry's measurements could not
+see because they never retuned.)*
 
 **ONE REPEATER, NOT TWO BRANCHES, and that is a bug fix rather than tidiness.**
 The copy count is a property (1 or 3) on the SAME `for`, so copy 0's tiles keep

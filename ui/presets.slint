@@ -1180,6 +1180,39 @@ export component PresetsBand inherits Rectangle {
         }
     }
 
+    /// The turn width as last anchored, or 0 while not looping.
+    property <length> span-seen: 0px;
+
+    /// A TURN CHANGED WIDTH — keep the copy under the window where it is.
+    ///
+    /// `span` carries `strip-delta`, the tuned tile's extra width, so it moves
+    /// by ~32px whenever the dial goes between a preset and an unsaved station.
+    /// Every copy is drawn at `(loop-turn + c) * span`, and the window sits on
+    /// turn seven or more, so that 32px is MULTIPLIED by the turn before it
+    /// reaches the screen: measured with the seam as the ruler, a retune moved
+    /// the rail 256px one turn out from home and 352px four turns out — the
+    /// whole strip jumping two to three tiles on a dial change that should have
+    /// moved nothing but the tuned tile's own edge.
+    ///
+    /// So the window is re-anchored by the same arithmetic: the turn under its
+    /// left edge, taken against the OLD width, times the change in width. After
+    /// that the copy under the window has not moved, the next copy along has
+    /// moved by one width change — which it must, that is what a width change
+    /// is — and the tiles after the tuned one have moved by the tile's growth,
+    /// exactly as they do on the bounded rail.
+    ///
+    /// A WRITE TO `viewport-x`, so it ends a momentum glide if one is running
+    /// at the moment of a retune. A wheel press during a throw is the only way
+    /// to reach that, and a glide that stops beats a rail that jumps.
+    changed span => {
+        if (root.looping && root.span-seen > 0px) {
+            rail.viewport-x = rail.viewport-x
+                - Math.floor((0px - rail.viewport-x) / root.span-seen)
+                    * (root.span - root.span-seen);
+        }
+        root.span-seen = root.looping ? root.span : 0px;
+    }
+
     /// Entering and leaving the loop, keeping the same stations on screen.
     ///
     /// ENTERING is a shift to home: the bounded position `p` becomes
@@ -1190,7 +1223,12 @@ export component PresetsBand inherits Rectangle {
     changed looping => {
         if (root.looping) {
             rail.viewport-x = root.loop-home + rail.viewport-x;
+            // The anchor for `changed span`. Set here as well as there because
+            // the two can fire in either order in the same pass, and each is a
+            // no-op once the other has run.
+            root.span-seen = root.span;
         } else {
+            root.span-seen = 0px;
             rail.viewport-x = 0px - Math.min(
                 Math.max(0px, root.content-w - rail.width),
                 Math.mod((0px - rail.viewport-x) / 1px, root.span / 1px) * 1px);
@@ -1326,10 +1364,23 @@ export component PresetsBand inherits Rectangle {
                 // scrolling and never on a write from here, so restarting the
                 // settle timer from it can neither re-enter nor be triggered by
                 // the re-centre it eventually schedules.
+                //
+                // `restart()` WHEN IT IS ALREADY RUNNING, and only `running = true`
+                // when it is not. The first cut wrote `running = false; running =
+                // true;` and that restarts nothing: Slint watches a Timer's
+                // `running` through a change callback (lower_timers.rs:111), which
+                // sees the property's value AFTER the handler — true both before
+                // and after — and so never re-arms. The timer then fired 2000ms
+                // after the FIRST flick of a burst, which is mid-drag on a long
+                // drag. `restart()` lowers to the runtime's `Timer::restart`,
+                // which re-arms from now.
                 flicked => {
                     if (root.looping) {
-                        loop-settle.running = false;
-                        loop-settle.running = true;
+                        if (loop-settle.running) {
+                            loop-settle.restart();
+                        } else {
+                            loop-settle.running = true;
+                        }
                     }
                 }
 

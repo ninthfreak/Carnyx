@@ -506,8 +506,18 @@ final class CarnyxOverlay {
         callView.setGravity(Gravity.CENTER);
         callView.setMaxLines(1);
         callView.setIncludeFontPadding(false);
+        // FITTED TO THE PLATE, as the face's own plates are (§13.1): a sign
+        // wider than the plate at full size shrinks rather than clips. Four
+        // letters at 0.40 of the plate are ~150dp of a 240dp plate and never
+        // trigger this; a seven-character sign or a dial title with a suffix
+        // would, and `setMaxLines(1)` alone cuts such a title off mid-glyph.
+        // Platform auto-size is API 26, this app's floor. The floor size is a
+        // third of the plate so the sign can never shrink to a caption.
+        int callPx = Math.round(wordsH * WORDS_CALL_FRAC);
+        callView.setAutoSizeTextTypeUniformWithConfiguration(
+                Math.max(1, callPx / 3), Math.max(2, callPx), 1, TypedValue.COMPLEX_UNIT_PX);
         plateView.addView(callView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                Math.round(wordsW * 0.92f), LinearLayout.LayoutParams.WRAP_CONTENT));
 
         TextView dialView = new TextView(ctx);
         dialView.setText(dial);
