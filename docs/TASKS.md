@@ -1306,6 +1306,12 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 130. The ETA pill is a pill
+**DONE.** *"During navigation, the pill around the eta time is far too square.
+Round the corners more."* The radius was §6's `11`, a quarter of the ~43px pill's
+height; it is `height / 2` now, a true pill. The spec's number is set aside on the
+owner's instruction; padding, fill, ink and type stay as §6 says.
+
 ### 129. The hero's shadows, at the handoff's numbers — and why no screenshot could show them
 **DONE IN CODE, UNVERIFIABLE HERE.** *"Implement the shadows. Don't ignore the fact
 that there are supposed to be shadows on the hero's call sign and frequency when
