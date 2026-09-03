@@ -1296,6 +1296,9 @@ export component SettingsOverlay inherits Rectangle {
     // ── SYSTEM ──
     in property <BatteryState> battery: BatteryState.checking;
     in property <string> battery-sub;
+    in property <bool> preset-loop: false;
+    /// What that row says underneath. See `crate::settings::preset_loop_sub`.
+    in property <string> preset-loop-sub;
     in property <bool> logos-on: false;
     /// "Auto-download station artwork over Wi-Fi" when on, "Off — assign logos
     /// manually from a station (auto-download in redesign)" when off.
@@ -1391,6 +1394,7 @@ export component SettingsOverlay inherits Rectangle {
     callback set-clock-on(bool);
     callback set-nav-on(bool);
     callback set-nav-hide-on-map(bool);
+    callback set-preset-loop(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
     callback set-theme(string);
@@ -1650,6 +1654,26 @@ export component SettingsOverlay inherits Rectangle {
                     sub: root.clock-sub;
                     on: root.clock-on;
                     toggled(v) => { root.set-clock-on(v); }
+                }
+
+                RowDivider { }
+
+                // §8's switch, and it is here for the reason the Clock row above
+                // is: this changes how the face BEHAVES to the finger, not what
+                // the radio does, and there is no presets section to put it in.
+                //
+                // THE ROW IS ALWAYS AVAILABLE EVEN THOUGH THE FEATURE IS NOT.
+                // §8.1 refuses to loop unless the rail overflows and one copy of
+                // the list is at least as wide as the rail, so with a short strip
+                // this switch moves and nothing on the face changes. Hiding it
+                // until enough presets exist would be worse: the driver would
+                // have to discover a setting that appears out of nowhere. The
+                // sub-line says the condition instead.
+                SwitchRow {
+                    title: "Wrap the preset rail";
+                    sub: root.preset-loop-sub;
+                    on: root.preset-loop;
+                    toggled(v) => { root.set-preset-loop(v); }
                 }
             }
 

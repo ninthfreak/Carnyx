@@ -1449,6 +1449,7 @@ impl App {
                     clock_on: saved.clock_on,
                     nav_on: saved.nav_on,
                     nav_hide_on_map: saved.nav_hide_on_map,
+                    preset_loop: saved.preset_loop,
                     diag_on: saved.diag_on,
                     ..settings::Settings::default()
                 },
@@ -3383,6 +3384,8 @@ impl App {
         // the wording and the ordering; this only gathers the facts.
         ui.set_settings_nav_sub(self.nav_sub_line().into());
         ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
+        ui.set_settings_preset_loop(cfg.preset_loop);
+        ui.set_settings_preset_loop_sub(settings::preset_loop_sub(cfg.preset_loop).into());
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a `DiagLog::CAP`-line ring — 600 — with up to
         // `DiagLog::HEAD_CAP` (24) more in the head that never scrolls, and
@@ -4539,6 +4542,13 @@ impl App {
             app.push_nav();
             app.push_settings();
         });
+        on!(on_settings_set_preset_loop, |app, v| {
+            // A DISPLAY RULE AND NOTHING ELSE. The rail decides at layout time
+            // whether the §8.1 conditions hold; Rust only remembers the switch,
+            // so there is no tuner state, no bind and no list to rebuild here.
+            app.state.borrow_mut().settings.preset_loop = v;
+            app.push_settings();
+        });
         on!(on_open_osmand, |app| {
             // TAPPING THE MARK, NOT THE SWITCH. §4.9 draws it only while the
             // integration is on, so this fires only from that state — but the
@@ -4861,6 +4871,7 @@ impl App {
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
             nav_hide_on_map: s.settings.nav_hide_on_map,
+            preset_loop: s.settings.preset_loop,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -6639,6 +6650,10 @@ mod tests {
             !crate::prefs::load(&dir).nav_hide_on_map,
             "and the hide-on-map switch"
         );
+
+        // Defaults OFF, so `true` is the value a broken save cannot fake.
+        ui.invoke_settings_set_preset_loop(true);
+        assert!(crate::prefs::load(&dir).preset_loop, "and the rail-wrap switch");
         drop(driver);
     }
 
@@ -6658,7 +6673,8 @@ mod tests {
     /// A WRITE-SIDE TEST CANNOT CATCH THAT, which is why this one exists beside
     /// `every_remembered_setting_is_written_when_it_changes` rather than inside
     /// it: the file was correct at every moment that test looked at it. So this
-    /// writes a file with all eight at their NON-default values, builds an App
+    /// writes a file with EVERY persisted setting at its NON-default value —
+    /// the list has grown past the eight it was written for — builds an App
     /// on it — which ends in `push_all` and therefore in `save_prefs`, the exact
     /// step that did the overwriting — and reads the file back.
     #[test]
@@ -6682,6 +6698,7 @@ mod tests {
             clock_on: false,
             nav_on: false,
             nav_hide_on_map: false,
+            preset_loop: true,
             diag_on: true,
         };
         crate::prefs::save(&dir, &chosen);
@@ -6709,6 +6726,7 @@ mod tests {
             assert!(!cfg.clock_on, "the clock switch");
             assert!(!cfg.nav_on, "the OsmAnd switch");
             assert!(!cfg.nav_hide_on_map, "the hide-on-map switch");
+            assert!(cfg.preset_loop, "the rail-wrap switch");
             assert!(cfg.diag_on, "the diagnostics switch");
             assert_eq!(
                 s.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
@@ -6732,6 +6750,7 @@ mod tests {
             back.nav_hide_on_map, chosen.nav_hide_on_map,
             "the hide-on-map switch survived"
         );
+        assert_eq!(back.preset_loop, chosen.preset_loop, "the rail-wrap switch survived");
         assert_eq!(back.diag_on, chosen.diag_on, "the diagnostics switch survived");
         assert_eq!(
             back.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),

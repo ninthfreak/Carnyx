@@ -84,6 +84,8 @@ pub struct Prefs {
     pub nav_on: bool,
     /// See `settings::Settings::nav_hide_on_map`. Defaults ON.
     pub nav_hide_on_map: bool,
+    /// See `settings::Settings::preset_loop`. Defaults OFF.
+    pub preset_loop: bool,
     pub diag_on: bool,
 }
 
@@ -103,6 +105,7 @@ impl Default for Prefs {
             clock_on: s.clock_on,
             nav_on: s.nav_on,
             nav_hide_on_map: s.nav_hide_on_map,
+            preset_loop: s.preset_loop,
             diag_on: s.diag_on,
         }
     }
@@ -232,6 +235,7 @@ fn from_json(text: &str) -> Option<Prefs> {
     p.clock_on = flag("clockOn", p.clock_on);
     p.nav_on = flag("navOn", p.nav_on);
     p.nav_hide_on_map = flag("navHideOnMap", p.nav_hide_on_map);
+    p.preset_loop = flag("presetLoop", p.preset_loop);
     p.diag_on = flag("diagOn", p.diag_on);
     // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
     // They were CarFM's diagnostics and are gone; a file written by an older
@@ -259,7 +263,7 @@ pub fn to_json(p: &Prefs) -> String {
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
             "\"logosOn\":{},\"permissionsAsked\":{},\"releaseOnSleep\":{},",
             "\"clockOn\":{},\"navOn\":{},",
-            "\"navHideOnMap\":{},\"diagOn\":{}}}"
+            "\"navHideOnMap\":{},\"presetLoop\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
@@ -270,6 +274,7 @@ pub fn to_json(p: &Prefs) -> String {
         p.clock_on,
         p.nav_on,
         p.nav_hide_on_map,
+        p.preset_loop,
         p.diag_on,
     )
 }
@@ -364,6 +369,7 @@ mod tests {
             clock_on: false,
             nav_on: true,
             nav_hide_on_map: false,
+            preset_loop: true,
             diag_on: true,
         };
         save(&d, &p);
@@ -429,6 +435,11 @@ mod tests {
         assert_eq!(p.selected, Source::Nwd);
         assert_eq!(p.theme, Theme::Dark);
         assert!(p.logos_on && p.diag_on);
+        // A file written before `presetLoop` existed comes back with looping
+        // OFF, which is the handoff's default (§8: "opt-in via the `presetLoop`
+        // prop (default off)"). An absent key must never turn a rail that a
+        // driver has learnt the shape of into one with no ends.
+        assert!(!p.preset_loop, "a file predating the key leaves looping off");
         let _ = fs::remove_dir_all(&d);
     }
 

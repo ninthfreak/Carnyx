@@ -1306,6 +1306,101 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 125. Handoff v3.3.0 §8 — the looping preset rail
+**BUILT, AND THE MECHANISM IS NOT THE HANDOFF'S.** Settings ▸ APPEARANCE ▸ *Wrap
+the preset rail*, off by default, persisted as `presetLoop`. The last of the eight
+v3.3.0 items.
+
+**OFF BY DEFAULT BECAUSE THE HANDOFF ARGUES FOR IT**, not because it was easier:
+*"there is no industry convention for an infinite-loop cue in automotive HMI — the
+convention is to avoid looping, because a hard edge is itself a cue and a seam
+that can land anywhere destroys positional memory."*
+
+**AND ON EVEN WHEN ON, ONLY SOMETIMES.** §8.1's six conditions are one property,
+`PresetsBand.looping`, and the last two do the work: the rail must actually
+overflow, and one copy must be at least as wide as the rail. The strip the app
+seeds does not overflow the head unit's rail, so on that surface the switch moves
+and the face does not change — which the settings row's sub-line says out loud
+rather than leaving it to be discovered. `shots/preset-loop-declined.png` is that
+state. It is a per-surface answer, not a per-preset-count one: the same six
+presets DO overflow a 360dp portrait rail, and there the same switch engages.
+
+**§8.2's THREE DEFECTS: TWO CANNOT HAPPEN HERE, AND A FOURTH ONE CAN.** Read from
+the Slint source rather than assumed:
+
+- *"Rebase an in-flight drag."* Impossible. Slint's Flickable reads `viewport_x`
+  FRESH each move and adds the pointer's delta — `items/flickable.rs:857-871`,
+  with the crate's own comment that "the viewport_y might not be stable, and might
+  jump around wildly". There is no captured origin to rebase.
+- *"Suppress re-entrancy."* Not needed. `flicked` is documented as firing only for
+  a USER action, and it does: all four of its call sites sit inside
+  `process_wheel_event`, `handle_mouse` and the release's `animate`
+  (`flickable.rs:536`, `560`, `645`, `874`). A property write reaches none of
+  them, so a write from the handler never re-enters it.
+- **The one that is real, and is Slint's own:** after a release, `viewport-x` gets
+  a physics ANIMATION BINDING (`flickable.rs:620-648`), and an imperative write
+  REMOVES it — the glide stops dead. `flicked` fires once when the glide starts and
+  not again while it runs, so the obvious hook cannot even see the frames a wrap
+  would land on. A literal §8.2 port therefore fails acceptance check 6 verbatim:
+  a hard flick either stops at the wrap or runs to the end of the third copy and
+  stalls.
+
+**SO THE COPIES CHASE THE VIEWPORT INSTEAD OF THE VIEWPORT BEING WRAPPED.**
+`loop-turn` is which turn of the rail the window is on; the three drawn copies are
+always turns `loop-turn`, `+1` and `+2`. Every copy renders the same list, so when
+the window crosses a boundary and `loop-turn` steps, the drawn set changes by one
+off each end and the picture does not move. Nothing is written, so nothing can
+fight a drag or a glide. The viewport gets 15 turns of room, and the middle is
+re-taken only after 2000ms with no `flicked` — longer than any glide Slint's
+2000px/s² deceleration can produce below 4000px/s — and only when the rail has
+drifted two whole turns, so an ordinary glide never reaches the code at all.
+
+**ONE REPEATER, NOT TWO BRANCHES, and that is a bug fix rather than tidiness.**
+The copy count is a property (1 or 3) on the SAME `for`, so copy 0's tiles keep
+their identity when §8.1 drops looping. A separate `if root.looping:` block would
+destroy and rebuild every tile at the moment reorder mode opens — which is a long
+press — and take with it the TouchArea holding the gesture that opened it.
+
+**MEASURED, NOT ASSERTED.** A temporary probe in the shot harness scrolled the
+rail 45,000px in one direction — more than twice the 21,861px the 15-turn viewport
+gives from the middle — in three rounds with a settle pause between each:
+
+| round | tiles across the rail row | settle invisible | rail still moving |
+|---|---|---|---|
+| 15,000px | 895/1024 | yes | yes |
+| 30,000px | 896/1024 | yes | yes |
+| 45,000px | 885/1024 | yes | yes |
+
+"Settle invisible" is the rail's pixel row compared byte-for-byte across the
+re-centre. "Still moving" is twenty more notches after the settle changing the
+picture — coverage alone cannot tell a working loop from one stalled at its bound,
+because the tiles are still there either way.
+
+**§8.3's SEAM IS EXACT IN BOTH THEMES**, measured off `shots/preset-loop.png` and
+`shots/preset-loop-dark.png`: an 11px container, two 3px rules with a 5px channel,
+9px clear on each side for a 29px footprint, 78% of the row and centred, `Pal.dim`
+at 50%, the inset at `rgba(0,0,0,0.16)` and the highlight at
+`rgba(255,255,255,0.2)`.
+
+**THE DEBOSS IS TWO RECTANGLES BECAUSE SLINT HAS NEITHER SHADOW.** There is no
+inset shadow at all, and `drop-shadow-*` at zero blur DREW NOTHING — the first cut
+used one and the rendered highlight column came back identical to the background.
+Both are rectangles now. The highlight's ends are square where a real shadow's
+would be rounded; at 1px against a 2px radius that is a quarter-pixel per corner.
+
+**THE UNCONDITIONAL HALF CHANGES NOTHING, AND THAT IS MEASURED TOO.** The outer
+repeater is in the tree whether or not the rail loops, so it had to be shown not
+to move an existing face. Rendering the strip shots from the pre-change tree and
+again from this one: `many-presets`, `many-presets-portrait`, `tuned`,
+`tuned-portrait` and `reorder-drag` are all byte-identical. Four other shots do
+differ — `acdc`, `acdc-dark`, `acdc-portrait`, `driving` — and a control run
+proves why: they differ between two renders of the SAME tree, because each holds a
+running animation.
+
+**NOT VERIFIED: the gesture on glass.** Everything above is a synthetic wheel
+event in a headless renderer. A finger, its momentum and the vendor's touch
+digitiser are not in this container.
+
 ### 124. Fix the plate's line proportions against the handoff's own capture
 **DONE, AND THE OWNER CAUGHT IT.** *"Those call sign and frequency positions and
 proportions do not look correct in your screenshots... compare those proportions
@@ -1339,11 +1434,23 @@ own type's line box (1.15x the font size) and the layout centres the pair. The
 the box's own height now derives from the size and reading it there would be a
 size depending on a height depending on the size.
 
-**WHAT REMAINS AND WHY.** The call band is 24.4% against the handoff's 26.8%
-because this tree's tiles are larger than §1's table (a plate ~132x102 design px
-where the handoff's is ~104x75), which predates this bundle. Same type, bigger
-plate, so the same glyphs occupy a smaller share. The RATIO and the POSITION —
-the two things the owner could see were wrong — now match within 3% and 1 point.
+**WHAT REMAINS AND WHY — RE-MEASURED, AND MOST OF THE GAP WAS THE RULER.** The
+table above read the two captures at DIFFERENT ink thresholds, which flatters the
+3x capture: at 224px a band loses about half a percent to the antialiased fringe
+and at 82px it loses two and a half. Measured like for like (any pixel more than
+40 from the fill, one such pixel per row) the same two plates read:
+
+| | handoff | now |
+|---|---|---|
+| call-sign band | 29.0% of plate | 26.8% |
+| frequency band | 17.9% | 17.1% |
+| call : frequency | 1.62 | 1.57 |
+| frequency starts at | 63.4% | 64.6% |
+
+So the ratio is within 3% and the frequency's position within 1.2 points, and what
+is left of the call band's 2.2 points is this tree's larger tiles — a plate
+~132x102 design px where §1's table says ~104x75, which predates this bundle.
+Same type, bigger plate, so the same glyphs occupy a smaller share.
 
 **Method note for the next person:** the handoff ships 3x captures, so a band
 measured there divides by 3 to reach design px, and this tree's shots render at
@@ -1621,9 +1728,10 @@ handoff could not do with arbitrary station data and this tree can, so a future
 fill that cannot be read fails here rather than on a dashboard. Clippy clean, all
 93 shots re-render.
 
-**Still to do from v3.3.0:** §4 plate and type fitting, §6 ETA pill, §7 hero
-no-logo scale, §7a.2 hold-to-unstar, §8 looping rail, §9.1 touch-first rail,
-§9.2 hero flick.
+**Still to do from v3.3.0** *(as this item was written; all eight are closed
+now — see #118-#125)*: §4 plate and type fitting, §6 ETA pill, §7 hero no-logo
+scale, §7a.2 hold-to-unstar, §8 looping rail, §9.1 touch-first rail, §9.2 hero
+flick.
 
 ### 116. Ask for the pop-up's permissions on first launch, once
 **BUILT, UNRUN ON THE UNIT.** The owner had to find the overlay grant by hand in

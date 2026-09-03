@@ -78,6 +78,9 @@ export component Face inherits Rectangle {
 
     // ── Presets ──
     in property <[Preset]> presets;
+    /// Settings ▸ APPEARANCE ▸ Wrap the preset rail (§8). Passed straight
+    /// through; `PresetsBand` decides whether the conditions to honour it hold.
+    in property <bool> preset-loop: false;
     in property <int> active-index: -1;
     in property <Preset> prev-preset;
     in property <Preset> next-preset;
@@ -216,6 +219,7 @@ export component Face inherits Rectangle {
             vertical-stretch: 0;
             band-height: root.band-h;
             presets: root.presets;
+            preset-loop: root.preset-loop;
             egg: root.egg;
             active-index: root.active-index;
             reordering: root.reordering;
