@@ -624,12 +624,17 @@ component DashedBox inherits Rectangle {
 // side — which is a third of a tile, so it never reads as an empty slot the
 // driver could tune.
 //
-// ── THE DEBOSS IS TWO SHADOWS AND SLINT HAS NEITHER ─────────────────────────
+// ── THE DEBOSS IS TWO SHADOWS AND BOTH ARE DRAWN AS RECTANGLES ───────────────
 //
 // §8.3 asks for `inset 1px 0 0 rgba(0,0,0,0.16), 1px 0 0 rgba(255,255,255,0.2)`.
-// Slint has no inset shadow at all, and its `drop-shadow-*` DREW NOTHING at zero
-// blur — the first cut of this used one and the rendered seam came back with the
-// highlight column identical to the background. So both are rectangles:
+// The first cut drew the highlight with `drop-shadow-*` at zero blur and the
+// rendered seam came back with that column identical to the background. THE
+// REASON RECORDED FOR THAT WAS WRONG: it was blamed on the zero blur, and it is
+// in fact that `i-slint-renderer-software` — the renderer behind every
+// screenshot this tree makes — has an empty `draw_box_shadow`. It draws no box
+// shadow of any kind, so nothing built on one can be checked here. A rectangle
+// is drawn by every renderer and checked by the shot, which is why both halves
+// of the deboss are rectangles:
 //
 //   · the inset is a 1px child down the rule's left edge, clipped so it follows
 //     the 2px radius;

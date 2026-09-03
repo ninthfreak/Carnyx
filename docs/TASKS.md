@@ -1306,6 +1306,57 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 129. The hero's shadows, at the handoff's numbers — and why no screenshot could show them
+**DONE IN CODE, UNVERIFIABLE HERE.** *"Implement the shadows. Don't ignore the fact
+that there are supposed to be shadows on the hero's call sign and frequency when
+there is no logo."* Both are in.
+
+**THE CARD.** `heroCardStyle` is `0 20px 44px rgba(20,30,45,0.16)` light,
+`0 20px 44px rgba(0,0,0,0.5)` dark, `none` when the face is off. The tree had
+blur 22, offset 14 and 18% black in both themes — half the blur, two thirds of the
+offset, and in dark a third of the depth. Slint's blur is CSS's blur one for one:
+the Skia renderer the unit draws with takes sigma = blur / 2
+(`i-slint-renderer-skia` `render_drop_shadow_image`), exactly as CSS does.
+
+**THE TYPE.** `heroShadow` is `0 4px 10px rgba(0,0,0,0.55)` dark, `0 3px 7px
+rgba(20,30,45,0.22)` light, on the hero's call sign and frequency and on the
+caption under a logo. Slint's `Text` has no shadow and no blur, so each line is
+drawn twice — a copy in the shadow ink, displaced by the spec's dy, under the real
+one. **The blur is NOT reproduced**: a hard edge where the spec has 7px and 10px
+of softness. A stack of fading copies would soften it at three Texts per line on
+the card the morph redraws every frame; the unit's frames are 160ms already. The
+AC/DC bolt-split call sign does not carry the copy; the prototype skips
+`heroShadow` for lined egg type too.
+
+**WHY THE OWNER SAW IT AND THE TREE COULD NOT.** Every screenshot this tree makes
+comes from `i-slint-renderer-software`, and its `draw_box_shadow` is an empty
+function with `// TODO` in it (`i-slint-renderer-software-1.17.1/lib.rs`). No
+shot has ever contained a box shadow on anything. That is why #125 misdiagnosed
+the seam highlight, and why the review in #128 could measure a hero to the pixel
+and not see that it was flat. Shadows are a device-only check from now on, and
+that sentence is the standing rule.
+
+**THE MISS ITSELF, STATED.** Directed to compare the hero against the handoff, I
+measured size, type and position — the list I had decided on — with the two
+images side by side and a 27-point darkening under the handoff's card already in
+my own numbers, and did not look for anything off the list. The method that
+replaces it: name every visible difference between the two images first, then
+measure. The harness's blindness explains the shot, not the miss.
+
+**MECHANICALLY CHECKED, AND THE FIRST PREDICTION WAS WRONG.** This entry first
+said the three shots the change could move would render byte-identical. Two did
+not: `head-unit-light` differs in 3,059 pixels and `head-unit-dark` in 3,538, every
+one inside the box x 374–646, y 139–330 — the glyphs of the call sign and the
+frequency. That is the type shadow. Its copies are ordinary `Text` elements, which
+the software renderer does draw; only the CARD's box shadow is invisible here.
+Nothing outside the glyphs moved, and `logo-plates` — a logo, no caption — is
+byte-identical, which is the check that the caption's new box has the caption's
+own height and that the shadow copies add no layout. The one hard-edged copy is
+visible in `head-unit-light.png`, under WERN and under 88.7.
+
+**NOT VERIFIED:** the card's shadow anywhere, and the type shadow as it looks on
+the unit at the unit's size. Both need one look in each theme.
+
 ### 128. Review of #125–#127: two loop defects measured and fixed, one guard added
 **DONE.** *"Time to look for bugs, problems, and wasteful code."* Reviewed the
 three commits since #124 by reading every hunk against the Slint and Android
@@ -1548,11 +1599,12 @@ because the tiles are still there either way.
 at 50%, the inset at `rgba(0,0,0,0.16)` and the highlight at
 `rgba(255,255,255,0.2)`.
 
-**THE DEBOSS IS TWO RECTANGLES BECAUSE SLINT HAS NEITHER SHADOW.** There is no
-inset shadow at all, and `drop-shadow-*` at zero blur DREW NOTHING — the first cut
-used one and the rendered highlight column came back identical to the background.
-Both are rectangles now. The highlight's ends are square where a real shadow's
-would be rounded; at 1px against a 2px radius that is a quarter-pixel per corner.
+**THE DEBOSS IS TWO RECTANGLES.** There is no inset shadow in Slint, and the first
+cut's `drop-shadow-*` highlight rendered as nothing. *(The reason this entry first
+gave for that — "at zero blur" — was wrong: the software renderer behind every
+shot draws NO box shadow at all, see #129. The rectangle was the right answer for
+the wrong reason.)* The highlight's ends are square where a real shadow's would
+be rounded; at 1px against a 2px radius that is a quarter-pixel per corner.
 
 **THE UNCONDITIONAL HALF CHANGES NOTHING, AND THAT IS MEASURED TOO.** The outer
 repeater is in the tree whether or not the rail loops, so it had to be shown not

@@ -897,9 +897,40 @@ export component HeroCard inherits Rectangle {
     border-radius: 28px * root.scale;
     border-color: root.edge;
     background: root.surface;
-    drop-shadow-blur: root.dead ? 0px : 22px * root.scale;
-    drop-shadow-offset-y: root.dead ? 0px : 14px * root.scale;
-    drop-shadow-color: #0000002E;
+    // ── THE CARD'S SHADOW, AT THE HANDOFF'S NUMBERS ──────────────────────────
+    //
+    // `heroCardStyle`: `0 20px 44px rgba(20,30,45,0.16)` in light and
+    // `0 20px 44px rgba(0,0,0,0.5)` in dark, `none` when the face is off
+    // (IMPLEMENTATION-SPEC §"Depth removed"). Slint's `drop-shadow-blur` is the
+    // CSS blur radius one for one — the Skia renderer the unit draws with takes
+    // sigma = blur / 2 (i-slint-renderer-skia itemrenderer.rs,
+    // `render_drop_shadow_image`), exactly as CSS does — so 44 here IS 44 there.
+    //
+    // THIS WAS 22 / 14 / 18% IN BOTH THEMES, half the blur, two thirds of the
+    // offset, and in dark a third of the depth. The owner saw the card sitting
+    // flat on the unit; nothing here could see it at all, because every
+    // screenshot this tree makes is drawn by `i-slint-renderer-software`, whose
+    // `draw_box_shadow` is an empty `// TODO`. Shadows are a device-only check.
+    drop-shadow-blur: root.dead ? 0px : 44px * root.scale;
+    drop-shadow-offset-y: root.dead ? 0px : 20px * root.scale;
+    drop-shadow-color: root.dead ? transparent : (Pal.dark ? #00000080 : #141E2D29);
+
+    // ── THE TYPE'S SHADOW, `heroShadow` ──────────────────────────────────────
+    //
+    // `heroShadow = dark ? '0 4px 10px rgba(0,0,0,0.55)' : '0 3px 7px
+    // rgba(20,30,45,0.22)'`, applied to the hero's call sign and frequency and
+    // to the caption under a logo. Slint's `Text` has no shadow and no blur, so
+    // each line is drawn TWICE: a copy in the shadow ink, offset by the spec's
+    // dy, underneath the real one. THE BLUR IS NOT REPRODUCED — 7px and 10px in
+    // the spec, a hard edge here — and that is stated rather than hidden. A
+    // stack of fading copies would soften it at three Texts per line on the
+    // card the morph redraws every frame, which the unit's 160ms frames cannot
+    // afford.
+    //
+    // NONE WHEN DEAD, as the card's own shadow is.
+    property <color> type-shadow-ink: root.dead ? transparent
+        : (Pal.dark ? #0000008C : #141E2D38);
+    property <length> type-shadow-dy: (Pal.dark ? 4px : 3px) * root.scale;
 
     // DECLARED BEFORE THE STAR AND THE POWER BUTTON, which is what excludes them.
     // §13.4's "excluded origin: anything inside the star target" is a hit-test
@@ -1089,14 +1120,33 @@ export component HeroCard inherits Rectangle {
                         plate: root.logo-plate;
                     }
                 }
-                if root.show-call && root.ident != "": Text {
-                    text: root.ident;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                    font-family: Font.face; font-weight: Font.bold;
-                    font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
-                    letter-spacing: 0.5px * root.scale;
-                    color: Pal.dim;
+                // The caption carries `heroShadow` too — the prototype puts it
+                // on the call-sign line whether or not a logo sits above it. A
+                // layout child cannot have a sibling drawn under it, so the
+                // caption is a box holding the shadow copy and then the text.
+                if root.show-call && root.ident != "": Rectangle {
+                    height: caption.preferred-height;
+                    if root.type-shadow-ink.alpha > 0: Text {
+                        y: root.type-shadow-dy;
+                        width: parent.width;
+                        text: root.ident;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
+                        letter-spacing: 0.5px * root.scale;
+                        color: root.type-shadow-ink;
+                    }
+                    caption := Text {
+                        width: parent.width;
+                        text: root.ident;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                        font-family: Font.face; font-weight: Font.bold;
+                        font-size: Metrics.s(root.tall ? 22 : 26) * root.scale;
+                        letter-spacing: 0.5px * root.scale;
+                        color: Pal.dim;
+                    }
                 }
             }
 
@@ -1114,6 +1164,22 @@ export component HeroCard inherits Rectangle {
             // line, so the ghost can never grow the card.
             if root.lettering && !root.egg.call-bolt: Rectangle {
                 height: live-call.line-h;
+
+                // `heroShadow` under the call sign. FIRST, so it is beneath the
+                // ghost and the live text; same face, size and tracking so it
+                // is the same glyphs displaced, which is what a shadow is.
+                if root.type-shadow-ink.alpha > 0: Text {
+                    x: 0;
+                    y: root.type-shadow-dy;
+                    width: parent.width;
+                    text: root.ident;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                    font-family: root.call-face; font-weight: Font.bold;
+                    font-size: root.call-size;
+                    letter-spacing: root.call-track;
+                    color: root.type-shadow-ink;
+                }
 
                 if root.egg.ghost-ink.alpha > 0: Text {
                     x: root.egg.ghost-dx * root.scale;
@@ -1219,6 +1285,19 @@ export component HeroCard inherits Rectangle {
             // the frequency line off — otherwise the hero would be blank.
             if root.freq-shown: Rectangle {
                 height: freq.preferred-height + 6px * root.scale;
+                // `heroShadow` under the frequency. See the card's
+                // `type-shadow-ink` for the rule and its one stated gap.
+                if root.type-shadow-ink.alpha > 0: Text {
+                    y: 6px * root.scale + root.type-shadow-dy;
+                    width: parent.width;
+                    text: root.freq-label;
+                    horizontal-alignment: center;
+                    font-family: root.egg.freq-face != "" ? root.egg.freq-face : root.call-face;
+                    font-weight: Font.bold;
+                    font-size: root.freq-size;
+                    letter-spacing: root.egg.on ? 1px * root.scale : 0px;
+                    color: root.type-shadow-ink;
+                }
                 freq := Text {
                     y: 6px * root.scale;
                     width: parent.width;
