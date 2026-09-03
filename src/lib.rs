@@ -380,6 +380,14 @@ fn android_main(android_app: slint::android::AndroidApp) {
         "station pop-up: unavailable — the alert class did not load"
     });
 
+    // THE ONE-TIME PERMISSIONS OFFER, HERE AND NOT IN THE APP'S CONSTRUCTOR.
+    // It asks the class that was just loaded whether the overlay is granted,
+    // and it spends a persisted flag when it asks — so asking before the class
+    // existed, which is what the constructor did, burned the only offer on a
+    // fresh install and raised nothing. The owner's log: "permissions: first
+    // launch — no alert class in this build".
+    _driver.offer_permissions();
+
     // THE WAKE RECEIVER'S HALF OF THE CONVERSATION (#67's other half).
     //
     // `init` does two things: it loads the class, and it seeds the flag the

@@ -269,8 +269,8 @@ public final class CarnyxAlert {
      *     half the driver actually sees; see {@link #toast}.
      */
     public static synchronized String post(String title, String text, String logoPath,
-            int brand, int ground, int ink, int edge, int logoFallback, int logoPlate,
-            int plate) {
+            int brand, int plateInk, int ground, int ink, int edge, int logoFallback,
+            int logoPlate, int plate) {
         if (ctx == null) {
             return "post() before attach()";
         }
@@ -304,7 +304,7 @@ public final class CarnyxAlert {
         // this app cannot ask for with a dialog — which is why the toast stays
         // rather than being replaced.
         String seen = CarnyxOverlay.show(ctx, title, text, logoPath,
-                brand, ground, ink, edge, logoFallback, logoPlate, plate);
+                brand, plateInk, ground, ink, edge, logoFallback, logoPlate, plate);
         if (seen.startsWith("no overlay")) {
             seen = seen + ", " + toast(title, text, ground, ink, edge);
         }

@@ -108,6 +108,9 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// marshalling a decoded bitmap across this seam would be more code and a copy
 /// of an image the platform is about to resample anyway.
 ///
+/// `plate_ink` is the ink for type drawn ON `brand` — `station::ink_on`'s
+/// measured answer, so the words card obeys §5 exactly as the face's plates do.
+///
 /// ONE NOTIFICATION ID BEHIND THIS, so stepping four presets updates one banner
 /// rather than stacking four — the driver wants to know where they landed, not
 /// where they have been.
@@ -124,6 +127,7 @@ pub fn post(
     text: &str,
     logo: &str,
     brand: i32,
+    plate_ink: i32,
     ground: i32,
     ink: i32,
     edge: i32,
@@ -146,7 +150,7 @@ pub fn post(
                 class,
                 jni_str!("post"),
                 jni_sig!(
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIII)\
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIIIIII)\
                      Ljava/lang/String;"
                 ),
                 &[
@@ -154,6 +158,7 @@ pub fn post(
                     (&x).into(),
                     (&l).into(),
                     brand.into(),
+                    plate_ink.into(),
                     ground.into(),
                     ink.into(),
                     edge.into(),

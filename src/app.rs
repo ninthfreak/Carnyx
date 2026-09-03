@@ -1613,10 +1613,15 @@ impl App {
         app.connect_tuner();
         app.install_callbacks(ui);
         app.push_all();
-        // LAST, AFTER `push_all`. The panel sets `overlay`, and `push_all` pushes
-        // the whole face including that property — raising it first would have
-        // the start-up push close it again.
-        app.offer_permissions();
+        // THE PERMISSIONS OFFER IS NOT MADE HERE ANY MORE. It was, as the last
+        // step, and a drive log showed what that cost: `android_main` builds this
+        // App BEFORE it loads the pop-up's class, so the offer asked
+        // `CarnyxAlert` two questions while `CLASS_REF` was still empty, got "no
+        // alert class in this build" for both, raised nothing — and SPENT THE
+        // ONE OFFER, which is persisted. Line 3 of the owner's log:
+        // "permissions: first launch — no alert class in this build". The offer
+        // now runs from `android_main`, after `alert::init`, and the host tests
+        // call it themselves in the same position. See `offer_permissions`.
         app
     }
 
@@ -3061,6 +3066,12 @@ impl App {
                 .art_for(&base, Some(TILE_BOX_DP))
                 .map_or(LogoPlate::Light, |(_, p)| p);
             let brand = brand_color(&base);
+            // THE INK FOR TYPE ON THE BRAND PLATE, by measured contrast — §5's
+            // rule, the same `ink_on` the face's plates use. The pop-up hard-coded
+            // white here, which on WZEE's teal or WMHX's light brand is the very
+            // defect §5 was written to remove; it went unnoticed while the words
+            // card was small, and the card is not small any more.
+            let plate_ink = crate::station::ink_on(brand);
             let (ground, ink, edge, logo_fallback, logo_plate) = {
                 let ui = self.ui();
                 let pal = ui.global::<crate::Pal>();
@@ -3072,6 +3083,7 @@ impl App {
                 &format!("{dial} FM"),
                 &logo,
                 argb(brand),
+                argb(plate_ink),
                 argb(ground),
                 argb(ink),
                 argb(edge),
@@ -3404,6 +3416,14 @@ impl App {
         let diag_changed = s.last_diag_rev != Some(diag_rev);
         if diag_changed {
             ui.set_settings_diag_lines(strings(&cfg.log.lines()));
+            // AFTER THE LINES, AND IT IS THE WELL'S CUE TO FOLLOW THE TAIL. See
+            // `DiagLog`'s `changed revision` in ui/settings.slint for what went
+            // wrong when the well watched the LINE COUNT instead: past
+            // `DiagLog::CAP` every append evicts one, the count stops moving, and
+            // the follow stops with it. Published as an `i32` because that is
+            // what Slint's `int` is; the value is only ever compared for
+            // inequality, so the truncation cannot matter.
+            ui.set_settings_diag_revision(diag_rev as i32);
         }
         // THE DIAGNOSTICS BUTTONS, same rule. The list is now fixed — the five
         // rows that came and went with the raw-capture switch and the live source
@@ -3415,6 +3435,7 @@ impl App {
             .iter()
             .map(|a| DiagAction {
                 label: a.label.as_str().into(),
+                sub: a.sub.as_str().into(),
                 divider_above: a.divider_above,
             })
             .collect();
@@ -3669,7 +3690,13 @@ impl App {
     /// -1 FROM `overlay_permission_state` IS NOT "NOT GRANTED". It means the
     /// question does not apply — a host build, or `attach` never ran — and
     /// treating it as a refusal would raise this panel over every screenshot.
-    fn offer_permissions(self: &Rc<App>) {
+    /// AFTER `alert::init`, AND AFTER `push_all`. Both orderings matter and one
+    /// of them was got wrong: the pop-up's class has to be loaded before this
+    /// can ask it anything, or the offer spends itself on "no alert class" (the
+    /// drive log that proved it is quoted at the end of `with_tuner`); and the
+    /// panel sets `overlay`, which the start-up push would otherwise close.
+    /// `android_main` calls this in that position; the host tests do the same.
+    pub fn offer_permissions(self: &Rc<App>) {
         if self.state.borrow().settings.permissions_asked {
             return;
         }
@@ -5447,6 +5474,16 @@ impl App {
             } else {
                 format!("{name}: nothing to report — see the log")
             };
+            // THE SAME ANSWER, UNDER THE ROW THAT ASKED FOR IT. `diag_status` is
+            // drawn above the log well and the rows are below it, so on a panel
+            // scrolled to the rows it is off screen — which is what had the
+            // owner tapping a probe three times to find out whether it ran.
+            let note = if count > 0 {
+                format!("{count} lines at {at} — in the log above")
+            } else {
+                "Nothing to report — see the log above".to_string()
+            };
+            s.settings.set_note(action, note);
         }
         self.push_settings();
     }
@@ -5479,6 +5516,11 @@ impl App {
             match action {
                 settings::Action::ClearLog => {
                     s.settings.log.clear();
+                    // AND EVERY ROW'S NOTE GOES WITH IT. The notes describe runs
+                    // whose output was in the log; leaving them behind would
+                    // point at lines that are no longer there.
+                    s.settings.notes.clear();
+                    s.diag_status = String::new();
                     None
                 }
                 // ── ASK FOR THE NOTIFICATION PERMISSION ───────────────────────
@@ -5497,6 +5539,7 @@ impl App {
                 settings::Action::AskNotifyPermission => {
                     let line = crate::android::request_notification_permission();
                     s.settings.log.push(&stamp(), &line);
+                    s.settings.set_note(action, line.clone());
                     s.diag_status = line;
                     None
                 }
@@ -5511,6 +5554,7 @@ impl App {
                 settings::Action::AskOverlayPermission => {
                     let line = crate::android::request_overlay_permission();
                     s.settings.log.push(&stamp(), &line);
+                    s.settings.set_note(action, line.clone());
                     s.diag_status = line;
                     None
                 }
@@ -5538,6 +5582,12 @@ impl App {
                 settings::Action::ProbeKeepAlive | settings::Action::ProbeStockRadio => {
                     s.diag_status = format!("{}: reading…", probe_name(action));
                     s.settings.log.push(&stamp(), &format!("{}: reading…", probe_name(action)));
+                    // ON THE ROW ITSELF, which is where the finger is. See
+                    // `Settings::notes`. This one is the shorter half of the
+                    // pair — the probes finish in well under a second, so the
+                    // reading state may barely be seen — and the line
+                    // `run_pending_probe` leaves behind is the half that lasts.
+                    s.settings.set_note(action, "Reading…");
                     s.pending_probe = Some(action);
                     s.probe_run.start(
                         slint::TimerMode::SingleShot,
@@ -5553,6 +5603,7 @@ impl App {
                         // There is no alert here; the log IS the channel, and a
                         // line saying why is what a tap has to leave behind.
                         s.settings.log.push(&at, "save to file: the log is empty");
+                        s.settings.set_note(action, "The log is empty — nothing to save");
                         None
                     } else {
                         // `lines().join("\n")` is CarFM's `diagText()` exactly —
@@ -5578,7 +5629,10 @@ impl App {
                 Ok(path) => format!("log saved to {path}"),
                 Err(e) => format!("save to file failed: {e}"),
             };
-            self.state.borrow_mut().settings.log.push(&at, &line);
+            let mut s = self.state.borrow_mut();
+            s.settings.log.push(&at, &line);
+            s.settings.set_note(settings::Action::SaveLog, line.clone());
+            s.diag_status = line;
         }
         self.push_settings();
     }
@@ -6461,6 +6515,10 @@ mod tests {
         };
 
         let (_ui, first) = make();
+        // AS `android_main` DOES: after the App is built, after the pop-up's
+        // class would have been loaded. `with_tuner` no longer makes the offer
+        // itself, for the reason written at its end.
+        first.offer_permissions();
         assert!(
             first.state.borrow().settings.permissions_asked,
             "the first launch spends the offer"
@@ -6482,6 +6540,7 @@ mod tests {
         // ignition cycle is. Not a second call on the same App — that would pass
         // on the in-memory flag alone and prove nothing about the file.
         let (_ui2, second) = make();
+        second.offer_permissions();
         assert!(second.state.borrow().settings.permissions_asked, "still spent");
         assert_eq!(asked(&second), 0, "and the second launch says nothing at all");
     }
@@ -7972,6 +8031,101 @@ mod tests {
             settled,
             "a tick with nothing pending does nothing"
         );
+    }
+
+    /// THE ROW THAT WAS TAPPED SAYS WHAT HAPPENED, UNDER ITSELF.
+    ///
+    /// The owner's drive log had the stock-radio probe run three times and the
+    /// keep-alive probe twice: *"probes pressed multiple times because I wasn't
+    /// sure if they were running because there wasn't visual feedback."* There
+    /// WAS feedback — `diag_status` — drawn above the log well, which on a panel
+    /// scrolled down to the rows is off screen. So each row now carries its own
+    /// note, and this is the test that the note lands on the row that was
+    /// tapped and on no other, in the model the panel actually draws.
+    #[test]
+    fn a_probe_row_reports_under_itself_and_not_under_its_neighbour() {
+        use slint::Model;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("probe-note");
+        driver.drain_events();
+
+        let sub_of = |label: &str| -> String {
+            let model = ui.get_settings_diag_actions();
+            (0..model.row_count())
+                .filter_map(|i| model.row_data(i))
+                .find(|a| a.label == label)
+                .map(|a| a.sub.to_string())
+                .unwrap_or_else(|| panic!("no row labelled {label:?}"))
+        };
+        const KEEP: &str = "What could keep Carnyx alive through sleep";
+        const STOCK: &str = "Where the stock radio app can be intercepted";
+
+        assert_eq!(sub_of(KEEP), "", "nothing has run yet");
+        assert_eq!(sub_of(STOCK), "", "on either row");
+
+        ui.invoke_settings_pick_diag_action(row_index(&driver, KEEP));
+        assert_eq!(sub_of(KEEP), "Reading…", "the tap marks its own row at once");
+        assert_eq!(sub_of(STOCK), "", "and only its own row");
+
+        driver.run_pending_probe();
+        let done = sub_of(KEEP);
+        assert!(
+            done.contains("lines at") || done.contains("Nothing to report"),
+            "the result replaces the reading state on the same row, got {done:?}"
+        );
+        assert!(done.contains("the log above"), "and points at where the output went: {done:?}");
+        assert_eq!(sub_of(STOCK), "", "the neighbour is still untouched");
+
+        // A CLEAR TAKES THE NOTES WITH IT. They describe output that was in the
+        // log; a note that outlives its lines points at nothing.
+        ui.invoke_settings_pick_diag_action(row_index(&driver, "Clear log"));
+        assert_eq!(sub_of(KEEP), "", "cleared with the log");
+    }
+
+    /// THE LOG WELL IS TOLD ABOUT EVERY APPEND, INCLUDING THE ONES THAT EVICT.
+    ///
+    /// `ui/settings.slint`'s well follows the tail from a `changed` handler, and
+    /// that handler used to hang off the LINE COUNT. The owner's exported log is
+    /// exactly `HEAD_CAP`'s used 8 plus `CAP`'s 600 lines: the ring had filled,
+    /// every append since had evicted one, the count had stopped moving, and the
+    /// well had stopped following — *"the log doesn't scroll right, so I can't
+    /// see the latest items added."* The well watches `revision` now, and this
+    /// is the test that the revision reaches it when the count cannot.
+    #[test]
+    fn the_log_revision_reaches_the_panel_when_the_line_count_cannot_move() {
+        use slint::Model;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("log-revision");
+        driver.drain_events();
+
+        // Fill the ring to the brim through the real writer.
+        {
+            let mut s = driver.state.borrow_mut();
+            for i in 0..settings::DiagLog::CAP {
+                s.settings.log.push("00:00:00", &format!("filler {i}"));
+            }
+        }
+        driver.push_settings();
+        let rows_full = ui.get_settings_diag_lines().row_count();
+        let rev_full = ui.get_settings_diag_revision();
+
+        // One more line: the ring is at CAP, so this evicts the oldest and the
+        // count stays exactly where it was. That is the case the row-count
+        // handler could never see.
+        driver.state.borrow_mut().settings.log.push("00:00:01", "one more");
+        driver.push_settings();
+        assert_eq!(
+            ui.get_settings_diag_lines().row_count(),
+            rows_full,
+            "the count is pinned at the cap"
+        );
+        assert_ne!(
+            ui.get_settings_diag_revision(),
+            rev_full,
+            "but the revision the well follows still moved"
+        );
+        let last = ui.get_settings_diag_lines().row_data(rows_full - 1).unwrap();
+        assert!(last.contains("one more"), "and the new line is the tail, got {last:?}");
     }
 
     /// LOSING FOCUS IS NOT LEAVING, AND A PAUSE IS.

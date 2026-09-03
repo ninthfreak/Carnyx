@@ -808,6 +808,7 @@ pub fn announce_station(
     text: &str,
     logo: &str,
     brand: i32,
+    plate_ink: i32,
     ground: i32,
     ink: i32,
     edge: i32,
@@ -815,7 +816,9 @@ pub fn announce_station(
     logo_plate: i32,
     plate: i32,
 ) -> String {
-    alert::post(title, text, logo, brand, ground, ink, edge, logo_fallback, logo_plate, plate)
+    alert::post(
+        title, text, logo, brand, plate_ink, ground, ink, edge, logo_fallback, logo_plate, plate,
+    )
 }
 
 /// The host has no notification shade. See the Android arm.
@@ -826,6 +829,7 @@ pub fn announce_station(
     _text: &str,
     _logo: &str,
     _brand: i32,
+    _plate_ink: i32,
     _ground: i32,
     _ink: i32,
     _edge: i32,

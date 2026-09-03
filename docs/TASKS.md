@@ -1306,6 +1306,167 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 128. Review of #125–#127: two loop defects measured and fixed, one guard added
+**DONE.** *"Time to look for bugs, problems, and wasteful code."* Reviewed the
+three commits since #124 by reading every hunk against the Slint and Android
+sources they lean on, and by measuring the two suspicions that reading raised.
+The `code-review` skill was tried first and reviewed the wrong repository — it
+ran in the CarFM checkout and reported ten findings about `SettingsPanel.tsx` —
+so none of that is here.
+
+**1. THE SETTLE TIMER NEVER RESTARTED.** `flicked` wrote `running = false;
+running = true;` to re-arm the 2000ms settle. Slint watches a Timer's `running`
+through a change callback (`lower_timers.rs:111`), which compares the value
+after the handler with the value before — true and true — and re-arms nothing.
+So the timer fired 2000ms after the FIRST flick of a burst, not the last, which
+on a long drag is mid-drag; #125's text said the opposite and is corrected below.
+Now `restart()` when running, `running = true` when not.
+
+**2. THE COPIES COMPOUNDED THE TUNED TILE'S WIDTH ACROSS EVERY TURN.** `span`
+carries `strip-delta`, the tuned tile's extra ~32px, and each copy is drawn at
+`(loop-turn + c) * span`. The window sits on turn seven or beyond, so a retune
+between a preset and an unsaved station moved the whole rail by the turn times
+32. Measured in the harness with the seam as the ruler, tuning from preset 0 to
+107.5:
+
+| distance from home | seam moved, before | after the fix |
+|---|---|---|
+| 0.8 turns | −256px | −32px |
+| 3.8 turns | −352px | −32px |
+
+−32 is the tuned tile's own shrink, which the bounded rail does too. The fix is
+a `changed span` handler that re-anchors `viewport-x` by the turn under the
+window's left edge, taken against the old width, times the change.
+
+**3. THE START-UP PARK WAS SUSPECTED AND IS CLEARED.** Read: a non-delayed
+`ChangeTracker::init` evaluates at component init and seeds its baseline
+silently (`change_tracker.rs:204-208`), so `changed looping` fires only on a
+later transition. Measured: with `presetLoop` already true in the file at
+build, the first frame loops and 600px of backward scrolling moves it, so the
+window had been parked with room behind it.
+
+**4. THE WORDS POP-UP'S CALL SIGN HAD NO FIT.** `setMaxLines(1)` with nothing
+else cuts a sign wider than the plate mid-glyph. Four letters at 0.40 of the
+plate are ~150dp of a 240dp plate and never reach it; a seven-character sign
+would. Platform auto-size (API 26, this app's floor) now shrinks it to fit, no
+smaller than a third of the plate.
+
+**LOOKED AT AND LEFT.** `SeamRule`'s per-side wrapper Rectangle is full-size
+and empty, but replacing it saves no elements — the rule needs `clip` for its
+inset and the highlight has to sit outside that clip, so a wrapper is needed
+either way. The mark decode target is the long side for tall art too, decoding
+up to 2x what a 150dp box needs; a few hundred kilobytes once per station
+change, not worth a second code path. The two identical `changed rows` and
+`changed revision` writes in `DiagLog` both fire on most appends; one property
+set each, and the second is the one that matters past the cap.
+
+**NOT VERIFIED ON THE UNIT:** the auto-size, and the feel of the corrected
+settle — the harness has no momentum.
+
+### 127. The words pop-up matches the logo pop-up
+**DONE.** *"Make the no-logo popup bigger to match the logo one."* The words
+card is now a 240x150 brand plate inside the same 10dp frame the mark gets — the
+exact box a 16:10 mark would be given — so a station with art and one without
+raise a card of one size. It was a 162x101 plate with 28x18 of margin and the
+dial in a line beneath.
+
+**BOTH LINES GO INSIDE THE PLATE.** The old card put the dial UNDER the plate in
+the card's ink, which was the peek card's form before v3.3.0 §13.1 moved the
+frequency into the plate. The face's plates all hold both lines now, so this is
+what "the way they are shown on peek cards" means today — and it is the only way
+the words card can be the mark card's height, since a line beneath the plate
+makes it taller than any mark.
+
+**THE TYPE IS A SHARE OF THE PLATE, FROM §13.1's CAPTURE.** Measured there (see
+#124): the call sign's ink band is 29% of the plate and the dial's 18%. Over a
+0.72 cap height that is 0.40 and 0.25 of the plate — 60 and 38 on 150dp, against
+the old 34 and 24 sp. Set in px as a fraction of a plate already in px.
+
+**AND THE INK IS §5's, NOT WHITE.** The call sign was hard-coded white. On WZEE's
+teal or WMHX's light brand that is the defect §5 exists to remove, unnoticed
+while the plate was small. `station::ink_on(brand)` now crosses the JNI seam as
+an eighth int, `plateInk`, through `announce_station`, `alert::post`,
+`CarnyxAlert.post` and `CarnyxOverlay.show`, and both lines are set in it.
+
+**GONE FROM THE JAVA:** the peek card's 162x101 and the toast's 28x18 margin as
+constants, and the 34/24 sp pair, with every doc that cited them rewritten.
+
+**NOT VERIFIED ON THE UNIT.** Syntax-checked with `javac` against no SDK; not
+drawn on glass.
+
+### 126. What one drive log said: probes with no feedback, a log that stopped following, a pop-up too small, and an offer that spent itself on nothing
+**DONE, FROM THE OWNER'S OWN LOG.** Four defects, three of them reported and one
+found in the same file. *"Probes pressed multiple times because I wasn't sure if
+they were running because there wasn't visual feedback. Also, the log doesn't
+scroll right, so I can't see the latest items added. The station logo popups look
+decent, but they are all too small because the logos aren't filling much of the
+full shape of the popup."*
+
+**1. THE PROBE ROWS NOW ANSWER UNDER THEMSELVES.** The feedback existed —
+`diag_status`, drawn above the log well. The rows are BELOW the well, which is up
+to 240dp tall, so a driver scrolled down to the rows was looking at the one part
+of the panel that did not change. The log has the stock-radio probe run three
+times and the keep-alive probe twice. Every DIAGNOSTICS row now carries a
+`sub` — "Reading…" on the tap, then "48 lines at 12:58:36 — in the log above",
+or the permission rows' own answer — held per row in `Settings::notes`, session
+state only, and cleared with the log. `a_probe_row_reports_under_itself_and_not_under_its_neighbour`
+reads it back off the model the panel draws.
+
+**2. THE LOG WELL FOLLOWS THE REVISION, NOT THE ROW COUNT.** The exported file is
+608 lines: 8 in the head plus `DiagLog::CAP` — 600 — exactly. The ring had
+filled. Past that every append evicts one, `lines.length` never moves again, and
+`changed rows` — which is what the well's follow hung off — never fired again.
+The well was frozen on whatever it showed when the ring filled, which with the
+two probes writing 131 lines between them is within one session of using the
+thing the follow exists for. `DiagLog::revision` already moved on every mutation;
+it is published as `settings-diag-revision` now and the well follows that.
+`the_log_revision_reaches_the_panel_when_the_line_count_cannot_move` fills the
+ring to the cap and proves the revision moves when the count cannot.
+
+**3. THE POP-UP'S MARK FILLS THE POP-UP.** Two things were eating it. The box was
+the peek card's 162x101 with the art `FIT_CENTER` inside: a square mark drew
+101x101 and left 61dp of card either side. And the card padded that by 28x18.
+Together a square mark was 34% of the card by area. The box now takes the ART'S
+aspect — 150dp tall, as wide as that makes it, capped at 300 with the height
+giving way, floored at 96 so it cannot become a strip — and the frame around a
+mark is 10dp. Checked arithmetically against what shipped, at density 1:
+
+| art | mark was | mark now | share of card |
+|---|---|---|---|
+| square | 101x101 | 150x150 | 34% → 78% |
+| 1.6:1 | 162x101 | 240x150 | 55% → 81% |
+| 3:1 wordmark | 162x54 | 300x100 | 29% → 78% |
+| 1:2 tall | 51x101 | 75x150 | 17% → 70% |
+
+The words card — call sign in the brand box, dial under it — is untouched: type
+needs the air a mark does not, and it was not what the owner said was small. So
+a logo pop-up is now larger than a no-logo one. Said here so it is not a
+surprise.
+
+**4. THE ONE-TIME PERMISSIONS OFFER RAN BEFORE THE CLASS IT ASKS.** Line 3 of the
+log: *"permissions: first launch — no alert class in this build"*. `android_main`
+builds the App — whose constructor made the offer as its last step — and only
+THEN loads `CarnyxAlert`. So the offer asked an empty `CLASS_REF` two questions,
+got "no alert class" for both, raised no panel, and spent the persisted flag. On
+this unit the overlay was already granted by hand so nothing was lost; on a
+fresh install the only offer would have gone silently. The offer is called from
+`android_main` now, after `alert::init`, and the host test calls it in the same
+position.
+
+**THE WORDS CARD WAS LEFT AT THE OLD SIZE HERE, AND #127 CHANGED THAT** the
+moment the owner saw the two side by side.
+
+**NOT DONE, AND WHY.** The offer still spends the flag when it cannot tell
+(`overlay_state() == -1`). Guarding that would make the flag unreachable on a
+host build, where -1 is the only answer, and take the restart test with it. The
+ordering fix removes the case on the device; a dex that fails to load would
+still burn the offer, and that is the gap.
+
+**NOT VERIFIED ON THE UNIT.** The Java is syntax-checked with `javac` against no
+SDK — every remaining error is a missing `android.*` symbol — and the box
+arithmetic is checked in a standalone program; the mark has not been drawn on
+glass at the new size.
+
 ### 125. Handoff v3.3.0 §8 — the looping preset rail
 **BUILT, AND THE MECHANISM IS NOT THE HANDOFF'S.** Settings ▸ APPEARANCE ▸ *Wrap
 the preset rail*, off by default, persisted as `presetLoop`. The last of the eight
@@ -1354,6 +1515,11 @@ fight a drag or a glide. The viewport gets 15 turns of room, and the middle is
 re-taken only after 2000ms with no `flicked` — longer than any glide Slint's
 2000px/s² deceleration can produce below 4000px/s — and only when the rail has
 drifted two whole turns, so an ordinary glide never reaches the code at all.
+*(As shipped here the "with no `flicked`" half was false: the re-arm was
+coalesced away and the timer ran from the first flick. #128 found and fixed
+it, and found a second defect in this mechanism — the copies compounding the
+tuned tile's width across turns — that this entry's measurements could not
+see because they never retuned.)*
 
 **ONE REPEATER, NOT TWO BRANCHES, and that is a bug fix rather than tidiness.**
 The copy count is a property (1 or 3) on the SAME `for`, so copy 0's tiles keep

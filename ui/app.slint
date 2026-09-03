@@ -295,6 +295,9 @@ export component AppWindow inherits Window {
     // action rows whose membership and dividers Rust decides.
     in property <bool> settings-diag-on: false;
     in property <[string]> settings-diag-lines;
+    /// `DiagLog::revision`, so the log well can follow the tail on an append
+    /// that evicts a line and therefore leaves the count alone.
+    in property <int> settings-diag-revision;
     in property <[DiagAction]> settings-diag-actions;
     in property <string> settings-about;
     /// The last probe's outcome, in a line the driver can actually read. Empty
@@ -527,6 +530,7 @@ export component AppWindow inherits Window {
         clearing-logos: root.settings-clearing-logos;
         diag-on: root.settings-diag-on;
         diag-lines: root.settings-diag-lines;
+        diag-revision: root.settings-diag-revision;
         diag-actions: root.settings-diag-actions;
         about: root.settings-about;
         diag-status: root.settings-diag-status;
