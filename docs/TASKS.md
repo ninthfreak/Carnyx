@@ -1306,6 +1306,76 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 126. What one drive log said: probes with no feedback, a log that stopped following, a pop-up too small, and an offer that spent itself on nothing
+**DONE, FROM THE OWNER'S OWN LOG.** Four defects, three of them reported and one
+found in the same file. *"Probes pressed multiple times because I wasn't sure if
+they were running because there wasn't visual feedback. Also, the log doesn't
+scroll right, so I can't see the latest items added. The station logo popups look
+decent, but they are all too small because the logos aren't filling much of the
+full shape of the popup."*
+
+**1. THE PROBE ROWS NOW ANSWER UNDER THEMSELVES.** The feedback existed —
+`diag_status`, drawn above the log well. The rows are BELOW the well, which is up
+to 240dp tall, so a driver scrolled down to the rows was looking at the one part
+of the panel that did not change. The log has the stock-radio probe run three
+times and the keep-alive probe twice. Every DIAGNOSTICS row now carries a
+`sub` — "Reading…" on the tap, then "48 lines at 12:58:36 — in the log above",
+or the permission rows' own answer — held per row in `Settings::notes`, session
+state only, and cleared with the log. `a_probe_row_reports_under_itself_and_not_under_its_neighbour`
+reads it back off the model the panel draws.
+
+**2. THE LOG WELL FOLLOWS THE REVISION, NOT THE ROW COUNT.** The exported file is
+608 lines: 8 in the head plus `DiagLog::CAP` — 600 — exactly. The ring had
+filled. Past that every append evicts one, `lines.length` never moves again, and
+`changed rows` — which is what the well's follow hung off — never fired again.
+The well was frozen on whatever it showed when the ring filled, which with the
+two probes writing 131 lines between them is within one session of using the
+thing the follow exists for. `DiagLog::revision` already moved on every mutation;
+it is published as `settings-diag-revision` now and the well follows that.
+`the_log_revision_reaches_the_panel_when_the_line_count_cannot_move` fills the
+ring to the cap and proves the revision moves when the count cannot.
+
+**3. THE POP-UP'S MARK FILLS THE POP-UP.** Two things were eating it. The box was
+the peek card's 162x101 with the art `FIT_CENTER` inside: a square mark drew
+101x101 and left 61dp of card either side. And the card padded that by 28x18.
+Together a square mark was 34% of the card by area. The box now takes the ART'S
+aspect — 150dp tall, as wide as that makes it, capped at 300 with the height
+giving way, floored at 96 so it cannot become a strip — and the frame around a
+mark is 10dp. Checked arithmetically against what shipped, at density 1:
+
+| art | mark was | mark now | share of card |
+|---|---|---|---|
+| square | 101x101 | 150x150 | 34% → 78% |
+| 1.6:1 | 162x101 | 240x150 | 55% → 81% |
+| 3:1 wordmark | 162x54 | 300x100 | 29% → 78% |
+| 1:2 tall | 51x101 | 75x150 | 17% → 70% |
+
+The words card — call sign in the brand box, dial under it — is untouched: type
+needs the air a mark does not, and it was not what the owner said was small. So
+a logo pop-up is now larger than a no-logo one. Said here so it is not a
+surprise.
+
+**4. THE ONE-TIME PERMISSIONS OFFER RAN BEFORE THE CLASS IT ASKS.** Line 3 of the
+log: *"permissions: first launch — no alert class in this build"*. `android_main`
+builds the App — whose constructor made the offer as its last step — and only
+THEN loads `CarnyxAlert`. So the offer asked an empty `CLASS_REF` two questions,
+got "no alert class" for both, raised no panel, and spent the persisted flag. On
+this unit the overlay was already granted by hand so nothing was lost; on a
+fresh install the only offer would have gone silently. The offer is called from
+`android_main` now, after `alert::init`, and the host test calls it in the same
+position.
+
+**NOT DONE, AND WHY.** The offer still spends the flag when it cannot tell
+(`overlay_state() == -1`). Guarding that would make the flag unreachable on a
+host build, where -1 is the only answer, and take the restart test with it. The
+ordering fix removes the case on the device; a dex that fails to load would
+still burn the offer, and that is the gap.
+
+**NOT VERIFIED ON THE UNIT.** The Java is syntax-checked with `javac` against no
+SDK — every remaining error is a missing `android.*` symbol — and the box
+arithmetic is checked in a standalone program; the mark has not been drawn on
+glass at the new size.
+
 ### 125. Handoff v3.3.0 §8 — the looping preset rail
 **BUILT, AND THE MECHANISM IS NOT THE HANDOFF'S.** Settings ▸ APPEARANCE ▸ *Wrap
 the preset rail*, off by default, persisted as `presetLoop`. The last of the eight

@@ -164,6 +164,10 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-scrolled-end", 1024, 614, false, State::Settings, -8.0),
     ("settings-diagnostics-open", 1024, 614, false, State::SettingsDiag, -7.0),
     ("settings-diagnostics-full", 1024, 614, false, State::SettingsDiagFull, -9.0),
+    // THE ROWS UNDER THE WELL, which the shot above stops short of. This is the
+    // one that shows a probe row answering under itself (#126): the same state,
+    // scrolled far enough that the well has gone by.
+    ("settings-diagnostics-rows", 1024, 614, false, State::SettingsDiagFull, -14.0),
     ("settings-diagnostics-portrait", 360, 800, false, State::SettingsDiag, -11.0),
     ("settings-phone-portrait", 360, 800, false, State::Settings, 0.0),
     ("settings-phone-portrait-scrolled", 360, 800, false, State::Settings, -8.0),
@@ -961,6 +965,24 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
             driver.settle_meter_for_test();
+            // AND ONE PROBE ROW, TAPPED, so the shot shows what a row says under
+            // itself afterwards (#126). Through the real callback and the real
+            // deferred half; on this host the class does not exist, so the row
+            // reads "Nothing to report — see the log above", which is the
+            // honest answer and the one the shot is of.
+            {
+                use slint::Model;
+                let rows = ui.get_settings_diag_actions();
+                let keep = (0..rows.row_count())
+                    .find(|&i| {
+                        rows.row_data(i)
+                            .map(|a| a.label.starts_with("What could keep"))
+                            .unwrap_or(false)
+                    })
+                    .expect("the keep-alive row") as i32;
+                ui.invoke_settings_pick_diag_action(keep);
+                driver.run_pending_probe();
+            }
             ui.set_overlay(Overlay::Settings);
         }
         // 8:05 rather than a round number: a single-digit hour is what the

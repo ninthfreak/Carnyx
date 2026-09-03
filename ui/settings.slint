@@ -142,6 +142,16 @@ export enum BatteryState {
 export struct DiagAction {
     /// "Save to file", "Probe NwdFmManager (signal · raw RDS · stereo)", …
     label: string,
+    /// What this row last did, drawn under its label, or empty.
+    ///
+    /// THE ROW ANSWERS FOR ITSELF, and it did not before. Every one of these
+    /// rows reported through `diag-status`, which is drawn ABOVE the log well —
+    /// so a driver who has scrolled down far enough to reach a row is looking at
+    /// a line up to 240px of well away from the only thing that changed. The
+    /// owner tapped both probes repeatedly "because I wasn't sure if they were
+    /// running": the feedback existed and was off screen. Rust fills this; see
+    /// `settings::Settings::note_for`.
+    sub: string,
     /// A RowDivider immediately above this row. False on "Save to file" — the log
     /// runs straight into it with no rule — and true on every other row, which is
     /// the TSX's dividers read off one by one rather than re-derived.
@@ -980,6 +990,9 @@ component BatteryRow inherits Rectangle {
 /// unlike the ✕ in overlay.slint's CloseButton — this one does not fall back.
 component ChevronRow inherits Rectangle {
     in property <string> label;
+    /// What the row last did. Empty draws nothing and the row keeps its old
+    /// single-line height.
+    in property <string> sub;
     /// False while the logo wipe runs, which is the TSX's `disabled={clearing}`.
     in property <bool> interactive: true;
 
@@ -1002,14 +1015,31 @@ component ChevronRow inherits Rectangle {
         // chevron keeps its own width, which puts them at the two ends.
         spacing: 0px;
 
-        Text {
-            text: root.label;
+        VerticalLayout {
             horizontal-stretch: 1;
-            font-size: Math.max(12px, Metrics.s(16));
-            font-weight: 700;
-            color: Pal.blue;
-            vertical-alignment: center;
-            wrap: word-wrap;
+            alignment: center;
+            spacing: root.sub == "" ? 0px : Metrics.s(3);
+
+            Text {
+                text: root.label;
+                font-size: Math.max(12px, Metrics.s(16));
+                font-weight: 700;
+                color: Pal.blue;
+                horizontal-alignment: left;
+                wrap: word-wrap;
+            }
+
+            // The same shape `RowText` gives a switch row its sub-line, and the
+            // same reason: the row states what it does, and underneath it states
+            // where it stands.
+            if root.sub != "": Text {
+                text: root.sub;
+                font-size: Math.max(11px, Metrics.s(13));
+                font-weight: 400;
+                color: Pal.dim;
+                horizontal-alignment: left;
+                wrap: word-wrap;
+            }
         }
 
         VerticalLayout {
@@ -1137,6 +1167,9 @@ component DiagLog inherits VerticalLayout {
     /// `src/settings.rs`, and the difference matters because a probe report is
     /// tens of lines against a ring ordinary playback already evicts from.
     in property <[string]> lines;
+    /// `DiagLog::revision` — bumped by every mutation of the log, including the
+    /// ones that leave the LINE COUNT alone. See the follow rule below.
+    in property <int> revision;
 
     property <length> pad: Metrics.s(10);
     property <length> line-font: Math.max(11px, Metrics.s(12));
@@ -1169,6 +1202,25 @@ component DiagLog inherits VerticalLayout {
     // `viewport-y` is NEGATIVE when scrolled down — 0 is the top and
     // `height - viewport-height` is the bottom — so the floor is the bottom and
     // 0 is the answer whenever the content fits.
+    //
+    // ── ON THE REVISION, AND IT USED TO BE ON THE ROW COUNT ──────────────────
+    //
+    // WHICH STOPPED FOLLOWING THE MOMENT THE RING FILLED, and a drive log proved
+    // it rather than a reading of the code. The owner: "the log doesn't scroll
+    // right, so I can't see the latest items added." The file they exported is
+    // 608 lines — `DiagLog::HEAD_CAP` (24, of which 8 were used) plus
+    // `DiagLog::CAP` (600) exactly. Past that every append EVICTS a line, so
+    // `lines.length` never changes again, `changed rows` never fires again, and
+    // the well sits frozen on whatever it was showing when the ring filled. The
+    // two probes write 131 lines between them, so it fills within one session of
+    // using the thing the follow exists for.
+    //
+    // `revision` moves on every mutation, evicting ones included, which is the
+    // property this rule always meant.
+    changed revision => { well.viewport-y = Math.min(0px, well.height - well.viewport-height); }
+    // STILL ON THE ROW COUNT AS WELL, because the two answer different
+    // questions: this one re-pins after the viewport RESIZES, which is what a
+    // clear does and what the first few lines of a session do.
     changed rows => { well.viewport-y = Math.min(0px, well.height - well.viewport-height); }
 
     // `marginHorizontal: 10, marginTop: 2` — a Slint layout child has no margin,
@@ -1327,6 +1379,9 @@ export component SettingsOverlay inherits Rectangle {
     /// The ring, oldest first, each line already `HH:MM:SS␣␣text`. Only read while
     /// `diag-on` — the TSX renders the log inside the same conditional.
     in property <[string]> diag-lines;
+    /// `DiagLog::revision`. See `DiagLog`'s follow rule — the well needs to know
+    /// that the log CHANGED, which is not the same as its length changing.
+    in property <int> diag-revision;
     /// Which action rows exist, in order, with their rules. Rust's decision; see
     /// DiagAction.
     in property <[DiagAction]> diag-actions;
@@ -1752,7 +1807,7 @@ export component SettingsOverlay inherits Rectangle {
                 if root.diag-on: VerticalLayout {
                     // The log is worth capturing on every drive; the on-face tail
                     // only when watching for something specific — an unnamed panel
-                    DiagLog { lines: root.diag-lines; }
+                    DiagLog { lines: root.diag-lines; revision: root.diag-revision; }
 
                     // No rule between the log and the first action — the TSX runs
                     // them together (:564-568) and only starts dividing at the
@@ -1761,6 +1816,7 @@ export component SettingsOverlay inherits Rectangle {
                         if a.divider-above: RowDivider { }
                         ChevronRow {
                             label: a.label;
+                            sub: a.sub;
                             clicked => { root.pick-diag-action(i); }
                         }
                     }

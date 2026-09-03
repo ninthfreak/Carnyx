@@ -129,6 +129,9 @@ impl Battery {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagAction {
     pub label: String,
+    /// What this row last did, drawn under its label. See
+    /// [`Settings::note_for`] for why it exists.
+    pub sub: String,
     pub divider_above: bool,
     /// What a tap actually asks for. `label` is what is drawn; this is what is
     /// dispatched, so re-wording a row cannot change what it does.
@@ -207,9 +210,15 @@ pub enum Action {
 /// anything against the vendor tuner; with those gone every row always applies.
 pub fn diag_actions() -> Vec<DiagAction> {
     vec![
-        DiagAction { label: "Save to file".into(), divider_above: false, action: Action::SaveLog },
+        DiagAction {
+            label: "Save to file".into(),
+            sub: String::new(),
+            divider_above: false,
+            action: Action::SaveLog,
+        },
         DiagAction {
             label: "What could keep Carnyx alive through sleep".into(),
+            sub: String::new(),
             divider_above: true,
             action: Action::ProbeKeepAlive,
         },
@@ -218,6 +227,7 @@ pub fn diag_actions() -> Vec<DiagAction> {
         // survive the sleep, and what to do about the app that wakes instead.
         DiagAction {
             label: "Where the stock radio app can be intercepted".into(),
+            sub: String::new(),
             divider_above: false,
             action: Action::ProbeStockRadio,
         },
@@ -228,6 +238,7 @@ pub fn diag_actions() -> Vec<DiagAction> {
         // put a dialog on the screen.
         DiagAction {
             label: "Ask for notification permission".into(),
+            sub: String::new(),
             divider_above: false,
             action: Action::AskNotifyPermission,
         },
@@ -236,10 +247,16 @@ pub fn diag_actions() -> Vec<DiagAction> {
         // station pop-up actually needs on every Android, not just a newer one.
         DiagAction {
             label: "Allow drawing over other apps".into(),
+            sub: String::new(),
             divider_above: false,
             action: Action::AskOverlayPermission,
         },
-        DiagAction { label: "Clear log".into(), divider_above: true, action: Action::ClearLog },
+        DiagAction {
+            label: "Clear log".into(),
+            sub: String::new(),
+            divider_above: true,
+            action: Action::ClearLog,
+        },
     ]
 }
 
@@ -577,6 +594,23 @@ pub struct Settings {
     /// once with two seams on screen, which reads as a duplicated list rather
     /// than a loop.
     pub preset_loop: bool,
+    /// What each DIAGNOSTICS row last did, drawn under its label.
+    ///
+    /// ── THE ROW HAD NO WAY TO ANSWER FOR ITSELF, AND THE OWNER PAID FOR IT ──
+    ///
+    /// *"I've attached a log, with probes pressed multiple times because I wasn't
+    /// sure if they were running because there wasn't visual feedback."* The
+    /// feedback existed: every one of these rows writes `diag_status`, and the
+    /// panel draws it. It draws it ABOVE the log well — up to 240dp of scrolling
+    /// text away from the rows, which are underneath it — so a driver who has
+    /// scrolled far enough to reach a row cannot see the only thing that moved.
+    /// The exported log shows the stock-radio probe run three times and the
+    /// keep-alive probe twice.
+    ///
+    /// SESSION STATE, deliberately not persisted: it says what happened on THIS
+    /// run, and a note restored from a file would claim a probe ran when it did
+    /// not.
+    pub notes: Vec<(Action, String)>,
     /// The master switch for the log itself. The three flags that used to sit
     /// beside it — mirror the log onto the face, capture raw RDS, reception
     /// testing mode — were CarFM's investigation tools and are gone.
@@ -603,6 +637,7 @@ impl Default for Settings {
             // OFF. See the field's own note: looping costs positional memory,
             // and the design bundle asks for it opt-in.
             preset_loop: false,
+            notes: Vec::new(),
             diag_on: false,
             log: DiagLog::new(),
         }
@@ -617,9 +652,32 @@ impl Settings {
         self.diag_on = on;
     }
 
-    /// The rows the DIAGNOSTICS action list currently has.
+    /// The rows the DIAGNOSTICS action list currently has, each carrying
+    /// whatever it last did.
     pub fn actions(&self) -> Vec<DiagAction> {
-        diag_actions()
+        let mut rows = diag_actions();
+        for row in &mut rows {
+            row.sub = self.note_for(row.action).unwrap_or_default().to_string();
+        }
+        rows
+    }
+
+    /// What `action`'s row last did, if it has done anything this session.
+    pub fn note_for(&self, action: Action) -> Option<&str> {
+        self.notes.iter().find(|(a, _)| *a == action).map(|(_, n)| n.as_str())
+    }
+
+    /// Record what a row just did, replacing whatever it said before.
+    ///
+    /// ONE ENTRY PER ROW, NOT A LIST OF EVENTS. The row answers the question "did
+    /// my tap do anything", and the answer is about the last tap; a history
+    /// belongs in the log, which is right above it.
+    pub fn set_note(&mut self, action: Action, note: impl Into<String>) {
+        let note = note.into();
+        match self.notes.iter_mut().find(|(a, _)| *a == action) {
+            Some(slot) => slot.1 = note,
+            None => self.notes.push((action, note)),
+        }
     }
 
     /// The four rows of the source picker, with availability filled in.

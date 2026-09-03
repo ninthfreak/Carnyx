@@ -92,6 +92,57 @@ final class CarnyxOverlay {
     private static final float RADIUS_DP = 18f;
 
     /**
+     * The frame around a mark, which is NOT {@link #PAD_X_DP}.
+     *
+     * <p>Owner, on the shipped pop-up: <i>"they are all too small because the
+     * logos aren't filling much of the full shape of the popup."</i> Two things
+     * were eating it, and this is the smaller one. A 28x18 margin around a
+     * 162x101 plate makes a 218x137 card of which the plate is 55% by area
+     * before the art has been fitted into it at all. The words card keeps the
+     * wide margin — type needs air — and a mark does not.
+     */
+    private static final float LOGO_PAD_DP = 10f;
+
+    /**
+     * The mark's box: how tall it is, and how wide it is allowed to get.
+     *
+     * <h2>Fitted to the art, not to a plate</h2>
+     *
+     * <p>This was the peek card's 162x101 box with the art {@code FIT_CENTER}
+     * inside it, which is the larger half of the owner's complaint: a SQUARE
+     * mark in a 16:10 box draws 101x101 and leaves 61dp of empty card either
+     * side. Nothing is wrong with those numbers on a peek card, where the plate
+     * is a fixed slot in a row of fixed slots; here there is no row, the card
+     * wraps its content, and a box that does not match the art is dead space
+     * with a border drawn round it.
+     *
+     * <p>So the box takes the ART'S aspect: {@link #LOGO_H_DP} tall, as wide as
+     * that makes it, and if that would pass {@link #LOGO_MAX_W_DP} the height
+     * gives way instead. A square mark is now 150x150 where it was 101x101 —
+     * half again as large in each direction, and with no slack left inside it.
+     *
+     * <h2>Why 150 and not the peek card's 101</h2>
+     *
+     * <p>The peek plate is sized for Carnyx's own screen, which the driver has
+     * opened and is looking at. This lands unannounced over a maps app and is
+     * read in one glance — the same brief {@link #CALL_SP} is raised to meet,
+     * and the same answer.
+     */
+    private static final float LOGO_H_DP = 150f;
+    private static final float LOGO_MAX_W_DP = 300f;
+
+    /**
+     * A floor on the box's width, so the pop-up cannot become a hairline.
+     *
+     * <p>Art taller than about 1:1.6 would otherwise give a card narrower than
+     * a third of its height, which reads as a strip rather than a card. Inside
+     * this floor the mark letterboxes again — the one case where it does — and
+     * no station wordmark is that shape, so it is insurance rather than a rule
+     * anything is expected to hit.
+     */
+    private static final float LOGO_MIN_W_DP = 96f;
+
+    /**
      * THE PEEK CARD'S PLATE, and these are its numbers rather than new ones.
      *
      * <p>{@code ui/presets.slint} caps a peek plate at 184 and scales the card by
@@ -228,9 +279,11 @@ final class CarnyxOverlay {
         // the poll's thread and decoding is the one expensive step in the whole
         // path; doing it inside the posted Runnable would put file I/O on the UI
         // thread of an app that is drawing a radio face.
-        // AT THE PLATE'S SIZE NOW, not a 52dp strip. The mark IS the pop-up when
-        // there is one, so it is decoded for a 162x101 box.
-        final Bitmap logo = CarnyxAlert.decodeLogo(logoPath, PLATE_W_DP);
+        // AT THE MARK'S OWN SIZE, not a 52dp strip and no longer the peek
+        // plate's 162 either. The mark IS the pop-up when there is one, and
+        // `card` now fits its box to the art up to LOGO_MAX_W_DP, so anything
+        // decoded smaller than that is a mark being upscaled on screen.
+        final Bitmap logo = CarnyxAlert.decodeLogo(logoPath, LOGO_MAX_W_DP);
         if (main == null) {
             main = new Handler(looper);
         }
@@ -341,7 +394,6 @@ final class CarnyxOverlay {
         LinearLayout col = new LinearLayout(ctx);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding(padX, padY, padX, padY);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setShape(GradientDrawable.RECTANGLE);
@@ -351,6 +403,28 @@ final class CarnyxOverlay {
         col.setBackground(bg);
 
         if (logo != null) {
+            // THE BOX IS THE ART'S SHAPE. See LOGO_H_DP for why it is not the
+            // peek plate's. A mark whose own bitmap reports nothing usable falls
+            // back to a square, which is the shape that wastes least against an
+            // unknown aspect.
+            int artW = logo.getWidth();
+            int artH = logo.getHeight();
+            float aspect = (artW > 0 && artH > 0) ? ((float) artW / (float) artH) : 1f;
+            float boxHdp = LOGO_H_DP;
+            float boxWdp = boxHdp * aspect;
+            if (boxWdp > LOGO_MAX_W_DP) {
+                boxWdp = LOGO_MAX_W_DP;
+                boxHdp = boxWdp / aspect;
+            }
+            if (boxWdp < LOGO_MIN_W_DP) {
+                boxWdp = LOGO_MIN_W_DP;
+            }
+            int boxW = Math.max(1, Math.round(boxWdp * density));
+            int boxH = Math.max(1, Math.round(boxHdp * density));
+            int markRadius = Math.round(Math.min(boxW, boxH) * PLATE_RADIUS_FRAC);
+            int markPad = Math.round(LOGO_PAD_DP * density);
+            col.setPadding(markPad, markPad, markPad, markPad);
+
             int slab = plate == PLATE_FALLBACK ? logoFallback
                     : plate == PLATE_GREY ? logoPlate
                     : 0;
@@ -358,21 +432,31 @@ final class CarnyxOverlay {
             mark.setImageBitmap(logo);
             // CONTAIN, NEVER CROP (§4.5): the art scales to the largest size that
             // fits and is never cut, because half a wordmark is not a wordmark.
+            // With the box now cut to the art's own aspect there is nothing left
+            // for it to letterbox, which is the point.
             mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
             if (slab != 0) {
                 GradientDrawable under = new GradientDrawable();
                 under.setShape(GradientDrawable.RECTANGLE);
-                under.setCornerRadius(plateRadius);
+                under.setCornerRadius(markRadius);
                 under.setColor(slab);
                 mark.setBackground(under);
             }
             if (plate == PLATE_GREY) {
-                int inset = Math.round(Math.max(plateW, plateH) * PLATED_PAD_FRAC);
+                // Still `PlateBox`'s 0.09 of the long side, now measured on the
+                // box this card actually draws. Grey-slab art is keyed to a slab
+                // showing around it, so the inset is the slab, not padding.
+                int inset = Math.round(Math.max(boxW, boxH) * PLATED_PAD_FRAC);
                 mark.setPadding(inset, inset, inset, inset);
             }
-            col.addView(mark, new LinearLayout.LayoutParams(plateW, plateH));
+            col.addView(mark, new LinearLayout.LayoutParams(boxW, boxH));
             return col;
         }
+
+        // THE WORDS CARD KEEPS THE WIDE MARGIN AND THE PEEK PLATE'S BOX. Only
+        // the mark's half of this method changed: type needs air around it where
+        // a mark does not, and 16:10 is the shape the call sign was fitted to.
+        col.setPadding(padX, padY, padX, padY);
 
         // NO ART: the brand-coloured box with the call letters in it, then the
         // dial. `Pal.flat` has already desaturated the brand upstream if the face
