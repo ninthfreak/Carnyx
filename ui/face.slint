@@ -638,7 +638,12 @@ export component Face inherits Rectangle {
             // faded. NO OPACITY ON THE LABEL either; §6 says it was tried at 0.82
             // and failed.
             if root.nav-eta != "": Rectangle {
-                border-radius: Metrics.s(11);
+                // A TRUE PILL: the radius is half the height. §6 says 11, which on
+                // a ~43px pill is a quarter of the height and read as a box on the
+                // unit — the owner: "far too square. Round the corners more." So
+                // the spec's number is set aside on that instruction; the rest of
+                // §6 (padding, fill, ink, type) stands.
+                border-radius: self.height / 2;
                 background: Pal.eta-pill;
                 // WRAPPED TO THE ROW'S CONTENT. A Rectangle in a layout takes the
                 // space offered, so the pill states its own size from the text
