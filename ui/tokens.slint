@@ -189,11 +189,21 @@ export global Pal {
     out property <color> border:      Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.13);
     // `uiAccentFill: 'rgba(201,201,201,0.15)'` — the theme states its own alpha,
     // which is why the themed arm does not reuse the 0.18/0.12 beside it.
+    //
+    // THE UNTHEMED ARM READS `blue`, and used to restate its hex pair. It was
+    // `flat-a(Pal.dark ? #4A9EFF : #2E86FF, …)`, which is by definition
+    // `flat(that).with-alpha(…)` — and on this arm `Pal.blue` IS `flat(that)`,
+    // because the arm only runs when there is no egg accent. Same colour, one
+    // statement of the pair instead of two.
     out property <color> blue-fill:   Pal.egg-accent.alpha > 0
         ? Pal.egg-accent.with-alpha(0.15)
-        : Pal.flat-a(Pal.dark ? #4A9EFF : #2E86FF, Pal.dark ? 0.18 : 0.12);
+        : Pal.blue.with-alpha(Pal.dark ? 0.18 : 0.12);
     out property <color> amber-fill:  Pal.flat-a(Pal.dark ? #FFB833 : #C9760A, Pal.dark ? 0.10 : 0.08);
-    out property <color> backdrop:    Pal.flat(Pal.dark ? #0C1218 : #DCE0E6);
+    // `backdrop` USED TO BE HERE — `#0C1218` dark, `#DCE0E6` light — and nothing
+    // in this tree ever read it. Not a screen, not an overlay, not a test. The
+    // face's ground comes from `Pal.bg`, and the modal scrim from
+    // `Pal.screen-veil`; this was a third answer to a question that already had
+    // one, sitting in the palette waiting to be picked by mistake.
     out property <color> meter-empty: Pal.flat-a(Pal.dark ? #FFFFFF : #141E2D, 0.10);
     out property <color> scroll-thumb: Pal.flat-a(#808690, 0.6);
     // ── The nearby magnifier: strokes, disc, lens, rim ──

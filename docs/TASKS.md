@@ -1306,6 +1306,128 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 131. Second review pass: a JNI call every second, five copies of one component, and a check that skipped a file it could read
+**DONE, WITH FOUR FINDINGS LEFT OPEN AND NAMED.** *"Let's do another pass checking
+for bugs, checking for consistency in how things are organized and named, checking
+for rule violations, checking for performance opportunities."*
+
+**THE DEVICE'S LOCALE WAS BEING READ OVER JNI ONCE A SECOND.** Three comments said
+it was read once at start-up — `State::units`, `App::refresh_units` and
+`android::service::country_code` — and one of them, `refresh_units`, explained why
+the once-a-second call it sat in was cheap: "the Java side caches the value at
+connect, so the call is a `jint` field read with no allocation and no binder
+traffic". That is true of `nav::metric_system`, the OTHER half of the answer. The
+locale half is `service::country_code`, which attaches the thread, calls a static
+method and marshals a `java.lang.String` back — every second, for the whole run,
+because `tick` calls `push_nav` whether or not a route exists and `push_nav` calls
+`refresh_units` first thing. The country is read once now and held in
+`State::country`; OsmAnd's `jint` is still asked on every publish, which is the
+half that has to be. `the_units_come_from_the_locale_read_at_start_up` pins it —
+the host's own `country_code` answers `""` and resolves to `units::FALLBACK`
+(imperial), so a metric country in the field can only reach the face through the
+field. It FAILS against the old code, which is the only reason it is worth having.
+
+**`VPath` WAS DECLARED FIVE TIMES.** `icons.slint`, `logo-search.slint`,
+`nearby.slint`, `numpad.slint`, `settings.slint` — and three of the four copies
+said so in their own header: "icons.slint's `VPath`, copied verbatim because it is
+private there." They had already drifted: the `icons.slint` one grew `ox`/`oy` for
+baked-in group transforms and the other four never did, so the same name meant two
+different components depending on which file you were reading. It is exported now
+and imported where it is used.
+
+**AND THE FOUR ICONS THAT BROUGHT THOSE COPIES WITH THEM.** Each was declared in
+the file that used it, under a note naming `icons.slint` as where it belonged and
+asking whoever consolidated to move it — the reason given, every time, was that
+`icons.slint` was another agent's file during that pass. `BackspaceIcon`
+(numpad.slint), `BackArrow` (nearby.slint) and `BatteryBolt` (settings.slint) are
+in `icons.slint` now, drawings and comments unchanged. The fourth, numpad's
+`WarnMark`, was not moved but DELETED: it was `icons.slint`'s `WarningTriangle`
+copied out byte for byte — same default size, same colour property, same path
+string — and numpad now imports the original. That is what a private `VPath` was
+for in each of those files, and why there were five of it.
+
+**THE NEARBY DISC WAS BUILT TWICE**, in `presets.slint` (wide and landscape) and
+`status-bar.slint` (tall) — same disc, same rim, same press opacity, same
+TouchArea branch, same tick over the same DONE caption, and FOUR numbers apart:
+disc 92/74, magnifier 64/59, tick 26/22, caption 13/11. Now `ui/nearby-disc.slint`,
+with those four passed in. They are not a constant fraction of the disc — 64/92 and
+59/74 are different ratios, and so are the other two pairs — so deriving them would
+have moved pixels; the shape is shared and the numbers stay where they differ.
+
+**`Pal.backdrop` WAS NEVER READ**, by anything, ever — not a screen, not an
+overlay, not a test. A third answer to a question `Pal.bg` and `Pal.screen-veil`
+already answer, sitting in the palette waiting to be picked by mistake. Gone.
+
+**`Pal.blue-fill` RESTATED `Pal.blue`'s HEX PAIR.** Its unthemed arm was
+`flat-a(dark ? #4A9EFF : #2E86FF, …)`, which is `flat(that).with-alpha(…)` — and on
+that arm `Pal.blue` IS `flat(that)`, because the arm only runs when no egg accent
+is set. Same colour, one statement of the pair instead of two.
+
+**`tools/check-jni.sh` SKIPPED `location.rs` FOR A REASON ITS OWN NEXT SENTENCE
+DENIED**: "skipped for the shape its `EnvUnowned` natives take, which this harness
+cannot stub", immediately followed by "`nav.rs` takes the SAME shape and is checked
+anyway". The shape was never the problem — the only thing missing was a stub for
+`ingest_position`, the one edge no other module uses. One line added; 199 lines of
+JNI now type-check that did not before. `nwd.rs` and `net.rs` are still out, and
+the comment now says exactly what they need (`ingest_sleep`, `ingest_illumination`
+and a `From<Error>` that collides with the harness's own) rather than implying they
+cannot be done at all.
+
+**A DEPRECATED JNI PAIR IN `nav::read_strings`.** `Env::get_array_length` and
+`Env::get_object_array_element` are deprecated in jni 0.22 and documented as going
+away; the array's own `len` and `get_element` replace them, and `len` answers a
+`usize`, so the `max(0)` that guarded against a negative `jsize` had nothing left
+to guard. Nothing else in this container compiles that file — `check-jni.sh` is
+what surfaced the warning, which is the second class of mistake it has now caught.
+
+**THE UNSTABLE SHOTS ARE NAMED.** Comparing the refactor against a baseline
+reported SEVENTEEN differing shots, which reads as a disaster and is not one: two
+renders of ONE UNCHANGED BINARY, back to back, disagree on the same seventeen —
+measured twice, including a three-run check on the two that flap intermittently
+(`hero-step-morph`, `acdc-dark`). Slint's animations run on a wall clock shared by
+the process, and the diagnostics log stamps its own lines with the time it ran.
+`tools/cmp-shots.py` took an ignore list on the command line and nothing in the
+tree said what belonged on it, so every session rediscovers this. The measured list
+is in the tool now, behind `--unstable`.
+
+**THE EVIDENCE FOR "NOTHING MOVED".** `tools/cmp-shots.py base shots --unstable`,
+run against a baseline taken before the first edit: **identical 83, known-unstable
+17, DIFFERING 0** — twice, once after the `VPath`/`NearbyDisc`/token work and again
+after the icons moved. Every shot that can be held still is byte-identical across
+the whole `ui/` refactor. Tests pass, clippy is clean over `--all-targets`, and the
+JNI seam type-checks over seven modules where it covered six.
+
+**FOUND AND NOT DONE**, deliberately, each with what it would take:
+
+1. **The android JNI class-handle boilerplate, duplicated seven ways.**
+   `alert.rs`, `probe.rs`, `service.rs`, `stock.rs` and `wake.rs` each hand-roll
+   the same `CLASS_REF: OnceLock<Global<JClass>>`, the same ~30-line `init` (attach
+   the VM, `dex::check`, `dex::load_class`, call `attach`, `new_global_ref`, set),
+   and then repeat `let Some(class) = CLASS_REF.get() else { … }` at every call
+   site — five times in `alert.rs` alone. `net.rs` and `location.rs` already
+   factored theirs into a `with_class`, and those two do not match each other
+   either. One `ClassHandle` in `dex.rs` would replace all of it. Not attempted in
+   a review pass: `check-jni.sh` type-checks the seam but nothing here RUNS it, and
+   a sweeping rewrite of the code that loads every Java class in the app is not
+   something to hand over unexecuted.
+2. **`INIT_ERR` exists in `probe.rs` and `stock.rs` and nowhere else.** It was
+   added because "no class" and "the class failed to load" printed the same
+   sentence, and a driver reading it would conclude the feature was never built.
+   `alert.rs` still returns a flat "no alert class in this build" from three places
+   with no way to tell those two apart — and that exact wording is what misread the
+   last drive log (#126). Same fix, same file shape; it belongs with finding 1.
+3. **`AppWindow` and `Face` restate ~30 properties each**, and `app.slint` binds
+   them one by one — three statements of one list. The codebase already groups this
+   kind of thing into structs (`Preset`, `NearbyState`, `LogoSearchState`), so the
+   pattern exists; applying it here means rewriting the Rust push path for the hero
+   and the status cluster, which is a change of a different size than this pass.
+4. **Seven raw-px type sizes bypass `Metrics.s()`**, against 81 that scale: three
+   `font-size:` literals left in place — the empty-rail line in `presets.slint`,
+   the OUT OF FM BAND pill and the tuner-error pill in `status-bar.slint` — plus
+   the four tick and caption sizes the two call sites now hand `NearbyDisc`. Left
+   alone ON PURPOSE: `Metrics.k` is ~0.8 at 1024, so "fixing" them would change
+   what the face draws, and this pass moved no pixels.
+
 ### 130. The ETA pill is a pill
 **DONE.** *"During navigation, the pill around the eta time is far too square.
 Round the corners more."* The radius was §6's `11`, a quarter of the ~43px pill's

@@ -41,91 +41,22 @@
 // contract.
 
 import { Pal, Metrics, Font } from "tokens.slint";
+import { BackspaceIcon, WarningTriangle } from "icons.slint";
 
-// ── The backspace glyph ─────────────────────────────────────────────────────
+// ── THE TWO GLYPHS THIS FILE USED TO DRAW ITSELF ────────────────────────────
 //
-// U+232B ERASE TO THE LEFT is NOT in either bundled Atkinson cut — I read the
-// cmaps of ui/fonts/AtkinsonHyperlegible-{Regular,Bold}.ttf: ‹ › – . are present,
-// ⚠ ⌫ ✕ ✓ ★ are not. CarFmLive.dc.html:333 renders "⌫" as text and only got a
-// glyph because a browser fallback font supplied one; the software renderer that
-// produces our screenshots has no fallback stack to lean on. So the key draws the
-// icon, which is what Numpad.tsx:110 does anyway (`<BackspaceIcon size={30} …>`).
+// U+232B ERASE TO THE LEFT and U+26A0 WARNING SIGN are NOT in either bundled
+// Atkinson cut — I read the cmaps of
+// ui/fonts/AtkinsonHyperlegible-{Regular,Bold}.ttf: ‹ › – . are present, ⚠ ⌫ ✕ ✓ ★
+// are not. CarFmLive.dc.html:333 renders "⌫" as text and only got a glyph because
+// a browser fallback font supplied one; the software renderer that produces our
+// screenshots has no fallback stack to lean on. So the keypad DRAWS both, which is
+// what Numpad.tsx:110 does anyway (`<BackspaceIcon size={30} …>`) — and
+// `error-text` therefore arrives WITHOUT the mark in it.
 //
-// This is the TENTH icon and it belongs in icons.slint beside the other nine, with
-// icons.slint's `VPath` wrapper. Both are duplicated here ONLY because this pass
-// was scoped to one file and icons.slint belongs to another agent — see the report.
-// The wrapper below is icons.slint:19-40 verbatim; do not let the two drift.
-
-// Slint's Path fits its geometry into (element size − stroke width) and then nudges
-// it back by half a stroke, and it does NOT scale stroke width with the viewbox —
-// both differ from SVG. This wrapper cancels the difference.
-component VPath inherits Path {
-    in property <length> box-w;
-    in property <length> box-h;
-    in property <float> vbw;
-    in property <float> vbh;
-    /// Stroke width in VIEWBOX units, as written in the SVG.
-    in property <float> raw-stroke: 0;
-
-    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
-    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
-
-    viewbox-width: root.vbw;
-    viewbox-height: root.vbh;
-    stroke-width: root.raw-stroke * root.sc * 1px;
-    x: 0px - self.stroke-width / 2;
-    y: 0px - self.stroke-width / 2;
-    width: root.box-w + self.stroke-width;
-    height: root.box-h + self.stroke-width;
-}
-
-/// Backspace — the keypad's twelfth key.
-///
-/// Exact port of CarFM's `icons.tsx:350-359`: viewBox 24×24, stroke 1.8, no fill.
-/// The SVG splits it into a closed body (round joins) and two crossing lines (round
-/// caps); one Path carries both correctly, because the body is closed with `z` so
-/// its caps never show and the two lines have no joins.
-component BackspaceIcon {
-    in property <length> size: 30px;
-    in property <color> color;
-
-    width: root.size;
-    height: root.size;
-
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.8;
-        commands: "M8.2 5h11.3A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5H8.2a1.5 1.5 0 0 1-1.1-.5L2 12l5.1-6.5a1.5 1.5 0 0 1 1.1-.5z M11 9.5 L16 14.5 M16 9.5 L11 14.5";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
-}
-
-// ── Rounded warning triangle ────────────────────────────────────────────────
-//
-// Same story as the backspace glyph: both references lead the error line with a
-// literal "⚠", and U+26A0 is absent from the app font. Carnyx already ships the
-// mark drawn (icons.slint's WarningTriangle, used by the tuner-error pill at
-// status-bar.slint:360) as well as typed (status-bar.slint:265's literal
-// "⚠ OUT OF FM BAND"). Drawn is the only one that survives the software renderer,
-// so the numpad draws it — and `error-text` therefore arrives WITHOUT the mark.
-//
-// Duplicated from icons.slint:236-250 for the same one-file reason as VPath.
-component WarnMark {
-    in property <length> size: 26px;
-    in property <color> color;
-
-    width: root.size;
-    height: root.size;
-
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
-        commands: "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z M12 9 L12 13 M12 17 L12.01 17";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
-}
+// BOTH LIVE IN `icons.slint` NOW, imported above. `BackspaceIcon` was declared
+// here under a note asking whoever consolidated to move it; `WarnMark` was
+// `WarningTriangle` copied out byte for byte, defaults and path data alike.
 
 // ── The three button shapes ─────────────────────────────────────────────────
 //
@@ -336,7 +267,7 @@ export component FreqPad inherits Rectangle {
     in property <bool> error: false;
 
     /// That line's text, finished, and WITHOUT a leading "⚠": the mark is drawn
-    /// (see WarnMark above), not typed.
+    /// (drawn as `WarningTriangle`, see the note at the top of this file), not typed.
     in property <string> error-text;
 
     // ── What the user can do ────────────────────────────────────────────────
@@ -545,7 +476,7 @@ export component FreqPad inherits Rectangle {
 
                         VerticalLayout {
                             alignment: center;
-                            WarnMark { size: Metrics.s(21); color: Pal.amber; }
+                            WarningTriangle { size: Metrics.s(21); color: Pal.amber; }
                         }
                         VerticalLayout {
                             alignment: center;

@@ -5,8 +5,9 @@
 
 import { Pal, Metrics, Font } from "tokens.slint";
 import { EggTheme, BandGear } from "types.slint";
-import { SignalWaves, StereoCone, GearIcon, MagnifierTower, WarningTriangle, GpsSatellite, MotionCar,
+import { SignalWaves, StereoCone, GearIcon, WarningTriangle, GpsSatellite, MotionCar,
          ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon, OsmAndMark } from "icons.slint";
+import { NearbyDisc } from "nearby-disc.slint";
 
 // One of the little status letters. Lit = full weight with a soft dark drop; off
 // = 32% with a faint 1px light emboss (an engraved look). §4.7 removes all of it
@@ -1052,38 +1053,19 @@ export component StatusBar inherits Rectangle {
             }
 
             // The nearby disc lives HERE on the tall track (the preset band has
-            // no room for it), and becomes DONE while reordering.
+            // no room for it), and becomes DONE while reordering. The wide and
+            // landscape tracks draw the same control at their own four sizes;
+            // see `nearby-disc.slint`.
             if Metrics.tall: HorizontalLayout {
                 alignment: end;
-                Rectangle {
-                    width: root.nearby-disc-size; height: root.nearby-disc-size;
-                    border-radius: self.width / 2;
-                    background: root.reordering ? Pal.blue : Pal.nearby-disc;
-                    border-width: root.reordering ? 0px : 1px;
-                    border-color: Pal.nearby-rim;
-                    opacity: nearby-touch.pressed ? 0.7 : 1.0;
-                    nearby-touch := TouchArea {
-                        clicked => {
-                            if (root.reordering) { root.done-reordering(); } else { root.open-nearby(); }
-                        }
-                    }
-                    if !root.reordering: MagnifierTower {
-                        size: Metrics.s(59);
-                        line: Pal.nearby-line;
-                        glass: Pal.nearby-glass;
-                    }
-                    if root.reordering: VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: "✓"; horizontal-alignment: center;
-                            color: #FFFFFF; font-size: 22px; font-weight: 700;
-                        }
-                        Text {
-                            text: "DONE"; horizontal-alignment: center;
-                            color: #FFFFFF; font-family: Font.face; font-weight: Font.bold;
-                            font-size: 11px; letter-spacing: 1.5px;
-                        }
-                    }
+                NearbyDisc {
+                    size: root.nearby-disc-size;
+                    glass-size: Metrics.s(59);
+                    tick-size: 22px;
+                    label-size: 11px;
+                    reordering: root.reordering;
+                    open-nearby => { root.open-nearby(); }
+                    done-reordering => { root.done-reordering(); }
                 }
             }
         }

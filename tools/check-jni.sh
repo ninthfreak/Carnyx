@@ -81,10 +81,21 @@ ROOT="$PWD"
 # The modules with no JNI in them, or whose shape the harness cannot stub. Named
 # rather than pattern-matched, and PRINTED, because a silent skip is how a check
 # like this stops covering something without anyone noticing.
-# `location.rs` is skipped for the shape its `EnvUnowned` natives take, which
-# this harness cannot stub; `nav.rs` takes the SAME shape and is checked anyway,
-# because it is the newest JNI in the tree and the one nothing else covers.
-SKIP=(mod.rs dex.rs nwd.rs net.rs location.rs)
+#
+# `location.rs` USED TO BE ON THIS LIST, "for the shape its `EnvUnowned` natives
+# take, which this harness cannot stub" — and the line right after that said
+# `nav.rs` takes the SAME shape and is checked anyway. Both cannot be true. The
+# shape was never the problem: the only thing missing was a stub for
+# `ingest_position`, the one edge `location.rs` pushes through and no other
+# module uses. It is one line below, and 199 lines of JNI are now covered.
+#
+# WHAT IS STILL SKIPPED, and why it is not the same kind of gap: `mod.rs` and
+# `dex.rs` are the harness's own scaffolding (`dex` is stubbed, `mod` IS the
+# stubs), and `nwd.rs` and `net.rs` need edges and trait impls the stub crate
+# does not have yet — `ingest_sleep`, `ingest_illumination`, and a `From<Error>`
+# that collides with the one above. Widening to them is a bigger job than one
+# stub and has not been done.
+SKIP=(mod.rs dex.rs nwd.rs net.rs)
 
 # The jni version this crate actually resolves to, read from the lockfile rather
 # than from Cargo.toml's range — checking against a different patch would be
@@ -178,6 +189,7 @@ pub fn ingest_nav(_distance_to: jni::sys::jint, _turn_type: jni::sys::jint, _lef
 pub fn ingest_nav_voice(_cmds: Vec<String>, _played: Vec<String>) {}
 pub fn ingest_nav_refused(_refused: jni::sys::jboolean) {}
 pub fn ingest_nav_info(_route: NavRoute) {}
+pub fn ingest_position(_lat: f64, _lon: f64, _fix: bool, _speed_mps: f32, _has_speed: bool) {}
 
 /// Stands in for `crate::nav::Route`, which `android::mod` re-exports as
 /// `NavRoute`. The FIELD TYPES are what the seam type-checks against — the seam
@@ -215,7 +227,7 @@ for f in names:
     body = body.replace("super::is_foreground()", "crate::is_foreground()")
     # NOT `f`: that is the loop's filename and shadowing it made every generated
     # module `pub mod ingest_`.
-    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_refused", "ingest_nav_info", "ingest_nav", "NavRoute"):
+    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_refused", "ingest_nav_info", "ingest_nav", "ingest_position", "NavRoute"):
         body = body.replace("super::" + edge, "crate::" + edge)
     body = body.replace("super::TunerError", "crate::TunerError")
     # NO `use super::*` EITHER, for the same reason: the three stubs are reached

@@ -28,7 +28,7 @@
 import { Pal, Metrics } from "tokens.slint";
 import { OverlayCard, OverlayHeader, OverlayBody, OverlayFooter } from "overlay.slint";
 import { FreqPad } from "numpad.slint";
-import { SignalWaves, StarIcon } from "icons.slint";
+import { SignalWaves, StarIcon, BackArrow } from "icons.slint";
 
 /// Which half of the tune overlay is showing (mini-handoff §6, `tab`).
 ///
@@ -111,54 +111,6 @@ export struct GenreColumn {
     /// chip tall and sits in the first row, as `grid-template-rows: repeat(2, auto)`
     /// gives it.
     has-bottom: bool,
-}
-
-// ── Back arrow ───────────────────────────────────────────────────────────────
-//
-// icons.tsx's `BackArrowIcon`, the icon-only "back to all stations" chip in the
-// genre band. It is the tenth icon in this design and it is NOT in ui/icons.slint,
-// which is where it belongs — but icons.slint is another agent's file this pass,
-// so it lives here for now. Whoever consolidates should move `BackArrow` (and the
-// wrapper below) into icons.slint and delete both from this file.
-
-// icons.slint's `VPath`, copied verbatim because it is private there. Slint's Path
-// fits its geometry into (element size − stroke width), nudges it back by half a
-// stroke, and does NOT scale stroke width with the viewbox — all three differ from
-// SVG, and this cancels the difference. Hand-rolling a Path instead is the
-// documented way to get this wrong.
-component VPath inherits Path {
-    in property <length> box-w;
-    in property <length> box-h;
-    in property <float> vbw;
-    in property <float> vbh;
-    /// Stroke width in VIEWBOX units, as written in the SVG.
-    in property <float> raw-stroke: 0;
-
-    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
-
-    viewbox-width: root.vbw;
-    viewbox-height: root.vbh;
-    stroke-width: root.raw-stroke * root.sc * 1px;
-    x: 0px - self.stroke-width / 2;
-    y: 0px - self.stroke-width / 2;
-    width: root.box-w + self.stroke-width;
-    height: root.box-h + self.stroke-width;
-}
-
-component BackArrow {
-    in property <length> size: 22px;
-    in property <color> color;
-
-    width: root.size;
-    height: root.size;
-
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2.2;
-        commands: "M11 5 L4 12 L11 19 M4 12 H19";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
 }
 
 // ── Filter chips ─────────────────────────────────────────────────────────────

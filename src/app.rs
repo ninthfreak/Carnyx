@@ -679,11 +679,21 @@ struct State {
     clock_test: Option<(u32, u32, bool)>,
     /// Feet and miles, or metres and kilometres (§4.9).
     ///
-    /// READ ONCE AT START-UP from the device's locale, because OsmAnd does not
-    /// expose its own unit setting over the API. A driver does not cross a
-    /// border mid-drive often enough to poll for it, and units changing under a
-    /// live countdown would be worse than being one launch behind.
+    /// TWO INPUTS ON TWO DIFFERENT CLOCKS. The locale below is read once at
+    /// start-up; OsmAnd's own setting is asked for on every navigation publish,
+    /// because it is unbound at start-up and its answer supersedes the guess the
+    /// moment it binds. See [`App::refresh_units`].
     units: crate::units::Units,
+    /// The device's ISO 3166-1 alpha-2 country, or `""`.
+    ///
+    /// HELD, BECAUSE READING IT IS A JNI CALL AND A `String`. Three comments —
+    /// this field's, `refresh_units`'s and `android::service::country_code`'s —
+    /// all said the locale was read once at start-up, and it was: at start-up
+    /// AND on every `push_nav`, which the 1s tick calls whether or not a route
+    /// is running. That is a `Java String` marshalled across JNI once a second
+    /// for the whole drive, to answer a question whose answer cannot change
+    /// while the car is moving. Read once, into here.
+    country: String,
     /// OsmAnd's gate is closed on this app — bound, and refused every call.
     ///
     /// Set by the refused edge from `CarnyxNav`, cleared by the same edge or by
@@ -1386,6 +1396,7 @@ impl App {
                 nav: crate::nav::Nav::new(),
                 nav_refused: false,
                 units: crate::units::Units::default(),
+                country: String::new(),
                 clock_test: None,
                 nav_said: String::new(),
                 nav_package: String::new(),
@@ -1583,12 +1594,18 @@ impl App {
             // this early, so this first read can only reach the locale and the
             // fallback; `refresh_units` takes OsmAnd's own answer the moment
             // there is one.
+            //
+            // THE LOCALE IS READ HERE AND NOWHERE ELSE. It is kept in `country`
+            // for `refresh_units` to re-use — see that field for the once-a-second
+            // JNI call this replaced.
+            let country = crate::android::country_code();
             let units = crate::units::Units::resolve(
                 crate::android::osmand_metric_system(),
-                &crate::android::country_code(),
+                &country,
             );
             let mut s = app.state.borrow_mut();
             s.nav_package = found;
+            s.country = country;
             s.units = units;
         }
         if app.state.borrow().settings.nav_on {
@@ -3736,12 +3753,19 @@ impl App {
 
     /// Take OsmAnd's units if it has an answer, and say so once when it changes.
     ///
-    /// CALLED FROM [`Self::push_nav`] AND NOWHERE ELSE, which is once a second
-    /// while a route runs and never otherwise. The alternative was an event on
-    /// the connect, and this is cheaper than the event would have been: the Java
-    /// side caches the value at connect, so the call is a `jint` field read with
-    /// no allocation and no binder traffic, and `Property::set` compares before
-    /// it marks anything dirty.
+    /// CALLED FROM [`Self::push_nav`] AND NOWHERE ELSE — which is ONCE A SECOND
+    /// FOR THE WHOLE RUN, route or no route, because `tick` publishes the nav
+    /// layer unconditionally. This comment used to claim "while a route runs and
+    /// never otherwise", and the cost of believing it was a `Java String` over
+    /// JNI every second: the locale half of the answer was re-read here on every
+    /// call. It is read once at start-up now and held in `State::country`.
+    ///
+    /// WHAT IS STILL ASKED EVERY SECOND is OsmAnd's own setting, and that is the
+    /// one that has to be: the alternative was an event on the connect, and this
+    /// is cheaper than the event would have been. The Java side caches the value
+    /// at connect, so the call is a `jint` field read with no allocation and no
+    /// binder traffic (`android::nav::metric_system`), and `Property::set`
+    /// compares before it marks anything dirty.
     ///
     /// THE COUNTDOWN CAN CHANGE UNITS UNDER ITSELF, which the old one-shot read
     /// existed to prevent — its note said this "must not change while a countdown
@@ -3750,11 +3774,16 @@ impl App {
     /// a correction and not a flap, and refusing it would mean holding the wrong
     /// units for the whole drive to avoid one redraw in the first second of it.
     fn refresh_units(&self) {
-        let found = crate::units::Units::resolve(
-            crate::android::osmand_metric_system(),
-            &crate::android::country_code(),
-        );
-        let before = self.state.borrow().units;
+        let (before, found) = {
+            let s = self.state.borrow();
+            (
+                s.units,
+                crate::units::Units::resolve(
+                    crate::android::osmand_metric_system(),
+                    &s.country,
+                ),
+            )
+        };
         if before == found {
             return;
         }
@@ -7446,6 +7475,30 @@ mod tests {
         driver.apply_logo_event(service::Event::NoDarkChoices { base: "WMGN".into() });
         assert_eq!(ui.get_overlay(), Overlay::None);
         assert!(driver.state.borrow().dark_pick.is_none());
+    }
+
+    /// THE LOCALE IS THE ONE THE RUN STARTED WITH, not one re-read per publish.
+    ///
+    /// `refresh_units` runs on every `push_nav`, which the 1s tick calls for the
+    /// whole run — and it used to ask the platform for the country code there,
+    /// which on the unit is a `java.lang.String` marshalled over JNI once a
+    /// second. The held answer is what it reads now, and this is how that is
+    /// visible from the host: the platform's own `country_code` is `""` here and
+    /// resolves to `units::FALLBACK`, which is IMPERIAL, so a metric country in
+    /// `State::country` can only reach the face through the field.
+    #[test]
+    fn the_units_come_from_the_locale_read_at_start_up() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("units-held");
+
+        driver.state.borrow_mut().country = "DE".into();
+        crate::android::ingest_nav(240, 5, false);
+        driver.drain_events();
+        assert_eq!(
+            ui.get_nav_distance().to_string(),
+            "240 m",
+            "the held locale decided the units; a fresh platform read would say 790 ft"
+        );
     }
 
     /// TURN-BY-TURN, FROM THE EVENT SEAM TO THE FACE, AND THE SWITCH THAT GATES IT.

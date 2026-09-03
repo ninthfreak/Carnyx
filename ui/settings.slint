@@ -59,7 +59,7 @@
 
 import { Pal, Metrics } from "tokens.slint";
 import { OverlayCard, OverlayHeader, OverlayBody } from "overlay.slint";
-import { SignalWaves, WarningTriangle } from "icons.slint";
+import { SignalWaves, WarningTriangle, BatteryBolt } from "icons.slint";
 
 // ── What Rust supplies ───────────────────────────────────────────────────────
 
@@ -156,75 +156,6 @@ export struct DiagAction {
     /// runs straight into it with no rule — and true on every other row, which is
     /// the TSX's dividers read off one by one rather than re-derived.
     divider-above: bool,
-}
-
-// ── Battery glyph ────────────────────────────────────────────────────────────
-//
-// icons.tsx's `BatteryBolt` (:251-259) and the dc.html's `battGlyph` (:178-182),
-// which are the same three marks at the same coordinates. It is the eleventh icon
-// in this design and it BELONGS IN ui/icons.slint — but icons.slint is another
-// agent's file this pass, so it lives here for now, exactly as nearby.slint's
-// BackArrow does. Whoever consolidates should move `BatteryBolt` (and the wrapper
-// below) into icons.slint and delete both from this file.
-
-// icons.slint's `VPath`, copied verbatim because it is private there. Slint's Path
-// fits its geometry into (element size − stroke width), nudges it back by half a
-// stroke, and does NOT scale stroke width with the viewbox — all three differ from
-// SVG, and this cancels the difference. Hand-rolling a Path instead is the
-// documented way to get this wrong.
-component VPath inherits Path {
-    in property <length> box-w;
-    in property <length> box-h;
-    in property <float> vbw;
-    in property <float> vbh;
-    /// Stroke width in VIEWBOX units, as written in the SVG.
-    in property <float> raw-stroke: 0;
-
-    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
-    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
-
-    viewbox-width: root.vbw;
-    viewbox-height: root.vbh;
-    stroke-width: root.raw-stroke * root.sc * 1px;
-    x: 0px - self.stroke-width / 2;
-    y: 0px - self.stroke-width / 2;
-    width: root.box-w + self.stroke-width;
-    height: root.box-h + self.stroke-width;
-}
-
-/// A battery with a lightning bolt through it — the SYSTEM group's Doze row.
-/// Blue when the app is exempt, amber when it is not; never red, per §6's
-/// colourblind rule and the panel's no-red-vs-green note (SettingsPanel.tsx:8).
-component BatteryBolt {
-    in property <length> size: 32px;
-    in property <color> color;
-
-    width: root.size;
-    height: root.size;
-
-    // TWO paths because the stroke weights differ (2 for the shell, 1.6 for the
-    // bolt) and one Path carries one stroke-width.
-    //
-    // The shell is `<Rect x=3 y=8 width=15 height=9 rx=2>` written out as an
-    // explicit rounded rectangle — Slint's Path has no rect command — plus the
-    // terminal pip, `<Line x1=20.5 y1=11 x2=20.5 y2=14>`. The rectangle is closed
-    // (Z) so the round cap only ever applies to the pip, which is what the SVG
-    // says too (`strokeLinecap: round` on the line, `strokeLinejoin: round` on
-    // the rect).
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
-        commands: "M5 8 H16 A2 2 0 0 1 18 10 V15 A2 2 0 0 1 16 17 H5 A2 2 0 0 1 3 15 V10 A2 2 0 0 1 5 8 Z M20.5 11 L20.5 14";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
-    VPath {
-        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.6;
-        commands: "M10.5 9.5 L8.5 12.5 L11 12.5 L9.5 15.5";
-        stroke: root.color;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-    }
 }
 
 // ── The pieces every section is built from ───────────────────────────────────
@@ -1217,11 +1148,16 @@ component DiagLog inherits VerticalLayout {
     //
     // `revision` moves on every mutation, evicting ones included, which is the
     // property this rule always meant.
-    changed revision => { well.viewport-y = Math.min(0px, well.height - well.viewport-height); }
+    changed revision => { root.pin-to-tail(); }
     // STILL ON THE ROW COUNT AS WELL, because the two answer different
     // questions: this one re-pins after the viewport RESIZES, which is what a
     // clear does and what the first few lines of a session do.
-    changed rows => { well.viewport-y = Math.min(0px, well.height - well.viewport-height); }
+    changed rows => { root.pin-to-tail(); }
+    /// The rule the two handlers above share, written once. It was written out
+    /// twice, and two copies of a rule is two places for the next fix to miss.
+    function pin-to-tail() {
+        well.viewport-y = Math.min(0px, well.height - well.viewport-height);
+    }
 
     // `marginHorizontal: 10, marginTop: 2` — a Slint layout child has no margin,
     // so it becomes this wrapper's padding, as on DiagPanel.
