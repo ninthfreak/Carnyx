@@ -1387,20 +1387,82 @@ re-bound after a stop, and both carry the background-activity-start exemption th
 Android 10 otherwise denies. Both are granted by the driver in system Settings.
 Neither is built, and neither should be built before the probes say it is needed.
 
-**WHAT IS ACTUALLY NEEDED NEXT, AND IT IS NOT CODE.** Two exports, and only the
-second needs a drive:
+**AND THE PROBES HAD ALREADY BEEN RUN.** Both of them, twice each, in the log of
+2026-09-03 — the same file #126 was written from. Its probe sections went unread
+for a month while this entry was being written about what they might say, and it
+was then reported to the owner as unrecoverable. It was on disk the whole time.
+It is now `docs/logs/2026-09-03-drive.txt`, and every log after it goes beside it;
+see the README there.
 
-1. **Now, parked.** Tap both DIAGNOSTICS rows and export. That answers the
-   force-stop count, the vendor auto-start tables, the three foreground-from-behind
-   grants, whether adb is enabled, and the whole stock-app interception report.
-2. **After one ignition cycle.** Switch off with Carnyx in front, switch on, tap
-   both rows again and export. The boot marker then has two launches to compare
-   and says reboot or suspend; the stopped-app count is read at its most
-   meaningful moment.
+**WHAT THE DEVICE ACTUALLY SAYS.** Both theories above are confirmed, by the unit,
+in its own words:
 
-The last log had the keep-alive probe in it twice and those sections were never
-read — the log was mined for the four interface defects of #126 instead. That is
-recorded here so the same omission is not repeated.
+```
+boot marker: NO REBOOT between the last two launches (same boot instant,
+             uptime rose by 14h). The SoC suspended and resumed, so
+             BOOT_COMPLETED never fires and cannot help.
+stopped: 8 of 17 third-party packages — the vendor cleaner force-stops
+         packages, which is why no broadcast of any kind reaches them
+```
+
+`uptime: 47d since boot` against a 14-hour gap between launches settles the
+reboot question the whole tree had been ASSUMING since CarFM. The force-stop list
+names `com.ninthfreak.carfm` among the eight. And the head of the same log reads
+`session: launch #55 … last run ended in destroy 49273s ago` with no `wake:` line
+and `last sleep: nothing recorded` — an ACC cycle happened between two launches
+and neither receiver left a note, which is the direct confirmation.
+
+**A THIRD REASON, WHICH NOBODY HAD SUSPECTED.** The action sweep reports
+`com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm, rcv:com.ninthfreak.carnyx`
+— the only two declarers on the unit are OUR OWN APPS. Nothing in the firmware
+declares it, and there is no evidence this ROM ever broadcasts it. The string
+came across from CarFM, which got it from another project. #95 was listening for
+something that may not exist.
+
+**THE STOCK RADIO APP, MEASURED.** `com.nwd.radio` 1.1.0.3, uid 10004, a system
+app whose APK sits at `/data/smallota/app/com.nwd.radio/com.nwd.radio.apk` and is
+**READABLE, 11,359 KB** — copy it to a USB stick and its real manifest can be read
+on a desktop, which is the only way to see intent filters the sweep cannot name.
+It launches as `com.nwd.radio/.home_horizontalActivity`, declares exactly ONE
+activity, exported, `launchMode=2`, and its only filter the sweep found is
+MAIN+LAUNCHER. It does NOT share a signing certificate with Carnyx, so a same-name
+install is impossible without removing the system copy — which needs root.
+
+**WHICH LEAVES THREE LIVE ROUTES, AND THE LOG PRICES EACH.**
+
+1. **Disable the stock app — delivers A AND B in one stroke, no root.**
+   `pm disable-user --user 0 com.nwd.radio` from an adb shell; the shell user
+   already holds the permission. The log says `adb: off (0)` and
+   `developer settings: unset`, so the owner would turn both on first. THE RISK IS
+   NAMED IN THE PROBE'S OWN "CANNOT ANSWER" LIST: whether the tuner service needs
+   the app. `com.nwd.radio.service` is a SEPARATE package and is what Carnyx tunes
+   through; it must stay. Disabling the UI package should not touch it, and one
+   ignition cycle proves it either way — `pm enable` puts it back.
+2. **Notice the stock app and come over it — delivers C.** Needs an exemption from
+   Android 10's background-activity-start block, and the log says which are
+   available: `notification listener: nothing enabled on this unit`,
+   `accessibility: not Carnyx (1 other(s) enabled)`, `usage access: not granted
+   (mode 3)`. Either of the first two grants the exemption; the third is how
+   Carnyx would notice. All three are granted by the driver in Settings, no adb.
+   They are also the only mechanisms here that survive a force-stop, because the
+   platform binds and re-binds them itself.
+3. **Get off the cleaner's list.** `system whitelist_packagename = null` and
+   `system whitelist_appname = null` — the vendor cleaner's own whitelist tables
+   are EMPTY, and `system nwd_vodka_clean_launcher_date = 0` names the cleaner.
+   Whether those keys are writable, and whether the cleaner honours them, is
+   unknown; a `Settings.System` write needs `WRITE_SETTINGS` and these are vendor
+   keys. Speculative, listed because the tables exist and are empty.
+
+**RECOMMENDED ORDER:** route 1 first. It is the owner's first AND second choice
+together, it needs no code at all, it is reversible with one command, and one
+ignition cycle settles it. Route 2 is the fallback and is the only one that
+survives if the stock app cannot be disabled — and it is a real build: a
+notification-listener or accessibility service, plus usage access to see the
+stock app arrive.
+
+**STILL CANNOT ANSWER** without the APK read on a desktop: what the stock app's
+real intent filters are, and therefore whether route 2 of #96 — becoming the
+handler — has a door at all. The sweep only sees actions it knows to name.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**

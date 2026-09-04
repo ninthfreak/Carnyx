@@ -1,0 +1,608 @@
+12:24:22  session: launch #55, app #1 in this process, last run ended in destroy 49273s ago, cold RDS
+12:24:22  sleep watch: listening for com.nwd.ACTION_ACCOFF_UPDATE, com.nwd.action.ACTION_ACCOFF_UPDATE, android.intent.action.SCREEN_OFF
+12:24:22  permissions: first launch — no alert class in this build
+12:24:22  nav: seam ready
+12:24:22  service: started
+12:24:22  station pop-up: ready
+12:24:22  last sleep: nothing recorded
+12:24:22  partial rendering: requested
+12:53:42  nav: left in 4.2 mi onto Kennedy Road [imminent=-1]
+12:53:48  nav: left in 4.1 mi onto Kennedy Road [imminent=-1]
+12:53:52  level 43 @ 8870 → 0+half
+12:53:54  nav: left in 4.0 mi onto Kennedy Road [imminent=-1]
+12:53:59  nav: left in 3.9 mi onto Kennedy Road [imminent=-1]
+12:53:59  RDS pi=a6ff pty=22 tp=false ta=false ps="WERN" rt="Wisconsionsiblic Radio" scroll=false art="" tit="" g=4913 x=862 q=57.8125 n=64
+12:54:05  nav: left in 3.8 mi onto Kennedy Road [imminent=-1]
+12:54:11  nav: left in 3.7 mi onto Kennedy Road [imminent=-1]
+12:54:12  level 39 @ 8870 → 0
+12:54:17  nav: left in 3.6 mi onto Kennedy Road [imminent=-1]
+12:54:24  nav: left in 3.5 mi onto Kennedy Road [imminent=-1]
+12:54:29  nav: left in 3.4 mi onto Kennedy Road [imminent=-1]
+12:54:32  level 56 @ 8870 → 1+half
+12:54:37  nav: left in 3.3 mi onto Kennedy Road [imminent=-1]
+12:54:43  nav: left in 3.2 mi onto Kennedy Road [imminent=-1]
+12:54:48  nav: left in 3.1 mi onto Kennedy Road [imminent=-1]
+12:54:49  RDS pi=a6ff pty=22 tp=false ta=false ps="WERN" rt="Wisconsin Public Radio" scroll=false art="" tit="" g=5075 x=920 q=67.1875 n=64
+12:54:53  level 56 @ 8870 → 1+half
+12:54:54  nav: left in 3.0 mi onto Kennedy Road [imminent=-1]
+12:55:00  nav: left in 2.9 mi onto Kennedy Road [imminent=-1]
+12:55:04  nav: left in 2.8 mi onto Kennedy Road [imminent=-1]
+12:55:07  RDS pi=a6ff pty=22 tp=false ta=false ps="WERN" rt="Wisconsin PuV sc Radio" scroll=false art="" tit="" g=5147 x=941 q=71.875 n=64
+12:55:10  nav: left in 2.7 mi onto Kennedy Road [imminent=-1]
+12:55:13  level 58 @ 8870 → 1+half
+12:55:17  nav: left in 2.6 mi onto Kennedy Road [imminent=-1]
+12:55:22  nav: left in 2.5 mi onto Kennedy Road [imminent=-1]
+12:55:28  nav: left in 2.4 mi onto Kennedy Road [imminent=-1]
+12:55:33  level 59 @ 8870 → 1+half
+12:55:34  nav: left in 2.3 mi onto Kennedy Road [imminent=-1]
+12:55:39  nav: left in 2.2 mi onto Kennedy Road [imminent=-1]
+12:55:45  nav: left in 2.1 mi onto Kennedy Road [imminent=-1]
+12:55:50  nav: left in 2.0 mi onto Kennedy Road [imminent=-1]
+12:55:53  level 58 @ 8870 → 1+half
+12:55:56  nav: left in 1.9 mi onto Kennedy Road [imminent=1]
+12:55:59  RDS pi=a6ff pty=22 tp=false ta=false ps="WERN" rt="Wisconsin Public Radio" scroll=false art="" tit="" g=5302 x=995 q=82.8125 n=64
+12:56:02  nav: left in 1.8 mi onto Kennedy Road [imminent=1]
+12:56:04  nav: left in 1.8 mi onto Kennedy Road [imminent=-1]
+12:56:09  nav: left in 1.7 mi onto Kennedy Road [imminent=-1]
+12:56:13  level 52 @ 8870 → 1
+12:56:16  nav: left in 1.6 mi onto Kennedy Road [imminent=1]
+12:56:17  nav: left in 1.6 mi onto Kennedy Road [imminent=-1]
+12:56:23  nav: left in 1.6 mi onto Kennedy Road [imminent=1]
+12:56:24  nav: left in 1.5 mi onto Kennedy Road [imminent=1]
+12:56:31  nav: left in 1.4 mi onto Kennedy Road [imminent=1]
+12:56:33  level 52 @ 8870 → 1
+12:56:36  nav: left in 1.3 mi onto Kennedy Road [imminent=1]
+12:56:42  nav: left in 1.2 mi onto Kennedy Road [imminent=1]
+12:56:48  nav: left in 1.1 mi onto Kennedy Road [imminent=1]
+12:56:50  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +941852ms [face]
+12:56:50  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:56:50  holding 101.5, dial went to 94.9
+12:56:50  tuned 94.9
+12:56:50  reasserting 101.5
+12:56:50  settled on 101.5
+12:56:50  tuned 101.5
+12:56:51  settled on 101.5
+12:56:51  tuned 101.5
+12:56:51  frames: 4 in 658 ms — 164.6 ms/frame
+12:56:51  RDS pi=19e2 pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5498 x=1053 q=- n=0
+12:56:52  RDS pi=19e2 pty=6 tp=true ta=false ps="" rt="" scroll=false art="" tit="" g=5500 x=1053 q=- n=2
+12:56:52  level 59 @ 10150 → 1+half
+12:56:53  level 58 @ 10150 → 1+half
+12:56:54  RDS pi=19e2 pty=6 tp=true ta=false ps="IBA-FM" rt="" scroll=false art="" tit="" g=5514 x=1053 q=100 n=16
+12:56:54  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +4334ms [face]
+12:56:55  nav: left in 1.0 mi onto Kennedy Road [imminent=1]
+12:56:55  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:56:55  holding 105.9, dial went to 104.1
+12:56:55  tuned 104.1
+12:56:55  reasserting 105.9
+12:56:55  level 58 @ 10410 → 1+half
+12:56:55  settled on 105.9
+12:56:55  tuned 105.9
+12:56:55  settled on 105.9
+12:56:55  tuned 105.9
+12:56:55  frames: 4 in 651 ms — 162.7 ms/frame
+12:56:56  RDS pi=8f7c pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5520 x=1053 q=- n=0
+12:56:56  RDS pi=8f7c pty=5 tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5522 x=1053 q=- n=2
+12:56:56  level 67 @ 10590 → 2+half
+12:56:57  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +2250ms [face]
+12:56:57  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:56:57  holding 102.1, dial went to 94.9
+12:56:57  tuned 94.9
+12:56:57  reasserting 102.1
+12:56:57  settled on 102.1
+12:56:57  tuned 102.1
+12:56:57  settled on 102.1
+12:56:57  tuned 102.1
+12:56:57  frames: 4 in 640 ms — 159.9 ms/frame
+12:56:58  level 41 @ 10210 → 0+half
+12:57:00  nav: left in 0.9 mi onto Kennedy Road [imminent=1]
+12:57:00  panel key 63 (preset prev) com.nwd.action.ACTION_KEY_VALUE [face]
+12:57:00  step morph: dir=-1 dead=no fit=25% cardw=720 peekw=206
+12:57:00  holding 105.9, dial went to 104.1
+12:57:00  tuned 104.1
+12:57:00  reasserting 105.9
+12:57:00  settled on 105.9
+12:57:00  tuned 105.9
+12:57:00  settled on 105.9
+12:57:00  tuned 105.9
+12:57:01  frames: 4 in 644 ms — 160.9 ms/frame
+12:57:01  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE [face]
+12:57:01  RDS pi=8f7c pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5529 x=1053 q=- n=0
+12:57:01  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:01  holding 102.1, dial went to 94.9
+12:57:01  tuned 94.9
+12:57:01  reasserting 102.1
+12:57:02  settled on 102.1
+12:57:02  tuned 102.1
+12:57:02  settled on 102.1
+12:57:02  tuned 102.1
+12:57:02  frames: 4 in 641 ms — 160.4 ms/frame
+12:57:02  stereo false
+12:57:02  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +952ms [face]
+12:57:02  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:02  holding 94.1, dial went to 98.1
+12:57:02  tuned 98.1
+12:57:02  reasserting 94.1
+12:57:02  settled on 94.1
+12:57:02  tuned 94.1
+12:57:03  settled on 94.1
+12:57:03  tuned 94.1
+12:57:03  frames: 4 in 679 ms — 169.7 ms/frame
+12:57:03  RDS pi=6d64 pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5532 x=1053 q=- n=0
+12:57:03  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +1319ms [face]
+12:57:03  RDS pi=6d64 pty=5 tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5534 x=1053 q=- n=2
+12:57:04  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:04  nav: left in 0.9 mi onto Kennedy Road [imminent=1] — "after about 1 mile, turn left onto  Kennedy Road"
+12:57:04  holding 94.9, dial went to 100.7
+12:57:04  tuned 100.7
+12:57:04  reasserting 94.9
+12:57:04  level 50 @ 10070 → 1
+12:57:04  stereo true
+12:57:04  settled on 94.9
+12:57:04  tuned 94.9
+12:57:04  settled on 94.9
+12:57:04  tuned 94.9
+12:57:04  frames: 4 in 720 ms — 180.1 ms/frame
+12:57:05  nav: left in 0.8 mi onto Kennedy Road [imminent=1] — "after about 1 mile, turn left onto  Kennedy Road"
+12:57:05  level 51 @ 9490 → 1
+12:57:08  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +4516ms [face]
+12:57:08  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:08  holding 104.1, dial went to 100.9
+12:57:08  tuned 100.9
+12:57:08  reasserting 104.1
+12:57:08  level 87 @ 9490 → 4
+12:57:08  settled on 104.1
+12:57:08  tuned 104.1
+12:57:08  settled on 104.1
+12:57:08  tuned 104.1
+12:57:09  frames: 4 in 685 ms — 171.4 ms/frame
+12:57:09  RDS pi=1718 pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5537 x=1053 q=- n=0
+12:57:09  RDS pi=1718 pty=9 tp=true ta=false ps="" rt="" scroll=false art="" tit="" g=5539 x=1053 q=- n=2
+12:57:10  level 62 @ 10410 → 2
+12:57:10  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +1808ms [face]
+12:57:10  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:10  holding 98.1, dial went to 101.1
+12:57:10  tuned 101.1
+12:57:10  reasserting 98.1
+12:57:10  settled on 98.1
+12:57:10  tuned 98.1
+12:57:10  frames: 4 in 680 ms — 170.1 ms/frame
+12:57:10  settled on 98.1
+12:57:10  tuned 98.1
+12:57:11  RDS pi=7501 pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5544 x=1053 q=- n=0
+12:57:11  nav: left in 0.7 mi onto Kennedy Road [imminent=1] — "after about 1 mile, turn left onto  Kennedy Road"
+12:57:11  RDS pi=7501 pty=7 tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5546 x=1053 q=- n=2
+12:57:11  level 58 @ 9810 → 1+half
+12:57:14  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +4165ms [face]
+12:57:14  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:14  holding 105.5, dial went to 101.5
+12:57:14  tuned 101.5
+12:57:14  reasserting 105.5
+12:57:14  settled on 105.5
+12:57:14  tuned 105.5
+12:57:14  settled on 105.5
+12:57:14  tuned 105.5
+12:57:15  frames: 4 in 691 ms — 172.7 ms/frame
+12:57:16  level 43 @ 10550 → 0+half
+12:57:16  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +2035ms [face]
+12:57:16  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:16  poll: dial is 105.5
+12:57:16  holding 91.3, dial went to 102.5
+12:57:16  tuned 102.5
+12:57:16  reasserting 91.3
+12:57:16  settled on 91.3
+12:57:16  tuned 91.3
+12:57:17  settled on 91.3
+12:57:17  tuned 91.3
+12:57:17  frames: 4 in 685 ms — 171.2 ms/frame
+12:57:17  nav: left in 0.6 mi onto Kennedy Road [imminent=1] — "after about 1 mile, turn left onto  Kennedy Road"
+12:57:18  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +1628ms [face]
+12:57:18  level 37 @ 9130 → 0
+12:57:18  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:18  holding 88.7, dial went to 103.1
+12:57:18  tuned 103.1
+12:57:18  reasserting 88.7
+12:57:18  settled on 88.7
+12:57:18  tuned 88.7
+12:57:18  settled on 88.7
+12:57:18  tuned 88.7
+12:57:18  frames: 4 in 694 ms — 173.4 ms/frame
+12:57:19  RDS pi=a6ff pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5564 x=1053 q=- n=0
+12:57:19  RDS pi=a6ff pty=22 tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5566 x=1053 q=- n=2
+12:57:19  level 60 @ 8870 → 2
+12:57:19  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +1865ms [face]
+12:57:20  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:20  holding 101.5, dial went to 104.1
+12:57:20  tuned 104.1
+12:57:20  reasserting 101.5
+12:57:20  settled on 101.5
+12:57:20  tuned 101.5
+12:57:20  settled on 101.5
+12:57:20  tuned 101.5
+12:57:20  frames: 4 in 645 ms — 161.3 ms/frame
+12:57:20  RDS pi=19e2 pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5571 x=1053 q=- n=0
+12:57:21  RDS pi=19e2 pty=6 tp=true ta=false ps="" rt="" scroll=false art="" tit="" g=5573 x=1053 q=- n=2
+12:57:21  level 57 @ 10150 → 1+half
+12:57:22  nav: left in 0.5 mi onto Kennedy Road [imminent=1] — "after about 1 mile, turn left onto  Kennedy Road"
+12:57:24  level 55 @ 10150 → 1+half
+12:57:24  nav: left in 0.5 mi onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:57:26  RDS pi=19e2 pty=6 tp=true ta=false ps="" rt="Madison's Classic Rock" scroll=false art="" tit="" g=5602 x=1053 q=100 n=31
+12:57:30  nav: left in 0.4 mi onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:57:37  nav: left in 0.3 mi onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:57:39  panel key 62 (preset next) com.nwd.action.ACTION_KEY_VALUE +19565ms [face]
+12:57:39  step morph: dir=1 dead=no fit=25% cardw=720 peekw=206
+12:57:39  holding 105.9, dial went to 104.9
+12:57:39  tuned 104.9
+12:57:39  reasserting 105.9
+12:57:39  settled on 105.9
+12:57:39  tuned 105.9
+12:57:40  frames: 4 in 695 ms — 173.8 ms/frame
+12:57:40  settled on 105.9
+12:57:40  tuned 105.9
+12:57:40  RDS pi=8f7c pty=- tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5680 x=1053 q=- n=0
+12:57:40  RDS pi=8f7c pty=5 tp=false ta=false ps="" rt="" scroll=false art="" tit="" g=5682 x=1053 q=- n=2
+12:57:41  level 60 @ 10590 → 2
+12:57:41  RDS pi=8f7c pty=5 tp=false ta=false ps="THE HOG" rt="" scroll=false art="" tit="" g=5687 x=1053 q=- n=7
+12:57:43  nav: left in 0.3 mi onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:44  level 66 @ 10590 → 2+half
+12:57:45  nav: left in 0.2 mi onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:51  nav: left in 970 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:52  nav: left in 930 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:53  nav: left in 900 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:54  nav: left in 850 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:55  nav: left in 820 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:56  nav: left in 800 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:57  nav: left in 810 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:58  nav: left in 800 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:57:59  nav: left in 790 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:58:00  nav: left in 780 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:58:01  nav: left in 760 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:58:02  nav: left in 730 ft onto Kennedy Road [imminent=1] — "in 3 tenths of a mile, turn left onto  Kennedy Road"
+12:58:03  RDS pi=8f7c pty=5 tp=false ta=false ps="THE HOG" rt="Everything That Rocks" scroll=false art="" tit="" g=5808 x=1053 q=100 n=64
+12:58:03  nav: left in 730 ft onto Kennedy Road [imminent=1]
+12:58:03  nav: left in 710 ft onto Kennedy Road [imminent=1]
+12:58:04  level 59 @ 10590 → 1+half
+12:58:04  nav: left in 680 ft onto Kennedy Road [imminent=1]
+12:58:05  nav: left in 670 ft onto Kennedy Road [imminent=1]
+12:58:08  nav: left in 660 ft onto Kennedy Road [imminent=1]
+12:58:08  nav: left in 660 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:08  nav: left in 560 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:10  nav: left in 520 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:12  nav: left in 510 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:14  nav: left in 690 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:16  nav: left in 730 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:18  nav: left in 760 ft onto Kennedy Road [imminent=1] — "Attention, railroad crossing"
+12:58:23  nav: left in 130 ft [imminent=1] — "Attention, railroad crossing"
+12:58:24  nav: left in 140 ft [imminent=1] — "Attention, railroad crossing"
+12:58:24  level 65 @ 10590 → 2+half
+12:58:27  nav: left in 150 ft [imminent=1] — "Attention, railroad crossing"
+12:58:28  nav: left in 150 ft [imminent=1]
+12:58:29  overlay permission: already granted
+12:58:34  overlay permission: already granted
+12:58:36  stock radio probe: reading…
+12:58:36  stock radio probe: android 29, Allwinner K2401/K2401P/k2401M
+12:58:36    candidate com.nwd.kernel
+12:58:36    candidate com.nwd.vodka.factory
+12:58:36    candidate com.nwd.media.scanner
+12:58:36    candidate com.nwd.setting.service
+12:58:36    candidate com.nwd.backcar
+12:58:36    candidate com.nwd.usb2cvbs (launchable)
+12:58:36    candidate com.nwd.ivicarModelShop
+12:58:36    candidate com.nwd.can.help
+12:58:36    candidate com.nwd.android.music.ui (launchable)
+12:58:36    candidate com.nwd.can.setting (launchable)
+12:58:36    candidate com.nwd.android.video.ui (launchable)
+12:58:36    candidate com.nwd.mycar (launchable)
+12:58:36    detailing com.nwd.radio (matches what CarFM recorded)
+12:58:36    app version 1.1.0.3, uid 10004, system
+12:58:36    apk /data/smallota/app/com.nwd.radio/com.nwd.radio.apk
+12:58:36    apk READABLE, 11359 KB — copy it off and read its manifest properly
+12:58:36    enabled setting 0 (0 default, 1 enabled, 2 disabled, 3 disabled-user)
+12:58:36    launches as com.nwd.radio/.home_horizontalActivity
+12:58:36    same signer as Carnyx: false — a same-name install is impossible without removing the system copy
+12:58:36    activities: 1
+12:58:36      act .home_horizontalActivity exported mode=2
+12:58:36    com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm, rcv:com.ninthfreak.carnyx
+12:58:36    com.nwd.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:58:36    com.nwd.action.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:58:36    com.nwd.radio.service.ACTION_RADIO_SERVICE → svc:com.nwd.radio.service
+12:58:36    android.intent.action.MEDIA_BUTTON → rcv:com.google.android.youtube, rcv:com.zjinnova.zlink, svc:com.android.chrome
+12:58:36    android.media.action.MEDIA_PLAY_FROM_SEARCH → act:com.google.android.youtube
+12:58:36    android.media.browse.MediaBrowserService → svc:com.google.android.googlequicksearchbox, svc:com.google.android.youtube, svc:com.ninthfreak.carfm, svc:com.telenav.launcher
+12:58:36    DOOR MAIN+LAUNCHER → act:com.android.chrome, act:com.android.settings, act:com.android.vending, act:com.google.android.apps.maps +28
+12:58:36    MAIN+HOME → act:com.android.launcher, act:com.android.launchertheme, act:com.telenav.launcher
+12:58:36    home com.android.launcher/com.android.launcher2.Launcher
+12:58:36    home com.android.launchertheme/com.android.launcher2.Launcher
+12:58:36    home com.telenav.launcher/com.vivid.launcher.splash.SplashActivity
+12:58:36    notification listener: nothing enabled on this unit
+12:58:36    accessibility: not Carnyx (1 other(s) enabled)
+12:58:36    usage access: not granted (mode 3)
+12:58:36    → either of the first two exempts Carnyx from the Android 10
+12:58:36      background-activity-start block; the third is how it would notice
+12:58:36    adb: off (0)
+12:58:36    developer settings: unset
+12:58:36    → with adb: `pm disable-user --user 0 <pkg>` needs no root and
+12:58:36      would end this whole question; one ignition cycle proves it
+12:58:36    CANNOT ANSWER, in the order they matter:
+12:58:36     1. by package or by component? only disabling com.nwd.radio + one ACC cycle says
+12:58:36     2. what the app's real intent filters are — read the APK off the unit
+12:58:36     3. whether the tuner service needs the app; it must stay either way
+12:58:36     4. whether a background start is actually permitted, until one is tried
+12:58:36  stock radio probe: done, 48 lines
+12:58:38  keep-alive probe: reading…
+12:58:38  keep-alive probe: android 29, Allwinner K2401/K2401P/k2401M
+12:58:38    uptime: 47d since boot
+12:58:38    last launch: 14h ago
+12:58:38    boot marker: NO REBOOT between the last two launches (same boot instant, uptime rose by 14h). The SoC suspended and resumed, so BOOT_COMPLETED never fires and cannot help.
+12:58:38    STOPPED com.google.android.youtube
+12:58:38    STOPPED com.telenav.launcher
+12:58:38    STOPPED com.ninthfreak.nwdprobe
+12:58:38    STOPPED com.openvehicles.OVMS
+12:58:38    STOPPED com.txznet.aipal
+12:58:38    STOPPED com.finalwire.aida64
+12:58:38    STOPPED axp.tool.apkextractor
+12:58:38    STOPPED com.ninthfreak.carfm
+12:58:38    stopped: 8 of 17 third-party packages — the vendor cleaner force-stops packages, which is why no broadcast of any kind reaches them
+12:58:38    secure accessibility_enabled = 0
+12:58:38    secure enabled_accessibility_services = com.txznet.txz/com.txznet.smartwakeup.service.OverseaAccessibilityService
+12:58:38    secure enabled_notification_listeners = (empty)
+12:58:38    overlay: SYSTEM_ALERT_WINDOW is declared in the manifest
+12:58:38    overlay: canDrawOverlays = true
+12:58:38    overlay: grant screen exists — com.android.settings
+12:58:38    action android.intent.action.BOOT_COMPLETED: 49 — com.nwd.can.setting, com.kingroot.kinguser, com.txznet.txz, android, com.nwd.android.phone, com.android.dynsystem, com.android.managedprovisioning, com.android.nfc
+12:58:38    action com.nwd.ACTION_OS_WAKE_UP: 2 — com.ninthfreak.carfm, com.ninthfreak.carnyx(us)
+12:58:38    action com.nwd.ACTION_ACCOFF_UPDATE: 1 — com.ninthfreak.carnyx(us)
+12:58:38    action com.nwd.action.ACTION_ACCOFF_UPDATE: 1 — com.ninthfreak.carnyx(us)
+12:58:38    action com.nwd.action.ACTION_KEY_VALUE: NOBODY declares a receiver
+12:58:38    battery: NOT exempt from Doze
+12:58:38    global enable_cellular_on_boot = 1
+12:58:38    global Phenotype_boot_count = 15
+12:58:38    global _boot_Phenotype_flags = 
+12:58:38    global device_idle_constants = light_after_inactive_to=180000,light_pre_idle_to=180000,
+12:58:38    global dock_sounds_enabled_when_accessbility = 0
+12:58:38    global wifi_sleep_policy = 2
+12:58:38    global location_ignore_settings_package_whitelist = com.google.android.gms,com.google.android.dialer
+12:58:38    global location_background_throttle_interval_ms = 600000
+12:58:38    global app_idle_constants = 
+12:58:38    global default_restrict_background_data = 0
+12:58:38    global wifi_wakeup_enabled = 1
+12:58:38    global app_standby_enabled = 1
+12:58:38    global location_global_kill_switch = 0
+12:58:38    global boot_count = 15
+12:58:38    secure sleep_timeout = -1
+12:58:38    secure double_tap_to_wake = 1
+12:58:38    secure wake_gesture_enabled = 1
+12:58:38    secure screensaver_activate_on_sleep = 0
+12:58:38    secure enabled_accessibility_services = com.txznet.txz/com.txznet.smartwakeup.service.OverseaAccessibilityService
+12:58:38    secure masterLocationPackagePrefixWhitelist = com.google.android.gms
+12:58:38    secure accessibility_display_magnification_scale = 2.0
+12:58:38    secure enabled_notification_policy_access_packages = com.android.camera2
+12:58:38    secure mount_ums_autostart = 0
+12:58:38    secure accessibility_enabled = 0
+12:58:38    secure accessibility_display_magnification_enabled = 0
+12:58:38    system arm_auto_start_navi_when_acc_on = 0
+12:58:38    system whitelist_packagename = null
+12:58:38    system nwd_vodka_clean_launcher_date = 0
+12:58:38    system boot_menu_type = 0
+12:58:38    system accelerometer_rotation = 0
+12:58:38    system whitelist_appname = null
+12:58:38    system key_nwd_backgroundvideoplayback = 0
+12:58:38    pkg com.nwd.kernel
+12:58:38    pkg com.nwd.vodka.factory
+12:58:38    pkg com.android.launcher
+12:58:38    pkg com.softwinner.awlogsettings
+12:58:38    pkg com.telenav.launcher
+12:58:38    pkg com.nwd.media.scanner
+12:58:38    pkg com.nwd.setting.service
+12:58:38    pkg com.nwd.backcar
+12:58:38    pkg com.nwd.usb2cvbs
+12:58:38    pkg com.nwd.ivicarModelShop
+12:58:38    pkg com.nwd.can.help
+12:58:38    pkg com.nwd.android.music.ui
+12:58:38    pkg com.nwd.can.setting
+12:58:38    pkg com.softwinner.settingssetup
+12:58:38    pkg com.nwd.android.video.ui
+12:58:38    pkg com.nwd.mycar
+12:58:38    pkg com.nwd.radio
+12:58:38    pkg com.nwd.bt.music
+12:58:38    pkg com.android.settings.intelligence
+12:58:38    pkg com.nwd.android.phone
+12:58:38    pkg com.android.providers.settings
+12:58:38    pkg com.nwd.audioset
+12:58:38    pkg com.nwd.filemanager
+12:58:38    pkg com.nwd.traversalfile
+12:58:38    pkg com.nwd.voice.analyze
+12:58:38    packages: 104 visible
+12:58:38  keep-alive probe: done, 83 lines
+12:58:41  stock radio probe: reading…
+12:58:41  stock radio probe: android 29, Allwinner K2401/K2401P/k2401M
+12:58:41    candidate com.nwd.kernel
+12:58:41    candidate com.nwd.vodka.factory
+12:58:41    candidate com.nwd.media.scanner
+12:58:41    candidate com.nwd.setting.service
+12:58:41    candidate com.nwd.backcar
+12:58:41    candidate com.nwd.usb2cvbs (launchable)
+12:58:41    candidate com.nwd.ivicarModelShop
+12:58:41    candidate com.nwd.can.help
+12:58:41    candidate com.nwd.android.music.ui (launchable)
+12:58:41    candidate com.nwd.can.setting (launchable)
+12:58:41    candidate com.nwd.android.video.ui (launchable)
+12:58:41    candidate com.nwd.mycar (launchable)
+12:58:41    detailing com.nwd.radio (matches what CarFM recorded)
+12:58:41    app version 1.1.0.3, uid 10004, system
+12:58:41    apk /data/smallota/app/com.nwd.radio/com.nwd.radio.apk
+12:58:41    apk READABLE, 11359 KB — copy it off and read its manifest properly
+12:58:41    enabled setting 0 (0 default, 1 enabled, 2 disabled, 3 disabled-user)
+12:58:41    launches as com.nwd.radio/.home_horizontalActivity
+12:58:41    same signer as Carnyx: false — a same-name install is impossible without removing the system copy
+12:58:41    activities: 1
+12:58:41      act .home_horizontalActivity exported mode=2
+12:58:41    com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm, rcv:com.ninthfreak.carnyx
+12:58:41    com.nwd.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:58:41    com.nwd.action.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:58:41    com.nwd.radio.service.ACTION_RADIO_SERVICE → svc:com.nwd.radio.service
+12:58:41    android.intent.action.MEDIA_BUTTON → rcv:com.google.android.youtube, rcv:com.zjinnova.zlink, svc:com.android.chrome
+12:58:41    android.media.action.MEDIA_PLAY_FROM_SEARCH → act:com.google.android.youtube
+12:58:41    android.media.browse.MediaBrowserService → svc:com.google.android.googlequicksearchbox, svc:com.google.android.youtube, svc:com.ninthfreak.carfm, svc:com.telenav.launcher
+12:58:41    DOOR MAIN+LAUNCHER → act:com.android.chrome, act:com.android.settings, act:com.android.vending, act:com.google.android.apps.maps +28
+12:58:41    MAIN+HOME → act:com.android.launcher, act:com.android.launchertheme, act:com.telenav.launcher
+12:58:41    home com.android.launcher/com.android.launcher2.Launcher
+12:58:41    home com.android.launchertheme/com.android.launcher2.Launcher
+12:58:41    home com.telenav.launcher/com.vivid.launcher.splash.SplashActivity
+12:58:41    notification listener: nothing enabled on this unit
+12:58:41    accessibility: not Carnyx (1 other(s) enabled)
+12:58:41    usage access: not granted (mode 3)
+12:58:41    → either of the first two exempts Carnyx from the Android 10
+12:58:41      background-activity-start block; the third is how it would notice
+12:58:41    adb: off (0)
+12:58:41    developer settings: unset
+12:58:41    → with adb: `pm disable-user --user 0 <pkg>` needs no root and
+12:58:41      would end this whole question; one ignition cycle proves it
+12:58:41    CANNOT ANSWER, in the order they matter:
+12:58:41     1. by package or by component? only disabling com.nwd.radio + one ACC cycle says
+12:58:41     2. what the app's real intent filters are — read the APK off the unit
+12:58:41     3. whether the tuner service needs the app; it must stay either way
+12:58:41     4. whether a background start is actually permitted, until one is tried
+12:58:41  stock radio probe: done, 48 lines
+12:58:43  nav: left in 50 ft [imminent=1]
+12:58:44  level 64 @ 10590 → 2
+12:59:04  level 65 @ 10590 → 2+half
+12:59:24  level 64 @ 10590 → 2
+12:59:42  overlay permission: already granted
+12:59:44  level 65 @ 10590 → 2+half
+12:59:47  notification permission: not needed below API 33 (this unit is API 29)
+12:59:48  stock radio probe: reading…
+12:59:48  stock radio probe: android 29, Allwinner K2401/K2401P/k2401M
+12:59:48    candidate com.nwd.kernel
+12:59:48    candidate com.nwd.vodka.factory
+12:59:48    candidate com.nwd.media.scanner
+12:59:48    candidate com.nwd.setting.service
+12:59:48    candidate com.nwd.backcar
+12:59:48    candidate com.nwd.usb2cvbs (launchable)
+12:59:48    candidate com.nwd.ivicarModelShop
+12:59:48    candidate com.nwd.can.help
+12:59:48    candidate com.nwd.android.music.ui (launchable)
+12:59:48    candidate com.nwd.can.setting (launchable)
+12:59:48    candidate com.nwd.android.video.ui (launchable)
+12:59:48    candidate com.nwd.mycar (launchable)
+12:59:48    detailing com.nwd.radio (matches what CarFM recorded)
+12:59:48    app version 1.1.0.3, uid 10004, system
+12:59:48    apk /data/smallota/app/com.nwd.radio/com.nwd.radio.apk
+12:59:48    apk READABLE, 11359 KB — copy it off and read its manifest properly
+12:59:48    enabled setting 0 (0 default, 1 enabled, 2 disabled, 3 disabled-user)
+12:59:48    launches as com.nwd.radio/.home_horizontalActivity
+12:59:48    same signer as Carnyx: false — a same-name install is impossible without removing the system copy
+12:59:48    activities: 1
+12:59:48      act .home_horizontalActivity exported mode=2
+12:59:48    com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm, rcv:com.ninthfreak.carnyx
+12:59:48    com.nwd.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:59:48    com.nwd.action.ACTION_ACCOFF_UPDATE → rcv:com.ninthfreak.carnyx
+12:59:48    com.nwd.radio.service.ACTION_RADIO_SERVICE → svc:com.nwd.radio.service
+12:59:48    android.intent.action.MEDIA_BUTTON → rcv:com.google.android.youtube, rcv:com.zjinnova.zlink, svc:com.android.chrome
+12:59:48    android.media.action.MEDIA_PLAY_FROM_SEARCH → act:com.google.android.youtube
+12:59:48    android.media.browse.MediaBrowserService → svc:com.google.android.googlequicksearchbox, svc:com.google.android.youtube, svc:com.ninthfreak.carfm, svc:com.telenav.launcher
+12:59:48    DOOR MAIN+LAUNCHER → act:com.android.chrome, act:com.android.settings, act:com.android.vending, act:com.google.android.apps.maps +28
+12:59:48    MAIN+HOME → act:com.android.launcher, act:com.android.launchertheme, act:com.telenav.launcher
+12:59:48    home com.android.launcher/com.android.launcher2.Launcher
+12:59:48    home com.android.launchertheme/com.android.launcher2.Launcher
+12:59:48    home com.telenav.launcher/com.vivid.launcher.splash.SplashActivity
+12:59:48    notification listener: nothing enabled on this unit
+12:59:48    accessibility: not Carnyx (1 other(s) enabled)
+12:59:48    usage access: not granted (mode 3)
+12:59:48    → either of the first two exempts Carnyx from the Android 10
+12:59:48      background-activity-start block; the third is how it would notice
+12:59:48    adb: off (0)
+12:59:48    developer settings: unset
+12:59:48    → with adb: `pm disable-user --user 0 <pkg>` needs no root and
+12:59:48      would end this whole question; one ignition cycle proves it
+12:59:48    CANNOT ANSWER, in the order they matter:
+12:59:48     1. by package or by component? only disabling com.nwd.radio + one ACC cycle says
+12:59:48     2. what the app's real intent filters are — read the APK off the unit
+12:59:48     3. whether the tuner service needs the app; it must stay either way
+12:59:48     4. whether a background start is actually permitted, until one is tried
+12:59:48  stock radio probe: done, 48 lines
+12:59:50  keep-alive probe: reading…
+12:59:51  keep-alive probe: android 29, Allwinner K2401/K2401P/k2401M
+12:59:51    uptime: 47d since boot
+12:59:51    last launch: 14h ago
+12:59:51    boot marker: NO REBOOT between the last two launches (same boot instant, uptime rose by 14h). The SoC suspended and resumed, so BOOT_COMPLETED never fires and cannot help.
+12:59:51    STOPPED com.google.android.youtube
+12:59:51    STOPPED com.telenav.launcher
+12:59:51    STOPPED com.ninthfreak.nwdprobe
+12:59:51    STOPPED com.openvehicles.OVMS
+12:59:51    STOPPED com.txznet.aipal
+12:59:51    STOPPED com.finalwire.aida64
+12:59:51    STOPPED axp.tool.apkextractor
+12:59:51    STOPPED com.ninthfreak.carfm
+12:59:51    stopped: 8 of 17 third-party packages — the vendor cleaner force-stops packages, which is why no broadcast of any kind reaches them
+12:59:51    secure accessibility_enabled = 0
+12:59:51    secure enabled_accessibility_services = com.txznet.txz/com.txznet.smartwakeup.service.OverseaAccessibilityService
+12:59:51    secure enabled_notification_listeners = (empty)
+12:59:51    overlay: SYSTEM_ALERT_WINDOW is declared in the manifest
+12:59:51    overlay: canDrawOverlays = true
+12:59:51    overlay: grant screen exists — com.android.settings
+12:59:51    action android.intent.action.BOOT_COMPLETED: 49 — com.nwd.can.setting, com.kingroot.kinguser, com.txznet.txz, android, com.nwd.android.phone, com.android.dynsystem, com.android.managedprovisioning, com.android.nfc
+12:59:51    action com.nwd.ACTION_OS_WAKE_UP: 2 — com.ninthfreak.carfm, com.ninthfreak.carnyx(us)
+12:59:51    action com.nwd.ACTION_ACCOFF_UPDATE: 1 — com.ninthfreak.carnyx(us)
+12:59:51    action com.nwd.action.ACTION_ACCOFF_UPDATE: 1 — com.ninthfreak.carnyx(us)
+12:59:51    action com.nwd.action.ACTION_KEY_VALUE: NOBODY declares a receiver
+12:59:51    battery: NOT exempt from Doze
+12:59:51    global enable_cellular_on_boot = 1
+12:59:51    global Phenotype_boot_count = 15
+12:59:51    global _boot_Phenotype_flags = 
+12:59:51    global device_idle_constants = light_after_inactive_to=180000,light_pre_idle_to=180000,
+12:59:51    global dock_sounds_enabled_when_accessbility = 0
+12:59:51    global wifi_sleep_policy = 2
+12:59:51    global location_ignore_settings_package_whitelist = com.google.android.gms,com.google.android.dialer
+12:59:51    global location_background_throttle_interval_ms = 600000
+12:59:51    global app_idle_constants = 
+12:59:51    global default_restrict_background_data = 0
+12:59:51    global wifi_wakeup_enabled = 1
+12:59:51    global app_standby_enabled = 1
+12:59:51    global location_global_kill_switch = 0
+12:59:51    global boot_count = 15
+12:59:51    secure sleep_timeout = -1
+12:59:51    secure double_tap_to_wake = 1
+12:59:51    secure wake_gesture_enabled = 1
+12:59:51    secure screensaver_activate_on_sleep = 0
+12:59:51    secure enabled_accessibility_services = com.txznet.txz/com.txznet.smartwakeup.service.OverseaAccessibilityService
+12:59:51    secure masterLocationPackagePrefixWhitelist = com.google.android.gms
+12:59:51    secure accessibility_display_magnification_scale = 2.0
+12:59:51    secure enabled_notification_policy_access_packages = com.android.camera2
+12:59:51    secure mount_ums_autostart = 0
+12:59:51    secure accessibility_enabled = 0
+12:59:51    secure accessibility_display_magnification_enabled = 0
+12:59:51    system arm_auto_start_navi_when_acc_on = 0
+12:59:51    system whitelist_packagename = null
+12:59:51    system nwd_vodka_clean_launcher_date = 0
+12:59:51    system boot_menu_type = 0
+12:59:51    system accelerometer_rotation = 0
+12:59:51    system whitelist_appname = null
+12:59:51    system key_nwd_backgroundvideoplayback = 0
+12:59:51    pkg com.nwd.kernel
+12:59:51    pkg com.nwd.vodka.factory
+12:59:51    pkg com.android.launcher
+12:59:51    pkg com.softwinner.awlogsettings
+12:59:51    pkg com.telenav.launcher
+12:59:51    pkg com.nwd.media.scanner
+12:59:51    pkg com.nwd.setting.service
+12:59:51    pkg com.nwd.backcar
+12:59:51    pkg com.nwd.usb2cvbs
+12:59:51    pkg com.nwd.ivicarModelShop
+12:59:51    pkg com.nwd.can.help
+12:59:51    pkg com.nwd.android.music.ui
+12:59:51    pkg com.nwd.can.setting
+12:59:51    pkg com.softwinner.settingssetup
+12:59:51    pkg com.nwd.android.video.ui
+12:59:51    pkg com.nwd.mycar
+12:59:51    pkg com.nwd.radio
+12:59:51    pkg com.nwd.bt.music
+12:59:51    pkg com.android.settings.intelligence
+12:59:51    pkg com.nwd.android.phone
+12:59:51    pkg com.android.providers.settings
+12:59:51    pkg com.nwd.audioset
+12:59:51    pkg com.nwd.filemanager
+12:59:51    pkg com.nwd.traversalfile
+12:59:51    pkg com.nwd.voice.analyze
+12:59:51    packages: 104 visible
+12:59:51  keep-alive probe: done, 83 lines
