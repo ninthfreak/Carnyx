@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon's background layer: one flat colour.
+
+  `#E2E6EC` is the page grey `docs/design/carnyx-icon.svg` uses, which its own
+  header records as the face's light-mode page token darkened from `#EEF1F5`
+  for icon contrast. A colour rather than a drawable because an adaptive
+  background is meant to be plain — the launcher parallaxes and masks it, and
+  anything with detail in it fights both.
+-->
+<resources>
+    <color name="ic_launcher_background">#E2E6EC</color>
+</resources>

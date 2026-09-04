@@ -1306,8 +1306,8 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
-### 132. Carnyx gets a launcher icon, and the adaptive half is a design question
-**THE LEGACY LADDER IS IN. THE ADAPTIVE FOREGROUND IS DRAWN AND NOT LANDED.**
+### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
+**BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
 radio face, hero card between two peek cards, preset row under it, signal glyph
 top-left, with an amber C wrapping "nyx" in the hero. No text elements, no
@@ -1344,18 +1344,39 @@ the device's own `DisplayMetrics`; it is the likely case, not a measured fact,
 and it is the reason the adaptive question is worth answering rather than
 deferring.
 
-**THE PROPOSAL, AWAITING THE OWNER.** Two foregrounds drawn on the 108 canvas,
-both from the existing monogram, both centred on its MEASURED ink box (104.38,
-94.00 in the source space — the eyeballed centre was 6 units high):
+**THE PROPOSAL WAS TWO FOREGROUNDS; THE OWNER PICKED A.** Both were drawn on the
+108 canvas from the existing monogram, both centred on its MEASURED ink box
+(104.38, 94.00 in the source space — the eyeballed centre had been 6 units high):
 
 - **A — C·nyx**, scaled 0.52 so its half-diagonal of 62.5 lands inside the
-  33-unit safe radius. Legible at 72 and 48, tight at 36.
+  33-unit safe radius. Legible at 72 and 48, tight at 36. **Chosen.**
 - **B — the C alone**, scaled 0.667 about its own centre (85.75, 94.00).
   Unmistakable at every size, and gives up the name.
 
-Neither is in the tree. Landing one means `mipmap-anydpi-v26/ic_launcher.xml`, a
-`values/ic_launcher_background.xml` colour (`#E2E6EC`), the foreground as a
-vector drawable, and `android:roundIcon` becoming worth setting.
+**A IS IN.** `docs/design/carnyx-icon-adaptive-foreground.svg` is the source;
+`res/drawable/ic_launcher_foreground.xml` is the VectorDrawable, a HAND
+translation rather than an export, because a VectorDrawable group takes pivot,
+scale and translate attributes and not an SVG transform string. The algebra is
+written out in both files: with pivot at the measured centre, scale 0.52 and
+translate (54 - 104.38, 54 - 94), a point maps to `0.52·(p - centre) + (54, 54)`,
+which is what the SVG's `translate(54 54) scale(0.52) translate(-104.38 -94)`
+does. Rendering the committed SVG and reading its alpha box back confirms the
+result: ink centred at exactly (54.00, 54.00) with a half-diagonal of **32.55**
+against the 33.00 the mask guarantees.
+
+With it: `mipmap-anydpi-v26/ic_launcher.xml`, the same again as
+`ic_launcher_round.xml` so `android:roundIcon` resolves rather than dangling, and
+`values/ic_launcher_background.xml` holding the page grey `#E2E6EC` as a colour
+— a colour rather than a drawable because the launcher parallaxes and masks the
+background layer, and detail there fights both.
+
+**AND THE CONSEQUENCE, WHICH IS NOT A DETAIL.** `minSdk = 26`, so
+`mipmap-anydpi-v26` shadows the PNG ladder on EVERY device this app runs on. The
+launcher on the head unit will show the MONOGRAM, not the face miniature. The
+bitmaps are not dead — anything reading an icon without adaptive support finds
+them, and the 512 is a listing image — but the face miniature is no longer what
+a driver sees on the home screen. That follows from choosing an adaptive icon at
+all, and it was put to the owner as the choice it is.
 
 **THE cargo-apk BUILD HAS NO ICON AND CANNOT HAVE ONE.** That packager ships no
 resources at all, so an install from it wears the system's default grey robot.

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Carnyx adaptive-icon FOREGROUND — the C·nyx monogram alone, on the 108-unit
+  adaptive canvas.
+
+  WHY NOT THE WHOLE FACE. `carnyx-icon.svg` is the drawing this is cut from, and
+  it cannot be an adaptive foreground: the mask keeps a centred circle of 66 of
+  the 108, which on that art's 200-unit canvas is a radius of ~61 — and its hero
+  card corners sit ~78 out, the signal glyph ~102, the status bar ~100, the
+  preset row's outer corners ~119. A round mask leaves the monogram in a white
+  blob and cuts everything else. That file stays the legacy square icon.
+
+  THE NUMBERS ARE MEASURED, NOT EYEBALLED. Rendering the monogram alone at 4x
+  and reading its alpha bounding box puts the ink at x 54.0..154.8, y 57.0..131.0
+  in the source's 200-unit space: centre (104.38, 94.00), 100.8 x 74.0, a
+  half-diagonal of 62.50. Scaling by 0.528 would land that half-diagonal exactly
+  on the 33-unit safe radius; 0.52 is used, for a little margin. The first cut of
+  this put the centre at (105, 88) by eye and sat visibly high.
+
+  THE ANDROID SIDE IS `res/drawable/ic_launcher_foreground.xml`, a
+  VectorDrawable, and it is a hand translation of THIS file rather than an
+  export — VectorDrawable groups take pivot/scale/translate attributes and not a
+  transform string. See the algebra in that file's own comment. If this changes,
+  that has to change with it; nothing enforces it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+  <defs><clipPath id="letterBand"><rect x="80" y="81.5" width="80" height="25"/></clipPath></defs>
+  <g transform="translate(54 54) scale(0.52) translate(-104.38 -94)">
+    <g fill="none" stroke-linecap="round">
+      <path d="M110.3 71 A30 30 0 1 0 110.3 117" stroke="#1B222C" stroke-width="14"/>
+      <path d="M110.3 71 A30 30 0 1 0 110.3 117" stroke="#C9760A" stroke-width="10"/>
+    </g>
+    <g transform="translate(-3 0)" fill="none" stroke="#1B222C" stroke-width="6.5"
+       stroke-linecap="butt" stroke-linejoin="miter">
+      <path d="M104 106.5 V97 L91.75 84.75 H88 V106.5"/>
+      <path d="M103 79.5 L126 104.5" clip-path="url(#letterBand)"/>
+      <path d="M126 81.5 V115.3"/>
+      <path d="M132.2 78.5 L155.8 109.5 M155.8 78.5 L132.2 109.5" clip-path="url(#letterBand)"/>
+    </g>
+  </g>
+</svg>

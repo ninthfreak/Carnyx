@@ -166,22 +166,34 @@
     </queries>
 
     <!--
-      THE ICON IS A LEGACY BITMAP LADDER, NOT AN ADAPTIVE ICON, and that is a
-      decision rather than an omission. `mipmap-*/ic_launcher.png` is rendered
-      from `docs/design/carnyx-icon.svg` by `tools/gen-launcher-icons.py`; the
-      drawing is a miniature of the radio face, and an adaptive icon's mask
-      keeps only a centred circle of 66 of its 108dp — measured against this
-      art, that circle cuts the peek cards, the preset row, the signal glyph
-      and the status bar, and clips the hero card's own corners. Adaptive needs
-      a foreground drawn for the mask, which is a design question and not a
-      packaging one.
+      TWO ICONS UNDER ONE NAME, and which one a device draws is decided by the
+      resource system, not here.
 
-      NO `android:roundIcon`. It is only read by launchers that ask for round
-      icons, and supplying the same square bitmap under that name buys nothing.
+      `mipmap-anydpi-v26/ic_launcher.xml` is an adaptive icon: the C·nyx
+      monogram over the page grey. `mipmap-*/ic_launcher.png` is the legacy
+      bitmap ladder, rendered from `docs/design/carnyx-icon.svg` — a miniature
+      of the radio face — by `tools/gen-launcher-icons.py`.
+
+      SINCE `minSdk = 26`, ANDROID PICKS THE ADAPTIVE ONE ON EVERY DEVICE THIS
+      APP RUNS ON, the head unit included. The bitmaps are not dead — anything
+      reading an icon without adaptive support still finds them, and the 512 is
+      a listing image — but the launcher will show the monogram, not the face.
+
+      WHY THE FACE IS NOT THE ADAPTIVE FOREGROUND: the mask keeps a centred
+      circle of 66 of 108dp, which on that art's 200-unit canvas is a radius of
+      ~61. Measured against the rendered ink, its hero card corners sit ~78 out,
+      the signal glyph ~102, the status bar ~100, the preset row's outer corners
+      ~119. A round mask would leave the monogram in a white blob and cut the
+      rest. See docs/TASKS.md #132.
+
+      `android:roundIcon` RESOLVES TO THE SAME ADAPTIVE ICON. A launcher that
+      asks for round gets one that masks to round anyway; the alias exists so
+      the attribute is not a dangling reference.
     -->
     <application
         android:label="Carnyx"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
