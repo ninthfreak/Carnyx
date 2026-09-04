@@ -1540,12 +1540,139 @@ every broadcast route dead, the lifecycle, or `setRadioBackServiceOn(false)`, ma
 be the only place left to do it from. The objection to the lifecycle stands as an
 objection; it is no longer a choice between it and something that works.
 
-**STILL OPEN FROM CarFM, AND NOW ON THE CRITICAL PATH:** the exact
-`EXTRA_MEDIA_SOURCE` value for the radio source. `BUILTIN-TUNER-FINDINGS.md`
-lists it under OPEN — "decompile the stock app's start/resume source-switch call"
-— and never closed it. The APK is readable on the unit at
-`/data/smallota/app/com.nwd.radio/com.nwd.radio.apk`, 11,359 KB, so a copy to a
-USB stick settles both this and the intent-filter question in one go.
+---
+
+**THE OWNER COPIED BOTH APKs OFF THE UNIT, AND THEY SETTLE MOST OF THIS.** Read
+with `androguard`; the findings and the evidence are in `docs/vendor/README.md`,
+the vendor's whole 194-action vocabulary in `docs/vendor/nwd-actions.txt`.
+
+**ROUTE 2 OF #96 IS DEAD.** The stock app's entire manifest is ONE activity —
+`com.nwd.radio.home_horizontalActivity`, `launchMode="2"` — with ONE filter,
+`MAIN` + `LAUNCHER`. No receivers, no services, no providers. There is no custom
+action to declare and no chooser to become the default of, so whatever launches it
+on ACC-on is naming the component explicitly. The probe's sweep was right that
+there is no door; it could not have proved it, and now the manifest does.
+
+**FM IS SOURCE 4, MEASURED.** `AWFMFeature.isRadioSource()` reads
+`SettingTableKey.getIntValue(cr, "mcu_current_source") == 4`. Every gate in
+`NwdBridge` that assumes 4 is correct.
+
+**CarFM'S OPEN QUESTION IS ANSWERED, AND ITS ANSWER NAMED THE WRONG EXTRA.**
+`BUILTIN-TUNER-FINDINGS.md` left "the exact `EXTRA_MEDIA_SOURCE` value" open.
+`extra_media_source` is not the one: it belongs to
+`OuterBroadcastSender.sendMediaPlayInfo`, which talks to the CAN bus. The extra
+that moves the radio is `extra_source_id`, and it is a BYTE:
+
+```java
+// AWRadioManager$1.onReceive
+byte newSource = intent.getByteExtra("extra_source_id", 0);
+if (newSource == 4) { InitFM(); }
+else if (!NewRdsManager.getInstance().isRdsEnable()) { ExitFm(); }
+```
+
+**AND THE FINDING THAT CHANGES WHAT TO BUILD.** The stock app is told BY NAME
+that it is about to be killed, and that is what it releases FM on:
+
+```java
+if ("com.nwd.ACTION_KILL_OTHER_APP".equals(action)) {
+    String pkg = intent.getStringExtra("extra_package_name");
+    if (pkg.equals("com.nwd.radio")) { ExitFm(); }
+}
+```
+
+All six of its actions are registered at RUNTIME —
+`AWRadioManager.registReceiver()` — which is why nothing on the unit declares them
+in a manifest, why the probe's sweep found no declarer, and why the API-26 ban on
+implicit broadcasts never applied to the vendor's own handling of them.
+
+**SO THE SIGNAL CARNYX NEEDS EXISTS, AND IT IS NOT THE ONE WE HAVE BEEN WAITING
+FOR.** `com.nwd.ACTION_OS_SLEEP`, `com.nwd.ACTION_OS_WAKE_UP` and
+`com.nwd.ACTION_ACCOFF_UPDATE` are all present in the string pools and NOTHING in
+the stock radio app references any of them — no sender, no receiver. They are
+bundled SDK constants. The action the vendor actually uses to tell an app it is
+about to go away is `com.nwd.ACTION_KILL_OTHER_APP` with `extra_package_name`, it
+arrives at a runtime receiver in a LIVING process, and it arrives BEFORE the kill.
+That is the one thing every mechanism tried so far has lacked.
+
+**WHAT THAT MAKES BUILDABLE**, in the owner's own ranking:
+
+- **B — nothing launches on wake.** Hear `ACTION_KILL_OTHER_APP` for
+  `com.ninthfreak.carnyx`, and hand the source back there instead of on an ACC-off
+  broadcast that never comes. If `mcu_current_source` is not 4 when the unit
+  sleeps, the MCU has no FM to restore. It also gives Carnyx a place to do what
+  the stock app does — the vendor's own idiom, in the vendor's own order.
+- **C — Carnyx on top.** Unchanged: still needs a notification listener or an
+  accessibility service for the background-activity-start exemption. The kill
+  signal does not help here, because by wake time the process is gone.
+- **A — Carnyx instead of the stock app.** Still only `pm disable-user`, and now
+  known to be the ONLY route: with no implicit door there is nothing to intercept.
+
+**WHAT IS STILL UNKNOWN.** Whether the cleaner broadcasts `ACTION_KILL_OTHER_APP`
+for third-party packages at all, or only for the vendor's own. The stock app is
+the only sample here, and it is a system app.
+
+---
+
+**B IS BUILT.** `NwdBridge.startSleepWatch` now registers `KILL_ACTION` alongside
+the three it already had, and the receiver tests the package extra the way the
+stock app tests its own name:
+
+```java
+if (KILL_ACTION.equals(action)) {
+    String named = i.getStringExtra(EXTRA_PACKAGE);
+    if (named == null || !named.equals(ctx.getPackageName())) {
+        safeSleep(action, "names " + named + ", not us — no release");
+        return;
+    }
+    action = action + " (" + named + ")";
+}
+```
+
+A kill naming Carnyx then falls through into the existing sleep path: release the
+source on this thread, `CarnyxWake.noteSleep` to disk, `safeSleep` to the log. A
+kill naming anything else is logged and NOT committed — `noteSleep` writes ONE
+durable slot that the next launch reads back, and filling it with "the cleaner
+killed YouTube" would overwrite the line that matters. Those go to the in-memory
+log, which dies with the process; that is acceptable, because a kill for another
+package is only interesting while we are alive to have seen it, and if we are
+alive we are still in line to be named.
+
+THE FILTER IS IN JAVA ON PURPOSE. The package extra never crosses the seam, so a
+kill for another app cannot reach Rust and cannot touch the durable note.
+`the_vendor_kill_is_a_sleep_when_it_names_us` pins the half that does cross.
+
+**AND THE PROBE ASKS ABOUT THE REST OF THE VOCABULARY NOW.** Added to the sweep:
+the other four of the stock app's own six (`ACTION_KILL_OTHER_APP`,
+`ACTION_EXIT_ARM_FM_RAIDO`, `ACTION_MEDIA_PLAY`, `ACTION_MCU_STATE_CHANGE`), the
+vendor's app-movers (`ACTION_REQUEST_START_ACTIVITY`, `ACTION_START_ACTIVITY`,
+`ACTION_START_NWD_ACTIVITY`, `ACTION_STOP_APP`, `ACTION_CLOSE_CAR_RADIO`) and the
+three that turned out to have no cross-references (`ACTION_OS_SLEEP`,
+`ACTION_AUTO_SLEEP_WAKE_STATE`, `ACTION_SYSTEM_AUTO_WAKEUP`). Misses are reported
+for the kill and the movers, because a miss there says the mechanism is
+runtime-only like the stock app's and there is nothing to declare against.
+
+**TWO CLAIMS IN THIS TREE WERE VERIFIED AGAINST THE FIRMWARE WHILE THE APKs WERE
+OPEN**, both of which had been asserted in comments and never checked:
+
+- `Frequency.java` says its parcel wire order is "byte band, String psName, int
+  freq — verified from the service's writeToParcel". The service's real
+  `writeToParcel` is `writeByte(mBandType); writeString(mPSName);
+  writeInt(mFrequency)`. MATCHES. `RadioPoint` likewise: min, max, step.
+- `RadioFeature.aidl` says "METHOD ORDER IS LOAD-BEARING … verified from the
+  service's TRANSACTION_* constants". Read out of `RadioFeature$Stub` and
+  `RadioCallback$Stub`: **30 of 30 and 14 of 14 line up in order.** Every
+  transaction code is right.
+
+**AND THE JAVA HAS A CHECK NOW.** `tools/check-java.sh` — 6,500 lines across ten
+classes, including the file this feature lives in, were compiled by nothing but
+Gradle on the owner's machine. It cost time immediately: the first cut of the
+receiver above put a `static final` field in an array initializer ABOVE its own
+declaration, an illegal forward reference and a hard compile error, invisible to
+every check this container had. The script fetches a Robolectric framework jar,
+generates interface stubs FROM THIS TREE'S OWN `.aidl` (not from the vendor APK —
+the licensing note on those files forbids redistributing decompiled code), and
+compiles twelve of the thirteen classes. `CarnyxNav` is skipped and printed, the
+way `check-jni.sh` prints its own skips.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**

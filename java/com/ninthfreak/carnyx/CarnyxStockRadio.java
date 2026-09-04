@@ -146,6 +146,40 @@ public final class CarnyxStockRadio {
         "com.nwd.ACTION_CHANGE_SOURCE",
         "com.nwd.action.ACTION_APP_IN_OUT",
         "com.nwd.action.ACTION_TEST_KEY",
+        // ── THE SIX THE STOCK APP ITSELF LISTENS FOR ─────────────────────────
+        //
+        // Read out of `AWRadioManager.registReceiver()` in the decompiled APK
+        // (docs/vendor/README.md), so this is the vendor's real vocabulary
+        // rather than what this tree happened to have seen. APP_IN_OUT and
+        // CHANGE_SOURCE are already above; these are the rest.
+        //
+        // ASKING IS STILL WORTH IT EVEN THOUGH WE KNOW THE ANSWER FOR THE STOCK
+        // APP. It registers all six at RUNTIME, so it will never appear as a
+        // declarer of any of them — but something ELSE on the unit might declare
+        // one in a manifest, and that would be a door this sweep exists to find.
+        "com.nwd.ACTION_KILL_OTHER_APP",
+        "com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO",
+        "com.nwd.ACTION_MEDIA_PLAY",
+        "com.nwd.action.ACTION_MCU_STATE_CHANGE",
+        // ── AND THE ONES THAT MOVE APPS AROUND ───────────────────────────────
+        //
+        // The stock app has no implicit door, so whatever brings it forward on
+        // ACC-on names its component. These are the vendor's own "start an
+        // activity" and "stop an app" broadcasts out of `nwd-actions.txt`; a
+        // declarer for any of them is a component that does the moving, which is
+        // the next place to look after the app itself came back empty.
+        "com.nwd.ACTION_REQUEST_START_ACTIVITY",
+        "com.nwd.action.ACTION_START_ACTIVITY",
+        "com.nwd.action.ACTION_START_NWD_ACTIVITY",
+        "com.nwd.action.ACTION_STOP_APP",
+        "com.nwd.action.ACTION_CLOSE_CAR_RADIO",
+        // The three this project spent months listening for. All three are in
+        // both vendor APKs' string pools as bundled SDK constants with NO
+        // cross-references — no sender, no receiver. Swept anyway, because a
+        // declarer elsewhere on the unit would overturn that.
+        "com.nwd.ACTION_OS_SLEEP",
+        "com.nwd.ACTION_AUTO_SLEEP_WAKE_STATE",
+        "com.nwd.android.ACTION_SYSTEM_AUTO_WAKEUP",
         "com.nwd.radio.service.ACTION_RADIO_SERVICE",
         "android.intent.action.MEDIA_BUTTON",
         "android.media.action.MEDIA_PLAY_FROM_SEARCH",
@@ -174,6 +208,15 @@ public final class CarnyxStockRadio {
         "com.nwd.ACTION_REQUEST_CHANGE_SOURCE",
         "com.nwd.action.ACTION_CHANGE_SOURCE",
         "com.nwd.ACTION_CHANGE_SOURCE",
+        // The kill and the movers. A miss on these is as load-bearing as a hit:
+        // it says the cleaner and the app-mover are runtime-only, like the stock
+        // app's own six, and that there is nothing to declare against them.
+        "com.nwd.ACTION_KILL_OTHER_APP",
+        "com.nwd.action.ACTION_STOP_APP",
+        "com.nwd.ACTION_REQUEST_START_ACTIVITY",
+        "com.nwd.action.ACTION_START_ACTIVITY",
+        "com.nwd.action.ACTION_START_NWD_ACTIVITY",
+        "com.nwd.ACTION_OS_SLEEP",
     };
 
     /** Categories to pair with {@code ACTION_MAIN}, which alone resolves nothing. */
