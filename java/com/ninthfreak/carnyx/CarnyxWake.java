@@ -2,6 +2,7 @@ package com.ninthfreak.carnyx;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.provider.Settings;
 import android.util.Log;
 
 /**
@@ -66,6 +67,25 @@ public final class CarnyxWake {
      * feature off.
      */
     private static final String KEY_LAST_SLEEP = "last_sleep";
+
+    /**
+     * What the notification listener's last bind or unbind did.
+     *
+     * <p>Written by {@code CarnyxListener}, which shares this file BY NAME the
+     * way {@code SleepReceiver} does — the platform can bind that service into a
+     * process with no Rust in it, so the two halves can never share a constant.
+     */
+    private static final String KEY_LAST_LISTENER = "last_listener";
+
+    /**
+     * The driver's "come forward when the platform binds us" switch.
+     *
+     * <p>Default FALSE and read by a cold process, for {@code
+     * KEY_RELEASE_ON_SLEEP}'s reason: the listener may be bound with no app
+     * behind it and no settings file parsed, and this is the only way it can
+     * know what the driver asked for.
+     */
+    private static final String KEY_COME_FORWARD = "come_forward";
     private static final String KEY_RELEASE_ON_SLEEP = "release_on_sleep";
 
     private static Context ctx;
@@ -149,6 +169,48 @@ public final class CarnyxWake {
         return take(KEY_LAST_SLEEP, "sleep");
     }
 
+    /**
+     * What the notification listener last did, and forget it.
+     *
+     * <p>THE ONE LINE THAT SAYS WHETHER OUTCOME C IS REACHABLE. A listener note
+     * present after an ignition cycle means the PLATFORM started this app's
+     * process with no human involved — which every broadcast receiver here has
+     * failed to achieve, because the vendor force-stops the package first.
+     * Absent, and the force-stop takes the listener down with everything else.
+     *
+     * <p>Empty is also what a cargo-apk build always reports: that packager
+     * declares no services, so there is no listener to bind.
+     */
+    public static synchronized String takeLastListener() {
+        return take(KEY_LAST_LISTENER, "listener");
+    }
+
+    /**
+     * Whether the driver has granted notification access.
+     *
+     * <p>Read off {@code Settings.Secure}'s own list rather than inferred from
+     * whether {@code CarnyxListener} has ever been constructed: the app needs
+     * this while drawing a settings row, which is a moment when the platform has
+     * told it nothing. The keep-alive probe reads the same key for its report;
+     * this is the same question asked where a row can act on the answer.
+     *
+     * <p>SUBSTRING, NOT EQUALITY. The setting is a colon-separated list of
+     * flattened component names across every app that holds the grant.
+     */
+    public static synchronized boolean isListenerGranted() {
+        if (ctx == null) {
+            return false;
+        }
+        try {
+            String enabled = Settings.Secure.getString(
+                    ctx.getContentResolver(), "enabled_notification_listeners");
+            return enabled != null && enabled.contains(ctx.getPackageName());
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the listener grant: " + t);
+            return false;
+        }
+    }
+
     /** Read one note and clear it. See {@link #takeLastWake}. */
     private static String take(String key, String what) {
         if (ctx == null) {
@@ -212,6 +274,27 @@ public final class CarnyxWake {
                     .edit().putBoolean(KEY_RELEASE_ON_SLEEP, on).commit();
         } catch (Throwable t) {
             Log.w(TAG, "could not record the release switch: " + t);
+        }
+    }
+
+    /**
+     * Write the driver's come-forward switch where the notification listener can
+     * read it.
+     *
+     * <p>Exactly {@link #setReleaseOnSleep}'s arrangement and for exactly its
+     * reason: {@code CarnyxListener} may be bound by the platform into a process
+     * with no app behind it, so a switch it must honour cannot live in
+     * {@code prefs.json}.
+     */
+    public static synchronized void setComeForward(boolean on) {
+        if (ctx == null) {
+            return;
+        }
+        try {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_COME_FORWARD, on).commit();
+        } catch (Throwable t) {
+            Log.w(TAG, "could not record the come-forward switch: " + t);
         }
     }
 }

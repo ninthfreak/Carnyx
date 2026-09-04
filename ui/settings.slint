@@ -1386,6 +1386,9 @@ export component SettingsOverlay inherits Rectangle {
     callback set-nav-on(bool);
     callback set-nav-hide-on-map(bool);
     callback set-preset-loop(bool);
+    in property <bool> come-forward: false;
+    in property <string> come-forward-sub;
+    callback set-come-forward(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
     callback set-theme(string);
@@ -1688,6 +1691,7 @@ export component SettingsOverlay inherits Rectangle {
                     toggled(v) => { root.set-logos(v); }
                 }
 
+
                 // UNCONDITIONAL, and no divider above it. The dc.html:112 shows this
                 // row only while the logos toggle is ON; SettingsPanel.tsx:488-501
                 // shows it always and carries a comment calling the gating a bug —
@@ -1700,6 +1704,31 @@ export component SettingsOverlay inherits Rectangle {
                     label: root.clear-logos-label;
                     interactive: !root.clearing-logos;
                     clicked => { root.clear-logos(); }
+                }
+
+                RowDivider { }
+
+                // LAST IN THE GROUP, AND BELOW THE LOGO PAIR RATHER THAN INSIDE
+                // IT. The first cut of this row went between "Station logos" and
+                // "Clear all station logos", which reads as a third logo setting
+                // and splits a pair the row above it is deliberately attached to
+                // — see that comment: no divider, because the clear row belongs
+                // to the toggle. A shot caught it.
+                //
+                // IN SYSTEM AND NOT APPEARANCE, because it is not a display rule
+                // — it asks the platform to start this app, which is the same
+                // question the battery row at the top of this group asks.
+                //
+                // THE SUB-LINE CARRIES THE CONDITION AND THE HAZARD, and the
+                // title promises nothing. #94 removed a row called "Start radio
+                // on boot" that described behaviour the app did not have; this
+                // one says what it will attempt, and its sub-line says when that
+                // attempt cannot even be made.
+                SwitchRow {
+                    title: "Come back on when the unit wakes";
+                    sub: root.come-forward-sub;
+                    on: root.come-forward;
+                    toggled(v) => { root.set-come-forward(v); }
                 }
             }
 

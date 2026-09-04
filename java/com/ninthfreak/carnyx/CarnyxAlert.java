@@ -345,6 +345,48 @@ public final class CarnyxAlert {
     }
 
     /**
+     * Send the driver to Android's "Notification access" screen.
+     *
+     * <p>THE THIRD PERMISSION ERRAND AND THE ONLY ONE THAT IS NOT ABOUT THE
+     * POP-UP. `CarnyxListener` wants this grant so the PLATFORM will bind it —
+     * the unit force-stops third-party packages on ACC-off and no broadcast
+     * reaches them afterwards, and a platform-bound service is the one route
+     * left that might survive that. See docs/TASKS.md #133.
+     *
+     * <p>NO `package:` URI, unlike the overlay screen. This action takes none —
+     * it opens the list of every app that could hold the grant, and the driver
+     * finds Carnyx in it. Passing a URI here is what makes some ROMs throw.
+     *
+     * <p>The activity when there is one and the app context otherwise, for
+     * {@link CarnyxOverlay#requestPermission}'s reason.
+     */
+    public static synchronized String requestListenerAccess() {
+        if (ctx == null) {
+            return "notification access: no context";
+        }
+        if (CarnyxWake.isListenerGranted()) {
+            return "notification access: already granted";
+        }
+        try {
+            Intent i = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
+            android.app.Activity a = activity == null ? null : activity.get();
+            if (a != null) {
+                a.startActivity(i);
+            } else {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(i);
+            }
+            return "notification access: sent you to Android's \"Notification access\""
+                    + " screen \u2014 switch Carnyx on there";
+        } catch (Throwable t) {
+            // A ROM without the screen throws here, and that is an answer rather
+            // than a bug: the route is closed on this unit and outcome C with it.
+            return "notification access: this ROM has no \"Notification access\""
+                    + " screen \u2014 " + t.getClass().getSimpleName();
+        }
+    }
+
+    /**
      * The same message as a TOAST, because on this unit the notification is not
      * what the driver sees.
      *

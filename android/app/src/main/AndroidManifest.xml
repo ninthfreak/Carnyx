@@ -341,5 +341,43 @@
                 <action android:name="com.nwd.action.ACTION_ACCOFF_UPDATE" />
             </intent-filter>
         </receiver>
+
+        <!--
+          THE NOTIFICATION LISTENER, WHICH LISTENS TO NO NOTIFICATIONS.
+
+          It is here for one property: a NotificationListenerService is bound by
+          the PLATFORM rather than by the app, and the platform re-binds it. Every
+          other mechanism this app has for surviving a sleep is a broadcast
+          receiver, and the unit force-stops third-party packages on ACC-off —
+          measured, 8 of 17 — after which no broadcast of any kind arrives until a
+          human taps the icon. See CarnyxListener.java and docs/TASKS.md #133.
+
+          WHETHER THE PLATFORM RE-BINDS A FORCE-STOPPED PACKAGE'S LISTENER IS THE
+          OPEN QUESTION, and the class is written so one ignition cycle answers it
+          either way: it writes a durable note on every bind, before it does
+          anything else.
+
+          `exported="true"` and the BIND permission are BOTH required, and not by
+          choice: the system binds this service, so it must be exported, and the
+          platform refuses to bind a listener that does not require
+          BIND_NOTIFICATION_LISTENER_SERVICE — the guarantee that only the system
+          can bind it is what makes exporting it safe.
+
+          NO `foregroundServiceType` AND NO EXPORTED RECEIVER FILTER: this is not
+          a foreground service and has no actions of its own. The single
+          intent-filter is the platform's own binding contract.
+
+          Under cargo-apk this class is absent and cannot be added — that build
+          packages no Java and its manifest schema has no `<service>` field. The
+          app notices only by never seeing a listener note.
+        -->
+        <service
+            android:name=".CarnyxListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

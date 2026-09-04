@@ -249,6 +249,34 @@ pub fn request_overlay_permission() -> String {
     .unwrap_or_else(|e| format!("JNI failure: {e}"))
 }
 
+/// Send the driver to Android's "Notification access" screen.
+///
+/// THE THIRD ERRAND OF THIS SHAPE AND THE ONLY ONE NOT ABOUT THE POP-UP.
+/// `CarnyxListener` needs the grant so the PLATFORM will bind it, which is the
+/// one route left that might survive the vendor's force-stop on ACC-off. See
+/// `CarnyxAlert.requestListenerAccess` and docs/TASKS.md #133.
+pub fn request_listener_access() -> String {
+    let Some(class) = CLASS_REF.get() else {
+        return "no alert class in this build".into();
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return "no JVM".into();
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
+        let out = env
+            .call_static_method(
+                class,
+                jni_str!("requestListenerAccess"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )?
+            .l()?;
+        let out = JString::cast_local(env, out)?;
+        out.try_to_string(env)
+    })
+    .unwrap_or_else(|e| format!("JNI failure: {e}"))
+}
+
 /// Take the pop-up down — the driver is back on the face and can see the dial.
 pub fn clear() {
     let Some(class) = CLASS_REF.get() else {

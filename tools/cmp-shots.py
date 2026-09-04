@@ -38,6 +38,13 @@ UNSTABLE = [
     # The power ring and the band art's own animation.
     "acdc.png", "acdc-dark.png", "acdc-portrait.png", "audio-released.png",
     "driving.png",
+    # INTERMITTENT, and it took three full runs to catch. A band theme draws
+    # `GlitchText`, whose animation is on the same wall clock as everything else
+    # here — so this shot agrees with itself across most pairs of runs and
+    # disagrees across some. A shot that flaps rarely is worse than one that
+    # flaps always: it reads as a regression in whichever change happens to be
+    # in flight. Two full runs are not enough to clear one; the mechanism is.
+    "nin.png",
     # Spinners.
     "logo-search-loading.png", "nearby-loading.png",
     # The RadioText strip mid-scroll.

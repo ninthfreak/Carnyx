@@ -201,6 +201,20 @@ pub enum Action {
     /// without the driver visiting a Settings screen, so this row is not a
     /// contingency — it is how the feature is turned on.
     AskOverlayPermission,
+    /// Send the driver to Android's "Notification access" screen. See
+    /// `CarnyxListener`.
+    ///
+    /// THE THIRD OF THE SAME SHAPE, and the one whose reason is not a permission
+    /// the feature needs but a MECHANISM the app is out of other options for.
+    /// The unit force-stops third-party packages on ACC-off, after which no
+    /// broadcast of any kind reaches them; a notification listener is bound by
+    /// the platform rather than by the app, which is the only route left that
+    /// might survive it. Whether it does is what granting this settles.
+    ///
+    /// IT READS NO NOTIFICATIONS. `CarnyxListener` overrides neither posted nor
+    /// removed, and the row's own sub-line says so, because "notification
+    /// access" on a radio is a thing a driver is right to look twice at.
+    AskListenerPermission,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -250,6 +264,16 @@ pub fn diag_actions() -> Vec<DiagAction> {
             sub: String::new(),
             divider_above: false,
             action: Action::AskOverlayPermission,
+        },
+        // Third of the three permission errands. Last of them because it is the
+        // one with a reason a driver has to be told rather than shown: the other
+        // two turn on a pop-up they have already seen, and this one turns on a
+        // mechanism whose whole purpose is invisible until an ignition cycle.
+        DiagAction {
+            label: "Allow notification access".into(),
+            sub: String::new(),
+            divider_above: false,
+            action: Action::AskListenerPermission,
         },
         DiagAction {
             label: "Clear log".into(),
@@ -464,6 +488,26 @@ pub fn logos_sub(on: bool) -> &'static str {
 /// one copy of the list is at least as wide as the rail, so a driver with four
 /// presets can turn this on, see nothing change, and be right to wonder whether
 /// it works. The row tells them before they wonder.
+/// What the "Come back on when the unit wakes" row says underneath.
+///
+/// THE ON LINE NAMES A CONDITION AND A HAZARD, in that order, because both are
+/// real and the driver is the one who pays for either. The condition is the
+/// grant: with no notification access the platform binds nothing and the switch
+/// governs nothing. The hazard is that a bind is not only a wake — the platform
+/// also binds at boot and after granting — so the face can come forward at a
+/// moment the driver did not ask for.
+///
+/// NOTHING HERE PROMISES IT WORKS, which is #94's whole lesson: that row said
+/// "Start radio on boot" over behaviour the app did not have. This one says what
+/// it will attempt.
+pub fn come_forward_sub(on: bool, granted: bool) -> &'static str {
+    match (on, granted) {
+        (false, _) => "Off \u{2014} waking the unit leaves Carnyx where it was",
+        (true, false) => "On \u{2014} but notification access is not granted, so nothing binds",
+        (true, true) => "On \u{2014} the face may also come forward on a boot or a re-grant",
+    }
+}
+
 pub fn preset_loop_sub(on: bool) -> &'static str {
     if on {
         "On \u{2014} takes effect once the rail is long enough to scroll"
@@ -594,6 +638,11 @@ pub struct Settings {
     /// once with two seams on screen, which reads as a duplicated list rather
     /// than a loop.
     pub preset_loop: bool,
+    /// Bring the face forward when the platform binds the notification listener.
+    ///
+    /// DEFAULT OFF, and #94 is why: a switch that promises behaviour nobody has
+    /// watched work is the row that got removed. See [`come_forward_sub`].
+    pub come_forward: bool,
     /// What each DIAGNOSTICS row last did, drawn under its label.
     ///
     /// ── THE ROW HAD NO WAY TO ANSWER FOR ITSELF, AND THE OWNER PAID FOR IT ──
@@ -637,6 +686,7 @@ impl Default for Settings {
             // OFF. See the field's own note: looping costs positional memory,
             // and the design bundle asks for it opt-in.
             preset_loop: false,
+            come_forward: false,
             notes: Vec::new(),
             diag_on: false,
             log: DiagLog::new(),
@@ -713,7 +763,7 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// FOUR ROWS IN THREE GROUPS, AND A DIVIDER MEANS A CHANGE OF SUBJECT.
+    /// SEVEN ROWS IN THREE GROUPS, AND A DIVIDER MEANS A CHANGE OF SUBJECT.
     ///
     /// This test used to enumerate seven and assert which of them appeared under
     /// which conditions. Five were CarFM's vendor probes — export the raw
@@ -727,7 +777,7 @@ mod tests {
     /// the app that wakes instead, and a rule between them would read as two
     /// unrelated tools.
     #[test]
-    fn the_action_rows_are_the_mechanism_two_probes_and_one_request() {
+    fn the_action_rows_are_the_mechanism_two_probes_and_three_requests() {
         let rows = diag_actions();
         assert_eq!(
             rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
@@ -737,20 +787,28 @@ mod tests {
                 "Where the stock radio app can be intercepted",
                 "Ask for notification permission",
                 "Allow drawing over other apps",
+                "Allow notification access",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, false, false, true],
+            [false, true, false, false, false, false, true],
             "the log well runs into the first row; rules open the platform rows and close them"
         );
-        // THE ONLY ROW THAT CHANGES ANYTHING SITS LAST OF THE THREE, so a
-        // mis-tap on the row above it costs a wasted read rather than a dialog.
+        // THE ROWS THAT CHANGE SOMETHING SIT BELOW BOTH PROBES, so a mis-tap on
+        // a probe costs a wasted read rather than a screen the driver did not
+        // ask for. The three of them keep their order too: the two pop-up
+        // permissions, then the listener, which is the one whose reason a driver
+        // cannot see from the row alone.
         assert_eq!(
-            rows[3].action,
-            Action::AskNotifyPermission,
-            "the request must stay below both probes"
+            rows[3..6].iter().map(|a| a.action).collect::<Vec<_>>(),
+            [
+                Action::AskNotifyPermission,
+                Action::AskOverlayPermission,
+                Action::AskListenerPermission
+            ],
+            "the three requests stay below both probes, in that order"
         );
     }
 

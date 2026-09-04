@@ -279,6 +279,12 @@ export component AppWindow inherits Window {
     in property <bool> settings-preset-loop: false;
     /// That row's own sub-line. See `crate::settings::preset_loop_sub`.
     in property <string> settings-preset-loop-sub;
+    /// Settings ▸ SYSTEM ▸ Come back on when the unit wakes (#133's outcome C).
+    /// Default OFF; see `crate::settings::Settings::come_forward`.
+    in property <bool> settings-come-forward: false;
+    /// That row's own sub-line, which names both the grant it needs and the
+    /// hazard it carries. See `crate::settings::come_forward_sub`.
+    in property <string> settings-come-forward-sub;
     /// Which OsmAnd the switch found, or empty. Drawn in the row's sub-line so a
     /// driver can see whether it has anything to talk to WITHOUT turning it on.
     in property <string> settings-nav-sub;
@@ -321,6 +327,7 @@ export component AppWindow inherits Window {
     callback settings-set-nav-on(bool);
     callback settings-set-nav-hide-on-map(bool);
     callback settings-set-preset-loop(bool);
+    callback settings-set-come-forward(bool);
     callback settings-set-theme(string);
     callback settings-fix-battery();
     callback settings-set-logos(bool);
@@ -542,6 +549,9 @@ export component AppWindow inherits Window {
         set-nav-on(v) => { root.settings-set-nav-on(v); }
         set-nav-hide-on-map(v) => { root.settings-set-nav-hide-on-map(v); }
         set-preset-loop(v) => { root.settings-set-preset-loop(v); }
+        come-forward: root.settings-come-forward;
+        come-forward-sub: root.settings-come-forward-sub;
+        set-come-forward(v) => { root.settings-set-come-forward(v); }
         set-theme(t) => { root.settings-set-theme(t); }
         fix-battery => { root.settings-fix-battery(); }
         set-logos(v) => { root.settings-set-logos(v); }
