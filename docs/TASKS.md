@@ -1306,6 +1306,66 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 132. Carnyx gets a launcher icon, and the adaptive half is a design question
+**THE LEGACY LADDER IS IN. THE ADAPTIVE FOREGROUND IS DRAWN AND NOT LANDED.**
+The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
+radio face, hero card between two peek cards, preset row under it, signal glyph
+top-left, with an amber C wrapping "nyx" in the hero. No text elements, no
+gradients, one clip-path, so it rasterises identically anywhere.
+
+**WHAT SHIPS.** `tools/gen-launcher-icons.py` renders it to
+`mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` at 48/72/96/144/192,
+and the manifest names it. The PNGs are committed because Gradle packages `res/`
+and does not run scripts — the same arrangement as `tools/bake-band-art.py`. The
+script is the only thing in `tools/` that needs a dependency outside `PIL`
+(`cairosvg`), and the header says why: this source has elliptical arcs, a
+clip-path and stroked subpaths, which is a rasteriser's job and not a parser's.
+
+**THE C2PA MANIFEST COMES OUT FIRST.** The SVG is 12,100 bytes, of which 4,353
+is the drawing; the remaining two thirds is a content-credentials manifest in
+`<metadata>`. Inert, but it has no business inside an APK in five resolutions.
+
+**WHY THERE IS NO ADAPTIVE ICON YET, MEASURED.** An adaptive icon guarantees
+only a centred circle — 66 of its 108dp, with about 72 typically visible. On
+this 200-unit canvas that circle has radius ~61 from centre. Rendering the art
+and measuring the ink: the hero card's own corners sit ~78 units out, the signal
+glyph ~102, the status bar ~100, the preset row's outer corners ~119. The SVG's
+own header anticipates "the two corner marks" being nearest a mask and suggests
+an 85% shrink; at 85% the hero corners are still at ~66, outside the guarantee.
+Under a round mask this art gives the monogram in a white blob and nothing else.
+So the legacy bitmap is the honest packaging of THIS drawing, and adaptive needs
+a foreground drawn for the mask.
+
+**AND THE 48 IS THE ONE THAT MATTERS HERE.** The unit is 1280x720 and this
+codebase works at density 1 throughout, which puts it in the mdpi bucket — so
+the icon the owner will actually see on the launcher is the 48px one, where the
+preset row is four grey smudges and "nyx" is unreadable. NOT CONFIRMED against
+the device's own `DisplayMetrics`; it is the likely case, not a measured fact,
+and it is the reason the adaptive question is worth answering rather than
+deferring.
+
+**THE PROPOSAL, AWAITING THE OWNER.** Two foregrounds drawn on the 108 canvas,
+both from the existing monogram, both centred on its MEASURED ink box (104.38,
+94.00 in the source space — the eyeballed centre was 6 units high):
+
+- **A — C·nyx**, scaled 0.52 so its half-diagonal of 62.5 lands inside the
+  33-unit safe radius. Legible at 72 and 48, tight at 36.
+- **B — the C alone**, scaled 0.667 about its own centre (85.75, 94.00).
+  Unmistakable at every size, and gives up the name.
+
+Neither is in the tree. Landing one means `mipmap-anydpi-v26/ic_launcher.xml`, a
+`values/ic_launcher_background.xml` colour (`#E2E6EC`), the foreground as a
+vector drawable, and `android:roundIcon` becoming worth setting.
+
+**THE cargo-apk BUILD HAS NO ICON AND CANNOT HAVE ONE.** That packager ships no
+resources at all, so an install from it wears the system's default grey robot.
+The divergence is recorded in `android/gradle.properties` beside the layout's.
+
+**NOT VERIFIED HERE.** There is no Android SDK in this container — no `aapt`, no
+`sdkmanager` — so the resource wiring has not been through a build. What was
+checked: the five PNGs exist at the right sizes with transparent corners, and
+the manifest and gradle notes say what is now true.
+
 ### 131. Second review pass: a JNI call every second, five copies of one component, and a check that skipped a file it could read
 **DONE, WITH FOUR FINDINGS LEFT OPEN AND NAMED.** *"Let's do another pass checking
 for bugs, checking for consistency in how things are organized and named, checking

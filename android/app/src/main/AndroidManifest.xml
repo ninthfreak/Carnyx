@@ -165,8 +165,23 @@
         </intent>
     </queries>
 
+    <!--
+      THE ICON IS A LEGACY BITMAP LADDER, NOT AN ADAPTIVE ICON, and that is a
+      decision rather than an omission. `mipmap-*/ic_launcher.png` is rendered
+      from `docs/design/carnyx-icon.svg` by `tools/gen-launcher-icons.py`; the
+      drawing is a miniature of the radio face, and an adaptive icon's mask
+      keeps only a centred circle of 66 of its 108dp — measured against this
+      art, that circle cuts the peek cards, the preset row, the signal glyph
+      and the status bar, and clips the hero card's own corners. Adaptive needs
+      a foreground drawn for the mask, which is a design question and not a
+      packaging one.
+
+      NO `android:roundIcon`. It is only read by launchers that ask for round
+      icons, and supplying the same square bitmap under that name buys nothing.
+    -->
     <application
         android:label="Carnyx"
+        android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
