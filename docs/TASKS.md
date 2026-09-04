@@ -1306,6 +1306,247 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 133. The sleep/wake behaviour: what the owner asked for, and why two builds could never have delivered it
+**OPEN. THE NEXT FOCUS OF DEVELOPMENT.** *"I want to work on the sleep/wake
+behavior, it's the next focus of development."*
+
+**FIRST, THE THING THIS FILE SHOULD HAVE HELD ALL ALONG.** The owner described the
+behaviour and ranked three outcomes, in their own words, and it was never written
+down here — it lived in a conversation, which is the exact failure `README.md`
+says this file exists to prevent. Verbatim:
+
+> Currently, if I shut off the car the head unit goes into some sort of sleep
+> mode. If the radio was currently on and playing when the unit sleeps, next time
+> I wake up the head unit by starting the car it will automatically open the stock
+> radio app. It doesn't matter if the stock app was open at this time. If Carnyx
+> was open when unit went to sleep, it gets closed or killed in some way. If the
+> radio wasn't playing when the unit went to sleep, the stock radio app doesn't
+> get launched.
+>
+> My ideal behavior would be how it works currently, except that it would launch
+> Carnyx instead of the stock app, and the stock app wouldn't be seen at all.
+> Second best would be nothing happening when waking up, whether or not the radio
+> was on it doesn't start the stock app. (There was an attempt to have Carnyx stop
+> the radio on sleep to accomplish this)
+> Third best would be launching Carnyx when coming back from sleep. The stock
+> radio still launches, but Carnyx launches on top and the stock app can just be
+> ignored. (Attempts at auto-launch have been done, but failed)
+
+Call them **A**, **B** and **C** below. THE RANKING IS THE SPEC. Anything built
+here is measured against which of the three it delivers, not against whether it
+works in the abstract.
+
+**SECOND, THE TWO THINGS THAT ARE DEAD, AND THEY ARE DEAD FOR A STRUCTURAL
+REASON.** #92 (release the FM source on ACC-off) and #95 (come forward on
+ACC-on) are confirmed by the owner never to have worked. Both are manifest
+receivers for a VENDOR-DEFINED IMPLICIT BROADCAST, and there are two independent
+reasons that cannot fire on this unit:
+
+1. **The API-26 ban.** Since Oreo a manifest receiver does not receive implicit
+   broadcasts, with a short exemption list. `com.nwd.ACTION_OS_WAKE_UP` and both
+   ACC-off spellings are not on it. `BOOT_COMPLETED` is — and is useless here,
+   because this unit suspends rather than cold-boots. THE STEERING WHEEL IS NOT A
+   COUNTER-EXAMPLE, and #95 leaned on it as one: the wheel's broadcast is heard by
+   a RUNTIME receiver inside a living process, which the ban does not touch.
+2. **The force-stop.** The owner reports that after a sleep NOTHING third-party
+   is left in the app switcher — Carnyx, OsmAnd and Plexamp all gone. An
+   out-of-memory kill leaves the task behind so a tap can resume it; a force-stop
+   wipes it. A force-stopped package receives no broadcast of ANY kind, exempt or
+   not, until a human taps its icon.
+
+Either one alone kills both receivers. That is why they produced silence rather
+than any of the failure lines they were written to produce, and it means no amount
+of driving would have made them work.
+
+**THIRD, WHAT IS ALREADY BUILT TO ANSWER THIS AND HAS NEVER BEEN RUN.** Two
+DIAGNOSTICS rows, both read-only, both a tap:
+
+- **#93, "What could keep Carnyx alive through sleep."** Its first two sections
+  are the two decisive questions. `bootMarker` compares `elapsedRealtime` across
+  launches — a value LOWER than last launch's is unforgeable proof of a reboot,
+  which decides whether `BOOT_COMPLETED` is in play at all and whether the tree's
+  inherited "this unit does not cold-boot" assumption is even true. `stoppedApps`
+  reads `ApplicationInfo.FLAG_STOPPED` across third-party packages and reports how
+  many are sitting force-stopped — the direct test of reason 2. Then the
+  survivable routes, the overlay grants, the vendor auto-start and protected-app
+  tables, battery, settings and packages.
+- **#96, "Where the stock radio app can be intercepted."** Four routes, and they
+  map onto the owner's three outcomes exactly: disable the stock app outright
+  (delivers **A** and **B** together, needs an adb shell and no root — the report
+  reads `adb_enabled` and `development_settings_enabled` first for that reason);
+  become the handler if the firmware launches by an implicit intent (**A**); jump
+  in front with a background-activity-start exemption (**C**); share the stock
+  app's `taskAffinity` (**C**, most fragile). Plus the APK path, so the vendor
+  package can be copied to a USB stick and its intent filters read properly on a
+  desktop — which is the only way to see filters the sweep does not know to name.
+
+**FOURTH, THE ONE ROUTE THAT SURVIVES A FORCE-STOP**, and it is the same one for
+**C** and for #95's known risk: a NOTIFICATION LISTENER or an ACCESSIBILITY
+SERVICE. Both are bound by the platform itself rather than by the app, both are
+re-bound after a stop, and both carry the background-activity-start exemption that
+Android 10 otherwise denies. Both are granted by the driver in system Settings.
+Neither is built, and neither should be built before the probes say it is needed.
+
+**AND THE PROBES HAD ALREADY BEEN RUN.** Both of them, twice each, in the log of
+2026-09-03 — the same file #126 was written from. Its probe sections went unread
+for a month while this entry was being written about what they might say, and it
+was then reported to the owner as unrecoverable. It was on disk the whole time.
+It is now `docs/logs/2026-09-03-drive.txt`, and every log after it goes beside it;
+see the README there.
+
+**WHAT THE DEVICE ACTUALLY SAYS.** Both theories above are confirmed, by the unit,
+in its own words:
+
+```
+boot marker: NO REBOOT between the last two launches (same boot instant,
+             uptime rose by 14h). The SoC suspended and resumed, so
+             BOOT_COMPLETED never fires and cannot help.
+stopped: 8 of 17 third-party packages — the vendor cleaner force-stops
+         packages, which is why no broadcast of any kind reaches them
+```
+
+`uptime: 47d since boot` against a 14-hour gap between launches settles the
+reboot question the whole tree had been ASSUMING since CarFM. The force-stop list
+names `com.ninthfreak.carfm` among the eight. And the head of the same log reads
+`session: launch #55 … last run ended in destroy 49273s ago` with no `wake:` line
+and `last sleep: nothing recorded` — an ACC cycle happened between two launches
+and neither receiver left a note, which is the direct confirmation.
+
+**A THIRD REASON, WHICH NOBODY HAD SUSPECTED.** The action sweep reports
+`com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm, rcv:com.ninthfreak.carnyx`
+— the only two declarers on the unit are OUR OWN APPS. Nothing in the firmware
+declares it, and there is no evidence this ROM ever broadcasts it. The string
+came across from CarFM, which got it from another project. #95 was listening for
+something that may not exist.
+
+**THE STOCK RADIO APP, MEASURED.** `com.nwd.radio` 1.1.0.3, uid 10004, a system
+app whose APK sits at `/data/smallota/app/com.nwd.radio/com.nwd.radio.apk` and is
+**READABLE, 11,359 KB** — copy it to a USB stick and its real manifest can be read
+on a desktop, which is the only way to see intent filters the sweep cannot name.
+It launches as `com.nwd.radio/.home_horizontalActivity`, declares exactly ONE
+activity, exported, `launchMode=2`, and its only filter the sweep found is
+MAIN+LAUNCHER. It does NOT share a signing certificate with Carnyx, so a same-name
+install is impossible without removing the system copy — which needs root.
+
+**WHICH LEAVES THREE LIVE ROUTES, AND THE LOG PRICES EACH.**
+
+1. **Disable the stock app — delivers A AND B in one stroke, no root.**
+   `pm disable-user --user 0 com.nwd.radio` from an adb shell; the shell user
+   already holds the permission. The log says `adb: off (0)` and
+   `developer settings: unset`, so the owner would turn both on first. THE RISK IS
+   NAMED IN THE PROBE'S OWN "CANNOT ANSWER" LIST: whether the tuner service needs
+   the app. `com.nwd.radio.service` is a SEPARATE package and is what Carnyx tunes
+   through; it must stay. Disabling the UI package should not touch it, and one
+   ignition cycle proves it either way — `pm enable` puts it back.
+2. **Notice the stock app and come over it — delivers C.** Needs an exemption from
+   Android 10's background-activity-start block, and the log says which are
+   available: `notification listener: nothing enabled on this unit`,
+   `accessibility: not Carnyx (1 other(s) enabled)`, `usage access: not granted
+   (mode 3)`. Either of the first two grants the exemption; the third is how
+   Carnyx would notice. All three are granted by the driver in Settings, no adb.
+   They are also the only mechanisms here that survive a force-stop, because the
+   platform binds and re-binds them itself.
+3. **Get off the cleaner's list.** `system whitelist_packagename = null` and
+   `system whitelist_appname = null` — the vendor cleaner's own whitelist tables
+   are EMPTY, and `system nwd_vodka_clean_launcher_date = 0` names the cleaner.
+   Whether those keys are writable, and whether the cleaner honours them, is
+   unknown; a `Settings.System` write needs `WRITE_SETTINGS` and these are vendor
+   keys. Speculative, listed because the tables exist and are empty.
+
+**RECOMMENDED ORDER:** route 1 first. It is the owner's first AND second choice
+together, it needs no code at all, it is reversible with one command, and one
+ignition cycle settles it. Route 2 is the fallback and is the only one that
+survives if the stock app cannot be disabled — and it is a real build: a
+notification-listener or accessibility service, plus usage access to see the
+stock app arrive.
+
+**STILL CANNOT ANSWER** without the APK read on a desktop: what the stock app's
+real intent filters are, and therefore whether route 2 of #96 — becoming the
+handler — has a door at all. The sweep only sees actions it knows to name.
+
+---
+
+**CarFM ALREADY DECOMPILED THIS APK, AND NAMED THE MECHANISM.** The owner pointed
+at two documents in the CarFM tree. One is a dead end for this question and one
+is not.
+
+`docs/AUDIT-2026-08-02.md` — **nothing here.** Forty-one defects in the React
+Native face: audio focus, RDS decoding, text handling, palette timing. Not one
+touches sleep, wake, the MCU or the stock app's launch. Most were carried into
+this port already.
+
+`docs/BUILTIN-TUNER-FINDINGS.md` — **this is the find.** It analysed
+`com.nwd.radio` v1103 as "a known-good client", and the unit reports version
+1.1.0.3, so that decompile describes the APK sitting there now. Its Q_audio
+section names the MCU's source manager:
+
+> **MCU audio-source switch via broadcast intents** (a "source manager" pattern):
+> `com.nwd.action.ACTION_CHANGE_SOURCE` / `ACTION_REQUEST_CHANGE_SOURCE` with
+> `EXTRA_MEDIA_SOURCE`, plus `APP_SRC_IN` / `APP_SRC_OUT` and `CURRENT_SOURCE`.
+> (Stock logs: `FmRadioServiceHandler pre power Up current_source =`)
+
+`pre power Up current_source =` is the MCU POWERING A REMEMBERED SOURCE BACK UP.
+That is the likeliest mechanism behind the whole of this entry, and it fits the
+owner's account exactly — the stock app comes up because FM was the current
+source when the unit slept, which is why it depends on whether the radio was
+PLAYING and not on which app was in front.
+
+**A CORRECTION TO MY OWN REPORT OF THIS.** I told the owner neither source-switch
+action had been swept. Half wrong: `com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE`
+was in `CarnyxStockRadio.ACTIONS` and was asked about; nobody on the unit answers
+it, and `sweep` is SILENT on a miss, so it printed nothing and read as never
+asked. `com.nwd.action.ACTION_CHANGE_SOURCE` — the other verb — was genuinely
+absent from the list.
+
+**AND THE ONE NUMBER THAT DECIDES IT HAS NEVER BEEN PRINTED.**
+`NwdBridge.mcuSource` has read `Settings.System` key `mcu_current_source` since
+the sleep release was built — it is what that release gates on, 4 being FM — but
+it reads it privately, for a decision, and no probe ever put it in the log.
+
+**WHAT CHANGED IN THE PROBE** (`CarnyxStockRadio`):
+
+1. All four spellings of the source switch are swept — both verbs, each with and
+   without the `.action.` infix, the ACC-off pair in the same list being the
+   precedent for the vendor writing one action unqualified and others in full.
+2. A `REPORT_MISSES` list: those four report "nobody declares it" instead of
+   staying silent, because there the silence IS the finding and is otherwise
+   indistinguishable from never having asked. The rest stay silent — one line per
+   unanswered action would be twenty lines of nothing in a 600-line ring.
+3. `mcu_current_source` is reported, with 4 read as FM, and with the caveat that
+   it is read when the row is tapped and what decides the wake is its value at
+   ACC-off.
+
+A MISS STILL PROVES LESS THAN IT LOOKS LIKE: it says no package DECLARES a
+manifest receiver. The MCU can deliver to a runtime receiver in a living process,
+or to an explicit component, and neither is visible to the package manager.
+
+**AND A FACT THE SAME LOG ALREADY SETTLES, ONCE THE CODE IS READ CAREFULLY.** The
+runtime sleep watch (`NwdBridge.startSleepWatch`) listens for `SCREEN_OFF` as
+well as both ACC-off spellings, and it calls `CarnyxWake.noteSleep` — a blocking
+commit to disk — BEFORE it hops to Rust, precisely so its evidence outlives the
+process. `last sleep: nothing recorded` therefore means neither the manifest
+receiver NOR the runtime `SCREEN_OFF` watch fired on that cycle. A runtime
+receiver in a living process is exempt from the API-26 ban, so either the process
+was already force-stopped before the screen went off, or this unit does not
+broadcast `SCREEN_OFF` on ACC-off at all.
+
+**WHICH REFRAMES OUTCOME B.** #92 released the source on an ACC-off broadcast and
+explicitly rejected the alternative: *"it is not the activity lifecycle:
+`Pause`/`Stop` fire whenever the driver opens another app, and releasing the
+source then would be wrong."* That reasoning assumed a broadcast would arrive.
+None does. If the MCU restores whatever source was current at sleep, then "nothing
+launches on wake" reduces to NOT BEING SOURCE 4 WHEN THE UNIT SLEEPS — and with
+every broadcast route dead, the lifecycle, or `setRadioBackServiceOn(false)`, may
+be the only place left to do it from. The objection to the lifecycle stands as an
+objection; it is no longer a choice between it and something that works.
+
+**STILL OPEN FROM CarFM, AND NOW ON THE CRITICAL PATH:** the exact
+`EXTRA_MEDIA_SOURCE` value for the radio source. `BUILTIN-TUNER-FINDINGS.md`
+lists it under OPEN — "decompile the stock app's start/resume source-switch call"
+— and never closed it. The APK is readable on the unit at
+`/data/smallota/app/com.nwd.radio/com.nwd.radio.apk`, 11,359 KB, so a copy to a
+USB stick settles both this and the intent-filter question in one go.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
@@ -3744,7 +3985,11 @@ it: `row_index` finds the first row by label, so two rows sharing an `Action`
 would send both taps to one probe and every other test would still pass.
 
 ### 95. Build the wake receiver
-**BUILT AND UNVERIFIED, AND IT WRITES ITS OWN EVIDENCE.** #67's other half: a
+**BUILT, AND CONFIRMED BY THE OWNER NEVER TO HAVE WORKED.** As #92: this said
+"BUILT AND UNVERIFIED" while nobody had driven with it, and the owner has since
+said plainly that it has never worked. The evidence it writes is not written,
+because it never runs. See #133. The rest of this entry is the build, unchanged,
+because the reasoning in it is what #133 argues from. #67's other half: a
 manifest receiver that brings the face back when the unit does.
 
 **The event it is really for.** `com.nwd.ACTION_OS_WAKE_UP`, not
@@ -3960,7 +4205,12 @@ that writes nothing reads as a broken row, which is the exact failure the five
 removed rows had.
 
 ### 92. Hand the FM source back when the unit goes to sleep
-**DONE, AND THE TRIGGER IS UNVERIFIED.** The MCU sleeps the SoC on ACC-off and
+**BUILT, AND CONFIRMED BY THE OWNER NEVER TO HAVE WORKED.** This entry read "DONE,
+AND THE TRIGGER IS UNVERIFIED" for as long as nobody had driven with it. The owner
+has since said plainly that it has never worked, and "unverified" is the wrong
+word for a thing that has been tried and does not happen: the trigger does not
+arrive. See #133 for what is now believed to be the reason and what replaces the
+approach. The MCU sleeps the SoC on ACC-off and
 restores its own radio app on ACC-on. An app still holding the FM source when it
 remembers the current source across the sleep, and restores it on ACC-on — so a
 unit left on FM comes back into FM and the stock radio app launches itself. This
