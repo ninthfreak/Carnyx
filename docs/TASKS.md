@@ -1464,6 +1464,89 @@ stock app arrive.
 real intent filters are, and therefore whether route 2 of #96 — becoming the
 handler — has a door at all. The sweep only sees actions it knows to name.
 
+---
+
+**CarFM ALREADY DECOMPILED THIS APK, AND NAMED THE MECHANISM.** The owner pointed
+at two documents in the CarFM tree. One is a dead end for this question and one
+is not.
+
+`docs/AUDIT-2026-08-02.md` — **nothing here.** Forty-one defects in the React
+Native face: audio focus, RDS decoding, text handling, palette timing. Not one
+touches sleep, wake, the MCU or the stock app's launch. Most were carried into
+this port already.
+
+`docs/BUILTIN-TUNER-FINDINGS.md` — **this is the find.** It analysed
+`com.nwd.radio` v1103 as "a known-good client", and the unit reports version
+1.1.0.3, so that decompile describes the APK sitting there now. Its Q_audio
+section names the MCU's source manager:
+
+> **MCU audio-source switch via broadcast intents** (a "source manager" pattern):
+> `com.nwd.action.ACTION_CHANGE_SOURCE` / `ACTION_REQUEST_CHANGE_SOURCE` with
+> `EXTRA_MEDIA_SOURCE`, plus `APP_SRC_IN` / `APP_SRC_OUT` and `CURRENT_SOURCE`.
+> (Stock logs: `FmRadioServiceHandler pre power Up current_source =`)
+
+`pre power Up current_source =` is the MCU POWERING A REMEMBERED SOURCE BACK UP.
+That is the likeliest mechanism behind the whole of this entry, and it fits the
+owner's account exactly — the stock app comes up because FM was the current
+source when the unit slept, which is why it depends on whether the radio was
+PLAYING and not on which app was in front.
+
+**A CORRECTION TO MY OWN REPORT OF THIS.** I told the owner neither source-switch
+action had been swept. Half wrong: `com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE`
+was in `CarnyxStockRadio.ACTIONS` and was asked about; nobody on the unit answers
+it, and `sweep` is SILENT on a miss, so it printed nothing and read as never
+asked. `com.nwd.action.ACTION_CHANGE_SOURCE` — the other verb — was genuinely
+absent from the list.
+
+**AND THE ONE NUMBER THAT DECIDES IT HAS NEVER BEEN PRINTED.**
+`NwdBridge.mcuSource` has read `Settings.System` key `mcu_current_source` since
+the sleep release was built — it is what that release gates on, 4 being FM — but
+it reads it privately, for a decision, and no probe ever put it in the log.
+
+**WHAT CHANGED IN THE PROBE** (`CarnyxStockRadio`):
+
+1. All four spellings of the source switch are swept — both verbs, each with and
+   without the `.action.` infix, the ACC-off pair in the same list being the
+   precedent for the vendor writing one action unqualified and others in full.
+2. A `REPORT_MISSES` list: those four report "nobody declares it" instead of
+   staying silent, because there the silence IS the finding and is otherwise
+   indistinguishable from never having asked. The rest stay silent — one line per
+   unanswered action would be twenty lines of nothing in a 600-line ring.
+3. `mcu_current_source` is reported, with 4 read as FM, and with the caveat that
+   it is read when the row is tapped and what decides the wake is its value at
+   ACC-off.
+
+A MISS STILL PROVES LESS THAN IT LOOKS LIKE: it says no package DECLARES a
+manifest receiver. The MCU can deliver to a runtime receiver in a living process,
+or to an explicit component, and neither is visible to the package manager.
+
+**AND A FACT THE SAME LOG ALREADY SETTLES, ONCE THE CODE IS READ CAREFULLY.** The
+runtime sleep watch (`NwdBridge.startSleepWatch`) listens for `SCREEN_OFF` as
+well as both ACC-off spellings, and it calls `CarnyxWake.noteSleep` — a blocking
+commit to disk — BEFORE it hops to Rust, precisely so its evidence outlives the
+process. `last sleep: nothing recorded` therefore means neither the manifest
+receiver NOR the runtime `SCREEN_OFF` watch fired on that cycle. A runtime
+receiver in a living process is exempt from the API-26 ban, so either the process
+was already force-stopped before the screen went off, or this unit does not
+broadcast `SCREEN_OFF` on ACC-off at all.
+
+**WHICH REFRAMES OUTCOME B.** #92 released the source on an ACC-off broadcast and
+explicitly rejected the alternative: *"it is not the activity lifecycle:
+`Pause`/`Stop` fire whenever the driver opens another app, and releasing the
+source then would be wrong."* That reasoning assumed a broadcast would arrive.
+None does. If the MCU restores whatever source was current at sleep, then "nothing
+launches on wake" reduces to NOT BEING SOURCE 4 WHEN THE UNIT SLEEPS — and with
+every broadcast route dead, the lifecycle, or `setRadioBackServiceOn(false)`, may
+be the only place left to do it from. The objection to the lifecycle stands as an
+objection; it is no longer a choice between it and something that works.
+
+**STILL OPEN FROM CarFM, AND NOW ON THE CRITICAL PATH:** the exact
+`EXTRA_MEDIA_SOURCE` value for the radio source. `BUILTIN-TUNER-FINDINGS.md`
+lists it under OPEN — "decompile the stock app's start/resume source-switch call"
+— and never closed it. The APK is readable on the unit at
+`/data/smallota/app/com.nwd.radio/com.nwd.radio.apk`, 11,359 KB, so a copy to a
+USB stick settles both this and the intent-filter question in one go.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

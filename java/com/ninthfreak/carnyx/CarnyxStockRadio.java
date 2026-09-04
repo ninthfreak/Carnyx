@@ -124,7 +124,26 @@ public final class CarnyxStockRadio {
         "com.nwd.action.ACTION_ACCOFF_UPDATE",
         "com.nwd.ACTION_ILL_STATE_CHANGE",
         "com.nwd.action.ACTION_KEY_VALUE",
+        // ── THE SOURCE SWITCH, BOTH VERBS AND BOTH SPELLINGS ─────────────────
+        //
+        // CarFM's decompile of this very APK (`docs/BUILTIN-TUNER-FINDINGS.md`,
+        // Q_audio) names the MCU's source manager as
+        // `com.nwd.action.ACTION_CHANGE_SOURCE` / `ACTION_REQUEST_CHANGE_SOURCE`
+        // carrying `EXTRA_MEDIA_SOURCE`, and quotes the stock app's own log line
+        // `FmRadioServiceHandler pre power Up current_source =`. That is the MCU
+        // POWERING A REMEMBERED SOURCE BACK UP, which is the likeliest mechanism
+        // behind the behaviour #133 is about: the unit brings FM up on ACC-on
+        // because FM is what was current when it slept, and the stock app comes
+        // with it.
+        //
+        // ONLY THE `REQUEST` VERB WAS EVER ASKED ABOUT, and only in the `.action.`
+        // spelling. The plain verb was never in this list at all, and the ACC-off
+        // pair above is this file's own precedent for the vendor writing one
+        // action unqualified where it writes others in full. All four now.
         "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
+        "com.nwd.ACTION_REQUEST_CHANGE_SOURCE",
+        "com.nwd.action.ACTION_CHANGE_SOURCE",
+        "com.nwd.ACTION_CHANGE_SOURCE",
         "com.nwd.action.ACTION_APP_IN_OUT",
         "com.nwd.action.ACTION_TEST_KEY",
         "com.nwd.radio.service.ACTION_RADIO_SERVICE",
@@ -132,6 +151,29 @@ public final class CarnyxStockRadio {
         "android.media.action.MEDIA_PLAY_FROM_SEARCH",
         "android.media.browse.MediaBrowserService",
         "android.intent.action.MUSIC_PLAYER",
+    };
+
+    /**
+     * The actions whose MISSES are worth a line of their own.
+     *
+     * <p>{@link #sweep} is silent when nobody answers, and it is right to be:
+     * one line per unanswered action would be twenty lines of nothing in a
+     * 600-line ring. But for the source switch the silence IS the finding, and a
+     * reader cannot tell it apart from the action never having been asked about
+     * — which is exactly the mistake that took a month to notice, when
+     * `ACTION_REQUEST_CHANGE_SOURCE` sat in the list above, resolved to nobody,
+     * printed nothing, and was reported as never having been swept.
+     *
+     * <p>A MISS STILL PROVES LESS THAN IT LOOKS LIKE. It says no package
+     * DECLARES a manifest receiver for the action. The MCU can still deliver it
+     * to a runtime receiver inside a living process, or send it to an explicit
+     * component, and neither is visible to the package manager.
+     */
+    private static final String[] REPORT_MISSES = {
+        "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE",
+        "com.nwd.ACTION_REQUEST_CHANGE_SOURCE",
+        "com.nwd.action.ACTION_CHANGE_SOURCE",
+        "com.nwd.ACTION_CHANGE_SOURCE",
     };
 
     /** Categories to pair with {@code ACTION_MAIN}, which alone resolves nothing. */
@@ -178,11 +220,56 @@ public final class CarnyxStockRadio {
             components(out, pkg);
         }
         actions(out, pkg);
+        currentSource(out);
         home(out);
         foreground(out);
         shellRoute(out);
         limits(out, pkg);
         return join(out);
+    }
+
+    /**
+     * What the MCU thinks the current audio source IS, right now.
+     *
+     * <p>THE SINGLE MOST DECISIVE NUMBER IN THIS REPORT, and it has never been
+     * printed. `NwdBridge.mcuSource` has read this key since the sleep release
+     * was built — it is what that release gates on — but it reads it privately,
+     * for a decision, and no probe has ever put it in the log.
+     *
+     * <p>WHY IT DECIDES THINGS. The owner's account of the unit is that the
+     * stock radio app comes up on ACC-on if THE RADIO WAS PLAYING when it slept,
+     * and not otherwise — it does not depend on which app was in front.
+     * CarFM's decompile of the stock APK names the mechanism: a source manager
+     * that remembers `current_source` across the sleep and powers it back up.
+     * If that is right, then "does the stock app launch on wake" is decided by
+     * this number at the moment the unit sleeps, and the whole of the owner's
+     * second-choice outcome — nothing launches — reduces to not being source 4
+     * when that happens.
+     *
+     * <p>4 IS FM. `NwdBridge.releaseSource` gates on exactly that, and -1 means
+     * the key could not be read rather than that no source is active.
+     */
+    private static void currentSource(List<String> out) {
+        String raw;
+        try {
+            raw = Settings.System.getString(ctx.getContentResolver(), "mcu_current_source");
+        } catch (Throwable t) {
+            out.add("  mcu_current_source: unreadable (" + t.getClass().getSimpleName() + ")");
+            return;
+        }
+        if (raw == null) {
+            out.add("  mcu_current_source: not set — the key does not exist on this ROM");
+            return;
+        }
+        String note;
+        if ("4".equals(raw.trim())) {
+            note = " — FM, which is what the sleep release gates on";
+        } else {
+            note = " — not FM (4); nothing here would hold the radio through a sleep";
+        }
+        out.add("  mcu_current_source: " + raw.trim() + note);
+        out.add("  → read at the moment the row was tapped, which is not the moment"
+                + " that matters; what decides the wake is its value at ACC-off");
     }
 
     // ── 1. Which package ─────────────────────────────────────────────────────
@@ -500,8 +587,14 @@ public final class CarnyxStockRadio {
             return 0;
         }
         if (hits.isEmpty()) {
-            // Silent. A no-handler action is the common case and one line each
-            // would be twenty lines of nothing in a 600-line ring.
+            // Silent, EXCEPT for the handful in REPORT_MISSES — see that field
+            // for why the silence is the finding on those and noise on the rest.
+            for (String named : REPORT_MISSES) {
+                if (named.equals(label)) {
+                    out.add("  " + label + ": nobody declares it");
+                    break;
+                }
+            }
             return 0;
         }
         String joined = join(hits, ", ");
