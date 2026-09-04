@@ -16,7 +16,14 @@ import { Pal, Font } from "tokens.slint";
 // the box the icon should occupy, scales the stroke by the viewbox ratio the way
 // SVG would, and grows/offsets the element so the geometry lands exactly where
 // the viewbox says.
-component VPath inherits Path {
+//
+// EXPORTED, AND IT IS NOW THE ONLY ONE. This declaration was one of FIVE
+// identical copies — `logo-search.slint`, `nearby.slint`, `numpad.slint` and
+// `settings.slint` each carried their own, because none of them could import it.
+// They had already drifted: this copy grew `ox`/`oy` for baked-in group
+// transforms and the other four never did, so the same name meant two different
+// components depending on which file you were reading. One declaration now.
+export component VPath inherits Path {
     in property <length> box-w;
     in property <length> box-h;
     in property <float> vbw;
@@ -751,5 +758,94 @@ export component TurnArrow {
         font-family: Font.face; font-weight: Font.bold;
         font-size: root.size * 9 / 24;
         color: root.color;
+    }
+}
+
+// ── THE THREE THAT LIVED IN OTHER FILES ─────────────────────────────────────
+//
+// Each of these was declared in the one file that used it, under a note saying it
+// belonged here and asking whoever consolidated to move it — `BackspaceIcon` in
+// numpad.slint, `BackArrow` in nearby.slint, `BatteryBolt` in settings.slint. All
+// three cited the same reason: this file was another agent's during the pass that
+// drew them. That reason has expired, and each brought a private copy of `VPath`
+// with it, which is how five copies of one wrapper came to exist.
+//
+// The drawings are unchanged, comments and path data alike.
+
+/// Backspace — the keypad's twelfth key.
+///
+/// Exact port of CarFM's `icons.tsx:350-359`: viewBox 24×24, stroke 1.8, no fill.
+/// The SVG splits it into a closed body (round joins) and two crossing lines (round
+/// caps); one Path carries both correctly, because the body is closed with `z` so
+/// its caps never show and the two lines have no joins.
+export component BackspaceIcon {
+    in property <length> size: 30px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.8;
+        commands: "M8.2 5h11.3A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5H8.2a1.5 1.5 0 0 1-1.1-.5L2 12l5.1-6.5a1.5 1.5 0 0 1 1.1-.5z M11 9.5 L16 14.5 M16 9.5 L11 14.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// icons.tsx's `BackArrowIcon` — the icon-only "back to all stations" chip in the
+/// nearby picker's genre band.
+export component BackArrow {
+    in property <length> size: 22px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2.2;
+        commands: "M11 5 L4 12 L11 19 M4 12 H19";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+}
+
+/// A battery with a lightning bolt through it — the SYSTEM group's Doze row.
+/// Blue when the app is exempt, amber when it is not; never red, per §6's
+/// colourblind rule and the panel's no-red-vs-green note (SettingsPanel.tsx:8).
+///
+/// icons.tsx's `BatteryBolt` (:251-259) and the dc.html's `battGlyph` (:178-182)
+/// are the same three marks at the same coordinates.
+export component BatteryBolt {
+    in property <length> size: 32px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    // TWO paths because the stroke weights differ (2 for the shell, 1.6 for the
+    // bolt) and one Path carries one stroke-width.
+    //
+    // The shell is `<Rect x=3 y=8 width=15 height=9 rx=2>` written out as an
+    // explicit rounded rectangle — Slint's Path has no rect command — plus the
+    // terminal pip, `<Line x1=20.5 y1=11 x2=20.5 y2=14>`. The rectangle is closed
+    // (Z) so the round cap only ever applies to the pip, which is what the SVG
+    // says too (`strokeLinecap: round` on the line, `strokeLinejoin: round` on
+    // the rect).
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 2;
+        commands: "M5 8 H16 A2 2 0 0 1 18 10 V15 A2 2 0 0 1 16 17 H5 A2 2 0 0 1 3 15 V10 A2 2 0 0 1 5 8 Z M20.5 11 L20.5 14";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+    VPath {
+        box-w: root.size; box-h: root.size; vbw: 24; vbh: 24; raw-stroke: 1.6;
+        commands: "M10.5 9.5 L8.5 12.5 L11 12.5 L9.5 15.5";
+        stroke: root.color;
+        stroke-line-cap: round;
+        stroke-line-join: round;
     }
 }

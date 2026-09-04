@@ -14,11 +14,43 @@ animations run on a wall clock shared by the whole process: the power ring, the
 logo-search spinner, the morph mid-travel and the diagnostics log's own
 timestamps. Name those on the command line; the report keeps them separate rather
 than hiding them.
+
+WHICH ONES, MEASURED RATHER THAN GUESSED. Two renders of one unchanged binary,
+back to back, disagreed on SEVENTEEN of the hundred — and a reviewer who does not
+know that reads a clean refactor as having repainted a fifth of the app. The list
+below is that measurement, and `--unstable` passes it for you:
+
+    tools/cmp-shots.py OLD_DIR NEW_DIR --unstable
+
+The rest are stable to the byte and are where a real change shows up. If a shot
+here ever settles down, take it off the list rather than leaving a blind spot; if
+a new one starts flapping, measure it the same way — render twice with no source
+change and compare the two.
 """
 import os
 import sys
 
 from PIL import Image
+
+# The shots that differ run to run against an UNCHANGED binary — measured, see
+# the module note. Grouped by what moves under them.
+UNSTABLE = [
+    # The power ring and the band art's own animation.
+    "acdc.png", "acdc-dark.png", "acdc-portrait.png", "audio-released.png",
+    "driving.png",
+    # Spinners.
+    "logo-search-loading.png", "nearby-loading.png",
+    # The RadioText strip mid-scroll.
+    "long-radiotext.png",
+    # The hero morph mid-travel.
+    "hero-step-morph.png",
+    # The maneuver layer's hairline, which fills on the wall clock.
+    "nav-approach.png", "nav-approach-portrait.png", "nav-cruise.png",
+    "nav-poll-only.png", "nav-turn-now.png", "nav-turn-now-portrait.png",
+    # The diagnostics log stamps its own lines with the time it ran.
+    "settings-diagnostics-full.png", "settings-diagnostics-portrait.png",
+    "settings-diagnostics-rows.png",
+]
 
 
 def main() -> int:
@@ -26,7 +58,9 @@ def main() -> int:
         print(__doc__.strip())
         return 2
     base, new = sys.argv[1], sys.argv[2]
-    ignore = set(sys.argv[3:])
+    rest = sys.argv[3:]
+    ignore = set(UNSTABLE) if "--unstable" in rest else set()
+    ignore.update(a for a in rest if a != "--unstable")
     same = 0
     ignored, diff = [], []
     for f in sorted(os.listdir(new)):

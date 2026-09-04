@@ -1,0 +1,70 @@
+// The round NEARBY button, which is also the DONE button while the rail is
+// being reordered.
+//
+// ── WHY IT IS A FILE AND NOT TWO BLOCKS ─────────────────────────────────────
+//
+// It was two blocks: `presets.slint`'s (the wide and landscape tracks, where it
+// sits at the end of the preset band) and `status-bar.slint`'s (the tall track,
+// where the band has no room for it and the cluster takes it). Same disc, same
+// rim, same press opacity, same TouchArea branching on `reordering`, same tick
+// over the same DONE caption — and FOUR numbers apart, which is the whole
+// argument: the disc is 92 there and 74 here, the magnifier 64 and 59, the tick
+// 26 and 22, the caption 13 and 11. Nothing linked them, so the second copy is
+// where a change to the first goes to be forgotten.
+//
+// THE FOUR NUMBERS STAY AT THE CALL SITES, as properties. They are not a ratio
+// of the disc — 64/92 and 59/74 are not the same fraction, and neither are the
+// other two pairs — so deriving them would have moved pixels on one track or the
+// other. What is shared here is the SHAPE; what differs stays where it differs.
+//
+// ONE SOURCE FOR EACH NUMBER, the rule `StatusBar` states over its own cluster.
+import { Pal, Font } from "tokens.slint";
+import { MagnifierTower } from "icons.slint";
+
+export component NearbyDisc inherits Rectangle {
+    /// The disc itself, which is also its diameter — the radius is half of it.
+    in property <length> size;
+    /// The magnifier inside it, when it is the NEARBY button.
+    in property <length> glass-size;
+    /// The ✓ and the word under it, when it is the DONE button.
+    in property <length> tick-size;
+    in property <length> label-size;
+    /// Which of the two buttons this is.
+    in property <bool> reordering: false;
+
+    callback open-nearby();
+    callback done-reordering();
+
+    width: root.size;
+    height: root.size;
+    border-radius: self.width / 2;
+    background: root.reordering ? Pal.blue : Pal.nearby-disc;
+    border-width: root.reordering ? 0px : 1px;
+    border-color: Pal.nearby-rim;
+    opacity: nearby-touch.pressed ? 0.7 : 1.0;
+
+    nearby-touch := TouchArea {
+        clicked => {
+            if (root.reordering) { root.done-reordering(); } else { root.open-nearby(); }
+        }
+    }
+
+    if !root.reordering: MagnifierTower {
+        size: root.glass-size;
+        line: Pal.nearby-line;
+        glass: Pal.nearby-glass;
+    }
+
+    if root.reordering: VerticalLayout {
+        alignment: center;
+        Text {
+            text: "✓"; horizontal-alignment: center;
+            color: #FFFFFF; font-size: root.tick-size; font-weight: 700;
+        }
+        Text {
+            text: "DONE"; horizontal-alignment: center;
+            color: #FFFFFF; font-family: Font.face; font-weight: Font.bold;
+            font-size: root.label-size; letter-spacing: 1.5px;
+        }
+    }
+}

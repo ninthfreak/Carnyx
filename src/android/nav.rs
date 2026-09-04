@@ -164,13 +164,16 @@ extern "system" fn native_nav_note<'a>(
 /// the same thing — and the cost of being wrong is a dropped announcement, not
 /// a crash, only because of this.
 fn read_strings(env: &mut Env, array: &JObjectArray) -> Result<Vec<String>, Error> {
-    // `get_array_length` answers a `jsize` (i32) and `get_object_array_element`
-    // wants a `usize`; the conversion is here rather than at the call because a
-    // negative length is not a thing a JVM produces and `max(0)` says so once.
-    let len = env.get_array_length(array)?.max(0) as usize;
+    // ON THE ARRAY, NOT ON `Env`. The two `Env` methods this used —
+    // `get_array_length` and `get_object_array_element` — are deprecated in jni
+    // 0.22 and are documented as going away; `tools/check-jni.sh` is what says
+    // so here, because nothing else in this container compiles this file. The
+    // array's own `len` answers a `usize`, so the `max(0) as usize` that guarded
+    // against a negative `jsize` has nothing left to guard.
+    let len = array.len(env)?;
     let mut out = Vec::with_capacity(len);
     for i in 0..len {
-        let item = env.get_object_array_element(array, i)?;
+        let item = array.get_element(env, i)?;
         let s = JString::cast_local(env, item)?;
         out.push(s.try_to_string(env).unwrap_or_default());
     }

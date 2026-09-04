@@ -194,6 +194,12 @@ pub fn clock_now() -> Option<(u32, u32, bool)> {
 /// READ ONCE AT START-UP by the caller, unlike the clock beside it. A driver
 /// does not cross a border mid-drive often enough to poll for it, and the units
 /// changing under a countdown would be worse than being a launch behind.
+///
+/// AND THIS IS A CLAIM ON THE CALLER, NOT A PROPERTY OF THIS FUNCTION, which is
+/// how it came to be false for a while: `App::refresh_units` re-read it on every
+/// navigation publish, i.e. once a second for the whole run. The answer is held
+/// in `App`'s `State::country` now. Every call here attaches the thread, calls
+/// across JNI and marshals a `java.lang.String` — do it once.
 pub fn country_code() -> String {
     let Some(class) = CLASS_REF.get() else {
         return String::new();

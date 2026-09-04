@@ -40,6 +40,7 @@
 
 import { Pal, Metrics } from "tokens.slint";
 import { OverlayCard, OverlayHeader, OverlayFooter } from "overlay.slint";
+import { VPath } from "icons.slint";
 
 // ── Data the Rust side fills in ──────────────────────────────────────────────
 
@@ -139,35 +140,6 @@ export struct LogoCandidate {
 }
 
 // ── Icons ────────────────────────────────────────────────────────────────────
-
-// icons.slint's `VPath`, copied verbatim because it is private there. Slint's
-// Path fits its geometry into (element size − stroke width), nudges it back by
-// half a stroke, and does NOT scale stroke width with the viewbox — all three
-// differ from SVG, and this cancels the difference. Hand-rolling a Path instead
-// is the documented way to get this wrong.
-//
-// Whoever consolidates should move this and the four glyphs below into
-// icons.slint and delete them from here, from nearby.slint and from numpad.slint,
-// which all carry the same copy for the same one-file reason.
-component VPath inherits Path {
-    in property <length> box-w;
-    in property <length> box-h;
-    in property <float> vbw;
-    in property <float> vbh;
-    /// Stroke width in VIEWBOX units, as written in the SVG.
-    in property <float> raw-stroke: 0;
-
-    // preserveAspectRatio="xMidYMid meet" — uniform, so the smaller ratio wins.
-    property <float> sc: Math.min(root.box-w / 1px / root.vbw, root.box-h / 1px / root.vbh);
-
-    viewbox-width: root.vbw;
-    viewbox-height: root.vbh;
-    stroke-width: root.raw-stroke * root.sc * 1px;
-    x: 0px - self.stroke-width / 2;
-    y: 0px - self.stroke-width / 2;
-    width: root.box-w + self.stroke-width;
-    height: root.box-h + self.stroke-width;
-}
 
 /// Magnifier over a picture — the empty/no-logo mark (dc.html `emptyGlyph`:258).
 ///
