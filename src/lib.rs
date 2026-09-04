@@ -434,6 +434,25 @@ fn android_main(android_app: slint::android::AndroidApp) {
         format!("last sleep: {sleep_note}")
     });
 
+    // AND WHETHER THE PLATFORM BOUND THE NOTIFICATION LISTENER, which is the one
+    // question #133's outcome C rests on. Every other survival mechanism in this
+    // app is a broadcast receiver, and the unit force-stops third-party packages
+    // on ACC-off — after which no broadcast arrives at all until a human taps the
+    // icon. A listener is bound by the PLATFORM, and the platform re-binds it;
+    // whether it does that for a force-stopped package is the thing nobody knows.
+    //
+    // PRINTED EVEN WHEN EMPTY, as the sleep note is and for the same reason: on a
+    // launch that followed an ignition cycle, silence means the force-stop took
+    // the listener down with everything else, and that is the finding. It also
+    // reads "nothing recorded" on any build where the driver has not granted
+    // notification access, and on cargo-apk, which declares no services at all.
+    let listener_note = android::take_listener_note();
+    _driver.log_platform(&if listener_note.is_empty() {
+        "listener: nothing recorded".to_string()
+    } else {
+        format!("listener: {listener_note}")
+    });
+
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
     // a driver can get that the renderer saw it, since the alternative — Slint

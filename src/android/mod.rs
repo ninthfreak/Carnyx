@@ -877,6 +877,19 @@ pub fn request_overlay_permission() -> String {
     "overlay permission: nothing to grant on this build".into()
 }
 
+/// Send the driver to the "Notification access" screen. See
+/// [`alert::request_listener_access`].
+#[cfg(target_os = "android")]
+pub fn request_listener_access() -> String {
+    alert::request_listener_access()
+}
+
+/// The host has no notification listeners. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn request_listener_access() -> String {
+    "notification access: nothing to grant on this build".into()
+}
+
 /// What could keep this app alive through a sleep. See `probe`.
 #[cfg(target_os = "android")]
 pub fn keep_alive_report() -> Vec<String> {
@@ -1056,6 +1069,44 @@ pub fn take_sleep_note() -> String {
 pub fn take_sleep_note() -> String {
     String::new()
 }
+
+/// What the notification listener's last bind did, and forget it. See
+/// [`wake::take_last_listener`].
+#[cfg(target_os = "android")]
+pub fn take_listener_note() -> String {
+    wake::take_last_listener()
+}
+
+/// The host has no platform to bind a listener. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn take_listener_note() -> String {
+    String::new()
+}
+
+/// Whether the driver has granted notification access. See
+/// [`wake::listener_granted`].
+#[cfg(target_os = "android")]
+pub fn listener_granted() -> bool {
+    wake::listener_granted()
+}
+
+/// The host grants nothing, so the row reports the same "not granted" a driver
+/// who has not visited the screen would see. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn listener_granted() -> bool {
+    false
+}
+
+/// Push the come-forward switch where a cold-started listener can read it. See
+/// [`wake::set_come_forward`].
+#[cfg(target_os = "android")]
+pub fn set_come_forward(on: bool) {
+    wake::set_come_forward(on);
+}
+
+/// The host has no listener to instruct. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn set_come_forward(_on: bool) {}
 
 /// Whether the face is the thing the driver is looking at.
 ///

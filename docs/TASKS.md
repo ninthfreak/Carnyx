@@ -1663,6 +1663,54 @@ OPEN**, both of which had been asserted in comments and never checked:
   `RadioCallback$Stub`: **30 of 30 and 14 of 14 line up in order.** Every
   transaction code is right.
 
+**C IS BUILT TOO, AND IT IS AN EXPERIMENT BEFORE IT IS A FEATURE.**
+`CarnyxListener` is a `NotificationListenerService` that reads no notifications —
+`onNotificationPosted` and `onNotificationRemoved` are left at their inherited
+no-ops, deliberately and permanently, and the class note says so. It is here for
+ONE property: a notification listener is bound by the PLATFORM rather than by the
+app, and the platform re-binds it. Every other survival mechanism this app has is
+a broadcast receiver, and a force-stopped package gets no broadcast at all.
+
+**WHAT IS UNKNOWN IS WHETHER THE PLATFORM RE-BINDS A FORCE-STOPPED PACKAGE'S
+LISTENER.** The documentation is about the ordinary lifecycle and the vendor
+cleaner is not ordinary. So `onListenerConnected` writes a durable note BEFORE it
+reads a flag or touches anything that can throw, and `lib.rs` prints it at every
+launch, empty or not. One ignition cycle then says: a `listener:` line means the
+platform started this process with no human involved, which is C's precondition
+and nothing else here has ever achieved; silence means the force-stop takes the
+listener with everything else, and C needs another mechanism or is unreachable.
+
+**THE LAUNCH SHIPS OFF.** Settings ▸ SYSTEM ▸ "Come back on when the unit wakes",
+default false, persisted as `comeForward` AND pushed through `CarnyxWake` into the
+shared-preferences file a cold-started listener can read — the same two-place
+arrangement as the release-on-sleep switch, for the same reason. #94's lesson is
+why it is off: a switch promising behaviour nobody has watched work is the row
+that got removed. The sub-line carries the condition (no grant, nothing binds)
+and the hazard (a bind is not only a wake — the platform also binds at boot and
+after a re-grant, and either could take the screen while the driver is in maps).
+
+**AND A THIRD PERMISSION ROW**, "Allow notification access", beside the two
+pop-up ones and last of the three because its reason is the one a driver cannot
+see from the row alone.
+
+**TWO DEFECTS OF MY OWN, BOTH CAUGHT BY A CHECK RATHER THAN BY READING:**
+
+1. The receiver in B put a `static final` field in an array initializer ABOVE its
+   own declaration — an illegal forward reference and a hard compile error. Found
+   by `tools/check-java.sh`, which did not exist until it was written to find it.
+2. This row first went BETWEEN "Station logos" and "Clear all station logos",
+   splitting a pair the second row is deliberately attached to (no divider, by
+   its own comment). It reads as a third logo setting. A shot caught it; it is
+   last in the group now, under its own rule.
+
+**AND A THIRD SHOT JOINS THE UNSTABLE LIST.** `nin.png` differed against the
+baseline in one full run, matched it byte-for-byte in the next two, and is stable
+across a run-to-run pair — an INTERMITTENT flapper, which is worse than a
+reliable one because it reads as a regression in whichever change is in flight.
+The mechanism is real: that band theme draws `GlitchText`, whose animation is on
+the same wall clock as the power ring and the spinners. Two runs cannot clear a
+shot like that; the mechanism can, and is what put it on the list.
+
 **AND THE JAVA HAS A CHECK NOW.** `tools/check-java.sh` — 6,500 lines across ten
 classes, including the file this feature lives in, were compiled by nothing but
 Gradle on the owner's machine. It cost time immediately: the first cut of the

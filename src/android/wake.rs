@@ -142,6 +142,63 @@ pub fn take_last_sleep() -> String {
     take(jni_str!("takeLastSleep"))
 }
 
+/// What the NOTIFICATION LISTENER's last bind or unbind did, and forget it.
+///
+/// THE ONE LINE THAT SAYS WHETHER #133's OUTCOME C IS REACHABLE AT ALL. Every
+/// other mechanism in this module is a broadcast receiver, and the unit
+/// force-stops third-party packages on ACC-off — after which no broadcast of any
+/// kind arrives until a human taps the icon. A notification listener is bound by
+/// the PLATFORM instead, and the platform re-binds it; whether it does so for a
+/// force-stopped package is the open question, and `CarnyxListener` writes this
+/// note on every bind so one ignition cycle answers it.
+///
+/// EMPTY IS THE ANSWER "NO", or a cargo-apk build, which declares no services at
+/// all and so has no listener to bind.
+pub fn take_last_listener() -> String {
+    take(jni_str!("takeLastListener"))
+}
+
+/// Whether the driver has granted notification access.
+///
+/// Asked of `Settings.Secure` rather than of the service, because the settings
+/// row needs the answer at a moment when the platform has said nothing. False on
+/// a build with no class, which is the same answer a driver who has not granted
+/// it would get and is the right one either way.
+pub fn listener_granted() -> bool {
+    let Some(class) = CLASS_REF.get() else {
+        return false;
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return false;
+    };
+    jvm.attach_current_thread(|env: &mut Env| -> Result<bool, jni::errors::Error> {
+        env.call_static_method(class, jni_str!("isListenerGranted"), jni_sig!("()Z"), &[])?.z()
+    })
+    .unwrap_or(false)
+}
+
+/// Write the driver's come-forward switch where the listener can read it.
+///
+/// As [`set_foreground`]: silently does nothing before [`init`] has run and on a
+/// build with no class, which are the same case from a caller's seat.
+pub fn set_come_forward(on: bool) {
+    let Some(class) = CLASS_REF.get() else {
+        return;
+    };
+    let Ok(jvm) = JavaVM::singleton() else {
+        return;
+    };
+    let _ = jvm.attach_current_thread(|env: &mut Env| -> Result<(), jni::errors::Error> {
+        env.call_static_method(
+            class,
+            jni_str!("setComeForward"),
+            jni_sig!("(Z)V"),
+            &[JValue::Bool(on)],
+        )?;
+        Ok(())
+    });
+}
+
 /// One `()Ljava/lang/String;` static, or `""` where the class never loaded.
 fn take(method: &JNIStr) -> String {
     let Some(class) = CLASS_REF.get() else {

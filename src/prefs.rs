@@ -86,6 +86,8 @@ pub struct Prefs {
     pub nav_hide_on_map: bool,
     /// See `settings::Settings::preset_loop`. Defaults OFF.
     pub preset_loop: bool,
+    /// See `settings::Settings::come_forward`. Defaults OFF.
+    pub come_forward: bool,
     pub diag_on: bool,
 }
 
@@ -106,6 +108,7 @@ impl Default for Prefs {
             nav_on: s.nav_on,
             nav_hide_on_map: s.nav_hide_on_map,
             preset_loop: s.preset_loop,
+            come_forward: s.come_forward,
             diag_on: s.diag_on,
         }
     }
@@ -236,6 +239,7 @@ fn from_json(text: &str) -> Option<Prefs> {
     p.nav_on = flag("navOn", p.nav_on);
     p.nav_hide_on_map = flag("navHideOnMap", p.nav_hide_on_map);
     p.preset_loop = flag("presetLoop", p.preset_loop);
+    p.come_forward = flag("comeForward", p.come_forward);
     p.diag_on = flag("diagOn", p.diag_on);
     // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
     // They were CarFM's diagnostics and are gone; a file written by an older
@@ -263,7 +267,7 @@ pub fn to_json(p: &Prefs) -> String {
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
             "\"logosOn\":{},\"permissionsAsked\":{},\"releaseOnSleep\":{},",
             "\"clockOn\":{},\"navOn\":{},",
-            "\"navHideOnMap\":{},\"presetLoop\":{},\"diagOn\":{}}}"
+            "\"navHideOnMap\":{},\"presetLoop\":{},\"comeForward\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
@@ -275,6 +279,7 @@ pub fn to_json(p: &Prefs) -> String {
         p.nav_on,
         p.nav_hide_on_map,
         p.preset_loop,
+        p.come_forward,
         p.diag_on,
     )
 }
@@ -370,6 +375,7 @@ mod tests {
             nav_on: true,
             nav_hide_on_map: false,
             preset_loop: true,
+            come_forward: true,
             diag_on: true,
         };
         save(&d, &p);
@@ -440,6 +446,7 @@ mod tests {
         // prop (default off)"). An absent key must never turn a rail that a
         // driver has learnt the shape of into one with no ends.
         assert!(!p.preset_loop, "a file predating the key leaves looping off");
+        assert!(!p.come_forward, "and predating comeForward leaves that off too");
         let _ = fs::remove_dir_all(&d);
     }
 

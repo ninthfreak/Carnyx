@@ -1461,6 +1461,7 @@ impl App {
                     nav_on: saved.nav_on,
                     nav_hide_on_map: saved.nav_hide_on_map,
                     preset_loop: saved.preset_loop,
+                    come_forward: saved.come_forward,
                     diag_on: saved.diag_on,
                     ..settings::Settings::default()
                 },
@@ -1577,6 +1578,12 @@ impl App {
         {
             let s = app.state.borrow();
             s.tuner.set_release_on_sleep(s.settings.release_on_sleep);
+            // AND THE COME-FORWARD SWITCH, for exactly the same reason: the
+            // notification listener may be bound into a process with no Rust,
+            // so the shared-preferences copy is the only thing it can read. A
+            // launch that did not push it would leave Java on its own default
+            // until the driver next touched the row.
+            crate::android::set_come_forward(s.settings.come_forward);
         }
         // ── OSMAND, IF THE DRIVER HAS ASKED FOR IT ───────────────────────
         //
@@ -3415,6 +3422,14 @@ impl App {
         ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
         ui.set_settings_preset_loop(cfg.preset_loop);
         ui.set_settings_preset_loop_sub(settings::preset_loop_sub(cfg.preset_loop).into());
+        // THE GRANT IS ASKED FOR ON EVERY PUBLISH, not cached. The driver can
+        // leave for Android's screen and come back with the answer changed, and
+        // this is the only moment the app gets to notice.
+        let granted = crate::android::listener_granted();
+        ui.set_settings_come_forward(cfg.come_forward);
+        ui.set_settings_come_forward_sub(
+            settings::come_forward_sub(cfg.come_forward, granted).into(),
+        );
         ui.set_settings_diag_on(cfg.diag_on);
         // The log is a `DiagLog::CAP`-line ring — 600 — with up to
         // `DiagLog::HEAD_CAP` (24) more in the head that never scrolls, and
@@ -4598,6 +4613,17 @@ impl App {
             app.push_nav();
             app.push_settings();
         });
+        on!(on_settings_set_come_forward, |app, v| {
+            // PUSHED TO DISK THROUGH JAVA, NOT JUST HELD HERE. The listener may
+            // be bound by the platform into a process with no Rust in it and no
+            // `prefs.json` parsed, so the shared-preferences copy is the only
+            // way it can know what the driver asked for. Same arrangement as the
+            // release-on-sleep switch and for the same reason.
+            app.state.borrow_mut().settings.come_forward = v;
+            crate::android::set_come_forward(v);
+            app.save_prefs();
+            app.push_settings();
+        });
         on!(on_settings_set_preset_loop, |app, v| {
             // A DISPLAY RULE AND NOTHING ELSE. The rail decides at layout time
             // whether the §8.1 conditions hold; Rust only remembers the switch,
@@ -4928,6 +4954,7 @@ impl App {
             nav_on: s.settings.nav_on,
             nav_hide_on_map: s.settings.nav_hide_on_map,
             preset_loop: s.settings.preset_loop,
+            come_forward: s.settings.come_forward,
             diag_on: s.settings.diag_on,
         };
         if now == s.saved {
@@ -5582,6 +5609,18 @@ impl App {
                 // "not permitted", which is the answer either way.
                 settings::Action::AskOverlayPermission => {
                     let line = crate::android::request_overlay_permission();
+                    s.settings.log.push(&stamp(), &line);
+                    s.settings.set_note(action, line.clone());
+                    s.diag_status = line;
+                    None
+                }
+                // THE SAME SHAPE AGAIN, and the third of three. This one opens
+                // the screen that decides whether outcome C is reachable: with
+                // notification access the platform binds `CarnyxListener`, and
+                // `listener:` lines start appearing in the log; without it
+                // nothing binds and the come-forward switch governs nothing.
+                settings::Action::AskListenerPermission => {
+                    let line = crate::android::request_listener_access();
                     s.settings.log.push(&stamp(), &line);
                     s.settings.set_note(action, line.clone());
                     s.diag_status = line;
@@ -6742,6 +6781,13 @@ mod tests {
         // Defaults OFF, so `true` is the value a broken save cannot fake.
         ui.invoke_settings_set_preset_loop(true);
         assert!(crate::prefs::load(&dir).preset_loop, "and the rail-wrap switch");
+        // THE COME-FORWARD SWITCH REACHES TWO PLACES, and only one of them is
+        // this file. `prefs.json` is what a launch restores from; the shared
+        // preferences copy is what the notification listener reads in a process
+        // with no Rust in it. This asserts the half a host build has — see
+        // `NwdBridge`/`CarnyxWake` for the other, which no test here can reach.
+        ui.invoke_settings_set_come_forward(true);
+        assert!(crate::prefs::load(&dir).come_forward, "and the come-forward switch");
         drop(driver);
     }
 
@@ -6787,6 +6833,7 @@ mod tests {
             nav_on: false,
             nav_hide_on_map: false,
             preset_loop: true,
+            come_forward: true,
             diag_on: true,
         };
         crate::prefs::save(&dir, &chosen);
@@ -6815,6 +6862,7 @@ mod tests {
             assert!(!cfg.nav_on, "the OsmAnd switch");
             assert!(!cfg.nav_hide_on_map, "the hide-on-map switch");
             assert!(cfg.preset_loop, "the rail-wrap switch");
+            assert!(cfg.come_forward, "the come-forward switch");
             assert!(cfg.diag_on, "the diagnostics switch");
             assert_eq!(
                 s.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
@@ -6839,6 +6887,7 @@ mod tests {
             "the hide-on-map switch survived"
         );
         assert_eq!(back.preset_loop, chosen.preset_loop, "the rail-wrap switch survived");
+        assert_eq!(back.come_forward, chosen.come_forward, "the come-forward switch survived");
         assert_eq!(back.diag_on, chosen.diag_on, "the diagnostics switch survived");
         assert_eq!(
             back.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
