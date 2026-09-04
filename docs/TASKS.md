@@ -1609,8 +1609,70 @@ That is the one thing every mechanism tried so far has lacked.
 
 **WHAT IS STILL UNKNOWN.** Whether the cleaner broadcasts `ACTION_KILL_OTHER_APP`
 for third-party packages at all, or only for the vendor's own. The stock app is
-the only sample here, and it is a system app. That is one line in the probe's
-sweep and one drive to answer.
+the only sample here, and it is a system app.
+
+---
+
+**B IS BUILT.** `NwdBridge.startSleepWatch` now registers `KILL_ACTION` alongside
+the three it already had, and the receiver tests the package extra the way the
+stock app tests its own name:
+
+```java
+if (KILL_ACTION.equals(action)) {
+    String named = i.getStringExtra(EXTRA_PACKAGE);
+    if (named == null || !named.equals(ctx.getPackageName())) {
+        safeSleep(action, "names " + named + ", not us — no release");
+        return;
+    }
+    action = action + " (" + named + ")";
+}
+```
+
+A kill naming Carnyx then falls through into the existing sleep path: release the
+source on this thread, `CarnyxWake.noteSleep` to disk, `safeSleep` to the log. A
+kill naming anything else is logged and NOT committed — `noteSleep` writes ONE
+durable slot that the next launch reads back, and filling it with "the cleaner
+killed YouTube" would overwrite the line that matters. Those go to the in-memory
+log, which dies with the process; that is acceptable, because a kill for another
+package is only interesting while we are alive to have seen it, and if we are
+alive we are still in line to be named.
+
+THE FILTER IS IN JAVA ON PURPOSE. The package extra never crosses the seam, so a
+kill for another app cannot reach Rust and cannot touch the durable note.
+`the_vendor_kill_is_a_sleep_when_it_names_us` pins the half that does cross.
+
+**AND THE PROBE ASKS ABOUT THE REST OF THE VOCABULARY NOW.** Added to the sweep:
+the other four of the stock app's own six (`ACTION_KILL_OTHER_APP`,
+`ACTION_EXIT_ARM_FM_RAIDO`, `ACTION_MEDIA_PLAY`, `ACTION_MCU_STATE_CHANGE`), the
+vendor's app-movers (`ACTION_REQUEST_START_ACTIVITY`, `ACTION_START_ACTIVITY`,
+`ACTION_START_NWD_ACTIVITY`, `ACTION_STOP_APP`, `ACTION_CLOSE_CAR_RADIO`) and the
+three that turned out to have no cross-references (`ACTION_OS_SLEEP`,
+`ACTION_AUTO_SLEEP_WAKE_STATE`, `ACTION_SYSTEM_AUTO_WAKEUP`). Misses are reported
+for the kill and the movers, because a miss there says the mechanism is
+runtime-only like the stock app's and there is nothing to declare against.
+
+**TWO CLAIMS IN THIS TREE WERE VERIFIED AGAINST THE FIRMWARE WHILE THE APKs WERE
+OPEN**, both of which had been asserted in comments and never checked:
+
+- `Frequency.java` says its parcel wire order is "byte band, String psName, int
+  freq — verified from the service's writeToParcel". The service's real
+  `writeToParcel` is `writeByte(mBandType); writeString(mPSName);
+  writeInt(mFrequency)`. MATCHES. `RadioPoint` likewise: min, max, step.
+- `RadioFeature.aidl` says "METHOD ORDER IS LOAD-BEARING … verified from the
+  service's TRANSACTION_* constants". Read out of `RadioFeature$Stub` and
+  `RadioCallback$Stub`: **30 of 30 and 14 of 14 line up in order.** Every
+  transaction code is right.
+
+**AND THE JAVA HAS A CHECK NOW.** `tools/check-java.sh` — 6,500 lines across ten
+classes, including the file this feature lives in, were compiled by nothing but
+Gradle on the owner's machine. It cost time immediately: the first cut of the
+receiver above put a `static final` field in an array initializer ABOVE its own
+declaration, an illegal forward reference and a hard compile error, invisible to
+every check this container had. The script fetches a Robolectric framework jar,
+generates interface stubs FROM THIS TREE'S OWN `.aidl` (not from the vendor APK —
+the licensing note on those files forbids redistributing decompiled code), and
+compiles twelve of the thirteen classes. `CarnyxNav` is skipped and printed, the
+way `check-jni.sh` prints its own skips.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**

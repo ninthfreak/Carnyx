@@ -893,11 +893,44 @@ public final class NwdBridge {
      * <p>SCREEN_OFF is the certain one and its hazard is on the switch that turns
      * this feature on; see the class note below.
      */
+    /** The vendor's "you are about to be killed" broadcast. See SLEEP_ACTIONS. */
+    private static final String KILL_ACTION = "com.nwd.ACTION_KILL_OTHER_APP";
+
+    /** Which package {@link #KILL_ACTION} is about. A string, not a byte. */
+    private static final String EXTRA_PACKAGE = "extra_package_name";
+
     private static final String[] SLEEP_ACTIONS = {
         "com.nwd.ACTION_ACCOFF_UPDATE",
         "com.nwd.action.ACTION_ACCOFF_UPDATE",
         Intent.ACTION_SCREEN_OFF,
+        // ── THE ONE THE VENDOR ACTUALLY USES ─────────────────────────────────
+        //
+        // The three above are guesses that have never fired: a drive log carrying
+        // an ACC cycle came back with no `wake:` line and `last sleep: nothing
+        // recorded`, which is the runtime SCREEN_OFF watch reporting nothing too.
+        // Reading the stock radio APK settled why. `com.nwd.ACTION_OS_SLEEP` and
+        // both ACC-off spellings are in its string pool as bundled SDK constants
+        // WITH NO CROSS-REFERENCES AT ALL — no sender, no receiver, in either
+        // vendor APK. Nothing on this unit is known to send them.
+        //
+        // What the stock app really listens to, in a RUNTIME receiver of its own
+        // (`AWRadioManager.registReceiver`), is this:
+        //
+        //     if ("com.nwd.ACTION_KILL_OTHER_APP".equals(action)) {
+        //         String pkg = intent.getStringExtra("extra_package_name");
+        //         if (pkg.equals("com.nwd.radio")) { ExitFm(); }
+        //     }
+        //
+        // The vendor names the app it is about to kill, and the app releases FM
+        // on being named. That is the signal every mechanism tried here has
+        // lacked: it arrives in a LIVING process, so the API-26 ban on implicit
+        // broadcasts does not reach it, and it arrives BEFORE the kill rather
+        // than after the process is gone.
+        //
+        // See docs/vendor/README.md for the decompile and docs/TASKS.md #133.
+        KILL_ACTION,
     };
+
 
     /**
      * @return a line for the DIAGNOSTICS LOG saying what happened, never null.
@@ -916,6 +949,31 @@ public final class NwdBridge {
         BroadcastReceiver r = new BroadcastReceiver() {
             @Override public void onReceive(Context c, Intent i) {
                 String action = i == null || i.getAction() == null ? "" : i.getAction();
+                // ── A KILL IS ONLY OURS WHEN IT NAMES US ─────────────────────
+                //
+                // The vendor cleaner broadcasts this per package, so most of
+                // them are about somebody else and releasing FM on those would
+                // hand the radio back every time the cleaner touched YouTube.
+                // The stock app makes exactly the same test against its own
+                // name; this is that test, with our name in it.
+                //
+                // A KILL FOR ANOTHER PACKAGE IS LOGGED AND NOT COMMITTED, and
+                // the asymmetry is deliberate. `CarnyxWake.noteSleep` writes ONE
+                // durable slot that the next launch reads back; filling it with
+                // "the cleaner killed YouTube" would overwrite the line that
+                // matters. Those go to the in-memory log, which dies with the
+                // process — acceptable, because a kill for another package is
+                // only interesting while we are still alive to have seen it,
+                // and if we are alive we are still in line to be named.
+                if (KILL_ACTION.equals(action)) {
+                    String named = i == null ? null : i.getStringExtra(EXTRA_PACKAGE);
+                    String me = ctx == null ? "" : ctx.getPackageName();
+                    if (named == null || !named.equals(me)) {
+                        safeSleep(action, "names " + named + ", not us — no release");
+                        return;
+                    }
+                    action = action + " (" + named + ")";
+                }
                 // RELEASED HERE, ON THIS THREAD, BEFORE THE HOP TO RUST. See
                 // releaseSource: the queued path is a thread hop and a drain
                 // taken while the MCU is cutting power, with no wake lock behind

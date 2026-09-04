@@ -6921,6 +6921,56 @@ mod tests {
         );
     }
 
+    /// THE VENDOR'S KILL BROADCAST IS A SLEEP, AND ONLY WHEN IT NAMES US.
+    ///
+    /// `com.nwd.ACTION_KILL_OTHER_APP` is what the stock radio app releases FM
+    /// on — the cleaner names the package it is about to kill, and the app
+    /// listening for its own name gets out of the way first. It is the only
+    /// signal in this whole investigation that arrives in a LIVING process and
+    /// BEFORE the kill, which is what the three actions this tree spent months
+    /// listening for never managed. See docs/vendor/README.md and #133.
+    ///
+    /// THE FILTERING HAPPENS IN JAVA, in the receiver, because the package extra
+    /// never crosses the seam — a kill for another app must not reach Rust at
+    /// all, or the durable note that the next launch reads back would be
+    /// overwritten with "the cleaner killed YouTube". What this test can pin is
+    /// the half that DOES cross: that a kill naming Carnyx is handled exactly as
+    /// any other sleep, source handed back and the action named in the log.
+    #[test]
+    fn the_vendor_kill_is_a_sleep_when_it_names_us() {
+        let _ui_lock = harness::ui_lock();
+        let (_ui, driver) = app_for("kill-sleep");
+
+        driver.set_audio(true);
+        assert_eq!(
+            driver.state.borrow().tuner.snapshot().unwrap().mcu_source,
+            Some(4),
+            "the face holds FM before the kill"
+        );
+
+        // The receiver rewrites the action to carry the package it matched, so
+        // the log says which name the cleaner used rather than just that one did.
+        crate::android::ingest_sleep(
+            "com.nwd.ACTION_KILL_OTHER_APP (com.ninthfreak.carnyx)".into(),
+            String::new(),
+        );
+        driver.drain_events();
+
+        let s = driver.state.borrow();
+        assert_eq!(
+            s.tuner.snapshot().unwrap().mcu_source,
+            Some(0),
+            "the source went back on the kill, as it does on an ACC-off"
+        );
+        assert!(!s.user_powered_off, "and a kill is not the driver's power button");
+        let lines = s.settings.log.lines();
+        assert!(
+            lines.iter().any(|l| l.contains("ACTION_KILL_OTHER_APP")
+                && l.contains("com.ninthfreak.carnyx")),
+            "the log names the action and the package it matched: {lines:?}"
+        );
+    }
+
     /// THE IGNITION GOING OFF HANDS THE FM SOURCE BACK, AND IS NOT A POWER-OFF.
     ///
     /// The MCU sleeps the SoC on ACC-off and restores its own radio app on
