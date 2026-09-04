@@ -1540,12 +1540,77 @@ every broadcast route dead, the lifecycle, or `setRadioBackServiceOn(false)`, ma
 be the only place left to do it from. The objection to the lifecycle stands as an
 objection; it is no longer a choice between it and something that works.
 
-**STILL OPEN FROM CarFM, AND NOW ON THE CRITICAL PATH:** the exact
-`EXTRA_MEDIA_SOURCE` value for the radio source. `BUILTIN-TUNER-FINDINGS.md`
-lists it under OPEN — "decompile the stock app's start/resume source-switch call"
-— and never closed it. The APK is readable on the unit at
-`/data/smallota/app/com.nwd.radio/com.nwd.radio.apk`, 11,359 KB, so a copy to a
-USB stick settles both this and the intent-filter question in one go.
+---
+
+**THE OWNER COPIED BOTH APKs OFF THE UNIT, AND THEY SETTLE MOST OF THIS.** Read
+with `androguard`; the findings and the evidence are in `docs/vendor/README.md`,
+the vendor's whole 194-action vocabulary in `docs/vendor/nwd-actions.txt`.
+
+**ROUTE 2 OF #96 IS DEAD.** The stock app's entire manifest is ONE activity —
+`com.nwd.radio.home_horizontalActivity`, `launchMode="2"` — with ONE filter,
+`MAIN` + `LAUNCHER`. No receivers, no services, no providers. There is no custom
+action to declare and no chooser to become the default of, so whatever launches it
+on ACC-on is naming the component explicitly. The probe's sweep was right that
+there is no door; it could not have proved it, and now the manifest does.
+
+**FM IS SOURCE 4, MEASURED.** `AWFMFeature.isRadioSource()` reads
+`SettingTableKey.getIntValue(cr, "mcu_current_source") == 4`. Every gate in
+`NwdBridge` that assumes 4 is correct.
+
+**CarFM'S OPEN QUESTION IS ANSWERED, AND ITS ANSWER NAMED THE WRONG EXTRA.**
+`BUILTIN-TUNER-FINDINGS.md` left "the exact `EXTRA_MEDIA_SOURCE` value" open.
+`extra_media_source` is not the one: it belongs to
+`OuterBroadcastSender.sendMediaPlayInfo`, which talks to the CAN bus. The extra
+that moves the radio is `extra_source_id`, and it is a BYTE:
+
+```java
+// AWRadioManager$1.onReceive
+byte newSource = intent.getByteExtra("extra_source_id", 0);
+if (newSource == 4) { InitFM(); }
+else if (!NewRdsManager.getInstance().isRdsEnable()) { ExitFm(); }
+```
+
+**AND THE FINDING THAT CHANGES WHAT TO BUILD.** The stock app is told BY NAME
+that it is about to be killed, and that is what it releases FM on:
+
+```java
+if ("com.nwd.ACTION_KILL_OTHER_APP".equals(action)) {
+    String pkg = intent.getStringExtra("extra_package_name");
+    if (pkg.equals("com.nwd.radio")) { ExitFm(); }
+}
+```
+
+All six of its actions are registered at RUNTIME —
+`AWRadioManager.registReceiver()` — which is why nothing on the unit declares them
+in a manifest, why the probe's sweep found no declarer, and why the API-26 ban on
+implicit broadcasts never applied to the vendor's own handling of them.
+
+**SO THE SIGNAL CARNYX NEEDS EXISTS, AND IT IS NOT THE ONE WE HAVE BEEN WAITING
+FOR.** `com.nwd.ACTION_OS_SLEEP`, `com.nwd.ACTION_OS_WAKE_UP` and
+`com.nwd.ACTION_ACCOFF_UPDATE` are all present in the string pools and NOTHING in
+the stock radio app references any of them — no sender, no receiver. They are
+bundled SDK constants. The action the vendor actually uses to tell an app it is
+about to go away is `com.nwd.ACTION_KILL_OTHER_APP` with `extra_package_name`, it
+arrives at a runtime receiver in a LIVING process, and it arrives BEFORE the kill.
+That is the one thing every mechanism tried so far has lacked.
+
+**WHAT THAT MAKES BUILDABLE**, in the owner's own ranking:
+
+- **B — nothing launches on wake.** Hear `ACTION_KILL_OTHER_APP` for
+  `com.ninthfreak.carnyx`, and hand the source back there instead of on an ACC-off
+  broadcast that never comes. If `mcu_current_source` is not 4 when the unit
+  sleeps, the MCU has no FM to restore. It also gives Carnyx a place to do what
+  the stock app does — the vendor's own idiom, in the vendor's own order.
+- **C — Carnyx on top.** Unchanged: still needs a notification listener or an
+  accessibility service for the background-activity-start exemption. The kill
+  signal does not help here, because by wake time the process is gone.
+- **A — Carnyx instead of the stock app.** Still only `pm disable-user`, and now
+  known to be the ONLY route: with no implicit door there is nothing to intercept.
+
+**WHAT IS STILL UNKNOWN.** Whether the cleaner broadcasts `ACTION_KILL_OTHER_APP`
+for third-party packages at all, or only for the vendor's own. The stock app is
+the only sample here, and it is a system app. That is one line in the probe's
+sweep and one drive to answer.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
