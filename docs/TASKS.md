@@ -1306,6 +1306,102 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 133. The sleep/wake behaviour: what the owner asked for, and why two builds could never have delivered it
+**OPEN. THE NEXT FOCUS OF DEVELOPMENT.** *"I want to work on the sleep/wake
+behavior, it's the next focus of development."*
+
+**FIRST, THE THING THIS FILE SHOULD HAVE HELD ALL ALONG.** The owner described the
+behaviour and ranked three outcomes, in their own words, and it was never written
+down here — it lived in a conversation, which is the exact failure `README.md`
+says this file exists to prevent. Verbatim:
+
+> Currently, if I shut off the car the head unit goes into some sort of sleep
+> mode. If the radio was currently on and playing when the unit sleeps, next time
+> I wake up the head unit by starting the car it will automatically open the stock
+> radio app. It doesn't matter if the stock app was open at this time. If Carnyx
+> was open when unit went to sleep, it gets closed or killed in some way. If the
+> radio wasn't playing when the unit went to sleep, the stock radio app doesn't
+> get launched.
+>
+> My ideal behavior would be how it works currently, except that it would launch
+> Carnyx instead of the stock app, and the stock app wouldn't be seen at all.
+> Second best would be nothing happening when waking up, whether or not the radio
+> was on it doesn't start the stock app. (There was an attempt to have Carnyx stop
+> the radio on sleep to accomplish this)
+> Third best would be launching Carnyx when coming back from sleep. The stock
+> radio still launches, but Carnyx launches on top and the stock app can just be
+> ignored. (Attempts at auto-launch have been done, but failed)
+
+Call them **A**, **B** and **C** below. THE RANKING IS THE SPEC. Anything built
+here is measured against which of the three it delivers, not against whether it
+works in the abstract.
+
+**SECOND, THE TWO THINGS THAT ARE DEAD, AND THEY ARE DEAD FOR A STRUCTURAL
+REASON.** #92 (release the FM source on ACC-off) and #95 (come forward on
+ACC-on) are confirmed by the owner never to have worked. Both are manifest
+receivers for a VENDOR-DEFINED IMPLICIT BROADCAST, and there are two independent
+reasons that cannot fire on this unit:
+
+1. **The API-26 ban.** Since Oreo a manifest receiver does not receive implicit
+   broadcasts, with a short exemption list. `com.nwd.ACTION_OS_WAKE_UP` and both
+   ACC-off spellings are not on it. `BOOT_COMPLETED` is — and is useless here,
+   because this unit suspends rather than cold-boots. THE STEERING WHEEL IS NOT A
+   COUNTER-EXAMPLE, and #95 leaned on it as one: the wheel's broadcast is heard by
+   a RUNTIME receiver inside a living process, which the ban does not touch.
+2. **The force-stop.** The owner reports that after a sleep NOTHING third-party
+   is left in the app switcher — Carnyx, OsmAnd and Plexamp all gone. An
+   out-of-memory kill leaves the task behind so a tap can resume it; a force-stop
+   wipes it. A force-stopped package receives no broadcast of ANY kind, exempt or
+   not, until a human taps its icon.
+
+Either one alone kills both receivers. That is why they produced silence rather
+than any of the failure lines they were written to produce, and it means no amount
+of driving would have made them work.
+
+**THIRD, WHAT IS ALREADY BUILT TO ANSWER THIS AND HAS NEVER BEEN RUN.** Two
+DIAGNOSTICS rows, both read-only, both a tap:
+
+- **#93, "What could keep Carnyx alive through sleep."** Its first two sections
+  are the two decisive questions. `bootMarker` compares `elapsedRealtime` across
+  launches — a value LOWER than last launch's is unforgeable proof of a reboot,
+  which decides whether `BOOT_COMPLETED` is in play at all and whether the tree's
+  inherited "this unit does not cold-boot" assumption is even true. `stoppedApps`
+  reads `ApplicationInfo.FLAG_STOPPED` across third-party packages and reports how
+  many are sitting force-stopped — the direct test of reason 2. Then the
+  survivable routes, the overlay grants, the vendor auto-start and protected-app
+  tables, battery, settings and packages.
+- **#96, "Where the stock radio app can be intercepted."** Four routes, and they
+  map onto the owner's three outcomes exactly: disable the stock app outright
+  (delivers **A** and **B** together, needs an adb shell and no root — the report
+  reads `adb_enabled` and `development_settings_enabled` first for that reason);
+  become the handler if the firmware launches by an implicit intent (**A**); jump
+  in front with a background-activity-start exemption (**C**); share the stock
+  app's `taskAffinity` (**C**, most fragile). Plus the APK path, so the vendor
+  package can be copied to a USB stick and its intent filters read properly on a
+  desktop — which is the only way to see filters the sweep does not know to name.
+
+**FOURTH, THE ONE ROUTE THAT SURVIVES A FORCE-STOP**, and it is the same one for
+**C** and for #95's known risk: a NOTIFICATION LISTENER or an ACCESSIBILITY
+SERVICE. Both are bound by the platform itself rather than by the app, both are
+re-bound after a stop, and both carry the background-activity-start exemption that
+Android 10 otherwise denies. Both are granted by the driver in system Settings.
+Neither is built, and neither should be built before the probes say it is needed.
+
+**WHAT IS ACTUALLY NEEDED NEXT, AND IT IS NOT CODE.** Two exports, and only the
+second needs a drive:
+
+1. **Now, parked.** Tap both DIAGNOSTICS rows and export. That answers the
+   force-stop count, the vendor auto-start tables, the three foreground-from-behind
+   grants, whether adb is enabled, and the whole stock-app interception report.
+2. **After one ignition cycle.** Switch off with Carnyx in front, switch on, tap
+   both rows again and export. The boot marker then has two launches to compare
+   and says reboot or suspend; the stopped-app count is read at its most
+   meaningful moment.
+
+The last log had the keep-alive probe in it twice and those sections were never
+read — the log was mined for the four interface defects of #126 instead. That is
+recorded here so the same omission is not repeated.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
@@ -3744,7 +3840,11 @@ it: `row_index` finds the first row by label, so two rows sharing an `Action`
 would send both taps to one probe and every other test would still pass.
 
 ### 95. Build the wake receiver
-**BUILT AND UNVERIFIED, AND IT WRITES ITS OWN EVIDENCE.** #67's other half: a
+**BUILT, AND CONFIRMED BY THE OWNER NEVER TO HAVE WORKED.** As #92: this said
+"BUILT AND UNVERIFIED" while nobody had driven with it, and the owner has since
+said plainly that it has never worked. The evidence it writes is not written,
+because it never runs. See #133. The rest of this entry is the build, unchanged,
+because the reasoning in it is what #133 argues from. #67's other half: a
 manifest receiver that brings the face back when the unit does.
 
 **The event it is really for.** `com.nwd.ACTION_OS_WAKE_UP`, not
@@ -3960,7 +4060,12 @@ that writes nothing reads as a broken row, which is the exact failure the five
 removed rows had.
 
 ### 92. Hand the FM source back when the unit goes to sleep
-**DONE, AND THE TRIGGER IS UNVERIFIED.** The MCU sleeps the SoC on ACC-off and
+**BUILT, AND CONFIRMED BY THE OWNER NEVER TO HAVE WORKED.** This entry read "DONE,
+AND THE TRIGGER IS UNVERIFIED" for as long as nobody had driven with it. The owner
+has since said plainly that it has never worked, and "unverified" is the wrong
+word for a thing that has been tried and does not happen: the trigger does not
+arrive. See #133 for what is now believed to be the reason and what replaces the
+approach. The MCU sleeps the SoC on ACC-off and
 restores its own radio app on ACC-on. An app still holding the FM source when it
 remembers the current source across the sleep, and restores it on ACC-on — so a
 unit left on FM comes back into FM and the stock radio app launches itself. This
