@@ -1416,11 +1416,15 @@ JNI seam type-checks over seven modules where it covered six.
    `alert.rs` still returns a flat "no alert class in this build" from three places
    with no way to tell those two apart — and that exact wording is what misread the
    last drive log (#126). Same fix, same file shape; it belongs with finding 1.
-3. **`AppWindow` and `Face` restate ~30 properties each**, and `app.slint` binds
-   them one by one — three statements of one list. The codebase already groups this
-   kind of thing into structs (`Preset`, `NearbyState`, `LogoSearchState`), so the
-   pattern exists; applying it here means rewriting the Rust push path for the hero
-   and the status cluster, which is a change of a different size than this pass.
+3. **`AppWindow` and `Face` DECLARE THE SAME 55 PROPERTIES**, and `app.slint` binds
+   69 of them one by one as `name: root.name` — three statements of one list. This
+   entry first said "~30 each", which was eyeballed rather than counted and
+   understates it by nearly half; the figures above are from counting the `in` and
+   `in-out` declarations in both files and the one-to-one bindings between them.
+   The codebase already groups this kind of thing into structs (`Preset`,
+   `NearbyState`, `LogoSearchState`), so the pattern exists; applying it here means
+   rewriting the Rust push path for the hero and the status cluster, which is a
+   change of a different size than this pass.
 4. **Seven raw-px type sizes bypass `Metrics.s()`**, against 81 that scale: three
    `font-size:` literals left in place — the empty-rail line in `presets.slint`,
    the OUT OF FM BAND pill and the tuner-error pill in `status-bar.slint` — plus
