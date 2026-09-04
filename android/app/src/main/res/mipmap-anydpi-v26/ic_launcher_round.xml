@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The same icon under the name a launcher asks for when it wants round ones.
+  Adaptive icons are masked by the launcher anyway, so there is nothing to draw
+  differently — this exists so `android:roundIcon` resolves rather than being
+  declared and unresolvable.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

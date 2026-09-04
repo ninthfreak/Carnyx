@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon's foreground: the C·nyx monogram.
+
+  A HAND TRANSLATION of `docs/design/carnyx-icon-adaptive-foreground.svg`, not an
+  export, because a VectorDrawable group cannot take an SVG transform string —
+  it takes pivot, scale and translate attributes. The SVG says
+
+      translate(54 54) scale(0.52) translate(-104.38 -94)
+
+  and a VectorDrawable group composes its own as
+
+      T(translateX, translateY) · T(pivot) · R · S · T(-pivot)
+
+  so with pivot at the monogram's measured centre (104.38, 94), scale 0.52 and
+  translate (54 - 104.38, 54 - 94) = (-50.38, -40), a point p maps to
+  0.52·(p - centre) + (54, 54). The same map. The two are checked against each
+  other by eye and by that arithmetic; nothing in this container can render a
+  VectorDrawable, so the SVG is what the previews were taken from.
+
+  WHERE THE NUMBERS COME FROM: the source SVG's header. The short version is the
+  monogram's ink measures 100.8 x 74.0 about (104.38, 94.00) in the 200-unit
+  space of `carnyx-icon.svg`, a half-diagonal of 62.50, and 0.52 puts that inside
+  the 33-unit radius an adaptive icon guarantees.
+
+  THE CLIP IS A GROUP, NOT AN ATTRIBUTE. In SVG each of the two diagonals carries
+  its own `clip-path`; in a VectorDrawable `<clip-path>` applies to everything
+  after it in ITS group, so the two clipped strokes live in a group of their own
+  and the two unclipped ones stay outside it. The clip is the same rectangle,
+  written as path data, and it is what squares off the ends of the x's diagonals
+  and the y's along the letters' top line and baseline.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:name="monogram"
+        android:pivotX="104.38"
+        android:pivotY="94"
+        android:scaleX="0.52"
+        android:scaleY="0.52"
+        android:translateX="-50.38"
+        android:translateY="-40">
+
+        <!-- The C: an ink stroke 2 units wider each side, with the amber over it. -->
+        <path
+            android:pathData="M110.3,71 A30,30 0 1 0 110.3,117"
+            android:strokeColor="#1B222C"
+            android:strokeWidth="14"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M110.3,71 A30,30 0 1 0 110.3,117"
+            android:strokeColor="#C9760A"
+            android:strokeWidth="10"
+            android:strokeLineCap="round" />
+
+        <group
+            android:name="letters"
+            android:translateX="-3">
+
+            <!-- n: full-height left stem, short flat top, 45 degree shoulder. -->
+            <path
+                android:pathData="M104,106.5 V97 L91.75,84.75 H88 V106.5"
+                android:strokeColor="#1B222C"
+                android:strokeWidth="6.5"
+                android:strokeLineCap="butt"
+                android:strokeLineJoin="miter" />
+            <!-- y's stem, which descends below the baseline and is NOT clipped. -->
+            <path
+                android:pathData="M126,81.5 V115.3"
+                android:strokeColor="#1B222C"
+                android:strokeWidth="6.5"
+                android:strokeLineCap="butt"
+                android:strokeLineJoin="miter" />
+
+            <group android:name="clippedDiagonals">
+                <clip-path
+                    android:name="letterBand"
+                    android:pathData="M80,81.5 H160 V106.5 H80 Z" />
+                <!-- y's diagonal, overshot and cut flat at both lines. -->
+                <path
+                    android:pathData="M103,79.5 L126,104.5"
+                    android:strokeColor="#1B222C"
+                    android:strokeWidth="6.5"
+                    android:strokeLineCap="butt"
+                    android:strokeLineJoin="miter" />
+                <!-- x: two diagonals, the same way. -->
+                <path
+                    android:pathData="M132.2,78.5 L155.8,109.5 M155.8,78.5 L132.2,109.5"
+                    android:strokeColor="#1B222C"
+                    android:strokeWidth="6.5"
+                    android:strokeLineCap="butt"
+                    android:strokeLineJoin="miter" />
+            </group>
+        </group>
+    </group>
+</vector>
