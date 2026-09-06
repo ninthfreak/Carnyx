@@ -70,17 +70,6 @@ public final class CarnyxListener extends NotificationListenerService {
 
     private static final String TAG = "CarnyxListener";
 
-    /**
-     * Shared with {@link CarnyxWake} BY NAME, the way {@code SleepReceiver}
-     * shares it. The two halves can never meet in memory: when the platform
-     * binds this service there may be no Rust loaded, so a constant cannot be
-     * imported from the dexed side of the app.
-     */
-    private static final String PREFS = "carnyx_wake";
-
-    /** What the last bind or unbind did. Read back by {@code takeLastListener}. */
-    private static final String KEY_LAST_LISTENER = "last_listener";
-
     /** The driver's switch. False, and this service only writes its note. */
     private static final String KEY_COME_FORWARD = "come_forward";
 
@@ -93,7 +82,7 @@ public final class CarnyxListener extends NotificationListenerService {
 
         boolean forward;
         try {
-            forward = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            forward = getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
                     .getBoolean(KEY_COME_FORWARD, false);
         } catch (Throwable t) {
             note("bound, but the come-forward flag could not be read: " + t);
@@ -128,20 +117,10 @@ public final class CarnyxListener extends NotificationListenerService {
     }
 
     /**
-     * One durable line, overwritten each time.
-     *
-     * <p>{@code commit()} and not {@code apply()}, for {@code WakeReceiver}'s
-     * reason: this may be running in a process the platform is about to tear
-     * down, and an {@code apply()} whose background thread never got scheduled
-     * would lose the evidence this class exists to produce.
+     * One entry in the listener's ring. See {@link CarnyxNotes}, which owns the
+     * file name, the cap and the blocking write.
      */
     private void note(String line) {
-        Log.i(TAG, line);
-        try {
-            SharedPreferences p = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            p.edit().putString(KEY_LAST_LISTENER, line).commit();
-        } catch (Throwable t) {
-            Log.w(TAG, "could not record the listener note: " + t);
-        }
+        CarnyxNotes.append(this, CarnyxNotes.KEY_LAST_LISTENER, line);
     }
 }

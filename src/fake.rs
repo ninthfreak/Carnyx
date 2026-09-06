@@ -67,16 +67,27 @@ impl FakeLocation {
 
 /// A pump with no tuner behind it.
 ///
-/// The groups are CarFM's captured hex, replayed in order and then repeated, so
-/// the decoder on screen is running the same gates it runs in the car — PI needs
-/// three identical groups, PS needs two agreeing complete assemblies — rather
-/// than being handed a finished string.
+/// The groups are replayed in order and then repeated, so the decoder on screen
+/// is running the same gates it runs in the car — PI needs three identical
+/// groups, PS needs two agreeing complete assemblies — rather than being handed
+/// a finished string.
 ///
-/// THE HEX IS A RECORDING, NOT A RADIO. It says nothing about whether this
-/// hardware behaves the way the recording did.
+/// THE HEX IS CONSTRUCTED, NOT CAPTURED, and this note used to say the opposite.
+/// [`WERN`]'s own doc has always been explicit — *"EVERY BLOCK IS COMPUTED, not
+/// copied off a wire"* — and it says how: each block is assembled bit field by
+/// bit field from the station's PI, PTY, PS and RadioText, with the AF pair
+/// filled from what every 0A in CarFM's drive logs carries.
 ///
-/// AND IT IS A RECORDING OF ONE STATION. [`FakeRdsStream::carries`] is what
-/// keeps that honest: the groups are replayed only on the dial they came from,
+/// THE FACTS ARE CARFM'S, THE BITS ARE NOT, and the distinction is the whole
+/// correction. A real radio produced what this models — the call sign, the
+/// programme type, the RadioText, the stereo pilot beside it — so the elsewhere
+/// in this module that calls WERN "the recording" is pointing at something that
+/// happened. The GROUPS were then written to represent it. Neither this corpus
+/// nor any part of it says whether THIS hardware emits what the model emits,
+/// because none of it came off this radio.
+///
+/// AND IT MODELS ONE STATION. [`FakeRdsStream::carries`] is what
+/// keeps that honest: the groups are replayed only on the dial they belong to,
 /// so tuning away leaves the decoder with nothing to decode — a blank hero with
 /// no genre and no RadioText, which is the correct picture of a station this
 /// build has never heard. Replaying them everywhere would put WERN's RadioText

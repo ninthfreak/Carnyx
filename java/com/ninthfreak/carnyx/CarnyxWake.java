@@ -241,14 +241,60 @@ public final class CarnyxWake {
      * measured against a process that may not exist a moment from now.
      */
     public static synchronized void noteSleep(String line) {
+        append(KEY_LAST_SLEEP, line);
+    }
+
+    /**
+     * How many entries one key keeps. See {@code CarnyxNotes.KEEP}, which states
+     * the same number on the other side of the class-loader divide.
+     */
+    private static final int KEEP = 8;
+
+    /** Entries are joined by this. Nothing written here contains one. */
+    private static final String SEP = "\n";
+
+    /**
+     * Append one line to a key's ring.
+     *
+     * <p>A RING, NOT A SLOT. Each note used to be one value, overwritten, and
+     * {@link #take} clears on read — so a note appeared in the log of the FIRST
+     * launch after the event and was erased at that moment. If that session died
+     * before the driver exported, the evidence was gone: the diagnostics log is
+     * a ring in memory and does not survive the process either. On a unit where
+     * the experiment IS "switch the car off, switch it on, see what was
+     * recorded", that put the answer one mis-step from being lost.
+     *
+     * <p>THE RULE IS STATED TWICE, here and in {@code CarnyxNotes}, and it has
+     * to be: that class is in the Gradle source set and this one is dexed by
+     * {@code build.rs} and loaded by an {@code InMemoryDexClassLoader}. The two
+     * halves can never meet in memory — the same divide {@link #PREFS} is
+     * already shared by name across.
+     *
+     * <p>{@code commit()} for {@link #noteSleep}'s original reason: the MCU has
+     * announced it is cutting power and this app holds no wake lock.
+     */
+    private static void append(String key, String line) {
         if (ctx == null || line == null || line.isEmpty()) {
             return;
         }
         try {
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().putString(KEY_LAST_SLEEP, line).commit();
+            SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            String prev = p.getString(key, "");
+            String joined = prev == null || prev.isEmpty() ? line : prev + SEP + line;
+            String[] parts = joined.split(SEP, -1);
+            if (parts.length > KEEP) {
+                StringBuilder b = new StringBuilder();
+                for (int i = parts.length - KEEP; i < parts.length; i++) {
+                    if (b.length() > 0) {
+                        b.append(SEP);
+                    }
+                    b.append(parts[i]);
+                }
+                joined = b.toString();
+            }
+            p.edit().putString(key, joined).commit();
         } catch (Throwable t) {
-            Log.w(TAG, "could not record the sleep note: " + t);
+            Log.w(TAG, "could not record a " + key + " note: " + t);
         }
     }
 

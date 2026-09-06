@@ -481,13 +481,6 @@ pub fn logos_sub(on: bool) -> &'static str {
     }
 }
 
-/// What the "Wrap the preset rail" row says underneath.
-///
-/// THE OFF LINE NAMES THE COST, and the on line names the CONDITION rather than
-/// promising the behaviour. §8.1 refuses to engage unless the rail overflows and
-/// one copy of the list is at least as wide as the rail, so a driver with four
-/// presets can turn this on, see nothing change, and be right to wonder whether
-/// it works. The row tells them before they wonder.
 /// What the "Come back on when the unit wakes" row says underneath.
 ///
 /// THE ON LINE NAMES A CONDITION AND A HAZARD, in that order, because both are
@@ -508,6 +501,42 @@ pub fn come_forward_sub(on: bool, granted: bool) -> &'static str {
     }
 }
 
+/// What the "Allow notification access" row says underneath.
+///
+/// ── THE LIVE GRANT, NOT THE LAST TAP, AND A DRIVE LOG IS WHY ────────────────
+///
+/// Every other DIAGNOSTICS row's sub-line is [`Settings::notes`] — what that row
+/// last DID. This one is what the row last ACHIEVED, read from the platform on
+/// every publish, and the difference is the whole point.
+///
+/// Tapping this row hands the screen to Android. The driver is gone at the exact
+/// moment the note is written, comes back having granted or not granted, and the
+/// note still describes the departure. The 2026-09-06 log shows precisely that
+/// dead end: `enabled_notification_listeners = (empty)` at probe time, this row
+/// tapped at 15:23:30 as the last event in the file, and no way to tell from the
+/// face whether the grant landed — because the only line that ever reported the
+/// grant was printed at launch, and the app never relaunched.
+///
+/// NOTHING IS LOST BY DROPPING THE NOTE HERE. The tap's own words go to the log,
+/// which is directly above these rows and is what "Save to file" exports, and to
+/// the status line. What the tap says is also stale the moment it is true: "sent
+/// you to Android's screen" is advice, and the driver who is reading it has
+/// already come back.
+pub fn listener_sub(granted: bool) -> &'static str {
+    if granted {
+        "Granted \u{2014} the platform can bind Carnyx's listener"
+    } else {
+        "Not granted \u{2014} nothing binds, so nothing comes forward"
+    }
+}
+
+/// What the "Wrap the preset rail" row says underneath.
+///
+/// THE OFF LINE NAMES THE COST, and the on line names the CONDITION rather than
+/// promising the behaviour. §8.1 refuses to engage unless the rail overflows and
+/// one copy of the list is at least as wide as the rail, so a driver with four
+/// presets can turn this on, see nothing change, and be right to wonder whether
+/// it works. The row tells them before they wonder.
 pub fn preset_loop_sub(on: bool) -> &'static str {
     if on {
         "On \u{2014} takes effect once the rail is long enough to scroll"
@@ -704,10 +733,19 @@ impl Settings {
 
     /// The rows the DIAGNOSTICS action list currently has, each carrying
     /// whatever it last did.
-    pub fn actions(&self) -> Vec<DiagAction> {
+    ///
+    /// ONE ROW ANSWERS FROM THE PLATFORM INSTEAD, and takes `listener_granted`
+    /// so it can: see [`listener_sub`] for why the notification-access row
+    /// reports the grant rather than the tap. The caller reads the grant once
+    /// per publish and hands it in, which keeps this module free of anything
+    /// Android — every test here runs on the host.
+    pub fn actions(&self, listener_granted: bool) -> Vec<DiagAction> {
         let mut rows = diag_actions();
         for row in &mut rows {
-            row.sub = self.note_for(row.action).unwrap_or_default().to_string();
+            row.sub = match row.action {
+                Action::AskListenerPermission => listener_sub(listener_granted).to_string(),
+                _ => self.note_for(row.action).unwrap_or_default().to_string(),
+            };
         }
         rows
     }
@@ -810,6 +848,63 @@ mod tests {
             ],
             "the three requests stay below both probes, in that order"
         );
+    }
+
+    /// THE NOTIFICATION-ACCESS ROW ANSWERS FROM THE PLATFORM, NOT FROM THE TAP.
+    ///
+    /// Both halves are asserted, and the second is the one that matters: a note
+    /// IS set on that row — the tap writes one, like every other row — and the
+    /// row still reports the grant. Without that assertion this would pass with
+    /// [`Settings::actions`] falling back to the note whenever one exists, which
+    /// is exactly the state a driver returning from Android's screen is in.
+    ///
+    /// See [`listener_sub`] for what the fall-back cost on 2026-09-06.
+    #[test]
+    fn the_notification_access_row_reports_the_grant_over_its_own_note() {
+        let mut s = Settings::default();
+        let at = |rows: &[DiagAction]| {
+            rows.iter()
+                .find(|a| a.action == Action::AskListenerPermission)
+                .expect("the listener row")
+                .sub
+                .clone()
+        };
+
+        assert_eq!(at(&s.actions(false)), listener_sub(false));
+        assert_eq!(at(&s.actions(true)), listener_sub(true));
+
+        s.set_note(
+            Action::AskListenerPermission,
+            "notification access: sent you to Android's screen",
+        );
+        assert_eq!(
+            at(&s.actions(true)),
+            listener_sub(true),
+            "the grant outranks the note the tap left on its way out"
+        );
+        // The note is still there for anything that asks for it directly — this
+        // suppresses it in the ROW, it does not throw it away.
+        assert!(s.note_for(Action::AskListenerPermission).is_some());
+
+        // AND EVERY OTHER ROW IS UNTOUCHED BY THE GRANT, which is the other way
+        // this could go wrong: one match arm, applied to the wrong rows.
+        s.set_note(Action::ClearLog, "cleared");
+        for granted in [false, true] {
+            let rows = s.actions(granted);
+            let clear = rows.iter().find(|a| a.action == Action::ClearLog).unwrap();
+            assert_eq!(clear.sub, "cleared");
+            let save = rows.iter().find(|a| a.action == Action::SaveLog).unwrap();
+            assert_eq!(save.sub, "", "a row with no note still says nothing");
+        }
+    }
+
+    /// The two lines are distinct and neither promises the other's state — the
+    /// row exists to be read at a glance from the driver's seat.
+    #[test]
+    fn the_two_grant_lines_lead_with_the_answer() {
+        assert!(listener_sub(true).starts_with("Granted"));
+        assert!(listener_sub(false).starts_with("Not granted"));
+        assert_ne!(listener_sub(true), listener_sub(false));
     }
 
     /// The shape, byte for byte. Two spaces either side of each U+00B7 is what

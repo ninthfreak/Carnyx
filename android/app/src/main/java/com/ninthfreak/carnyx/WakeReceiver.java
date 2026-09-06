@@ -147,12 +147,6 @@ public final class WakeReceiver extends BroadcastReceiver {
      * scheduled would lose exactly the evidence this exists to produce.
      */
     private void note(Context context, String line) {
-        Log.i(TAG, line);
-        try {
-            SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            p.edit().putString(KEY_LAST_WAKE, line).commit();
-        } catch (Throwable t) {
-            Log.w(TAG, "could not record the wake note: " + t);
-        }
+        CarnyxNotes.append(context, CarnyxNotes.KEY_LAST_WAKE, line);
     }
 }

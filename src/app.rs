@@ -1170,12 +1170,6 @@ impl Drop for App {
 pub const FM_LO: f32 = 87.5;
 pub const FM_HI: f32 = 108.0;
 
-/// How often to re-read the signal level while connected.
-///
-/// The Java bridge floors this at 5s (`NwdBridge.LEVEL_MIN_INTERVAL_MS`) because
-/// every tick commands the tuner, and the vendor rate-limits its own comparable
-/// read to 900ms. Asking for less than the floor just gets clamped, so the floor
-/// is what is asked for.
 /// How often to re-read the signal level while parked on a station.
 ///
 /// CarFM's `LEVEL_POLL_MS`, referenced rather than restated. This used to be
@@ -2645,12 +2639,6 @@ impl App {
         }
     }
 
-    /// Feed the replayed corpus in until the decoder has published a name.
-    ///
-    /// THE SOURCE IS A RECORDING. `fake::FakeRdsStream` is CarFM's captured
-    /// group shapes replayed; on the device this loop is the vendor's 90 ms pump
-    /// and every group goes to `push()` undeduplicated, because the consensus
-    /// gates count the repeats.
     /// The running morph's frame tally, for `examples/morphbench.rs`.
     ///
     /// Exposed so the probe can hold the tally against its OWN count of frames.
@@ -2670,6 +2658,14 @@ impl App {
         self.pump_rds_until_settled();
     }
 
+    /// Feed the replayed corpus in until the decoder has published a name.
+    ///
+    /// THE SOURCE IS A CONSTRUCTION, NOT A CAPTURE — see `fake::WERN`, whose own
+    /// note is *"EVERY BLOCK IS COMPUTED, not copied off a wire"*. The group
+    /// shapes are modelled on CarFM's drive logs and assembled bit field by bit
+    /// field; nothing here was recorded off this radio or any other. On the
+    /// device this loop is the vendor's 90 ms pump, and every group goes to
+    /// `push()` undeduplicated, because the consensus gates count the repeats.
     fn pump_rds_until_settled(&self) {
         // NEVER against a real radio. The corpus below is SYNTHESISED — the
         // block bit-layouts for WERN were computed, not captured — so replaying
@@ -3463,7 +3459,7 @@ impl App {
         // once, but it is cheap and the shape is shared with every other list
         // here.
         let diag_actions: Vec<DiagAction> = cfg
-            .actions()
+            .actions(granted)
             .iter()
             .map(|a| DiagAction {
                 label: a.label.as_str().into(),
@@ -3587,6 +3583,14 @@ impl App {
         ui.set_freq_error_text(format!("Outside {FM_LO:.1}\u{2013}{FM_HI:.1} MHz band").into());
     }
 
+    /// The local hour, minute and 12/24 setting, or `None`.
+    ///
+    /// The test override first, then the platform. Both the readout and the ETA
+    /// go through this, so a shot cannot show one without the other.
+    fn clock_reading(&self) -> Option<(u32, u32, bool)> {
+        self.state.borrow().clock_test.or_else(crate::android::clock_now)
+    }
+
     /// Publish the clock (§4.8).
     ///
     /// FORMATTED EVERY TIME AND PUBLISHED ONLY ON A CHANGE. §4.8 asks for both:
@@ -3600,14 +3604,6 @@ impl App {
     /// class that answers lives in the embedded dex. Drawing `00:00` there would
     /// be a real time and a lie; the face draws nothing instead, so no shot
     /// carries a clock that was never read.
-    /// The local hour, minute and 12/24 setting, or `None`.
-    ///
-    /// The test override first, then the platform. Both the readout and the ETA
-    /// go through this, so a shot cannot show one without the other.
-    fn clock_reading(&self) -> Option<(u32, u32, bool)> {
-        self.state.borrow().clock_test.or_else(crate::android::clock_now)
-    }
-
     fn push_clock(&self) {
         let on = self.state.borrow().settings.clock_on;
         let now = on.then(|| self.clock_reading()).flatten();
@@ -5545,12 +5541,14 @@ impl App {
     }
 
     fn run_diag_action(self: &Rc<App>, index: i32) {
-        let action = {
-            let s = self.state.borrow();
-            match s.settings.actions().get(index as usize) {
-                Some(a) => a.action,
-                None => return,
-            }
+        // THE FREE LIST, NOT THE SETTINGS ONE, because an index maps to an
+        // action through the list's SHAPE and nothing else. `Settings::actions`
+        // fills in sub-lines from the session's notes and from the live
+        // notification grant — state this lookup does not read, and, since the
+        // grant crosses into JNI, would be paying a binder call to ignore.
+        let action = match settings::diag_actions().get(index as usize) {
+            Some(a) => a.action,
+            None => return,
         };
         // WHAT STILL HAS TO HAPPEN ONCE THE BORROW IS GONE, if anything.
         //
@@ -5869,18 +5867,6 @@ impl App {
         self.push_logo_search();
     }
 
-    /// Tear the logo window down: forget the target, drop the art, and tell the
-    /// worker to stop paying for an answer nobody is waiting for.
-    ///
-    /// The cancel is the point. A search is two round trips plus four thumbnail
-    /// downloads, and `run_search` checks the shared generation between each
-    /// one — so a window closed after the grid appears abandons the remaining
-    /// thumbnails instead of finishing them. Without this call the worker would
-    /// run every job to completion on a head unit's radio link.
-    ///
-    /// Called on EVERY overlay close, so it starts by checking there was a logo
-    /// window at all: bumping the generation for a numpad dismissal would be
-    /// harmless but untrue.
     /// Put the dark picker away and close the window behind it.
     ///
     /// BOTH BUTTONS END HERE and so does the ✕ — Skip, Use this, and a dismissal
@@ -5898,6 +5884,18 @@ impl App {
         self.push_settings();
     }
 
+    /// Tear the logo window down: forget the target, drop the art, and tell the
+    /// worker to stop paying for an answer nobody is waiting for.
+    ///
+    /// The cancel is the point. A search is two round trips plus four thumbnail
+    /// downloads, and `run_search` checks the shared generation between each
+    /// one — so a window closed after the grid appears abandons the remaining
+    /// thumbnails instead of finishing them. Without this call the worker would
+    /// run every job to completion on a head unit's radio link.
+    ///
+    /// Called on EVERY overlay close, so it starts by checking there was a logo
+    /// window at all: bumping the generation for a numpad dismissal would be
+    /// harmless but untrue.
     fn close_logo_search(&self) {
         // THE PICKER GOES FIRST, WHATEVER CLOSED THE WINDOW. The ✕ and the scrim
         // reach `close_overlay`, which calls this directly and knows nothing
@@ -8080,7 +8078,7 @@ mod tests {
             }
         }
 
-        let index = row_index(&driver, "Save to file");
+        let index = row_index("Save to file");
         ui.invoke_settings_pick_diag_action(index);
 
         let written = std::fs::read_to_string(out.join("carnyx-tuner-log-1.txt"))
@@ -8126,7 +8124,7 @@ mod tests {
         driver.set_log_dir_for_test(out.clone());
         driver.state.borrow_mut().settings.log.clear();
 
-        let index = row_index(&driver, "Save to file");
+        let index = row_index("Save to file");
         ui.invoke_settings_pick_diag_action(index);
 
         assert!(!out.join("carnyx-tuner-log-1.txt").exists(), "no file was written");
@@ -8150,7 +8148,7 @@ mod tests {
         driver.drain_events();
         let before = driver.state.borrow().settings.log.lines().len();
 
-        ui.invoke_settings_pick_diag_action(row_index(&driver, "What could keep Carnyx alive through sleep"));
+        ui.invoke_settings_pick_diag_action(row_index("What could keep Carnyx alive through sleep"));
 
         // THE TAP ANSWERS BEFORE THE WORK. The row defers the binder walk by a
         // frame so the well can repaint; what the driver sees FIRST is this.
@@ -8215,7 +8213,7 @@ mod tests {
         assert_eq!(sub_of(KEEP), "", "nothing has run yet");
         assert_eq!(sub_of(STOCK), "", "on either row");
 
-        ui.invoke_settings_pick_diag_action(row_index(&driver, KEEP));
+        ui.invoke_settings_pick_diag_action(row_index(KEEP));
         assert_eq!(sub_of(KEEP), "Reading…", "the tap marks its own row at once");
         assert_eq!(sub_of(STOCK), "", "and only its own row");
 
@@ -8230,7 +8228,7 @@ mod tests {
 
         // A CLEAR TAKES THE NOTES WITH IT. They describe output that was in the
         // log; a note that outlives its lines points at nothing.
-        ui.invoke_settings_pick_diag_action(row_index(&driver, "Clear log"));
+        ui.invoke_settings_pick_diag_action(row_index("Clear log"));
         assert_eq!(sub_of(KEEP), "", "cleared with the log");
     }
 
@@ -8339,7 +8337,6 @@ mod tests {
         let before = driver.state.borrow().settings.log.lines().len();
 
         ui.invoke_settings_pick_diag_action(row_index(
-            &driver,
             "Where the stock radio app can be intercepted",
         ));
 
@@ -8409,7 +8406,7 @@ mod tests {
         let (ui, driver) = app_for("notifyperm");
         driver.drain_events();
 
-        ui.invoke_settings_pick_diag_action(row_index(&driver, "Ask for notification permission"));
+        ui.invoke_settings_pick_diag_action(row_index("Ask for notification permission"));
 
         // IMMEDIATELY, WITH NO `drain_events` AND NO TIMER. That is the half of
         // this that pins the row as inline: the two probes defer through
@@ -8435,7 +8432,7 @@ mod tests {
         let (ui, driver) = app_for("overlayperm");
         driver.drain_events();
 
-        ui.invoke_settings_pick_diag_action(row_index(&driver, "Allow drawing over other apps"));
+        ui.invoke_settings_pick_diag_action(row_index("Allow drawing over other apps"));
 
         let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
         assert!(
@@ -8446,10 +8443,11 @@ mod tests {
 
     /// Where a labelled diagnostics row currently sits, so a test names the row
     /// rather than an index that a reorder would silently change.
-    fn row_index(driver: &Rc<App>, label: &str) -> i32 {
-        let s = driver.state.borrow();
-        s.settings
-            .actions()
+    ///
+    /// Reads the free list for [`App::run_diag_action`]'s reason — labels and
+    /// order live there — so it no longer needs a driver to ask.
+    fn row_index(label: &str) -> i32 {
+        settings::diag_actions()
             .iter()
             .position(|a| a.label == label)
             .unwrap_or_else(|| panic!("no {label:?} row")) as i32
