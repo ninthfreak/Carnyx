@@ -1722,6 +1722,68 @@ the licensing note on those files forbids redistributing decompiled code), and
 compiles twelve of the thirteen classes. `CarnyxNav` is skipped and printed, the
 way `check-jni.sh` prints its own skips.
 
+**THE EXPERIMENT COULD NOT SURVIVE THE DRIVE THAT WOULD TEST IT, AND TWO CHANGES
+FIX THAT.** The 2026-09-06 log asked the question and could not answer it: the
+listener row was tapped at 15:23:30 as the very last event in the file, the
+`enabled_notification_listeners` probe read `(empty)` before that, and the
+`listener:` line prints only at launch. So there was no way to tell from the face
+whether the grant landed, and no way for a note written during the next ignition
+cycle to reach an export.
+
+1. **THE NOTES ARE A RING NOW, NOT A SLOT.** `CarnyxNotes` — one class replacing
+   three private copies of the same six-line `note()` in `WakeReceiver`,
+   `SleepReceiver` and `CarnyxListener` — APPENDS up to eight entries per key
+   instead of overwriting one, and `CarnyxWake` carries its own copy of the same
+   rule across the class-loader divide it has always been split by. The reader
+   drains all of them and `lib.rs` prints them one per log line. Before this, a
+   note appeared in the FIRST launch after the event and was erased at that
+   moment: if the session died before the driver exported, the evidence was gone,
+   because the diagnostics log is a ring in memory that does not survive the
+   process either. Several ignition cycles and several launches can now pass and
+   the notes still arrive together. Oldest goes first at the cap, which is the
+   right end to drop — these are read after the fact, and the most recent cycle
+   is the one being asked about.
+2. **THE PERMISSION ROW ANSWERS FROM THE PLATFORM.** "Allow notification access"
+   now reads `Granted — the platform can bind Carnyx's listener` or `Not granted —
+   nothing binds, so nothing comes forward`, read on every settings publish rather
+   than remembered from the tap. Every other DIAGNOSTICS row's sub-line is what
+   that row last DID; this one is what it last ACHIEVED, and the difference is
+   the point — tapping it hands the screen to Android, so the driver is gone at
+   the exact moment the note is written and comes back to a note describing the
+   departure. Two tests pin it, and the second is the one that matters: a note IS
+   set on that row and the row still reports the grant.
+
+**AND `Settings::actions` STOPPED BEING ASKED FOR THINGS IT IS NOT FOR.** Two
+callers wanted only an index-to-action mapping and a label lookup, and were
+reading the note-filled, grant-reading list to get them. Both read the free
+`diag_actions()` now: the shape lives there, and `run_diag_action` no longer pays
+a JNI call to ignore its result.
+
+**SEVEN DOC COMMENTS WERE ATTACHED TO THE WRONG ITEM, TWO OF THEM MINE.** Adding
+`come_forward_sub` and `log_note` put each new function between an existing doc
+comment and the item it documented, so `preset_loop_sub` and `android_main` were
+left undocumented and their notes read as the new functions' second paragraphs. A
+detector for the insertion pattern — a `+///` line landing directly on a context
+`///` line that ends a sentence — was run over every commit in this branch and
+then structurally over the whole of `src/`. It found FIVE MORE, all pre-existing:
+
+- `LEVEL_WATCH_MS` carried a stale doc for the `5_000` it replaced, which
+  contradicted the live one beside it (`a70786e` swapped the constant and its
+  note and left the old note above).
+- `pump_rds_until_settled`, `push_clock`, `close_logo_search` and
+  `ingest_position` were each undocumented while their notes sat above the item
+  before them.
+
+**AND THE CORPUS IS NOT A RECORDING.** Moving one of those notes surfaced a
+contradiction it had been hiding: `FakeRdsStream`'s doc said *"the groups are
+CarFM's captured hex"* and *"THE HEX IS A RECORDING, NOT A RADIO"*, while
+`fake::WERN`'s own doc thirty lines below says *"EVERY BLOCK IS COMPUTED, not
+copied off a wire"* and then shows the bit-field arithmetic. The const is right.
+The facts are CarFM's — call sign, programme type, RadioText, the stereo pilot
+beside them — and the GROUPS were written to represent them, so the module's
+other references to "the recording" point at something real; the claim that the
+hex came off a wire did not.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

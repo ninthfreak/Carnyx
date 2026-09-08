@@ -144,12 +144,6 @@ public final class SleepReceiver extends BroadcastReceiver {
      * wins, and when both fire they are saying the same thing.
      */
     private void note(Context context, String line) {
-        Log.i(TAG, line);
-        try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().putString(KEY_LAST_SLEEP, line).commit();
-        } catch (Throwable t) {
-            Log.w(TAG, "could not record the sleep note: " + t);
-        }
+        CarnyxNotes.append(context, CarnyxNotes.KEY_LAST_SLEEP, line);
     }
 }

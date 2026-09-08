@@ -588,12 +588,6 @@ pub fn ingest_connected(band: i32, raw: i32, ps: String, rt: String, pty: i32, r
     emit(TunerEvent::Connected(Connected { band, raw, mhz, ps, rt, pty, registered }));
 }
 
-/// A fix from the platform's LocationManager.
-///
-/// Guards the coordinates rather than trusting them: Android will hand out a
-/// (0, 0) fix from a provider that has nothing, and Null Island is 700 km off
-/// the Gulf of Guinea, where the nearest FM station is nobody's. An impossible
-/// pair is reported as NO fix, which the picker already knows how to draw.
 /// Above this the car is moving; below the other, it has stopped.
 ///
 /// CarFM's own pair, converted from mph (`services/motion.ts`, MOVING_ON_MPH 5 /
@@ -620,6 +614,12 @@ pub fn settle_motion(was_moving: bool, speed_mps: f32, has_speed: bool) -> bool 
     }
 }
 
+/// A fix from the platform's LocationManager.
+///
+/// Guards the coordinates rather than trusting them: Android will hand out a
+/// (0, 0) fix from a provider that has nothing, and Null Island is 700 km off
+/// the Gulf of Guinea, where the nearest FM station is nobody's. An impossible
+/// pair is reported as NO fix, which the picker already knows how to draw.
 pub fn ingest_position(lat: f64, lon: f64, fix: bool, speed_mps: f32, has_speed: bool) {
     let sane = lat.is_finite()
         && lon.is_finite()

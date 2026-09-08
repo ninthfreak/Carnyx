@@ -67,6 +67,36 @@ pub fn run() -> Result<(), slint::PlatformError> {
     ui.run()
 }
 
+/// Put one durable note into the diagnostics log, one line per entry.
+///
+/// ── ONE ENTRY PER LINE, BECAUSE THE NOTES ARE A RING NOW ────────────────────
+///
+/// Each note used to be a single value that a reader overwrote, and printing it
+/// was a `format!`. `CarnyxNotes` and `CarnyxWake` append instead, up to eight
+/// entries joined by newlines, so several ignition cycles and several launches
+/// can pass without the evidence being lost. A note holding four of those pushed
+/// as ONE log line would be four events on one row of a 240dp well, unreadable
+/// on the unit and wrong in the exported file.
+///
+/// `print_empty` IS THE DIFFERENCE BETWEEN THE THREE. Silence from the wake
+/// receiver is ordinary — a launcher tap says nothing, and neither does a
+/// cargo-apk build. Silence from the sleep note and the listener is the FINDING:
+/// on a launch that followed an ignition cycle it means the broadcast never came
+/// or the force-stop took the listener, and a missing line cannot say that while
+/// a printed one can.
+#[cfg(target_os = "android")]
+fn log_note(driver: &std::rc::Rc<app::App>, what: &str, note: &str, print_empty: bool) {
+    if note.is_empty() {
+        if print_empty {
+            driver.log_platform(&format!("{what}: nothing recorded"));
+        }
+        return;
+    }
+    for line in note.lines() {
+        driver.log_platform(&format!("{what}: {line}"));
+    }
+}
+
 /// Android entry point. `cargo-apk` calls this; there is no `main`.
 ///
 /// UNTESTED, AND UNTESTABLE HERE. There is no device in this container, so
@@ -410,9 +440,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // nothing, and neither does a cargo-apk build, which packages no Java and
     // whose manifest schema has no `<receiver>` field at all.
     let wake_note = android::take_wake_note();
-    if !wake_note.is_empty() {
-        _driver.log_platform(&format!("wake: {wake_note}"));
-    }
+    log_note(&_driver, "wake", &wake_note, false);
 
     // AND WHAT THE LAST SLEEP MANAGED, which is a line the diagnostics log has
     // never been able to hold. That log is a ring in memory, so everything
@@ -428,11 +456,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // fault from a release that was attempted and failed, needing a different
     // fix — and a missing line cannot say which, while this one can.
     let sleep_note = android::take_sleep_note();
-    _driver.log_platform(&if sleep_note.is_empty() {
-        "last sleep: nothing recorded".to_string()
-    } else {
-        format!("last sleep: {sleep_note}")
-    });
+    log_note(&_driver, "last sleep", &sleep_note, true);
 
     // AND WHETHER THE PLATFORM BOUND THE NOTIFICATION LISTENER, which is the one
     // question #133's outcome C rests on. Every other survival mechanism in this
@@ -447,11 +471,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // reads "nothing recorded" on any build where the driver has not granted
     // notification access, and on cargo-apk, which declares no services at all.
     let listener_note = android::take_listener_note();
-    _driver.log_platform(&if listener_note.is_empty() {
-        "listener: nothing recorded".to_string()
-    } else {
-        format!("listener: {listener_note}")
-    });
+    log_note(&_driver, "listener", &listener_note, true);
 
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
