@@ -162,6 +162,31 @@ pub fn start(text: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// How long this process had been running when asked, in seconds, or `None`.
+///
+/// THE ONE NUMBER THAT SAYS WHO STARTED CARNYX. See
+/// `CarnyxProcess.processAgeSeconds` for the argument; the short of it is that
+/// tapping a force-stopped app's icon makes Android reinstate that package's
+/// components at that moment, so "bound by the platform" can be written a
+/// fraction of a second before it is read. An age of forty seconds at the moment
+/// the window opens means something else had already started the process.
+///
+/// `None` on every host build, where the class does not exist, and on a -1 from
+/// the Java side, which is its "could not read" — zero is a real answer here and
+/// must not be confused with a failure.
+pub fn process_age_seconds() -> Option<u64> {
+    let class = CLASS_REF.get()?;
+    let jvm = JavaVM::singleton().ok()?;
+    jvm.attach_current_thread(|env: &mut Env| -> Result<Option<u64>, jni::errors::Error> {
+        let age = env
+            .call_static_method(class, jni_str!("processAgeSeconds"), jni_sig!("()J"), &[])?
+            .j()?;
+        Ok(if age < 0 { None } else { Some(age as u64) })
+    })
+    .ok()
+    .flatten()
+}
+
 /// The clock's two facts (§4.8): the local time and the system's 12/24 setting.
 ///
 /// ONE CALL FOR THE TIME so both fields come from one reading — see

@@ -1007,6 +1007,19 @@ fn record_foreground(on: bool) {
 #[cfg(not(target_os = "android"))]
 fn record_foreground(_on: bool) {}
 
+/// How old this process was when asked. See [`service::process_age_seconds`].
+#[cfg(target_os = "android")]
+pub fn process_age_seconds() -> Option<u64> {
+    service::process_age_seconds()
+}
+
+/// A host build's process was started by `cargo run` and nothing else, so the
+/// question this answers cannot be asked here. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn process_age_seconds() -> Option<u64> {
+    None
+}
+
 /// The clock's two facts. See [`service::clock_now`].
 #[cfg(target_os = "android")]
 pub fn clock_now() -> Option<(u32, u32, bool)> {

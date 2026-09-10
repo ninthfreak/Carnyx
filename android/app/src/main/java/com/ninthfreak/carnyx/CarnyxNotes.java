@@ -2,6 +2,7 @@ package com.ninthfreak.carnyx;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 import android.util.Log;
 
 /**
@@ -84,6 +85,7 @@ final class CarnyxNotes {
         if (ctx == null || line == null || line.isEmpty()) {
             return;
         }
+        line = stamp() + "  " + line;
         try {
             SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             String prev = p.getString(key, "");
@@ -92,6 +94,68 @@ final class CarnyxNotes {
         } catch (Throwable t) {
             Log.w(TAG, "could not record a " + key + " note: " + t);
         }
+    }
+
+    /**
+     * What every entry is stamped with: the wall clock, and how long this unit
+     * has been asleep since it last booted.
+     *
+     * <h2>THE STAMP IS THE MEASUREMENT, not decoration</h2>
+     *
+     * <p>An undated "bound by the platform" is four different events wearing the
+     * same words: the driver granted the permission, the unit booted, the platform
+     * re-bound on its own timer, or THE UNIT WOKE. Only the last one answers #133,
+     * and the log these end up in stamps its lines with the time each note was
+     * READ, not written — so a note from an hour ago and one from a second ago
+     * printed identically. That is exactly what left the 2026-09-08 drive
+     * undecided.
+     *
+     * <p>THE SLEPT FIGURE IS THE HALF THAT CANNOT BE FAKED. Android keeps two
+     * counters since boot: one that keeps running while the unit is suspended and
+     * one that stops. Their difference is how long this unit has spent asleep in
+     * total. It never decreases, so comparing it between two notes says whether a
+     * SLEEP happened between them — the one event the wall clock cannot show,
+     * because the clock advances the same either way.
+     *
+     * <p>So two notes reading {@code slept 41m} and {@code slept 58m} bracket a
+     * seventeen-minute sleep, and a bind stamped on the far side of that gap is
+     * the platform starting this app after the unit woke. Nothing in this app has
+     * ever been able to say that.
+     *
+     * <p>Neither reading can realistically throw; both are guarded anyway, because
+     * a note that fails to record is the single failure this class exists to
+     * prevent.
+     */
+    static String stamp() {
+        StringBuilder b = new StringBuilder();
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            b.append(String.format(java.util.Locale.US, "%02d:%02d:%02d",
+                    c.get(java.util.Calendar.HOUR_OF_DAY),
+                    c.get(java.util.Calendar.MINUTE),
+                    c.get(java.util.Calendar.SECOND)));
+        } catch (Throwable t) {
+            b.append("--:--:--");
+        }
+        try {
+            b.append(" slept ").append(
+                    forHumans(SystemClock.elapsedRealtime() - SystemClock.uptimeMillis()));
+        } catch (Throwable t) {
+            b.append(" slept ?");
+        }
+        return b.toString();
+    }
+
+    /**
+     * Milliseconds as {@code 41m} or {@code 3h12m}.
+     *
+     * <p>MINUTES ARE THE FLOOR, deliberately: this is read to spot a GAP between
+     * two notes, and seconds of resolution on a figure that grows by whole
+     * ignition cycles would be noise on a line read from a dashboard.
+     */
+    static String forHumans(long ms) {
+        long m = ms / 60000L;
+        return m < 60 ? m + "m" : (m / 60) + "h" + (m % 60) + "m";
     }
 
     /**

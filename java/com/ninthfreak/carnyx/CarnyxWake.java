@@ -2,6 +2,7 @@ package com.ninthfreak.carnyx;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -277,6 +278,7 @@ public final class CarnyxWake {
         if (ctx == null || line == null || line.isEmpty()) {
             return;
         }
+        line = stamp() + "  " + line;
         try {
             SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             String prev = p.getString(key, "");
@@ -296,6 +298,41 @@ public final class CarnyxWake {
         } catch (Throwable t) {
             Log.w(TAG, "could not record a " + key + " note: " + t);
         }
+    }
+
+    /**
+     * The wall clock, and how long this unit has been asleep since it booted.
+     *
+     * <p>THE THIRD THING STATED TWICE ACROSS THE DIVIDE, after {@link #PREFS} and
+     * the appending rule above, and for the same unavoidable reason: this class is
+     * dexed by {@code build.rs} and loaded by an {@code InMemoryDexClassLoader},
+     * while {@code CarnyxNotes} is in the Gradle source set. The two can never
+     * meet in memory. {@code CarnyxNotes.stamp} carries the full argument for what
+     * this measures and why an undated note answered nothing; this is that method,
+     * on this side.
+     *
+     * <p>The FORMAT is shared by name as much as the file is: a reader looking at
+     * `wake:` and `listener:` lines in one log must not have to learn two.
+     */
+    private static String stamp() {
+        StringBuilder b = new StringBuilder();
+        try {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            b.append(String.format(java.util.Locale.US, "%02d:%02d:%02d",
+                    c.get(java.util.Calendar.HOUR_OF_DAY),
+                    c.get(java.util.Calendar.MINUTE),
+                    c.get(java.util.Calendar.SECOND)));
+        } catch (Throwable t) {
+            b.append("--:--:--");
+        }
+        try {
+            long ms = SystemClock.elapsedRealtime() - SystemClock.uptimeMillis();
+            long m = ms / 60000L;
+            b.append(" slept ").append(m < 60 ? m + "m" : (m / 60) + "h" + (m % 60) + "m");
+        } catch (Throwable t) {
+            b.append(" slept ?");
+        }
+        return b.toString();
     }
 
     /**

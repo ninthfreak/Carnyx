@@ -1784,6 +1784,93 @@ beside them — and the GROUPS were written to represent them, so the module's
 other references to "the recording" point at something real; the claim that the
 hex came off a wire did not.
 
+---
+
+**2026-09-10: IT WORKS. THE PLATFORM PUTS CARNYX BACK AFTER THE VENDOR KILLS
+IT.** Two independent readings, taken by the owner an hour apart, agree to within
+two seconds and settle the question this entry was opened to ask.
+
+- Android's own "Running app" screen at 07:20, after a night parked: Carnyx,
+  **1 process and 1 service**, 9.5 MB, up **12:50:48**. The one service is
+  `CarnyxListener`, "currently in use". No window. No foreground service.
+  Working back: that process began at **18:29:12** the previous evening.
+- The log from the launch a minute later: `last run ended in destroy 46326s
+  ago` — the last window died at **18:29:10** the previous evening.
+
+A window died and a NEW PROCESS BEGAN AT THE SAME MOMENT. Had nothing killed
+Carnyx, the process would date from the drive home hours earlier. So the vendor's
+cleaner does take Carnyx at ACC-off, exactly as #133 always assumed — and the
+platform re-binds the notification listener within moments, and THAT process is
+the one that sits through the night on 9.5 MB.
+
+**EVERY OTHER MECHANISM IN THIS FILE FAILED FOR ONE REASON**, stated a dozen
+times above: a force-stopped package receives no broadcast of any kind until a
+human taps its icon. A listener is not a broadcast. It is bound by the platform,
+and the platform rebinds it after the kill.
+
+**THE OWNER'S OBSERVATION THAT COMPLETES THE PICTURE:** *"If I go from ACC to
+actually starting the engine, the head unit will kill Carnyx and launch the stock
+radio app again in the ~1 second its screen turns off."* So there are TWO kills in
+an ordinary drive, not one, and the logs record them differently: the ACC-off kill
+left `destroy` (an orderly teardown, then the process taken), the engine-start
+kill left `pause` (killed where it stood). Both are followed by a rebind — log
+#73 carried TWO `listener: bound by the platform` notes waiting from overnight,
+log #74 one more from the ninety seconds after the engine-start kill.
+
+**WHICH CORRECTS A CLAIM MADE HERE YESTERDAY.** On the strength of the
+forty-minute screenshot alone this entry nearly recorded "the process survives the
+sleep, the cleaner does not take it", and the come-forward switch was called dead
+on the reasoning that a listener never unbound can never re-bind. Both were wrong,
+and wrong in the direction that would have thrown away the working mechanism: the
+listener IS unbound on every kill, so `onListenerConnected` fires on every wake,
+so the switch is wired to the right event after all. The overnight reading is what
+separated them — forty minutes was inside the noise, and thirteen hours was not.
+
+**AND `app #2 in this process` WAS THE WRONG TEST**, asked for and then withdrawn.
+`APPS_BUILT_HERE` counts WINDOWS built in a process; a process the platform
+started for the listener has never had one, so its first launch reports `app #1`
+however long it has been sitting there. Both of this morning's logs say `app #1`
+and neither says anything. The two clocks above are what carried it.
+
+**STILL UNANSWERED, AND THE NEXT DRIVE ANSWERS IT:** whether the come-forward
+launch is permitted. Android 10 refuses a background activity start, and holding
+notification access may or may not exempt this app. `CarnyxListener` already
+reports both outcomes by name — `bound, and brought the face forward` against
+`bound, but the launch was refused:` — so one drive with the switch on decides it.
+`SYSTEM_ALERT_WINDOW` is an explicit exemption from that restriction and Carnyx
+has a row that asks for it, so the switch should be turned on WITH the overlay
+permission granted.
+
+**AND THE GOAL IS NOT TO SHARE THE UNIT WITH THE STOCK APP.** The owner, on the
+stereo pill staying dark whenever the stock radio holds the audio source: *"Don't
+bother fixing any weird behavior that occurs when the stock radio app is running
+yet, the goal is to not fight it but get rid of it."* Recorded so the next reader
+does not spend a day making the two coexist. The stereo defect is real — every
+launch logs `stereo true` and `FM is not the MCU source` in the same second while
+the pill stays dark — and it is parked, not forgotten.
+
+**THE TWO MEASUREMENTS BUILT FOR THIS, both of which the reading above needed and
+neither of which existed yet:**
+
+1. **THE PROCESS SAYS HOW OLD IT IS.** `CarnyxProcess.processAgeSeconds` reads
+   the elapsed-realtime clock — the one that keeps counting through a suspend —
+   against this process's own start, and `lib.rs` prints the age with a reading
+   of it beside every launch. It puts the "Running app" screen's number into the
+   exported log automatically, where until now it depended on the owner thinking
+   to visit a settings screen BEFORE opening the app. The age is always printed;
+   the verdict beside it is only an interpretation of a five-second threshold,
+   and a threshold that is a guess must not be the only thing in the record.
+2. **EVERY NOTE CARRIES ITS OWN TIME.** `CarnyxNotes.stamp` prefixes each entry
+   with the wall clock and with how long the unit has slept since it booted —
+   Android's two since-boot counters, one that runs through a suspend and one
+   that stops, subtracted. The wall clock cannot show a sleep, because it advances
+   the same either way; that difference can, and it never decreases, so two notes
+   reading `slept 41m` and `slept 58m` bracket a seventeen-minute sleep. This is
+   precisely the ambiguity left standing above: log #73's two bind notes are the
+   evening rebind and a morning one, OR two of either, and undated they cannot
+   say which. Stated twice, in `CarnyxNotes` and in `CarnyxWake`, across the
+   class-loader divide those two have always been split by.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

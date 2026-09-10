@@ -4,6 +4,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.SystemClock;
 import android.text.format.DateFormat;
 import android.util.Log;
 
@@ -136,6 +137,41 @@ public final class CarnyxProcess {
      * built for API 26 and {@code java.time} is API 26+ ONLY WITH desugaring,
      * which {@code build.rs}'s d8 invocation does not turn on.
      */
+    /**
+     * How long this PROCESS had already been running, in seconds, or -1.
+     *
+     * <h2>What this settles, and why nothing else could</h2>
+     *
+     * <p>The question #133 turns on is whether the platform starts Carnyx AFTER
+     * the vendor force-stops it on ACC-off. A note saying "bound by the platform"
+     * cannot answer it: tapping a force-stopped app's icon makes Android reinstate
+     * that package's components at that moment, so the bind can happen a fraction
+     * of a second before the note is read, as part of the launch itself.
+     *
+     * <p>This tells the two apart with one number. If the driver taps the icon and
+     * the process turns out to have been alive for forty seconds already, then
+     * SOMETHING ELSE STARTED IT — the notification listener, or a manifest
+     * receiver — and the launch merely attached a window to a process that was
+     * running. A fraction of a second means the tap started it and nothing had.
+     *
+     * <p>ELAPSED REALTIME ON BOTH SIDES, which is the clock that keeps counting
+     * while the unit is suspended. The wall clock would be wrong across a time
+     * sync and {@code uptimeMillis} stops during sleep, and this unit's whole
+     * problem happens across a sleep.
+     *
+     * <p>-1 rather than 0 when it cannot be read: zero is a real answer here — it
+     * is the answer for every ordinary tap — so a failure must not look like one.
+     */
+    public static long processAgeSeconds() {
+        try {
+            long ms = SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime();
+            return ms < 0 ? -1 : ms / 1000L;
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the process start time", t);
+            return -1;
+        }
+    }
+
     public static int clockHourMinute() {
         try {
             java.util.Calendar c = java.util.Calendar.getInstance();

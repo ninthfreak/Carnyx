@@ -473,6 +473,45 @@ fn android_main(android_app: slint::android::AndroidApp) {
     let listener_note = android::take_listener_note();
     log_note(&_driver, "listener", &listener_note, true);
 
+    // ── AND WHO STARTED THIS PROCESS, WHICH THE NOTES ABOVE CANNOT SAY ──────────
+    //
+    // The notes say a bind happened. They cannot say whether it happened because
+    // the unit woke or because the driver's own tap made Android reinstate a
+    // force-stopped package's components a fraction of a second earlier. This
+    // does: if the window opens onto a process that has been alive for forty
+    // seconds, the tap did not start it, and the only things in this app that
+    // could have are the notification listener and the manifest receivers.
+    //
+    // READ AFTER THE NOTES, ON PURPOSE. A reader working down the log gets what
+    // was recorded first and then who was already running, which is the order the
+    // question is actually asked in.
+    //
+    // THE NUMBER IS ALWAYS PRINTED, and the verdict beside it is only a reading of
+    // it. `FRESH_S` is a guess about how long a cold start takes on this unit —
+    // the process is spawned, the dex loads, Rust reaches this line — and a guess
+    // must not be the only thing in the log. A driver who sees `4s` can disagree
+    // with the word next to it; a driver who sees only the word cannot.
+    //
+    // FIVE SECONDS because the two cases are not close: a tap is a second or two
+    // even on this hardware, and the alternative is the platform having started
+    // the process when the unit woke, which is however long it takes a person to
+    // notice the screen, deal with the stock app and find an icon. Anything in
+    // between is not a case this can distinguish, and says so by printing the age.
+    //
+    // AN ORDINARY ANSWER IS STILL PRINTED rather than suppressed: "the tap started
+    // it" is a real finding on the drive where the other answer was expected, and
+    // a line that appears only sometimes cannot be told from one that failed.
+    const FRESH_S: u64 = 5;
+    match android::process_age_seconds() {
+        Some(age) if age <= FRESH_S => {
+            _driver.log_platform(&format!("process: {age}s old — this launch started it"))
+        }
+        Some(age) => _driver.log_platform(&format!(
+            "process: {age}s old — ALREADY RUNNING before this window opened"
+        )),
+        None => _driver.log_platform("process: age unavailable in this build"),
+    }
+
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
     // a driver can get that the renderer saw it, since the alternative — Slint
