@@ -1,9 +1,24 @@
 # Carnyx
 
-Radio for a NOWADA (NWD) Android head unit. Slint interface, Rust logic.
+A radio face for Android head units. Slint interface, Rust logic.
 
-**The unit is 32-bit ARM** (`armeabi-v7a`). Every build has to produce that ABI;
-an arm64-only APK will not install on it.
+**IT IS NOT BUILT FOR ONE MODEL.** Carnyx runs on a NOWADA (NWD) unit today, and
+every measurement in this file was taken there — but that is the DEVELOPMENT
+UNIT, not the target. The distinction is load-bearing, because the two read the
+same in a document and lead to opposite decisions: a permission that happens to
+be granted on the development unit is not a permission the app may assume, and a
+vendor quirk measured once is a fact about that vendor, not about Android.
+
+So this file keeps them apart. Where something is true of Android, it is stated
+plainly. Where it came off the development unit, it says so. The NWD vendor
+service is ONE TUNER SOURCE among several behind a common interface — the source
+picker offers NWD, RTL-SDR and FYT — and the day a second unit runs this app,
+nothing here should have to be unlearned.
+
+**Head units are commonly 32-bit ARM** (`armeabi-v7a`), and the development unit
+is. `build_targets` lists both ABIs and both are built every time: an arm64-only
+APK will not install on a 32-bit unit, and an APK is a poor place to discover
+months later that an architecture was never compiled.
 
 The successor to CarFM, which is React Native and is being retired. Carnyx is
 not a port of that codebase — it is a rebuild that salvages the parts worth
@@ -24,9 +39,9 @@ number, and CarFM's tree cites three of them from code: `#55` in
 
 ## Order of work
 
-1. **The interface.** Slint, on the head unit, with placeholder data.
-2. **The NWD tuner.** The head unit's built-in FM chip, reached through the
-   vendor's `com.nwd.radio.service`.
+1. **The interface.** Slint, on the unit, with placeholder data.
+2. **The NWD tuner.** The built-in FM chip on NWD-based units, reached through
+   the vendor's `com.nwd.radio.service`.
 3. **An SDR tuner** behind the same interface, so the app is not tied to one
    piece of hardware.
 
@@ -36,8 +51,8 @@ two implementations of everything and nothing retired.
 
 ## The face
 
-The face is meant to be visually identical to the one running on the head unit
-today, so the reference is **CarFM's shipped code**, not the design bundle in
+The face is meant to be visually identical to the one CarFM ships today, so the
+reference is **CarFM's shipped code**, not the design bundle in
 `docs/design/handoff` — the bundle is v1.10.0 against a v1.14.x face and differs
 on real values (`amberFill` is 0.12/0.15 there and 0.08/0.10 in the app).
 Sources, in the order they were worked from:
@@ -111,7 +126,7 @@ which is how the probe this one replaces spent its whole life reporting the gaps
 BETWEEN the cards as though they were a card.
 
 `pollprobe` also pins where the poll RUNS. The vendor getters are binder calls
-into the head unit's radio service; CarFM makes them from React Native's
+into the unit's radio service; CarFM makes them from React Native's
 native-modules thread and never from the UI thread, so Carnyx's poll is a thread
 of its own (`android::start_state_poll`) that emits a `TunerEvent::Snapshot` and
 lets the ordinary wake hop carry it to the face. The first version used a
@@ -160,8 +175,8 @@ pixels are all Rust's, in `src/logos.rs`, where they are tested.
 Every download and every pixel pass runs on one worker thread
 (`logos::service::Worker`), never on the event loop: a search is two round trips
 plus four thumbnail downloads, and a confirm is a download, a decode, a trim,
-three ladder resamples and a full dark-adaptation pass. On this hardware that is
-seconds, and the face is the thing the driver is looking at.
+three ladder resamples and a full dark-adaptation pass. On head-unit hardware
+that is seconds, and the face is the thing the driver is looking at.
 
 **There is no automatic logo fetching, and there must not be.**
 `AUTO_LOGO_RESOLUTION` is `false` and stays false: CarFM's 2026-07-17 device test
@@ -172,12 +187,13 @@ reorder mode, then the badge on the tile.
 
 ## Building
 
-Everything below runs on your development machine. Nothing is ever compiled on
-the head unit — the Android build is a cross-compile, and what you carry over is
-an APK file.
+Everything below runs on your development machine. Nothing is ever compiled on a
+head unit — the Android build is a cross-compile, and what you carry over is an
+APK file.
 
-`cargo build` compiles for the host. That is a compile check only: there is no
-desktop application, and the head unit is the only target that matters.
+`cargo build` compiles for the host. That is a compile check only — there is no
+desktop application, so nothing the host build produces is a deliverable. Android
+is what ships.
 
 ### An APK to sideload
 
@@ -205,7 +221,8 @@ Gradle script does search, which is why it needs none of these.
 not set` without it. Both are needed.
 
 The APK lands at **`target/debug/apk/carnyx.apk`**, and goes to the unit on a USB
-stick. (`cargo apk run` and `adb install` exist, but this unit is not on adb.)
+stick. (`cargo apk run` and `adb install` exist; the development unit exposes no
+adb, and a sideload from a stick is the path that works on a unit either way.)
 
 **Check it before you carry it out:**
 
@@ -258,8 +275,8 @@ switched away from — CarFM stays alive because a foreground service pins its
 process — and why it does not come back when the unit wakes on ACC. Gradle writes
 its own manifest, so both become possible. That is task **#67**.
 
-**It is confirmed on the unit.** The Gradle APK installed over the cargo-apk
-build and ran. It packages *exactly* what cargo-apk packages — same package id,
+**It is confirmed on the development unit.** The Gradle APK installed over the
+cargo-apk build and ran. It packages *exactly* what cargo-apk packages — same package id,
 version, permissions, `queries`, theme, `configChanges`, `launchMode`, assets,
 and the same debug certificate, so it upgrades in place and app data survives.
 The service and the receiver were deliberately left out of the spike, so that a
@@ -340,10 +357,10 @@ is signed.
 
 `--lib` because the crate is a `cdylib` with no `main`: the entry point is
 `android_main`. No `--target` flag, on purpose — `build_targets` in `Cargo.toml`
-lists both ABIs and **both are built every time**. The unit is 32-bit today, but
-an APK is a poor place to discover months later that one architecture was never
-compiled. `tools/check-apk.sh` fails if either is missing. No `cmdline-tools` are
-needed.
+lists both ABIs and **both are built every time**, for the reason given at the top
+of this file: the development unit is 32-bit, the next unit may not be, and an APK
+is a poor place to discover months later that one architecture was never compiled.
+`tools/check-apk.sh` fails if either is missing. No `cmdline-tools` are needed.
 
 ### Skia comes along whether you want it or not
 
@@ -354,10 +371,11 @@ So an Android build always pulls `skia-bindings`, which first tries to download 
 prebuilt keyed by `<rust-skia-hash>-<target-triple>-<features>` and, failing
 that, compiles Skia from source.
 
-There is no armv7 prebuilt for skia-bindings 0.99 — the download 404s. Since the
-head unit is 32-bit, that is not avoidable by dropping the ABI: **every build for
-this device compiles Skia from source.** The published `skia-bindings` crate is
-2.3 MB and contains no Skia tree, so the build fetches one.
+There is no armv7 prebuilt for skia-bindings 0.99 — the download 404s. Since
+armeabi-v7a is built every time, that is not avoidable by dropping the ABI:
+**every build compiles Skia from source, and will until a 32-bit prebuilt
+exists.** The published `skia-bindings` crate is 2.3 MB and contains no Skia
+tree, so the build fetches one.
 
 **Install the source-build tools first.** Both of these fail LATE — `ninja` after
 GN has generated, `libclang` after the entire Skia tree has compiled — so a
@@ -415,9 +433,11 @@ performance on a release build or not at all.
 
 That said, the first on-device run was a `-O0` debug build and it performed well
 — no stutter on anything the face draws. Since that is the pessimistic case by a
-wide margin, CPU cost is not a live concern for this design on this hardware. It
-is worth re-checking once the overlays land, because they add scrolling lists and
-a 2x2 image grid, which is different work from a static face.
+wide margin, CPU cost is not a live concern for this design on hardware of that
+class. It is worth re-checking once the overlays land, because they add scrolling
+lists and a 2x2 image grid, which is different work from a static face — and
+re-checking on any unit slower than the development one, since a single machine
+is what this measurement rests on.
 
 Placement was within single-digit pixels of right at the real panel size, which
 is close enough to leave until the tuner is in. Nothing about the layout tracks
@@ -512,12 +532,14 @@ Its README lists `aarch64-linux-android` and `x86_64-linux-android` only, there
 is no armv7 prebuilt at any version, and rust-skia#850 has been open since
 October 2023 asking for it.
 
-**It works anyway.** The APK installed on the head unit and the face rendered
-correctly — so 32-bit ARM Android is unsupported by rust-skia in the sense that
-nobody publishes a binary or promises it keeps working, not in the sense that it
-does not work. Slint on Skia on armv7 Android is a real, running configuration on
-this hardware. The install also settles the API 26 floor from the other
-direction: the unit accepted the package, so it is Android 8.0 or newer.
+**It works anyway.** The APK installed on the development unit and the face
+rendered correctly — so 32-bit ARM Android is unsupported by rust-skia in the
+sense that nobody publishes a binary or promises it keeps working, not in the
+sense that it does not work. Slint on Skia on armv7 Android is a real, running
+configuration. That is one unit's worth of evidence, which is enough to retire
+the fear and not enough to promise every unit; the API 26 floor below is the part
+that generalises. The install also settles that floor from the other direction:
+the development unit accepted the package, so it is Android 8.0 or newer.
 
 What "unsupported" costs us is a version pin, not a rewrite. Nothing in CI
 upstream tests this target, so a future skia-bindings could break it without
@@ -543,14 +565,15 @@ NDK — the failure above comes from the sysroot, not from a version check.
 
 ### No Skia at all (contingency, not the current plan)
 
-Skia now builds and runs on the unit, so nothing below is needed today. It is
+Skia now builds and runs on the development unit, so nothing below is needed
+today. It is
 kept because the research behind it was expensive and the situation that would
 call for it — a skia-bindings release that drops armv7, or an NDK requirement we
 cannot meet — is one bad upgrade away.
 
 Every problem in the section above comes from one place: Slint's `android-activity`
 backend hard-depends on the Skia renderer. Nothing here needs Skia. The face is
-text, rectangles and a few paths, on a 32-bit head unit.
+text, rectangles and a few paths.
 
 Dropping Skia does NOT mean dropping the GPU. Slint's third renderer, FemtoVG, is
 pure Rust over OpenGL ES — `femtovg` and `glow`, no C++ anywhere — and unlike the
@@ -643,9 +666,9 @@ Causes, in the order worth checking:
 
 And the two this project can produce, both of which `check-apk.sh` catches:
 
-- **`INSTALL_FAILED_NO_MATCHING_ABIS`** — the APK has no native library for the
-  unit's CPU. The unit is 32-bit, so `armeabi-v7a` is the one that decides
-  whether it installs at all:
+- **`INSTALL_FAILED_NO_MATCHING_ABIS`** — the APK has no native library for that
+  unit's CPU. On a 32-bit unit, which the development one is and many are,
+  `armeabi-v7a` decides whether it installs at all:
 
   ```sh
   unzip -l target/debug/apk/carnyx.apk | grep 'lib/'
