@@ -2,18 +2,16 @@
 
 A radio face for Android head units. Slint interface, Rust logic.
 
-**IT IS NOT BUILT FOR ONE MODEL.** Carnyx runs on a NOWADA (NWD) unit today, and
-every measurement in this file was taken there — but that is the DEVELOPMENT
-UNIT, not the target. The distinction is load-bearing, because the two read the
-same in a document and lead to opposite decisions: a permission that happens to
-be granted on the development unit is not a permission the app may assume, and a
-vendor quirk measured once is a fact about that vendor, not about Android.
+Sources sit behind one interface, so the tuner is a choice the app makes rather
+than a shape it is built into. The vendor FM service is the first of them — NWD
+today — and an SDR tuner is item 3 below.
 
-So this file keeps them apart. Where something is true of Android, it is stated
-plainly. Where it came off the development unit, it says so. The NWD vendor
-service is ONE TUNER SOURCE among several behind a common interface — the source
-picker offers NWD, RTL-SDR and FYT — and the day a second unit runs this app,
-nothing here should have to be unlearned.
+**Development happens on a NOWADA (NWD) unit**, and every measurement in this
+file was taken there, so the file attributes them. A reading off one unit is
+evidence about that unit: a permission that happens to be granted there is not
+one the app may assume, and a vendor quirk measured once is a fact about that
+vendor rather than about Android. Where something is true of Android it is stated
+plainly; where it came off the development unit, it says so.
 
 **Head units are commonly 32-bit ARM** (`armeabi-v7a`), and the development unit
 is. `build_targets` lists both ABIs and both are built every time: an arm64-only
