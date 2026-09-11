@@ -1871,6 +1871,63 @@ neither of which existed yet:**
    say which. Stated twice, in `CarnyxNotes` and in `CarnyxWake`, across the
    class-loader divide those two have always been split by.
 
+---
+
+**2026-09-11: THE COME-FORWARD BUILD DELIVERED C, BADLY, AND THE OWNER REJECTED
+IT.** *"Carnyx will launch it's interface on wake from the receiver. It does this
+whether or not the radio was playing when the car was shut off the last time. If
+the radio was playing, it launches over the stock app. Both of these outcomes I
+did not want."* And then, flatly: *"I NEED you to make Carnyx not launch when the
+radio wasn't playing. This is terrible behavior for the head unit."*
+
+**MEASURED AGAINST THE RANKING, WHICH IS WHAT THIS ENTRY SAID TO DO AND WAS NOT
+DONE.** The build launched on every platform bind. That is C — the stock radio
+still launches and Carnyx lands on top — except it also fires on an ignition
+cycle where nothing was playing, which is outside A, B and C alike. The rule it
+broke is four paragraphs above it in this entry: *"THE RANKING IS THE SPEC.
+Anything built here is measured against which of the three it delivers, not
+against whether it works in the abstract."* The mechanism was proven and then
+wired to the first behaviour that came to hand.
+
+**A'S CONDITION IS PART OF A.** *"how it works currently, except that it would
+launch Carnyx instead of the stock app"* — and "how it works currently" is
+stated in the same breath: *"If the radio wasn't playing when the unit went to
+sleep, the stock radio app doesn't get launched."* The condition is not a detail
+of the vendor's implementation to be dropped; it is half of what was asked for.
+
+**SO THE LAUNCH IS GATED, AND THE FACT IT IS GATED ON IS MEASURED.** `CarnyxWake`
+records `radio_playing` at shutdown from `NwdBridge.mcuSource()` — the MCU's own
+current-source number, 4 being FM — rather than from anything this app believes
+about itself, and `CarnyxListener` refuses to come forward unless it reads true.
+Absent is false, deliberately: a missing key means no clean shutdown was ever
+recorded, and the safe answer to an unanswerable question is silence. A face that
+fails to appear is a disappointment; a face that appears over a driver's map is
+the defect being fixed.
+
+**AND IT IS WRITTEN FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY
+GIVES.** Three builds waited on a vendor ACC-off broadcast and no log has ever
+carried one. Meanwhile the ordinary Android teardown arrives: the 2026-09-10 log
+read `last run ended in destroy 46326s ago` — 18:29:10 — against a screenshot
+putting the replacement process at 18:29:12. The unit delivers a teardown and
+then takes the package. Destroy alone, never Pause or Stop: those two are what
+BACKGROUNDING looks like, and the radio is meant to play through them.
+
+**WHAT THE OWNER ASKED FOR NEXT, AND WHY IT IS THE SAME CHANGE.** *"One thing I
+want Carnyx to do, aside from launch behavior, is to kill the radio audio feed
+when the app is closed, whether this is a force close or not. The stock app will
+kill the radio when closed by Android, whether or not Carnyx is running."* That
+is outcome B by another road: stop the audio at shutdown and FM is not playing
+into the sleep, so the vendor never resumes its radio app and there is nothing to
+close on the next start. `NwdBridge.releaseSource` already exists, already has the
+ownership test that keeps it from stealing a Bluetooth session, and is wired
+ONLY to the broadcast that never comes. Moving it onto the same `Destroy` is the
+whole of it. NOT BUILT YET — the gate above went in first because it was ordered
+and because it removes a live defect on its own.
+
+**ONE LIMIT THAT IS NOT ENGINEERING-SOLVABLE.** A force-stop from Android's
+settings screen delivers no callback of any kind. Nothing runs, so nothing
+releases. Ordinary closing and ACC-off both give `Destroy`; that case does not.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

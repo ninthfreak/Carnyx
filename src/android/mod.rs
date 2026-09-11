@@ -1007,6 +1007,18 @@ fn record_foreground(on: bool) {
 #[cfg(not(target_os = "android"))]
 fn record_foreground(_on: bool) {}
 
+/// Record whether FM was playing, at shutdown. See [`wake::note_radio_playing`].
+#[cfg(target_os = "android")]
+pub fn note_radio_playing() -> String {
+    wake::note_radio_playing()
+}
+
+/// The host has no MCU and no next wake to record for. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn note_radio_playing() -> String {
+    String::new()
+}
+
 /// How old this process was when asked. See [`service::process_age_seconds`].
 #[cfg(target_os = "android")]
 pub fn process_age_seconds() -> Option<u64> {

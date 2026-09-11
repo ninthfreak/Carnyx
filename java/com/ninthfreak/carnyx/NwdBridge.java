@@ -610,8 +610,17 @@ public final class NwdBridge {
         }
     }
 
-    /** Read the MCU's current audio source. 4 = FM; -1 = could not read. */
-    private static int mcuSource() {
+    /**
+     * Read the MCU's current audio source. 4 = FM; -1 = could not read.
+     *
+     * <p>PACKAGE-PRIVATE RATHER THAN PRIVATE so {@link CarnyxWake#noteRadioPlaying}
+     * can record it at shutdown. Both classes are in the runtime dex and share a
+     * class loader, so that is an ordinary call and not the divide
+     * {@code CarnyxNotes} documents. It stays off the public surface: this is the
+     * MCU's own number rather than a fact about the tuner, and every other reader
+     * of it is in this file.
+     */
+    static int mcuSource() {
         try {
             String v = Settings.System.getString(ctx.getContentResolver(), "mcu_current_source");
             return v == null ? -1 : Integer.parseInt(v.trim());

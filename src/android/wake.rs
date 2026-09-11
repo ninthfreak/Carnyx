@@ -199,6 +199,27 @@ pub fn set_come_forward(on: bool) {
     });
 }
 
+/// Record whether FM was the MCU's source, for the next wake to read.
+///
+/// ── CALLED FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY GIVES ────
+///
+/// Three builds waited for a vendor ACC-off broadcast and no log has ever carried
+/// one — `last sleep: nothing recorded`, every time. Meanwhile the ordinary
+/// Android lifecycle `Destroy` DOES arrive: the 2026-09-10 log read `last run
+/// ended in destroy 46326s ago`, putting it at 18:29:10, and Android's own
+/// running-apps screen put the replacement process at 18:29:12. The teardown is
+/// delivered, then the package is taken.
+///
+/// So the fact the next launch needs is written from there, off the MCU's own
+/// current-source number rather than off anything this app believes about itself.
+/// See `CarnyxWake.noteRadioPlaying`.
+///
+/// Returns the line for the diagnostics log, or `""` where the class never
+/// loaded — which is every host build.
+pub fn note_radio_playing() -> String {
+    take(jni_str!("noteRadioPlaying"))
+}
+
 /// One `()Ljava/lang/String;` static, or `""` where the class never loaded.
 fn take(method: &JNIStr) -> String {
     let Some(class) = CLASS_REF.get() else {

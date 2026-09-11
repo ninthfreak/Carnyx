@@ -89,6 +89,35 @@ public final class CarnyxWake {
     private static final String KEY_COME_FORWARD = "come_forward";
     private static final String KEY_RELEASE_ON_SLEEP = "release_on_sleep";
 
+    /**
+     * Whether FM was the MCU's audio source when this app last shut down.
+     *
+     * <h2>THE CONDITION THE OWNER RANKED FIRST, AND THE ONE THE FIRST BUILD
+     * IGNORED</h2>
+     *
+     * <p>#133's outcome A is "how it works currently, except that it would launch
+     * Carnyx instead of the stock app" — and "how it works currently" INCLUDES
+     * the condition: *"If the radio wasn't playing when the unit went to sleep,
+     * the stock radio app doesn't get launched."* The first come-forward build
+     * came forward on every platform bind, which is not A, not B and not C; it
+     * put the face on screen after an ignition cycle in which nothing had been
+     * playing. The owner: *"This is terrible behavior for the head unit."*
+     *
+     * <p>MEASURED, NOT GUESSED. Written at shutdown from {@code mcuSource()} —
+     * the MCU's own current-source number, 4 being FM — so it records what the
+     * hardware was actually doing rather than what this app believed. Written
+     * AFTER any release, so it also answers the question that matters next:
+     * releasing means the radio is off and nothing should come forward, and
+     * leaving it alone means the vendor will resume FM and the stock app with it.
+     *
+     * <p>ABSENT MEANS FALSE, and that is a deliberate default rather than an
+     * accident of the API. A missing key is a unit where this app has never shut
+     * down cleanly, and the safe answer there is silence: a face that fails to
+     * appear is a disappointment, and a face that appears over a driver's map is
+     * the defect being fixed.
+     */
+    private static final String KEY_RADIO_PLAYING = "radio_playing";
+
     private static Context ctx;
 
     private CarnyxWake() {
@@ -378,6 +407,52 @@ public final class CarnyxWake {
                     .edit().putBoolean(KEY_COME_FORWARD, on).commit();
         } catch (Throwable t) {
             Log.w(TAG, "could not record the come-forward switch: " + t);
+        }
+    }
+
+    /**
+     * Record whether FM is the MCU's source, for the next wake to read.
+     *
+     * <p>See {@link #KEY_RADIO_PLAYING}. Called at shutdown, from the lifecycle
+     * event the unit DOES deliver on ACC-off — `Destroy`, confirmed by a drive
+     * log that read `last run ended in destroy 46326s ago` against a screenshot
+     * putting the replacement process at the same second. The vendor sleep
+     * broadcast this app spent three builds waiting for has still never arrived.
+     *
+     * <p>{@code commit()} and not {@code apply()}, for {@code CarnyxNotes}'
+     * reason: the MCU is cutting power and an {@code apply()} whose background
+     * thread never got scheduled would lose the one fact the next launch needs.
+     *
+     * @return the line for the diagnostics log. Never null.
+     */
+    public static synchronized String noteRadioPlaying() {
+        if (ctx == null) {
+            return "radio state: no context";
+        }
+        int src;
+        try {
+            src = NwdBridge.mcuSource();
+        } catch (Throwable t) {
+            // UNKNOWN IS RECORDED AS NOT PLAYING. See KEY_RADIO_PLAYING: the
+            // wrong answer in this direction costs a face that did not appear,
+            // and in the other it costs the defect being fixed.
+            setRadioPlaying(false);
+            return "radio state: could not read the MCU source, recorded as off (" + t + ")";
+        }
+        boolean playing = src == 4;
+        setRadioPlaying(playing);
+        return "radio state: " + (playing ? "FM was playing" : "not FM")
+                + " at shutdown (mcu_current_source=" + src + ")";
+    }
+
+    /** The write half of {@link #noteRadioPlaying}, separated so a failure to
+     *  read the MCU can still record the safe answer. */
+    private static void setRadioPlaying(boolean playing) {
+        try {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_RADIO_PLAYING, playing).commit();
+        } catch (Throwable t) {
+            Log.w(TAG, "could not record the radio state: " + t);
         }
     }
 }

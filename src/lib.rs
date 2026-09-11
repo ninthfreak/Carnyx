@@ -225,6 +225,24 @@ fn android_main(android_app: slint::android::AndroidApp) {
         };
         app::persist_session_current(parting);
         android::ingest_note(format!("lifecycle: {}", parting.name()));
+        // ── THE ONE FACT THE NEXT WAKE NEEDS, WRITTEN WHERE IT CAN BE ─────────
+        //
+        // DESTROY AND NOTHING ELSE. Pause and Stop are what BACKGROUNDING looks
+        // like — the driver in maps, the screen timing out — and the radio is
+        // meant to keep playing through both. Destroy is the app going away, and
+        // on this unit it is also what an ACC-off delivers: the 2026-09-10 log
+        // read `last run ended in destroy 46326s ago`, which lands at the same
+        // second Android's running-apps screen put the replacement process.
+        //
+        // WHICH IS WHY THIS IS HERE AND NOT IN THE SLEEP RECEIVER. The receiver
+        // waits on a vendor broadcast that no log has ever carried; this waits on
+        // a callback that has now been measured twice.
+        if matches!(parting, session::Parting::Destroy) {
+            let line = android::note_radio_playing();
+            if !line.is_empty() {
+                android::ingest_note(line);
+            }
+        }
     })
     .unwrap();
 
