@@ -849,37 +849,6 @@ public final class NwdBridge {
     }
 
     /**
-     * Watch for the head unit going to sleep, so the FM source can be handed back
-     * before this process stops running.
-     *
-     * <p>WHY: the MCU sleeps the SoC on ACC-off, remembers the current source
-     * across the sleep, and restores it on ACC-on — so a unit left on FM comes
-     * back into FM and the stock radio app launches itself. Handing the source
-     * back on the way down leaves nothing for it to restore.
-     *
-     * <p>TWO ACTIONS, NOT EQUALLY GOOD.
-     *
-     * <p>{@code com.nwd.ACTION_ACCOFF_UPDATE} is the precise one — CarFM's
-     * BootReceiver records the vendor service handling it on the way down, which
-     * is exactly the moment wanted. What is NOT known is whether a third-party
-     * app receives it at all: it is a vendor action, it may be protected, and
-     * nothing in either app has ever listened for it. If it never arrives this
-     * costs nothing and the other action still fires.
-     *
-     * <p>{@code ACTION_SCREEN_OFF} is the certain one — a standard system
-     * broadcast, and unlike the activity lifecycle it does not fire when the
-     * driver merely switches to maps. ITS HAZARD IS REAL: a screen timeout with
-     * the engine running looks identical from here, and the audio would stop with
-     * the driver still listening. There is no auto-reclaim, because reclaiming
-     * would put the source back and undo the point of releasing it, so recovery
-     * is the power button. Delete the one {@code addAction} to remove that
-     * half.
-     *
-     * <p>SCREEN_OFF CANNOT BE A MANIFEST RECEIVER (Android 8 took it off the
-     * implicit-broadcast allowlist), which is no obstacle: this app is alive to
-     * register it, and the foreground service is what keeps it that way.
-     */
-    /**
      * The actions this watch listens for.
      *
      * <p>TWO SPELLINGS OF THE VENDOR ACTION, because NOBODY KNOWS WHICH IS RIGHT.
@@ -942,6 +911,36 @@ public final class NwdBridge {
 
 
     /**
+     * Watch for the head unit going to sleep, so the FM source can be handed back
+     * before this process stops running.
+     *
+     * <p>WHY: the MCU sleeps the SoC on ACC-off, remembers the current source
+     * across the sleep, and restores it on ACC-on — so a unit left on FM comes
+     * back into FM and the stock radio app launches itself. Handing the source
+     * back on the way down leaves nothing for it to restore.
+     *
+     * <p>TWO ACTIONS, NOT EQUALLY GOOD.
+     *
+     * <p>{@code com.nwd.ACTION_ACCOFF_UPDATE} is the precise one — CarFM's
+     * BootReceiver records the vendor service handling it on the way down, which
+     * is exactly the moment wanted. What is NOT known is whether a third-party
+     * app receives it at all: it is a vendor action, it may be protected, and
+     * nothing in either app has ever listened for it. If it never arrives this
+     * costs nothing and the other action still fires.
+     *
+     * <p>{@code ACTION_SCREEN_OFF} is the certain one — a standard system
+     * broadcast, and unlike the activity lifecycle it does not fire when the
+     * driver merely switches to maps. ITS HAZARD IS REAL: a screen timeout with
+     * the engine running looks identical from here, and the audio would stop with
+     * the driver still listening. There is no auto-reclaim, because reclaiming
+     * would put the source back and undo the point of releasing it, so recovery
+     * is the power button. Delete the one {@code addAction} to remove that
+     * half.
+     *
+     * <p>SCREEN_OFF CANNOT BE A MANIFEST RECEIVER (Android 8 took it off the
+     * implicit-broadcast allowlist), which is no obstacle: this app is alive to
+     * register it, and the foreground service is what keeps it that way.
+     *
      * @return a line for the DIAGNOSTICS LOG saying what happened, never null.
      *     It used to return void and say so to logcat, which on a unit with no
      *     adb reaches nobody — so "the receiver never registered" and "the

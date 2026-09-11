@@ -1572,13 +1572,15 @@ impl App {
         {
             let s = app.state.borrow();
             s.tuner.set_release_on_sleep(s.settings.release_on_sleep);
-            // AND THE COME-FORWARD SWITCH, for exactly the same reason: the
-            // notification listener may be bound into a process with no Rust,
-            // so the shared-preferences copy is the only thing it can read. A
-            // launch that did not push it would leave Java on its own default
-            // until the driver next touched the row.
-            crate::android::set_come_forward(s.settings.come_forward);
         }
+        // THE COME-FORWARD SWITCH IS NOT PUSHED HERE, and it used to be. The
+        // tuner's class is loaded by the time this constructor runs, so the line
+        // above reaches Java; `CarnyxWake`'s is not. `android::wake::init` is the
+        // only thing that fills that class reference, and `android_main` calls it
+        // a hundred lines AFTER this constructor — so `set_come_forward` took its
+        // `let Some(class) = CLASS_REF.get() else { return }` branch on every
+        // cold launch and the push was dead. See `App::mirror_come_forward`,
+        // which android_main calls once the class exists.
         // ── OSMAND, IF THE DRIVER HAS ASKED FOR IT ───────────────────────
         //
         // The package is read either way, because the settings row says which
@@ -5723,6 +5725,33 @@ impl App {
     /// the wake receiver did, what the last sleep managed. In a plain ring those
     /// are the first lines evicted, and they are the ones a drive log is read
     /// for; see `DiagLog::push_head` for the drive that proved it.
+    /// Push the come-forward switch into the shared preferences the notification
+    /// listener reads.
+    ///
+    /// ── CALLED FROM `android_main`, AFTER `wake::init`, AND THAT IS THE POINT ──
+    ///
+    /// This used to sit in `App::with_tuner` beside the release-on-sleep push,
+    /// which looks like the same errand and is not. The tuner's class is loaded
+    /// before the constructor runs, so that push lands; `CarnyxWake`'s is loaded
+    /// by `android::wake::init`, which `android_main` calls AFTER building the
+    /// App. So the come-forward push hit `CLASS_REF.get()`'s `else { return }`
+    /// on every cold launch and did nothing at all.
+    ///
+    /// WHAT THAT COST, and why it is worth a method rather than a moved line:
+    /// the listener is bound into a process with no Rust and no `prefs.json`
+    /// parsed, so this copy is the ONLY thing it can read. A launch that failed
+    /// to push left Java on whatever the last successful write said — which is
+    /// whatever the driver last toggled, or the Java-side default on a unit
+    /// where they never have. The two agreed by luck, because both default to
+    /// false; a different default on either side would have made the switch lie.
+    ///
+    /// Silently does nothing on a host build and on a unit where the class did
+    /// not load, which is what every other `wake::` call does.
+    pub fn mirror_come_forward(self: &Rc<App>) {
+        let on = self.state.borrow().settings.come_forward;
+        crate::android::set_come_forward(on);
+    }
+
     pub fn log_platform(self: &Rc<App>, line: &str) {
         {
             let mut s = self.state.borrow_mut();

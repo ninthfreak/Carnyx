@@ -453,6 +453,13 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // SAFETY: same pointers, same lifetime argument as the three above.
     let _ = unsafe { android::wake::init(vm, activity) };
 
+    // AND NOW THE COME-FORWARD SWITCH CAN BE PUSHED, which it could not be
+    // before this line. `App::with_tuner` used to do it beside the
+    // release-on-sleep push; that constructor runs a hundred lines up, before
+    // the class above exists, so the call took its no-class branch every time.
+    // See `App::mirror_come_forward`.
+    _driver.mirror_come_forward();
+
     // AND WHAT THE RECEIVER DID, if it ran at all. THIS IS THE ONLY EVIDENCE
     // THIS FEATURE CAN PRODUCE: the receiver runs in a process with no face, on
     // a unit with no adb, so "the broadcast never arrived", "the flag said the

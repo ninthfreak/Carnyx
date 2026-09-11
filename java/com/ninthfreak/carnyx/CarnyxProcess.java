@@ -126,18 +126,6 @@ public final class CarnyxProcess {
     // `!8:05 A`, or nothing at all — is `crate::clock`, where it is tested.
 
     /**
-     * The local wall clock as {@code hour * 100 + minute}, or -1.
-     *
-     * <p>ONE INT RATHER THAN TWO CALLS, because the two must come from the SAME
-     * reading: asked separately, a call that straddles 09:59→10:00 returns hour
-     * 9 and minute 0, and the face shows 09:00 for a minute. `Calendar` is read
-     * once and both fields taken off it.
-     *
-     * <p>{@code Calendar.getInstance()} and not {@code LocalTime}: this dex is
-     * built for API 26 and {@code java.time} is API 26+ ONLY WITH desugaring,
-     * which {@code build.rs}'s d8 invocation does not turn on.
-     */
-    /**
      * How long this PROCESS had already been running, in seconds, or -1.
      *
      * <h2>What this settles, and why nothing else could</h2>
@@ -172,6 +160,18 @@ public final class CarnyxProcess {
         }
     }
 
+    /**
+     * The local wall clock as {@code hour * 100 + minute}, or -1.
+     *
+     * <p>ONE INT RATHER THAN TWO CALLS, because the two must come from the SAME
+     * reading: asked separately, a call that straddles 09:59→10:00 returns hour
+     * 9 and minute 0, and the face shows 09:00 for a minute. `Calendar` is read
+     * once and both fields taken off it.
+     *
+     * <p>{@code Calendar.getInstance()} and not {@code LocalTime}: this dex is
+     * built for API 26 and {@code java.time} is API 26+ ONLY WITH desugaring,
+     * which {@code build.rs}'s d8 invocation does not turn on.
+     */
     public static int clockHourMinute() {
         try {
             java.util.Calendar c = java.util.Calendar.getInstance();

@@ -1948,6 +1948,85 @@ not Carnyx is running."* Closed BY ANDROID counts.
 settings screen delivers no callback of any kind. Nothing runs, so nothing
 releases. Ordinary closing and ACC-off both give `Destroy`; that case does not.
 
+---
+
+**2026-09-11, LATER: THE REVIEW PASS, AND WHAT IT COST TO RUN.** Eight dimensions
+swept in parallel, each finding put to three adversarial verifiers. The first
+finding killed the feature shipped an hour earlier and is written up in
+`8e546c5`. This entry is the rest, and the honest state of the review itself.
+
+**THE REVIEW RAN AT HALF STRENGTH AND THEN COULD NOT BE FINISHED.** 112 of 212
+agents died when the account hit its usage limit. The script scored a finding
+whose verifiers all died as REFUTED, which is wrong — 37 findings were never
+checked at all, and "refuted" was the wrong word for every one of them. The
+resumed run then failed for a different reason: every subagent lost file access
+to a harness fault — *"The permission handler returned updatedInput for X that
+failed schema validation"* — 211 blocked tool calls across the 20 newest agents.
+One verifier said so in its own verdict and ruled `refuted` anyway. The run was
+stopped rather than allowed to produce blind verdicts, and the 37 were verified
+BY HAND instead.
+
+**THE DOC-COMMENT DEFECT REACHED TEN, AND TWO OF THE LAST THREE WERE MINE.**
+Inserting a function directly above an existing one strands the older function's
+doc comment: the reader gets it as the new function's opening paragraph, and the
+old item is left undocumented. Nothing catches it. `rustc` and `javac` are both
+content, every test passes, and the only symptom is a comment describing the
+wrong thing.
+
+- `clockHourMinute` — stolen by `processAgeSeconds`, in `2b87c0f`, four days
+  after five instances of this exact bug were found and fixed by hand.
+- `requestOverlayPermission` (`CarnyxAlert`) and `startSleepWatch`
+  (`NwdBridge`) — both pre-existing, both found only because the check below
+  now exists.
+
+**SO THE CHECK IS A FILE NOW, NOT A PASTE.** `tools/check-docs.py`. It catches
+two shapes: ADJACENT JAVADOC BLOCKS, which is exact — two `/** */` in a row bind
+only the last, so every hit is a defect and the script exits non-zero — and
+MERGED RUST DOC BLOCKS, which is a heuristic reported for a human to judge and
+never fails a build, because a check that cries wolf gets switched off. Two
+paragraphs of ordinary prose that trip the heuristic are named in `KNOWN_PROSE`
+with the reading that cleared them, rather than being silently skipped.
+
+**AND ONE OF THE FIXES WAS WRONG BEFORE IT WAS RIGHT.** `startSleepWatch`'s
+documentation was in TWO blocks — a description stranded above `SLEEP_ACTIONS`
+and an `@return` tag left on the method. Moving the description down put it
+BETWEEN the tag block and the method, stranding the tag instead. The check caught
+that on the next run, which is the argument for the check in one line. They are
+one block now, description then tag.
+
+**THE COME-FORWARD SWITCH NEVER REACHED JAVA ON A COLD LAUNCH.**
+`App::with_tuner` pushed it beside the release-on-sleep push, which looks like
+the same errand and is not: the tuner's class is loaded before that constructor
+runs, and `CarnyxWake`'s is loaded by `android::wake::init`, which `android_main`
+calls A HUNDRED LINES LATER. So `set_come_forward` took its
+`let Some(class) = CLASS_REF.get() else { return }` branch every single time.
+The two sides agreed by luck, both defaulting to false; a different default on
+either would have made the switch lie. It is `App::mirror_come_forward` now,
+called from `android_main` once the class exists.
+
+**`android::country_code()` IS DEAD ON THE SAME PATH AND IT DOES NOT MATTER.**
+`service::init` also runs after the constructor, so the start-up read returns
+`""` and `Units::resolve` takes `FALLBACK` — which is `Units::Imperial`, the
+correct answer for the only country `crate::stations` can answer questions
+about. Recorded because a dead call that happens to be right is still a dead
+call, and the next person to move that line should know why it looked fine.
+
+**STILL OPEN, MEASURED AND NOT FIXED:**
+
+- `tools/check-jni.sh` skips `src/android/mod.rs`, which is where both of this
+  week's dispatchers live. Their Android arms are compiled by nothing in this
+  container. Verified by running it: *"skipping: dex, mod, net, nwd"*.
+- The note rings hold 8 entries per key across three keys, and `DiagLog`'s head
+  holds `HEAD_CAP` = 24. A drive that fills all three pushes the rest of the
+  head into the scrolling ring — the part that does not survive.
+- `run_diag_action` holds a `RefMut<State>` across three JNI round trips, which
+  is the one rule `src/app.rs` states about calls like that.
+- The Gradle manifest's header says three components are declared and names
+  them; four are, and `CarnyxListener` is the fourth.
+- `README.md` still carries the `app #1 in this process` bullet that #133
+  withdrew, and a closing "No APK has ever been built" that its own line 276
+  contradicts.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
