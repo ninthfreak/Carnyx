@@ -240,6 +240,71 @@ print("checking: " + ", ".join(n[:-3] for n in names))
 print("skipping: " + ", ".join(sorted(s[:-3] for s in skip)))
 PY
 
+# ── AND THE DISPATCHERS IN mod.rs, WHICH THE STUB CRATE CANNOT HOLD ───────────
+#
+# `mod.rs` stays on the SKIP list above and has to: it is the module root, so it
+# cannot be wrapped as `pub mod mod { ... }` the way every other file is. But the
+# gap that leaves is not academic. Most of the file is two-line dispatchers with
+# an Android arm and a host arm:
+#
+#     #[cfg(target_os = "android")]
+#     pub fn on_app_destroyed() -> String { wake::on_app_destroyed() }
+#     #[cfg(not(target_os = "android"))]
+#     pub fn on_app_destroyed() -> String { String::new() }
+#
+# `cargo build` in this container compiles the HOST arm only. The stub crate does
+# not see the file at all. So the Android arm — the one that actually runs on the
+# unit — is compiled by NOTHING here, and a dispatcher naming a function that
+# does not exist would be found by a driver, on a unit with no adb.
+#
+# This is not a type check and does not pretend to be. It answers the one
+# question that gap leaves open: does every `module::name` these arms call exist
+# in that module, and does every Android arm have a host arm beside it? Both
+# failures are silent today.
+python3 - "$ROOT" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+src = (root / "src/android/mod.rs").read_text(encoding="utf-8")
+
+modules = {p.stem for p in (root / "src/android").glob("*.rs")} - {"mod"}
+problems = []
+
+# Every `module::name(` called from this file, for modules that are files beside
+# it. `self::` and `crate::` are somebody else's problem.
+pattern = r"\b(%s)::([a-z_][a-z0-9_]*)\s*\(" % "|".join(sorted(modules))
+for m, name in sorted(set(re.findall(pattern, src))):
+    body = (root / "src/android" / (m + ".rs")).read_text(encoding="utf-8")
+    if not re.search(r"\bfn\s+%s\b" % re.escape(name), body):
+        problems.append("%s::%s is called from mod.rs and declared nowhere in %s.rs" % (m, name, m))
+
+# Every Android arm wants a host arm of the same name, or the host build silently
+# loses the function instead of failing to compile — and the reverse means the
+# unit does.
+def arms(cfg):
+    return set(re.findall(
+        r"#\[cfg\(%s\)\]\s*\n(?:\s*(?:///|//|#\[)[^\n]*\n)*\s*pub fn ([a-z_][a-z0-9_]*)" % cfg,
+        src,
+    ))
+
+android = arms(r'target_os = "android"')
+host = arms(r'not\(target_os = "android"\)')
+for name in sorted(android - host):
+    problems.append("%s has an Android arm in mod.rs and no host arm" % name)
+for name in sorted(host - android):
+    problems.append("%s has a host arm in mod.rs and no Android arm" % name)
+
+print()
+if problems:
+    print("mod.rs dispatchers: %d PROBLEM(S)" % len(problems))
+    for line in problems:
+        print("  " + line)
+    sys.exit(1)
+print("mod.rs dispatchers: %d paired, every call resolves" % len(android & host))
+PY
+
 echo
 cd "$OUT"
 if cargo check --quiet 2>&1; then

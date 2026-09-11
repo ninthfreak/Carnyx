@@ -312,9 +312,33 @@ impl DiagLog {
     /// How many lines the head will hold before it stops taking them.
     ///
     /// A BOUND ON A THING THAT CANNOT BE EVICTED, which is the only reason it
-    /// exists — there is no path today that pushes more than about eight. If one
-    /// ever does, the ring is where it belongs.
-    pub const HEAD_CAP: usize = 24;
+    /// exists. Past it, `push_head` falls back to the ring — where a long drive
+    /// evicts exactly the lines the head was built to protect.
+    ///
+    /// ── 24 WAS RIGHT UNTIL THE NOTE RINGS LANDED, AND THEN WAS EXACTLY WRONG ─
+    ///
+    /// This said "there is no path today that pushes more than about eight", and
+    /// that was true of a launch that printed one line per durable note. Since
+    /// `CarnyxNotes` those notes are RINGS of eight, across three keys — wake,
+    /// sleep and listener — and `log_note` prints one line per entry. Three
+    /// eights is 24, which is to say the notes alone could fill the old cap to
+    /// the line and push every other launch line into the ring.
+    ///
+    /// THE ARITHMETIC, so the next person moving either number can check it:
+    ///
+    /// * 24 — three note rings at `CarnyxNotes.KEEP` (8) entries each
+    /// * ~12 — the fixed launch lines: the session record, the sleep watch, the
+    ///   nav seam, the service, the station pop-up, partial rendering, the
+    ///   process age, and a crash report when there is one
+    /// * the rest is headroom, because this costs one `String` per line on a
+    ///   unit that has 9.5 MB of this process resident and a 600-line ring
+    ///   beneath it
+    ///
+    /// `CarnyxNotes.KEEP` LIVES IN JAVA and cannot be imported here — it is on
+    /// the far side of the class-loader divide that file documents. So this
+    /// number is not derived from it and will not follow it. If that cap moves,
+    /// this one is a place to look.
+    pub const HEAD_CAP: usize = 48;
 
     pub fn new() -> DiagLog {
         DiagLog::default()

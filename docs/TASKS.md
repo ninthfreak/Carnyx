@@ -2011,21 +2011,38 @@ correct answer for the only country `crate::stations` can answer questions
 about. Recorded because a dead call that happens to be right is still a dead
 call, and the next person to move that line should know why it looked fine.
 
-**STILL OPEN, MEASURED AND NOT FIXED:**
+**THE FIVE THAT WERE MEASURED AND LEFT, NOW CLOSED.** Listed here as open for
+one commit, then fixed on the owner's instruction.
 
-- `tools/check-jni.sh` skips `src/android/mod.rs`, which is where both of this
-  week's dispatchers live. Their Android arms are compiled by nothing in this
-  container. Verified by running it: *"skipping: dex, mod, net, nwd"*.
-- The note rings hold 8 entries per key across three keys, and `DiagLog`'s head
-  holds `HEAD_CAP` = 24. A drive that fills all three pushes the rest of the
-  head into the scrolling ring — the part that does not survive.
-- `run_diag_action` holds a `RefMut<State>` across three JNI round trips, which
-  is the one rule `src/app.rs` states about calls like that.
-- The Gradle manifest's header says three components are declared and names
-  them; four are, and `CarnyxListener` is the fourth.
-- `README.md` still carries the `app #1 in this process` bullet that #133
-  withdrew, and a closing "No APK has ever been built" that its own line 276
-  contradicts.
+1. **`tools/check-jni.sh` skipped `src/android/mod.rs`**, where every dispatcher
+   lives. It still does — `mod.rs` is the module root and cannot be wrapped as
+   `pub mod mod { }` the way the stub crate wraps every other file — but the gap
+   it left is closed from the other side. The script now checks the two things
+   that gap made silent: that every `module::name` the dispatchers call exists in
+   that module, and that every Android arm has a host arm beside it. PROVED BY
+   BREAKING IT: a planted `wake::on_app_destroyedd` produced *"is called from
+   mod.rs and declared nowhere in wake.rs"* and a non-zero exit. 20 pairs
+   currently resolve.
+2. **`DiagLog::HEAD_CAP` was 24 and the note rings alone are 24.** Three keys at
+   `CarnyxNotes.KEEP` = 8. The doc said "there is no path today that pushes more
+   than about eight", which was true before the rings and exactly wrong after —
+   the notes could fill the head to the line and push every other launch line
+   into the scrolling ring, which is the part that does not survive. 48 now, with
+   the arithmetic written out: 24 for the rings, about 12 fixed launch lines, the
+   rest headroom. `KEEP` lives in Java and cannot be imported, so the two numbers
+   do not follow each other and this one says so.
+3. **`run_diag_action` held a `RefMut<State>` across three JNI round trips.** The
+   file states one rule about calls like that, four paragraphs above the defect,
+   and had already fixed the file-export arm for it. The three permission errands
+   run BEFORE the borrow now and hand their line in. Their three arms were
+   identical to the character and are one arm.
+4. **The Gradle manifest's header counted three components.** Four are declared;
+   `CarnyxListener` had been the fourth since f15a0f7.
+5. **Two stale `README.md` passages.** The `app #1 in this process` bullet now
+   says what it cannot discriminate and points at the `process:` line that can.
+   The closing paragraph said "No APK has ever been built", contradicting its own
+   file a few hundred lines up; it is corrected rather than deleted, because the
+   distinction it draws is real — the container cannot package, the machine can.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**

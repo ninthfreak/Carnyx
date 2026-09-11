@@ -5567,6 +5567,28 @@ impl App {
         // Same shape as `run_pending_probe`: take a clone of what the call needs
         // inside a scoped borrow, drop it, make the call, then re-borrow to
         // write the result line.
+        // ── AND THE THREE PERMISSION ERRANDS, FOR THE SAME REASON ────────────
+        //
+        // Each crosses into JNI, and all three used to do it with the borrow
+        // below alive — the same defect the paragraph above describes for the
+        // file export, left behind when that one was fixed. They take no state,
+        // so they run BEFORE the borrow exists and hand their line in.
+        //
+        // ONE CALL AT MOST: the match arms are mutually exclusive and everything
+        // else yields `None`, so no row pays for a JNI call it did not ask for.
+        let permission_line = match action {
+            settings::Action::AskNotifyPermission => {
+                Some(crate::android::request_notification_permission())
+            }
+            settings::Action::AskOverlayPermission => {
+                Some(crate::android::request_overlay_permission())
+            }
+            settings::Action::AskListenerPermission => {
+                Some(crate::android::request_listener_access())
+            }
+            _ => None,
+        };
+
         let saving = {
             let mut s = self.state.borrow_mut();
             match action {
@@ -5592,35 +5614,32 @@ impl App {
                 // five removed diagnostics rows had, and this one CAN do nothing
                 // on the unit it was written on, where the permission does not
                 // exist.
-                settings::Action::AskNotifyPermission => {
-                    let line = crate::android::request_notification_permission();
-                    s.settings.log.push(&stamp(), &line);
-                    s.settings.set_note(action, line.clone());
-                    s.diag_status = line;
-                    None
-                }
                 // ── ALLOW DRAWING OVER OTHER APPS ─────────────────────────────
                 //
-                // Inline for the same reason as the row above, and it opens a
-                // Settings screen rather than raising a dialog: there IS no
-                // dialog for a special permission. The app comes back to the
-                // foreground when the driver returns, and nothing here waits for
-                // that — the next station change either draws an overlay or says
-                // "not permitted", which is the answer either way.
-                settings::Action::AskOverlayPermission => {
-                    let line = crate::android::request_overlay_permission();
-                    s.settings.log.push(&stamp(), &line);
-                    s.settings.set_note(action, line.clone());
-                    s.diag_status = line;
-                    None
-                }
-                // THE SAME SHAPE AGAIN, and the third of three. This one opens
-                // the screen that decides whether outcome C is reachable: with
-                // notification access the platform binds `CarnyxListener`, and
-                // `listener:` lines start appearing in the log; without it
+                // The second of the three opens a Settings screen rather than
+                // raising a dialog: there IS no dialog for a special permission.
+                // The app comes back to the foreground when the driver returns,
+                // and nothing here waits for that — the next station change
+                // either draws an overlay or says "not permitted", which is the
+                // answer either way.
+                //
+                // ── AND THE THIRD DECIDES WHETHER OUTCOME C IS REACHABLE ──────
+                //
+                // With notification access the platform binds `CarnyxListener`
+                // and `listener:` lines start appearing in the log; without it
                 // nothing binds and the come-forward switch governs nothing.
-                settings::Action::AskListenerPermission => {
-                    let line = crate::android::request_listener_access();
+                //
+                // ONE ARM FOR ALL THREE, because the bodies were identical to the
+                // character and the call that distinguished them now happens
+                // above this borrow. Three copies of five lines is three places
+                // for a fix to miss.
+                settings::Action::AskNotifyPermission
+                | settings::Action::AskOverlayPermission
+                | settings::Action::AskListenerPermission => {
+                    // Set by the match above for exactly these three actions and
+                    // for no other, so the fallback is unreachable rather than a
+                    // default worth choosing.
+                    let line = permission_line.unwrap_or_default();
                     s.settings.log.push(&stamp(), &line);
                     s.settings.set_note(action, line.clone());
                     s.diag_status = line;
