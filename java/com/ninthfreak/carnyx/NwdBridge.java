@@ -613,7 +613,7 @@ public final class NwdBridge {
     /**
      * Read the MCU's current audio source. 4 = FM; -1 = could not read.
      *
-     * <p>PACKAGE-PRIVATE RATHER THAN PRIVATE so {@link CarnyxWake#noteRadioPlaying}
+     * <p>PACKAGE-PRIVATE RATHER THAN PRIVATE so {@link CarnyxWake#onAppDestroyed}
      * can record it at shutdown. Both classes are in the runtime dex and share a
      * class loader, so that is an ordinary call and not the divide
      * {@code CarnyxNotes} documents. It stays off the public surface: this is the

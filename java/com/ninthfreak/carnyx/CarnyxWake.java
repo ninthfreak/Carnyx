@@ -441,40 +441,22 @@ public final class CarnyxWake {
             return "shutdown: no context";
         }
 
-        // ── HAND THE RADIO BACK FIRST, THEN RECORD WHAT IS LEFT ──────────────
+        // ── READ THE MCU FIRST, RELEASE SECOND, AND NEVER READ IT AGAIN ──────
         //
-        // THE ORDER IS THE FEATURE. Releasing means FM is not playing into the
-        // sleep, so the vendor never resumes its radio app and there is nothing
-        // to close on the next start — #133's outcome B, reached from the wake
-        // end instead of the sleep end that has no signal. Reading the MCU
-        // AFTERWARDS then records the truth the next wake needs: we turned it
-        // off, so nothing should come forward either.
+        // THE FIRST CUT OF THIS METHOD READ IT AFTERWARDS and was wrong on the
+        // one path that matters. `releaseSource` ends in `ctx.sendBroadcast` —
+        // fire-and-forget. The vendor service in another process has still to be
+        // dispatched, command the MCU, and have the MCU write
+        // `mcu_current_source` back. A re-read microseconds later therefore
+        // still returns 4, so the release-on path recorded `radio_playing=true`:
+        // the face came forward after an ignition cycle in which the radio had
+        // just been deliberately handed back. Exactly the behaviour the gate
+        // exists to prevent. This file measures that lag itself, four hundred
+        // lines up — *"the MCU re-powered FM a second later"*.
         //
-        // Leave the switch off and the opposite composes just as cleanly: FM
-        // stays the source, the flag lands true, the vendor launches its app and
-        // the come-forward switch can put Carnyx over it. One switch, two
-        // outcomes, no third behaviour hiding between them.
-        String released = "";
-        boolean on = true;
-        try {
-            on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
-        } catch (Throwable t) {
-            Log.w(TAG, "could not read the release switch: " + t);
-        }
-        if (on) {
-            try {
-                // Its own ownership test comes first — it sends nothing when FM
-                // is not the MCU's source, so a Bluetooth session playing while
-                // Carnyx is closed is not interrupted.
-                released = " — " + NwdBridge.releaseSource();
-            } catch (Throwable t) {
-                released = " — release failed: " + t;
-            }
-        } else {
-            released = " — release is off";
-        }
-
+        // So the state is read ONCE, before anything is sent, and what gets
+        // recorded is derived rather than re-measured: FM will be playing into
+        // the sleep if it was playing AND we did not hand it back.
         int src;
         try {
             src = NwdBridge.mcuSource();
@@ -483,16 +465,69 @@ public final class CarnyxWake {
             // wrong answer in this direction costs a face that did not appear,
             // and in the other it costs the defect being fixed.
             setRadioPlaying(false);
-            return "shutdown: could not read the MCU source, recorded as off ("
-                    + t + ")" + released;
+            return note("shutdown: could not read the MCU source, recorded as off ("
+                    + t + ")");
         }
-        boolean playing = src == 4;
+        boolean wasPlaying = src == 4;
+
+        boolean on = true;
+        try {
+            on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the release switch: " + t);
+        }
+
+        String released;
+        boolean handedBack = false;
+        if (!on) {
+            released = " — release is off";
+        } else if (!wasPlaying) {
+            // `releaseSource` would reach its own ownership test and send
+            // nothing, so this says the same thing without the round trip — and
+            // without a "skipped" line that reads like a failure.
+            released = " — nothing to release";
+        } else {
+            try {
+                released = " — " + NwdBridge.releaseSource();
+                handedBack = true;
+            } catch (Throwable t) {
+                released = " — release failed: " + t;
+            }
+        }
+
+        // THE RACE HERE FAILS SAFE, which is why a non-throwing call is taken as
+        // a handover. If the source moved between the read above and
+        // `releaseSource`'s own ownership test, this records "not playing" for a
+        // radio that is — and the cost of that is a face that does not come
+        // forward. The opposite mistake is the defect being fixed.
+        boolean playing = wasPlaying && !handedBack;
         setRadioPlaying(playing);
-        return "shutdown: " + (playing ? "FM still the source" : "FM not the source")
-                + " (mcu_current_source=" + src + ")" + released;
+        return note("shutdown: " + (playing ? "FM left playing" : "FM not playing")
+                + " (mcu_current_source was " + src + ")" + released);
     }
 
-    /** The write half of {@link #noteRadioPlaying}, separated so a failure to
+    /**
+     * Put a shutdown line in the durable ring as well as returning it.
+     *
+     * <p>RETURNING IT IS NOT ENOUGH, and that was the second defect in the first
+     * cut. The caller hands the returned line to `ingest_note`, which queues a
+     * `TunerEvent` and posts a drain onto the SLINT EVENT LOOP — a loop that,
+     * on the teardown this method runs from, will not be scheduled again. The
+     * one report of what the release actually did died with the process it was
+     * describing.
+     *
+     * <p>So it goes where the other durable notes go, under the key the next
+     * launch already prints as `last sleep:`. That reader exists, it already
+     * prints one line per entry, and this IS the sleep note — written from the
+     * callback that arrives instead of the broadcast that never does.
+     */
+    private static String note(String line) {
+        append(KEY_LAST_SLEEP, line);
+        return line;
+    }
+
+    /** The write half of {@link #onAppDestroyed}, separated so a failure to
      *  read the MCU can still record the safe answer. */
     private static void setRadioPlaying(boolean playing) {
         try {

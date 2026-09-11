@@ -77,7 +77,12 @@ public final class WakeReceiver extends BroadcastReceiver {
     /** Shared with {@link CarnyxWake} by name. Keep the two in step. */
     private static final String PREFS = "carnyx_wake";
     private static final String KEY_WAS_FOREGROUND = "was_foreground";
-    private static final String KEY_LAST_WAKE = "last_wake";
+    // KEY_LAST_WAKE IS GONE FROM HERE, and the deletion is the point: this class
+    // writes its notes through `CarnyxNotes.KEY_LAST_WAKE` now, so a private copy
+    // of the same string was a fourth hand-maintained spelling of a key that only
+    // matters because it is spelled identically everywhere. An unused duplicate of
+    // a by-name contract is worse than no copy — it reads as authoritative and
+    // nothing breaks when it drifts.
 
     @Override
     public void onReceive(Context context, Intent intent) {

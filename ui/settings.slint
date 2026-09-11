@@ -1516,20 +1516,23 @@ export component SettingsOverlay inherits Rectangle {
                 // until there is a receiver behind it; see #94.
                 SwitchRow {
                     title: "Stop the radio when Carnyx closes";
-                    // THE TITLE CHANGED BECAUSE THE TRIGGER DID. This said
+                    // THE TITLE CHANGED BECAUSE A TRIGGER WAS ADDED. This said
                     // "Release FM on sleep" and was wired to a vendor ACC-off
-                    // broadcast that has never arrived in any drive log — three
-                    // builds of a switch that could not do what it named. It
-                    // now runs from the `Destroy` the unit actually delivers,
-                    // measured twice on 2026-09-10, so the row can finally
-                    // describe a real trigger: the app going away.
+                    // broadcast that has never arrived in any drive log. It now
+                    // ALSO runs from the `Destroy` the unit actually delivers,
+                    // measured twice on 2026-09-10.
                     //
-                    // THE OLD HAZARD SENTENCE IS GONE WITH THE OLD TRIGGER. A
-                    // screen blanking on a timer used to count as sleeping, so
-                    // the radio could stop with the driver still listening.
-                    // Backgrounding raises Pause and Stop, and neither reaches
-                    // this now; only the app closing does.
-                    sub: "Hand the FM source back when Carnyx closes, including when the head unit shuts it down at ACC-off. The radio is then not playing when the unit wakes, so the stock radio app has no reason to launch itself. Switching to another app does not count as closing.";
+                    // THE HAZARD SENTENCE STAYS, AND SAYING OTHERWISE WAS A
+                    // FALSE CLAIM TO THE DRIVER. The first cut of this row
+                    // removed it on the reasoning that the old trigger had been
+                    // replaced. It has not: `NwdBridge.SLEEP_ACTIONS` still
+                    // lists `ACTION_SCREEN_OFF`, `startSleepWatch` still
+                    // registers it, and the handler still calls `releaseSource`
+                    // when this switch is on. A screen blanking on a timer is
+                    // indistinguishable from an ignition going off, so the radio
+                    // can still stop with the driver listening. One switch, two
+                    // triggers, and the row has to own both.
+                    sub: "Hand the FM source back when Carnyx closes, and when the head unit sleeps, so the stock radio app has no reason to launch itself on the way back. A screen that goes dark on its own still counts as sleeping: if that happens while you are listening the radio stops, and the power button starts it again.";
                     on: root.release-on-sleep;
                     toggled(v) => { root.set-release-on-sleep(v); }
                 }
