@@ -1007,15 +1007,17 @@ fn record_foreground(on: bool) {
 #[cfg(not(target_os = "android"))]
 fn record_foreground(_on: bool) {}
 
-/// Record whether FM was playing, at shutdown. See [`wake::note_radio_playing`].
+/// Release FM and record what is left, at shutdown. See
+/// [`wake::on_app_destroyed`].
 #[cfg(target_os = "android")]
-pub fn note_radio_playing() -> String {
-    wake::note_radio_playing()
+pub fn on_app_destroyed() -> String {
+    wake::on_app_destroyed()
 }
 
-/// The host has no MCU and no next wake to record for. See the Android arm.
+/// The host has no MCU to hand back and no next wake to record for. See the
+/// Android arm.
 #[cfg(not(target_os = "android"))]
-pub fn note_radio_playing() -> String {
+pub fn on_app_destroyed() -> String {
     String::new()
 }
 

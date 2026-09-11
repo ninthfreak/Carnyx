@@ -225,7 +225,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
         };
         app::persist_session_current(parting);
         android::ingest_note(format!("lifecycle: {}", parting.name()));
-        // ── THE ONE FACT THE NEXT WAKE NEEDS, WRITTEN WHERE IT CAN BE ─────────
+        // ── HAND THE RADIO BACK, AND RECORD WHAT THE NEXT WAKE NEEDS ──────────
         //
         // DESTROY AND NOTHING ELSE. Pause and Stop are what BACKGROUNDING looks
         // like — the driver in maps, the screen timing out — and the radio is
@@ -237,8 +237,14 @@ fn android_main(android_app: slint::android::AndroidApp) {
         // WHICH IS WHY THIS IS HERE AND NOT IN THE SLEEP RECEIVER. The receiver
         // waits on a vendor broadcast that no log has ever carried; this waits on
         // a callback that has now been measured twice.
+        //
+        // THE OWNER NAMED THE PRECEDENT, and it settles the one case that looked
+        // like it needed special handling: *"The stock app will kill the radio
+        // when closed by Android, whether or not Carnyx is running."* Closed BY
+        // ANDROID counts, so nothing here tries to tell a driver's own close from
+        // a system teardown.
         if matches!(parting, session::Parting::Destroy) {
-            let line = android::note_radio_playing();
+            let line = android::on_app_destroyed();
             if !line.is_empty() {
                 android::ingest_note(line);
             }

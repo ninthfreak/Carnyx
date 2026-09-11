@@ -411,13 +411,24 @@ public final class CarnyxWake {
     }
 
     /**
-     * Record whether FM is the MCU's source, for the next wake to read.
+     * Hand the FM source back, then record what the MCU is left on.
      *
-     * <p>See {@link #KEY_RADIO_PLAYING}. Called at shutdown, from the lifecycle
-     * event the unit DOES deliver on ACC-off — `Destroy`, confirmed by a drive
-     * log that read `last run ended in destroy 46326s ago` against a screenshot
-     * putting the replacement process at the same second. The vendor sleep
-     * broadcast this app spent three builds waiting for has still never arrived.
+     * <p>CALLED FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY GIVES.
+     * The vendor ACC-off broadcast this app spent three builds waiting for has
+     * never arrived in any log; the ordinary Android teardown has. The
+     * 2026-09-10 log read `last run ended in destroy 46326s ago`, landing at
+     * 18:29:10, against a screenshot putting the replacement process at 18:29:12.
+     * The unit tears the app down and then takes the package.
+     *
+     * <p>DESTROY AND NOT PAUSE OR STOP. Those two are what BACKGROUNDING looks
+     * like — the driver in maps, the screen on a timer — and the radio is meant
+     * to play through both. This is the app going away. The owner asked for
+     * exactly that boundary and named the precedent: *"The stock app will kill
+     * the radio when closed by Android, whether or not Carnyx is running."*
+     * Closed BY ANDROID counts, which is why nothing here tries to tell a
+     * user-initiated close from a system one.
+     *
+     * <p>See {@link #KEY_RADIO_PLAYING} for what the recorded half is for.
      *
      * <p>{@code commit()} and not {@code apply()}, for {@code CarnyxNotes}'
      * reason: the MCU is cutting power and an {@code apply()} whose background
@@ -425,10 +436,45 @@ public final class CarnyxWake {
      *
      * @return the line for the diagnostics log. Never null.
      */
-    public static synchronized String noteRadioPlaying() {
+    public static synchronized String onAppDestroyed() {
         if (ctx == null) {
-            return "radio state: no context";
+            return "shutdown: no context";
         }
+
+        // ── HAND THE RADIO BACK FIRST, THEN RECORD WHAT IS LEFT ──────────────
+        //
+        // THE ORDER IS THE FEATURE. Releasing means FM is not playing into the
+        // sleep, so the vendor never resumes its radio app and there is nothing
+        // to close on the next start — #133's outcome B, reached from the wake
+        // end instead of the sleep end that has no signal. Reading the MCU
+        // AFTERWARDS then records the truth the next wake needs: we turned it
+        // off, so nothing should come forward either.
+        //
+        // Leave the switch off and the opposite composes just as cleanly: FM
+        // stays the source, the flag lands true, the vendor launches its app and
+        // the come-forward switch can put Carnyx over it. One switch, two
+        // outcomes, no third behaviour hiding between them.
+        String released = "";
+        boolean on = true;
+        try {
+            on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the release switch: " + t);
+        }
+        if (on) {
+            try {
+                // Its own ownership test comes first — it sends nothing when FM
+                // is not the MCU's source, so a Bluetooth session playing while
+                // Carnyx is closed is not interrupted.
+                released = " — " + NwdBridge.releaseSource();
+            } catch (Throwable t) {
+                released = " — release failed: " + t;
+            }
+        } else {
+            released = " — release is off";
+        }
+
         int src;
         try {
             src = NwdBridge.mcuSource();
@@ -437,12 +483,13 @@ public final class CarnyxWake {
             // wrong answer in this direction costs a face that did not appear,
             // and in the other it costs the defect being fixed.
             setRadioPlaying(false);
-            return "radio state: could not read the MCU source, recorded as off (" + t + ")";
+            return "shutdown: could not read the MCU source, recorded as off ("
+                    + t + ")" + released;
         }
         boolean playing = src == 4;
         setRadioPlaying(playing);
-        return "radio state: " + (playing ? "FM was playing" : "not FM")
-                + " at shutdown (mcu_current_source=" + src + ")";
+        return "shutdown: " + (playing ? "FM still the source" : "FM not the source")
+                + " (mcu_current_source=" + src + ")" + released;
     }
 
     /** The write half of {@link #noteRadioPlaying}, separated so a failure to

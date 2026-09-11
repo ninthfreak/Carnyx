@@ -1918,11 +1918,31 @@ when the app is closed, whether this is a force close or not. The stock app will
 kill the radio when closed by Android, whether or not Carnyx is running."* That
 is outcome B by another road: stop the audio at shutdown and FM is not playing
 into the sleep, so the vendor never resumes its radio app and there is nothing to
-close on the next start. `NwdBridge.releaseSource` already exists, already has the
-ownership test that keeps it from stealing a Bluetooth session, and is wired
-ONLY to the broadcast that never comes. Moving it onto the same `Destroy` is the
-whole of it. NOT BUILT YET — the gate above went in first because it was ordered
-and because it removes a live defect on its own.
+close on the next start. `NwdBridge.releaseSource` already existed, already had
+the ownership test that keeps it from stealing a Bluetooth session, and was wired
+ONLY to the broadcast that never comes. Moving it onto the same `Destroy` was the
+whole of it, and it is done.
+
+**THE ORDER OF THE TWO HALVES IS THE FEATURE.** `CarnyxWake.onAppDestroyed`
+releases FIRST and reads the MCU afterwards, so the recorded `radio_playing` is
+the truth the next wake needs rather than the truth a second earlier. Switch on:
+FM goes back, the flag lands false, the vendor resumes nothing and Carnyx comes
+forward for nothing — outcome **B**, whole. Switch off: FM stays the source, the
+flag lands true, the vendor launches its app and the come-forward switch can put
+Carnyx over it — outcome **C**. One switch, two of the ranked outcomes, and no
+third behaviour hiding between them.
+
+**THE ROW WAS RENAMED BECAUSE THE TRIGGER CHANGED.** "Release FM on sleep" was
+wired to the ACC-off broadcast for three builds and could never do what it named.
+It reads "Stop the radio when Carnyx closes" now, and its sub-line loses the old
+hazard sentence along with the old trigger: a screen blanking on a timer used to
+count as sleeping, so the radio could stop with the driver still listening. Pause
+and Stop are backgrounding and neither reaches this; only the app closing does.
+
+**AND IT DELIBERATELY DOES NOT TELL A DRIVER'S CLOSE FROM A SYSTEM TEARDOWN.**
+The owner named the precedent and it settles the case that looked like it needed
+handling: *"The stock app will kill the radio when closed by Android, whether or
+not Carnyx is running."* Closed BY ANDROID counts.
 
 **ONE LIMIT THAT IS NOT ENGINEERING-SOLVABLE.** A force-stop from Android's
 settings screen delivers no callback of any kind. Nothing runs, so nothing

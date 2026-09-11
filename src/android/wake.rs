@@ -199,7 +199,7 @@ pub fn set_come_forward(on: bool) {
     });
 }
 
-/// Record whether FM was the MCU's source, for the next wake to read.
+/// Hand the FM source back and record what the MCU is left on.
 ///
 /// ── CALLED FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY GIVES ────
 ///
@@ -210,14 +210,16 @@ pub fn set_come_forward(on: bool) {
 /// running-apps screen put the replacement process at 18:29:12. The teardown is
 /// delivered, then the package is taken.
 ///
-/// So the fact the next launch needs is written from there, off the MCU's own
-/// current-source number rather than off anything this app believes about itself.
-/// See `CarnyxWake.noteRadioPlaying`.
+/// BOTH HALVES RUN ON THE THREAD THAT GOT THE CALLBACK, which is the same reason
+/// `NwdBridge.releaseSource` was split out for the sleep receiver: the MCU may be
+/// cutting power, this app holds no wake lock, and nothing guarantees another
+/// thread is scheduled again. One JNI call, no hops. See
+/// `CarnyxWake.onAppDestroyed` for why the release comes before the reading.
 ///
 /// Returns the line for the diagnostics log, or `""` where the class never
 /// loaded — which is every host build.
-pub fn note_radio_playing() -> String {
-    take(jni_str!("noteRadioPlaying"))
+pub fn on_app_destroyed() -> String {
+    take(jni_str!("onAppDestroyed"))
 }
 
 /// One `()Ljava/lang/String;` static, or `""` where the class never loaded.
