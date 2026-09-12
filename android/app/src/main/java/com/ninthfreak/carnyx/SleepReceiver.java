@@ -82,7 +82,10 @@ public final class SleepReceiver extends BroadcastReceiver {
 
     /** Shared with {@link CarnyxWake} by name. Keep the two in step. */
     private static final String PREFS = "carnyx_wake";
-    private static final String KEY_LAST_SLEEP = "last_sleep";
+    // KEY_LAST_SLEEP IS GONE FROM HERE. See the same deletion in WakeReceiver:
+    // notes are written through `CarnyxNotes.KEY_LAST_SLEEP` now, and an unused
+    // private copy of a string that matters only for being identical everywhere
+    // is a liability rather than documentation.
     private static final String KEY_RELEASE_ON_SLEEP = "release_on_sleep";
 
     @Override

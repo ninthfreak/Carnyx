@@ -73,6 +73,25 @@ public final class CarnyxListener extends NotificationListenerService {
     /** The driver's switch. False, and this service only writes its note. */
     private static final String KEY_COME_FORWARD = "come_forward";
 
+    /**
+     * Whether FM was the MCU's source when this app last shut down.
+     *
+     * <p>THE SECOND GATE, AND THE ONE THE FIRST BUILD LACKED. See
+     * {@code CarnyxWake.KEY_RADIO_PLAYING} for what writes it and why it is
+     * measured off the MCU rather than believed. The switch above says whether
+     * the driver WANTS the face back; this says whether there is anything to come
+     * back for. #133's outcome A keeps the unit's own condition — *"If the radio
+     * wasn't playing when the unit went to sleep, the stock radio app doesn't get
+     * launched"* — and a build that ignored it put the face on screen after
+     * ignition cycles in which nothing had been playing.
+     *
+     * <p>DEFAULT FALSE. A key that is absent means this app has never recorded a
+     * clean shutdown, and silence is the right answer to a question nobody can
+     * answer: a face that fails to appear is a disappointment, and a face that
+     * appears over a driver's map is the defect.
+     */
+    private static final String KEY_RADIO_PLAYING = "radio_playing";
+
     @Override
     public void onListenerConnected() {
         // WRITTEN FIRST, before the flag is read and before anything can throw.
@@ -81,14 +100,26 @@ public final class CarnyxListener extends NotificationListenerService {
         note("bound by the platform");
 
         boolean forward;
+        boolean playing;
         try {
-            forward = getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_COME_FORWARD, false);
+            SharedPreferences p =
+                    getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE);
+            forward = p.getBoolean(KEY_COME_FORWARD, false);
+            playing = p.getBoolean(KEY_RADIO_PLAYING, false);
         } catch (Throwable t) {
-            note("bound, but the come-forward flag could not be read: " + t);
+            note("bound, but the come-forward flags could not be read: " + t);
             return;
         }
         if (!forward) {
+            return;
+        }
+        // THE CONDITION THE UNIT ITSELF APPLIES, kept rather than discarded. The
+        // vendor resumes its radio app only when FM was playing into the sleep;
+        // #133's outcome A asks for Carnyx in its place, WITH that condition
+        // intact. Noted rather than silent, because "did nothing, and here is
+        // why" is the line that separates a gate from a failure.
+        if (!playing) {
+            note("bound, come-forward on, but the radio was not playing at shutdown");
             return;
         }
 

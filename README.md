@@ -793,6 +793,16 @@ session: launch #12, app #1 in this process, last run ended in pause 6s ago, RDS
   APK to be built by something that can write its own manifest: Gradle, or a
   forked cargo-apk.
 
+**`app #1` IS NOT A DISCRIMINATOR ON ITS OWN, AND READING IT AS ONE COST A DAY.**
+That counter counts APPS built in this process, and only an Activity builds one.
+A process the PLATFORM started — for the notification listener, or for a manifest
+receiver — has never had an Activity, so the first launch after it reports
+`app #1` however long that process had already been alive. The two cases it
+cannot tell apart are "the process was killed and you started it" and "something
+else started the process and you then opened the app", which is exactly the
+question #133 spent a week on. What settles it is the `process:` line beside this
+one, which reports how old the process was when the window opened.
+
 Until one of those happens the restart is survived rather than prevented.
 `src/session.rs` writes the dial and the decoded RDS on the way out — on pause,
 stop, destroy and the low-memory warning, through the lifecycle listener in
@@ -807,11 +817,18 @@ stale.
 `xbuild` (`cargo install xbuild`) is the alternative that uses `aapt2`. It has
 not been tried here.
 
-**Untested path.** No APK has ever been built: this repository has been developed
-in a container with no SDK and no NDK. The `[package.metadata.android]` block is
-schema-checked against cargo-apk and accepted, and the paths and failure modes
-above are read from its source, but nothing past manifest parsing has been run.
-Expect to iterate on the first attempt.
+**Nothing in this section has been run in this container**, which has no SDK and
+no NDK: the `[package.metadata.android]` block is schema-checked against
+cargo-apk and accepted, and the paths and failure modes above are read from its
+source, but no APK is built here. It IS built and installed on the development
+machine — see *It is confirmed on the development unit* above, and the drive logs
+in `docs/logs/`. So expect to iterate on a change to this section, and do not
+read it as a feature nobody has ever exercised.
+
+This paragraph said "No APK has ever been built" until 2026-09-11, contradicting
+its own file a few hundred lines up. It is kept, corrected, rather than deleted,
+because the distinction it draws is real and easy to lose: the container cannot
+package, the machine can.
 
 ## Licence
 

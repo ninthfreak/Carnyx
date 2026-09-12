@@ -312,15 +312,6 @@ public final class CarnyxAlert {
     }
 
     /**
-     * Send the driver to Android's "Display over other apps" screen.
-     *
-     * <p>See {@link CarnyxOverlay} for what the permission buys and why no
-     * dialog can ask for it. Routed through this class because it is the pop-up's
-     * single entry point from Rust — the JNI seam knows one class, not three.
-     *
-     * @return one line for the diagnostics log, never null.
-     */
-    /**
      * Can the overlay be drawn right now? 1 yes, 0 no, -1 cannot tell.
      *
      * <p>A QUERY AND NOT THE REQUEST, because the launch decision has to be able
@@ -340,6 +331,15 @@ public final class CarnyxAlert {
         return CarnyxOverlay.permitted(ctx) ? 1 : 0;
     }
 
+    /**
+     * Send the driver to Android's "Display over other apps" screen.
+     *
+     * <p>See {@link CarnyxOverlay} for what the permission buys and why no
+     * dialog can ask for it. Routed through this class because it is the pop-up's
+     * single entry point from Rust — the JNI seam knows one class, not three.
+     *
+     * @return one line for the diagnostics log, never null.
+     */
     public static synchronized String requestOverlayPermission() {
         return CarnyxOverlay.requestPermission(ctx, activity == null ? null : activity.get());
     }

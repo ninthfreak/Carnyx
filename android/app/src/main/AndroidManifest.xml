@@ -11,9 +11,14 @@
   an APK built by cargo-apk has no service and no `CarnyxService` class, and the
   app detects that at run time rather than assuming either build.
 
-  The wake and sleep receivers are the other components only this packager can
-  declare — three in all, `CarnyxService` plus `WakeReceiver` and
-  `SleepReceiver`, and all three are declared at the bottom.
+  The receivers and the notification listener are the other components only this
+  packager can declare — FOUR in all, `CarnyxService` plus `WakeReceiver`,
+  `SleepReceiver` and `CarnyxListener`, and all four are declared at the bottom.
+
+  This said three until 2026-09-11, while `CarnyxListener` had been declared
+  below it since f15a0f7. A header that counts is a header that goes stale, and
+  the count is worth keeping only because being the packager that CAN declare
+  these components is the entire reason this file exists.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 

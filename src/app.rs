@@ -1572,13 +1572,15 @@ impl App {
         {
             let s = app.state.borrow();
             s.tuner.set_release_on_sleep(s.settings.release_on_sleep);
-            // AND THE COME-FORWARD SWITCH, for exactly the same reason: the
-            // notification listener may be bound into a process with no Rust,
-            // so the shared-preferences copy is the only thing it can read. A
-            // launch that did not push it would leave Java on its own default
-            // until the driver next touched the row.
-            crate::android::set_come_forward(s.settings.come_forward);
         }
+        // THE COME-FORWARD SWITCH IS NOT PUSHED HERE, and it used to be. The
+        // tuner's class is loaded by the time this constructor runs, so the line
+        // above reaches Java; `CarnyxWake`'s is not. `android::wake::init` is the
+        // only thing that fills that class reference, and `android_main` calls it
+        // a hundred lines AFTER this constructor — so `set_come_forward` took its
+        // `let Some(class) = CLASS_REF.get() else { return }` branch on every
+        // cold launch and the push was dead. See `App::mirror_come_forward`,
+        // which android_main calls once the class exists.
         // ── OSMAND, IF THE DRIVER HAS ASKED FOR IT ───────────────────────
         //
         // The package is read either way, because the settings row says which
@@ -5565,6 +5567,28 @@ impl App {
         // Same shape as `run_pending_probe`: take a clone of what the call needs
         // inside a scoped borrow, drop it, make the call, then re-borrow to
         // write the result line.
+        // ── AND THE THREE PERMISSION ERRANDS, FOR THE SAME REASON ────────────
+        //
+        // Each crosses into JNI, and all three used to do it with the borrow
+        // below alive — the same defect the paragraph above describes for the
+        // file export, left behind when that one was fixed. They take no state,
+        // so they run BEFORE the borrow exists and hand their line in.
+        //
+        // ONE CALL AT MOST: the match arms are mutually exclusive and everything
+        // else yields `None`, so no row pays for a JNI call it did not ask for.
+        let permission_line = match action {
+            settings::Action::AskNotifyPermission => {
+                Some(crate::android::request_notification_permission())
+            }
+            settings::Action::AskOverlayPermission => {
+                Some(crate::android::request_overlay_permission())
+            }
+            settings::Action::AskListenerPermission => {
+                Some(crate::android::request_listener_access())
+            }
+            _ => None,
+        };
+
         let saving = {
             let mut s = self.state.borrow_mut();
             match action {
@@ -5590,35 +5614,32 @@ impl App {
                 // five removed diagnostics rows had, and this one CAN do nothing
                 // on the unit it was written on, where the permission does not
                 // exist.
-                settings::Action::AskNotifyPermission => {
-                    let line = crate::android::request_notification_permission();
-                    s.settings.log.push(&stamp(), &line);
-                    s.settings.set_note(action, line.clone());
-                    s.diag_status = line;
-                    None
-                }
                 // ── ALLOW DRAWING OVER OTHER APPS ─────────────────────────────
                 //
-                // Inline for the same reason as the row above, and it opens a
-                // Settings screen rather than raising a dialog: there IS no
-                // dialog for a special permission. The app comes back to the
-                // foreground when the driver returns, and nothing here waits for
-                // that — the next station change either draws an overlay or says
-                // "not permitted", which is the answer either way.
-                settings::Action::AskOverlayPermission => {
-                    let line = crate::android::request_overlay_permission();
-                    s.settings.log.push(&stamp(), &line);
-                    s.settings.set_note(action, line.clone());
-                    s.diag_status = line;
-                    None
-                }
-                // THE SAME SHAPE AGAIN, and the third of three. This one opens
-                // the screen that decides whether outcome C is reachable: with
-                // notification access the platform binds `CarnyxListener`, and
-                // `listener:` lines start appearing in the log; without it
+                // The second of the three opens a Settings screen rather than
+                // raising a dialog: there IS no dialog for a special permission.
+                // The app comes back to the foreground when the driver returns,
+                // and nothing here waits for that — the next station change
+                // either draws an overlay or says "not permitted", which is the
+                // answer either way.
+                //
+                // ── AND THE THIRD DECIDES WHETHER OUTCOME C IS REACHABLE ──────
+                //
+                // With notification access the platform binds `CarnyxListener`
+                // and `listener:` lines start appearing in the log; without it
                 // nothing binds and the come-forward switch governs nothing.
-                settings::Action::AskListenerPermission => {
-                    let line = crate::android::request_listener_access();
+                //
+                // ONE ARM FOR ALL THREE, because the bodies were identical to the
+                // character and the call that distinguished them now happens
+                // above this borrow. Three copies of five lines is three places
+                // for a fix to miss.
+                settings::Action::AskNotifyPermission
+                | settings::Action::AskOverlayPermission
+                | settings::Action::AskListenerPermission => {
+                    // Set by the match above for exactly these three actions and
+                    // for no other, so the fallback is unreachable rather than a
+                    // default worth choosing.
+                    let line = permission_line.unwrap_or_default();
                     s.settings.log.push(&stamp(), &line);
                     s.settings.set_note(action, line.clone());
                     s.diag_status = line;
@@ -5723,6 +5744,33 @@ impl App {
     /// the wake receiver did, what the last sleep managed. In a plain ring those
     /// are the first lines evicted, and they are the ones a drive log is read
     /// for; see `DiagLog::push_head` for the drive that proved it.
+    /// Push the come-forward switch into the shared preferences the notification
+    /// listener reads.
+    ///
+    /// ── CALLED FROM `android_main`, AFTER `wake::init`, AND THAT IS THE POINT ──
+    ///
+    /// This used to sit in `App::with_tuner` beside the release-on-sleep push,
+    /// which looks like the same errand and is not. The tuner's class is loaded
+    /// before the constructor runs, so that push lands; `CarnyxWake`'s is loaded
+    /// by `android::wake::init`, which `android_main` calls AFTER building the
+    /// App. So the come-forward push hit `CLASS_REF.get()`'s `else { return }`
+    /// on every cold launch and did nothing at all.
+    ///
+    /// WHAT THAT COST, and why it is worth a method rather than a moved line:
+    /// the listener is bound into a process with no Rust and no `prefs.json`
+    /// parsed, so this copy is the ONLY thing it can read. A launch that failed
+    /// to push left Java on whatever the last successful write said — which is
+    /// whatever the driver last toggled, or the Java-side default on a unit
+    /// where they never have. The two agreed by luck, because both default to
+    /// false; a different default on either side would have made the switch lie.
+    ///
+    /// Silently does nothing on a host build and on a unit where the class did
+    /// not load, which is what every other `wake::` call does.
+    pub fn mirror_come_forward(self: &Rc<App>) {
+        let on = self.state.borrow().settings.come_forward;
+        crate::android::set_come_forward(on);
+    }
+
     pub fn log_platform(self: &Rc<App>, line: &str) {
         {
             let mut s = self.state.borrow_mut();

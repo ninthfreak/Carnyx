@@ -1871,6 +1871,179 @@ neither of which existed yet:**
    say which. Stated twice, in `CarnyxNotes` and in `CarnyxWake`, across the
    class-loader divide those two have always been split by.
 
+---
+
+**2026-09-11: THE COME-FORWARD BUILD DELIVERED C, BADLY, AND THE OWNER REJECTED
+IT.** *"Carnyx will launch it's interface on wake from the receiver. It does this
+whether or not the radio was playing when the car was shut off the last time. If
+the radio was playing, it launches over the stock app. Both of these outcomes I
+did not want."* And then, flatly: *"I NEED you to make Carnyx not launch when the
+radio wasn't playing. This is terrible behavior for the head unit."*
+
+**MEASURED AGAINST THE RANKING, WHICH IS WHAT THIS ENTRY SAID TO DO AND WAS NOT
+DONE.** The build launched on every platform bind. That is C — the stock radio
+still launches and Carnyx lands on top — except it also fires on an ignition
+cycle where nothing was playing, which is outside A, B and C alike. The rule it
+broke is four paragraphs above it in this entry: *"THE RANKING IS THE SPEC.
+Anything built here is measured against which of the three it delivers, not
+against whether it works in the abstract."* The mechanism was proven and then
+wired to the first behaviour that came to hand.
+
+**A'S CONDITION IS PART OF A.** *"how it works currently, except that it would
+launch Carnyx instead of the stock app"* — and "how it works currently" is
+stated in the same breath: *"If the radio wasn't playing when the unit went to
+sleep, the stock radio app doesn't get launched."* The condition is not a detail
+of the vendor's implementation to be dropped; it is half of what was asked for.
+
+**SO THE LAUNCH IS GATED, AND THE FACT IT IS GATED ON IS MEASURED.** `CarnyxWake`
+records `radio_playing` at shutdown from `NwdBridge.mcuSource()` — the MCU's own
+current-source number, 4 being FM — rather than from anything this app believes
+about itself, and `CarnyxListener` refuses to come forward unless it reads true.
+Absent is false, deliberately: a missing key means no clean shutdown was ever
+recorded, and the safe answer to an unanswerable question is silence. A face that
+fails to appear is a disappointment; a face that appears over a driver's map is
+the defect being fixed.
+
+**AND IT IS WRITTEN FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY
+GIVES.** Three builds waited on a vendor ACC-off broadcast and no log has ever
+carried one. Meanwhile the ordinary Android teardown arrives: the 2026-09-10 log
+read `last run ended in destroy 46326s ago` — 18:29:10 — against a screenshot
+putting the replacement process at 18:29:12. The unit delivers a teardown and
+then takes the package. Destroy alone, never Pause or Stop: those two are what
+BACKGROUNDING looks like, and the radio is meant to play through them.
+
+**WHAT THE OWNER ASKED FOR NEXT, AND WHY IT IS THE SAME CHANGE.** *"One thing I
+want Carnyx to do, aside from launch behavior, is to kill the radio audio feed
+when the app is closed, whether this is a force close or not. The stock app will
+kill the radio when closed by Android, whether or not Carnyx is running."* That
+is outcome B by another road: stop the audio at shutdown and FM is not playing
+into the sleep, so the vendor never resumes its radio app and there is nothing to
+close on the next start. `NwdBridge.releaseSource` already existed, already had
+the ownership test that keeps it from stealing a Bluetooth session, and was wired
+ONLY to the broadcast that never comes. Moving it onto the same `Destroy` was the
+whole of it, and it is done.
+
+**THE ORDER OF THE TWO HALVES IS THE FEATURE.** `CarnyxWake.onAppDestroyed`
+releases FIRST and reads the MCU afterwards, so the recorded `radio_playing` is
+the truth the next wake needs rather than the truth a second earlier. Switch on:
+FM goes back, the flag lands false, the vendor resumes nothing and Carnyx comes
+forward for nothing — outcome **B**, whole. Switch off: FM stays the source, the
+flag lands true, the vendor launches its app and the come-forward switch can put
+Carnyx over it — outcome **C**. One switch, two of the ranked outcomes, and no
+third behaviour hiding between them.
+
+**THE ROW WAS RENAMED BECAUSE THE TRIGGER CHANGED.** "Release FM on sleep" was
+wired to the ACC-off broadcast for three builds and could never do what it named.
+It reads "Stop the radio when Carnyx closes" now, and its sub-line loses the old
+hazard sentence along with the old trigger: a screen blanking on a timer used to
+count as sleeping, so the radio could stop with the driver still listening. Pause
+and Stop are backgrounding and neither reaches this; only the app closing does.
+
+**AND IT DELIBERATELY DOES NOT TELL A DRIVER'S CLOSE FROM A SYSTEM TEARDOWN.**
+The owner named the precedent and it settles the case that looked like it needed
+handling: *"The stock app will kill the radio when closed by Android, whether or
+not Carnyx is running."* Closed BY ANDROID counts.
+
+**ONE LIMIT THAT IS NOT ENGINEERING-SOLVABLE.** A force-stop from Android's
+settings screen delivers no callback of any kind. Nothing runs, so nothing
+releases. Ordinary closing and ACC-off both give `Destroy`; that case does not.
+
+---
+
+**2026-09-11, LATER: THE REVIEW PASS, AND WHAT IT COST TO RUN.** Eight dimensions
+swept in parallel, each finding put to three adversarial verifiers. The first
+finding killed the feature shipped an hour earlier and is written up in
+`8e546c5`. This entry is the rest, and the honest state of the review itself.
+
+**THE REVIEW RAN AT HALF STRENGTH AND THEN COULD NOT BE FINISHED.** 112 of 212
+agents died when the account hit its usage limit. The script scored a finding
+whose verifiers all died as REFUTED, which is wrong — 37 findings were never
+checked at all, and "refuted" was the wrong word for every one of them. The
+resumed run then failed for a different reason: every subagent lost file access
+to a harness fault — *"The permission handler returned updatedInput for X that
+failed schema validation"* — 211 blocked tool calls across the 20 newest agents.
+One verifier said so in its own verdict and ruled `refuted` anyway. The run was
+stopped rather than allowed to produce blind verdicts, and the 37 were verified
+BY HAND instead.
+
+**THE DOC-COMMENT DEFECT REACHED TEN, AND TWO OF THE LAST THREE WERE MINE.**
+Inserting a function directly above an existing one strands the older function's
+doc comment: the reader gets it as the new function's opening paragraph, and the
+old item is left undocumented. Nothing catches it. `rustc` and `javac` are both
+content, every test passes, and the only symptom is a comment describing the
+wrong thing.
+
+- `clockHourMinute` — stolen by `processAgeSeconds`, in `2b87c0f`, four days
+  after five instances of this exact bug were found and fixed by hand.
+- `requestOverlayPermission` (`CarnyxAlert`) and `startSleepWatch`
+  (`NwdBridge`) — both pre-existing, both found only because the check below
+  now exists.
+
+**SO THE CHECK IS A FILE NOW, NOT A PASTE.** `tools/check-docs.py`. It catches
+two shapes: ADJACENT JAVADOC BLOCKS, which is exact — two `/** */` in a row bind
+only the last, so every hit is a defect and the script exits non-zero — and
+MERGED RUST DOC BLOCKS, which is a heuristic reported for a human to judge and
+never fails a build, because a check that cries wolf gets switched off. Two
+paragraphs of ordinary prose that trip the heuristic are named in `KNOWN_PROSE`
+with the reading that cleared them, rather than being silently skipped.
+
+**AND ONE OF THE FIXES WAS WRONG BEFORE IT WAS RIGHT.** `startSleepWatch`'s
+documentation was in TWO blocks — a description stranded above `SLEEP_ACTIONS`
+and an `@return` tag left on the method. Moving the description down put it
+BETWEEN the tag block and the method, stranding the tag instead. The check caught
+that on the next run, which is the argument for the check in one line. They are
+one block now, description then tag.
+
+**THE COME-FORWARD SWITCH NEVER REACHED JAVA ON A COLD LAUNCH.**
+`App::with_tuner` pushed it beside the release-on-sleep push, which looks like
+the same errand and is not: the tuner's class is loaded before that constructor
+runs, and `CarnyxWake`'s is loaded by `android::wake::init`, which `android_main`
+calls A HUNDRED LINES LATER. So `set_come_forward` took its
+`let Some(class) = CLASS_REF.get() else { return }` branch every single time.
+The two sides agreed by luck, both defaulting to false; a different default on
+either would have made the switch lie. It is `App::mirror_come_forward` now,
+called from `android_main` once the class exists.
+
+**`android::country_code()` IS DEAD ON THE SAME PATH AND IT DOES NOT MATTER.**
+`service::init` also runs after the constructor, so the start-up read returns
+`""` and `Units::resolve` takes `FALLBACK` — which is `Units::Imperial`, the
+correct answer for the only country `crate::stations` can answer questions
+about. Recorded because a dead call that happens to be right is still a dead
+call, and the next person to move that line should know why it looked fine.
+
+**THE FIVE THAT WERE MEASURED AND LEFT, NOW CLOSED.** Listed here as open for
+one commit, then fixed on the owner's instruction.
+
+1. **`tools/check-jni.sh` skipped `src/android/mod.rs`**, where every dispatcher
+   lives. It still does — `mod.rs` is the module root and cannot be wrapped as
+   `pub mod mod { }` the way the stub crate wraps every other file — but the gap
+   it left is closed from the other side. The script now checks the two things
+   that gap made silent: that every `module::name` the dispatchers call exists in
+   that module, and that every Android arm has a host arm beside it. PROVED BY
+   BREAKING IT: a planted `wake::on_app_destroyedd` produced *"is called from
+   mod.rs and declared nowhere in wake.rs"* and a non-zero exit. 20 pairs
+   currently resolve.
+2. **`DiagLog::HEAD_CAP` was 24 and the note rings alone are 24.** Three keys at
+   `CarnyxNotes.KEEP` = 8. The doc said "there is no path today that pushes more
+   than about eight", which was true before the rings and exactly wrong after —
+   the notes could fill the head to the line and push every other launch line
+   into the scrolling ring, which is the part that does not survive. 48 now, with
+   the arithmetic written out: 24 for the rings, about 12 fixed launch lines, the
+   rest headroom. `KEEP` lives in Java and cannot be imported, so the two numbers
+   do not follow each other and this one says so.
+3. **`run_diag_action` held a `RefMut<State>` across three JNI round trips.** The
+   file states one rule about calls like that, four paragraphs above the defect,
+   and had already fixed the file-export arm for it. The three permission errands
+   run BEFORE the borrow now and hand their line in. Their three arms were
+   identical to the character and are one arm.
+4. **The Gradle manifest's header counted three components.** Four are declared;
+   `CarnyxListener` had been the fourth since f15a0f7.
+5. **Two stale `README.md` passages.** The `app #1 in this process` bullet now
+   says what it cannot discriminate and points at the `process:` line that can.
+   The closing paragraph said "No APK has ever been built", contradicting its own
+   file a few hundred lines up; it is corrected rather than deleted, because the
+   distinction it draws is real — the container cannot package, the machine can.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

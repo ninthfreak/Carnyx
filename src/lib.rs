@@ -225,6 +225,30 @@ fn android_main(android_app: slint::android::AndroidApp) {
         };
         app::persist_session_current(parting);
         android::ingest_note(format!("lifecycle: {}", parting.name()));
+        // ── HAND THE RADIO BACK, AND RECORD WHAT THE NEXT WAKE NEEDS ──────────
+        //
+        // DESTROY AND NOTHING ELSE. Pause and Stop are what BACKGROUNDING looks
+        // like — the driver in maps, the screen timing out — and the radio is
+        // meant to keep playing through both. Destroy is the app going away, and
+        // on this unit it is also what an ACC-off delivers: the 2026-09-10 log
+        // read `last run ended in destroy 46326s ago`, which lands at the same
+        // second Android's running-apps screen put the replacement process.
+        //
+        // WHICH IS WHY THIS IS HERE AND NOT IN THE SLEEP RECEIVER. The receiver
+        // waits on a vendor broadcast that no log has ever carried; this waits on
+        // a callback that has now been measured twice.
+        //
+        // THE OWNER NAMED THE PRECEDENT, and it settles the one case that looked
+        // like it needed special handling: *"The stock app will kill the radio
+        // when closed by Android, whether or not Carnyx is running."* Closed BY
+        // ANDROID counts, so nothing here tries to tell a driver's own close from
+        // a system teardown.
+        if matches!(parting, session::Parting::Destroy) {
+            let line = android::on_app_destroyed();
+            if !line.is_empty() {
+                android::ingest_note(line);
+            }
+        }
     })
     .unwrap();
 
@@ -428,6 +452,13 @@ fn android_main(android_app: slint::android::AndroidApp) {
     //
     // SAFETY: same pointers, same lifetime argument as the three above.
     let _ = unsafe { android::wake::init(vm, activity) };
+
+    // AND NOW THE COME-FORWARD SWITCH CAN BE PUSHED, which it could not be
+    // before this line. `App::with_tuner` used to do it beside the
+    // release-on-sleep push; that constructor runs a hundred lines up, before
+    // the class above exists, so the call took its no-class branch every time.
+    // See `App::mirror_come_forward`.
+    _driver.mirror_come_forward();
 
     // AND WHAT THE RECEIVER DID, if it ran at all. THIS IS THE ONLY EVIDENCE
     // THIS FEATURE CAN PRODUCE: the receiver runs in a process with no face, on

@@ -138,8 +138,15 @@ final class CarnyxNotes {
             b.append("--:--:--");
         }
         try {
-            b.append(" slept ").append(
-                    forHumans(SystemClock.elapsedRealtime() - SystemClock.uptimeMillis()));
+            // COMPUTED BEFORE ANYTHING IS APPENDED, which is not style. Appending
+            // " slept " first and then computing left `" slept  slept ?"` in the
+            // ring whenever the clock read threw — the buffer already carried the
+            // label the catch was about to add again. The other copy of this
+            // method, across the class-loader divide in `CarnyxWake`, computed
+            // first and so read correctly; two rings that disagree on the same
+            // input are exactly what stating the rule twice is supposed to avoid.
+            String slept = forHumans(SystemClock.elapsedRealtime() - SystemClock.uptimeMillis());
+            b.append(" slept ").append(slept);
         } catch (Throwable t) {
             b.append(" slept ?");
         }

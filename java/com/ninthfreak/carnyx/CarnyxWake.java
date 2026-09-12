@@ -89,6 +89,35 @@ public final class CarnyxWake {
     private static final String KEY_COME_FORWARD = "come_forward";
     private static final String KEY_RELEASE_ON_SLEEP = "release_on_sleep";
 
+    /**
+     * Whether FM was the MCU's audio source when this app last shut down.
+     *
+     * <h2>THE CONDITION THE OWNER RANKED FIRST, AND THE ONE THE FIRST BUILD
+     * IGNORED</h2>
+     *
+     * <p>#133's outcome A is "how it works currently, except that it would launch
+     * Carnyx instead of the stock app" — and "how it works currently" INCLUDES
+     * the condition: *"If the radio wasn't playing when the unit went to sleep,
+     * the stock radio app doesn't get launched."* The first come-forward build
+     * came forward on every platform bind, which is not A, not B and not C; it
+     * put the face on screen after an ignition cycle in which nothing had been
+     * playing. The owner: *"This is terrible behavior for the head unit."*
+     *
+     * <p>MEASURED, NOT GUESSED. Written at shutdown from {@code mcuSource()} —
+     * the MCU's own current-source number, 4 being FM — so it records what the
+     * hardware was actually doing rather than what this app believed. Written
+     * AFTER any release, so it also answers the question that matters next:
+     * releasing means the radio is off and nothing should come forward, and
+     * leaving it alone means the vendor will resume FM and the stock app with it.
+     *
+     * <p>ABSENT MEANS FALSE, and that is a deliberate default rather than an
+     * accident of the API. A missing key is a unit where this app has never shut
+     * down cleanly, and the safe answer there is silence: a face that fails to
+     * appear is a disappointment, and a face that appears over a driver's map is
+     * the defect being fixed.
+     */
+    private static final String KEY_RADIO_PLAYING = "radio_playing";
+
     private static Context ctx;
 
     private CarnyxWake() {
@@ -378,6 +407,134 @@ public final class CarnyxWake {
                     .edit().putBoolean(KEY_COME_FORWARD, on).commit();
         } catch (Throwable t) {
             Log.w(TAG, "could not record the come-forward switch: " + t);
+        }
+    }
+
+    /**
+     * Hand the FM source back, then record what the MCU is left on.
+     *
+     * <p>CALLED FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY GIVES.
+     * The vendor ACC-off broadcast this app spent three builds waiting for has
+     * never arrived in any log; the ordinary Android teardown has. The
+     * 2026-09-10 log read `last run ended in destroy 46326s ago`, landing at
+     * 18:29:10, against a screenshot putting the replacement process at 18:29:12.
+     * The unit tears the app down and then takes the package.
+     *
+     * <p>DESTROY AND NOT PAUSE OR STOP. Those two are what BACKGROUNDING looks
+     * like — the driver in maps, the screen on a timer — and the radio is meant
+     * to play through both. This is the app going away. The owner asked for
+     * exactly that boundary and named the precedent: *"The stock app will kill
+     * the radio when closed by Android, whether or not Carnyx is running."*
+     * Closed BY ANDROID counts, which is why nothing here tries to tell a
+     * user-initiated close from a system one.
+     *
+     * <p>See {@link #KEY_RADIO_PLAYING} for what the recorded half is for.
+     *
+     * <p>{@code commit()} and not {@code apply()}, for {@code CarnyxNotes}'
+     * reason: the MCU is cutting power and an {@code apply()} whose background
+     * thread never got scheduled would lose the one fact the next launch needs.
+     *
+     * @return the line for the diagnostics log. Never null.
+     */
+    public static synchronized String onAppDestroyed() {
+        if (ctx == null) {
+            return "shutdown: no context";
+        }
+
+        // ── READ THE MCU FIRST, RELEASE SECOND, AND NEVER READ IT AGAIN ──────
+        //
+        // THE FIRST CUT OF THIS METHOD READ IT AFTERWARDS and was wrong on the
+        // one path that matters. `releaseSource` ends in `ctx.sendBroadcast` —
+        // fire-and-forget. The vendor service in another process has still to be
+        // dispatched, command the MCU, and have the MCU write
+        // `mcu_current_source` back. A re-read microseconds later therefore
+        // still returns 4, so the release-on path recorded `radio_playing=true`:
+        // the face came forward after an ignition cycle in which the radio had
+        // just been deliberately handed back. Exactly the behaviour the gate
+        // exists to prevent. This file measures that lag itself, four hundred
+        // lines up — *"the MCU re-powered FM a second later"*.
+        //
+        // So the state is read ONCE, before anything is sent, and what gets
+        // recorded is derived rather than re-measured: FM will be playing into
+        // the sleep if it was playing AND we did not hand it back.
+        int src;
+        try {
+            src = NwdBridge.mcuSource();
+        } catch (Throwable t) {
+            // UNKNOWN IS RECORDED AS NOT PLAYING. See KEY_RADIO_PLAYING: the
+            // wrong answer in this direction costs a face that did not appear,
+            // and in the other it costs the defect being fixed.
+            setRadioPlaying(false);
+            return note("shutdown: could not read the MCU source, recorded as off ("
+                    + t + ")");
+        }
+        boolean wasPlaying = src == 4;
+
+        boolean on = true;
+        try {
+            on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the release switch: " + t);
+        }
+
+        String released;
+        boolean handedBack = false;
+        if (!on) {
+            released = " — release is off";
+        } else if (!wasPlaying) {
+            // `releaseSource` would reach its own ownership test and send
+            // nothing, so this says the same thing without the round trip — and
+            // without a "skipped" line that reads like a failure.
+            released = " — nothing to release";
+        } else {
+            try {
+                released = " — " + NwdBridge.releaseSource();
+                handedBack = true;
+            } catch (Throwable t) {
+                released = " — release failed: " + t;
+            }
+        }
+
+        // THE RACE HERE FAILS SAFE, which is why a non-throwing call is taken as
+        // a handover. If the source moved between the read above and
+        // `releaseSource`'s own ownership test, this records "not playing" for a
+        // radio that is — and the cost of that is a face that does not come
+        // forward. The opposite mistake is the defect being fixed.
+        boolean playing = wasPlaying && !handedBack;
+        setRadioPlaying(playing);
+        return note("shutdown: " + (playing ? "FM left playing" : "FM not playing")
+                + " (mcu_current_source was " + src + ")" + released);
+    }
+
+    /**
+     * Put a shutdown line in the durable ring as well as returning it.
+     *
+     * <p>RETURNING IT IS NOT ENOUGH, and that was the second defect in the first
+     * cut. The caller hands the returned line to `ingest_note`, which queues a
+     * `TunerEvent` and posts a drain onto the SLINT EVENT LOOP — a loop that,
+     * on the teardown this method runs from, will not be scheduled again. The
+     * one report of what the release actually did died with the process it was
+     * describing.
+     *
+     * <p>So it goes where the other durable notes go, under the key the next
+     * launch already prints as `last sleep:`. That reader exists, it already
+     * prints one line per entry, and this IS the sleep note — written from the
+     * callback that arrives instead of the broadcast that never does.
+     */
+    private static String note(String line) {
+        append(KEY_LAST_SLEEP, line);
+        return line;
+    }
+
+    /** The write half of {@link #onAppDestroyed}, separated so a failure to
+     *  read the MCU can still record the safe answer. */
+    private static void setRadioPlaying(boolean playing) {
+        try {
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_RADIO_PLAYING, playing).commit();
+        } catch (Throwable t) {
+            Log.w(TAG, "could not record the radio state: " + t);
         }
     }
 }

@@ -199,6 +199,29 @@ pub fn set_come_forward(on: bool) {
     });
 }
 
+/// Hand the FM source back and record what the MCU is left on.
+///
+/// ── CALLED FROM `Destroy`, WHICH IS THE CALLBACK THIS UNIT ACTUALLY GIVES ────
+///
+/// Three builds waited for a vendor ACC-off broadcast and no log has ever carried
+/// one — `last sleep: nothing recorded`, every time. Meanwhile the ordinary
+/// Android lifecycle `Destroy` DOES arrive: the 2026-09-10 log read `last run
+/// ended in destroy 46326s ago`, putting it at 18:29:10, and Android's own
+/// running-apps screen put the replacement process at 18:29:12. The teardown is
+/// delivered, then the package is taken.
+///
+/// BOTH HALVES RUN ON THE THREAD THAT GOT THE CALLBACK, which is the same reason
+/// `NwdBridge.releaseSource` was split out for the sleep receiver: the MCU may be
+/// cutting power, this app holds no wake lock, and nothing guarantees another
+/// thread is scheduled again. One JNI call, no hops. See
+/// `CarnyxWake.onAppDestroyed` for why the release comes before the reading.
+///
+/// Returns the line for the diagnostics log, or `""` where the class never
+/// loaded — which is every host build.
+pub fn on_app_destroyed() -> String {
+    take(jni_str!("onAppDestroyed"))
+}
+
 /// One `()Ljava/lang/String;` static, or `""` where the class never loaded.
 fn take(method: &JNIStr) -> String {
     let Some(class) = CLASS_REF.get() else {
