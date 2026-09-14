@@ -89,6 +89,11 @@ public final class CarnyxListener extends NotificationListenerService {
      * clean shutdown, and silence is the right answer to a question nobody can
      * answer: a face that fails to appear is a disappointment, and a face that
      * appears over a driver's map is the defect.
+     *
+     * <p>AND IT IS SPENT WHEN IT IS READ. It describes ONE shutdown, while
+     * {@link #onListenerConnected} fires on every rebind the platform decides to
+     * make — so a flag left standing is a face that comes back over whatever the
+     * driver is using, again and again. See the consume in that method.
      */
     private static final String KEY_RADIO_PLAYING = "radio_playing";
 
@@ -120,6 +125,37 @@ public final class CarnyxListener extends NotificationListenerService {
         // why" is the line that separates a gate from a failure.
         if (!playing) {
             note("bound, come-forward on, but the radio was not playing at shutdown");
+            return;
+        }
+
+        // ── SPENT ON READING, BEFORE THE LAUNCH AND NOT AFTER IT ─────────────
+        //
+        // THE OWNER: *"The app likes to keep itself in front of everything.
+        // Everything. Even when I want to use a different app, it keeps
+        // reasserting itself."* This is that defect. `radio_playing` describes
+        // ONE shutdown, and `onListenerConnected` does not fire once — the
+        // platform rebinds a notification listener on package changes, on
+        // settings changes, on its own rebind timer, and every time this process
+        // is killed and started again. A flag that stays true turns each of
+        // those into another `startActivity`, and the driver who is trying to
+        // use maps gets the radio back every time.
+        //
+        // So the fact is CONSUMED, the way every other durable note in this tree
+        // is consumed — `CarnyxWake.take` clears on read for exactly this
+        // reason. One shutdown grants one attempt to come forward.
+        //
+        // BEFORE THE LAUNCH, so that a refusal spends it too. Android 10 can
+        // refuse a background activity start; if that left the flag set, every
+        // subsequent rebind would retry, which is the same loop by another road.
+        // One attempt is what was asked for, not one success.
+        try {
+            getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_RADIO_PLAYING, false).commit();
+        } catch (Throwable t) {
+            // A flag that cannot be cleared is the loop above waiting to happen,
+            // so this does NOT go on to launch. Silence is recoverable by the
+            // driver; a face that will not stay out of the way is not.
+            note("bound, but the come-forward flag could not be spent: " + t);
             return;
         }
 
