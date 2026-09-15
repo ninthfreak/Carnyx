@@ -2044,6 +2044,43 @@ one commit, then fixed on the owner's instruction.
    file a few hundred lines up; it is corrected rather than deleted, because the
    distinction it draws is real — the container cannot package, the machine can.
 
+---
+
+**2026-09-14: THE FACE WOULD NOT STAY OUT OF THE WAY.** *"The app likes to keep
+itself in front of everything. Everything. Even when I want to use a different
+app, it keeps reasserting itself. Doing that is not good."*
+
+**TWO DEFECTS STACKED, AND THE REVIEW HAD ALREADY FOUND BOTH.**
+
+1. `radio_playing` was READ AND NEVER SPENT. It describes ONE shutdown;
+   `onListenerConnected` fires on every rebind the platform decides to make —
+   package changes, settings changes, its own rebind timer, and every restart of
+   this process. A flag left standing turns each of those into another
+   `startActivity`. The review pass raised this as HIGH, refuted by none of three
+   verifiers, and it was NOT among the five fixed on 2026-09-11. The list given
+   to the owner said five confirmed problems remained; it should have said six.
+2. The build on the unit predates `8e546c5`, so its `onAppDestroyed` still reads
+   the MCU after the asynchronous release and records `radio_playing = true`
+   every time. The gate that was supposed to hold the launch back was passing
+   unconditionally, which is what made defect 1 fire on every single rebind
+   rather than occasionally.
+
+**THE FLAG IS CONSUMED ON READ NOW**, the way `CarnyxWake.take` consumes every
+other durable note and for the same reason. One shutdown grants one attempt.
+
+**SPENT BEFORE THE LAUNCH, NOT AFTER IT**, which is the part worth stating:
+Android 10 can refuse a background activity start, and a flag cleared only on
+success would have every later rebind retry — the same loop by another road.
+What was asked for is one attempt, not one success. A flag that cannot be cleared
+does not go on to launch either: silence is recoverable by the driver, and a face
+that will not stay out of the way is not.
+
+**THE OTHER TWO LAUNCH PATHS WERE READ AND RULED OUT** rather than assumed
+innocent. `CarnyxAlert.launchIntent` builds a `PendingIntent` that is the station
+pop-up's tap target and fires only when a driver taps it. `WakeReceiver` is gated
+on the vendor wake broadcasts, which no log has ever carried, and its conditional
+actions are gated again on `wasForeground`.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the
