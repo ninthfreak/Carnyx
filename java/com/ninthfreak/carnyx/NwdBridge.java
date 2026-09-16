@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -817,6 +818,9 @@ public final class NwdBridge {
 
     private static BroadcastReceiver sleepReceiver;
 
+    /** The second route to a sleep. See {@link #startStateObserver}. */
+    private static ContentObserver stateObserver;
+
     /**
      * The driver's "Release FM on sleep" switch, MIRRORED FROM RUST.
      *
@@ -877,6 +881,55 @@ public final class NwdBridge {
     /** Which package {@link #KILL_ACTION} is about. A string, not a byte. */
     private static final String EXTRA_PACKAGE = "extra_package_name";
 
+    /**
+     * The vendor's own ACC state signal, and the one this app should have been
+     * listening for from the start.
+     *
+     * <h2>READ OFF THIS UNIT'S OWN CODE PATH</h2>
+     *
+     * <p>{@code AWRadioManager.registReceiver()} — the Allwinner manager, which
+     * is the one an Allwinner unit instantiates — registers a RUNTIME receiver
+     * for this action, and its handler is, in full:
+     *
+     * <pre>
+     *     int v6 = SettingTableKey.getIntValue(resolver, "mcu_state", 1);
+     *     if (v6 != 3 &amp;&amp; v6 != 2) {
+     *         if (v6 != 0) {
+     *             if (v6 == 1) { ... InitFM() ... }
+     *         } else { ... PowerState = 0 ... }
+     *     } else {
+     *         ExitFm();
+     *     }
+     * </pre>
+     *
+     * <p>So 2 and 3 are GOING TO SLEEP and the vendor tears the tuner down on
+     * them; 1 is awake; 0 is powered down. And note what it reads: the SETTING,
+     * not an extra on the intent. The broadcast is a nudge and
+     * {@link #MCU_STATE_KEY} is the fact.
+     *
+     * <h2>WHY THREE BUILDS HEARD NOTHING</h2>
+     *
+     * <p>{@code com.nwd.ACTION_ACCOFF_UPDATE}, which this app has listened for
+     * since the first attempt, is DEAD CODE in both vendor APKs — a string
+     * constant that is never sent, never registered and never compared against
+     * in 645 classes. Every log that read `last sleep: nothing recorded` was
+     * telling the truth about a broadcast that does not exist.
+     */
+    private static final String MCU_STATE_ACTION = "com.nwd.action.ACTION_MCU_STATE_CHANGE";
+
+    /**
+     * Where the ACC state actually lives. 1 awake, 2 and 3 going to sleep, 0 off.
+     *
+     * <p>A PLAIN {@code Settings.System} INTEGER, readable by any app with no
+     * permission at all — the same table {@link #mcuSource} reads. The vendor
+     * treats it as authoritative and re-reads it on every state broadcast rather
+     * than trusting the extra.
+     */
+    private static final String MCU_STATE_KEY = "mcu_state";
+
+    /** Awake. */
+    private static final int MCU_AWAKE = 1;
+
     private static final String[] SLEEP_ACTIONS = {
         "com.nwd.ACTION_ACCOFF_UPDATE",
         "com.nwd.action.ACTION_ACCOFF_UPDATE",
@@ -907,7 +960,37 @@ public final class NwdBridge {
         //
         // See docs/vendor/README.md for the decompile and docs/TASKS.md #133.
         KILL_ACTION,
+        // AND THE ONE THE VENDOR ITSELF USES. See MCU_STATE_ACTION: the Allwinner
+        // manager on this unit registers a runtime receiver for it and tears the
+        // tuner down when `mcu_state` reads 2 or 3. It is handled DIFFERENTLY
+        // from every other action in this array — see the receiver — because it
+        // also fires on WAKE, and treating a wake as a sleep would hand the
+        // source back at the moment the driver wants it.
+        MCU_STATE_ACTION,
     };
+
+    /**
+     * Is the unit on its way down, according to the vendor's own state word?
+     *
+     * <p>True for 2 and 3, the two values {@code AWRadioManager} answers with
+     * {@code ExitFm()}. Anything unreadable counts as AWAKE: the cost of
+     * mistaking a sleep for a wake is one drive where the radio does not shut
+     * off, and the cost of the reverse is the radio cutting out in traffic.
+     */
+    static boolean mcuGoingDown() {
+        int state = mcuState();
+        return state == 2 || state == 3;
+    }
+
+    /** The vendor's ACC state word, or {@link #MCU_AWAKE} if it cannot be read. */
+    static int mcuState() {
+        try {
+            String v = Settings.System.getString(ctx.getContentResolver(), MCU_STATE_KEY);
+            return v == null ? MCU_AWAKE : Integer.parseInt(v.trim());
+        } catch (Throwable t) {
+            return MCU_AWAKE;
+        }
+    }
 
 
     /**
@@ -982,6 +1065,29 @@ public final class NwdBridge {
                     }
                     action = action + " (" + named + ")";
                 }
+                // ── AND A STATE CHANGE IS ONLY A SLEEP AT 2 OR 3 ─────────────
+                //
+                // This action is NOT like the others in SLEEP_ACTIONS. They are
+                // each announcements of one event; this one announces every ACC
+                // transition, INCLUDING THE WAKE. Treating it the way the rest
+                // are treated would release the source at the exact moment the
+                // driver started the car — the radio going silent on ACC-on,
+                // which is worse than the defect being fixed.
+                //
+                // The gate is the vendor's own: `AWRadioManager` re-reads
+                // `mcu_state` on this broadcast and calls `ExitFm()` only for 2
+                // and 3. So does this. The value travels into the note either
+                // way, because "woke up" is worth a line on a path that has
+                // spent three builds recording nothing at all.
+                if (MCU_STATE_ACTION.equals(action)) {
+                    int state = mcuState();
+                    action = action + " (mcu_state=" + state + ")";
+                    if (state != 2 && state != 3) {
+                        CarnyxWake.noteSleep(action + ": not a sleep, left alone");
+                        safeSleep(action, "not a sleep, left alone");
+                        return;
+                    }
+                }
                 // RELEASED HERE, ON THIS THREAD, BEFORE THE HOP TO RUST. See
                 // releaseSource: the queued path is a thread hop and a drain
                 // taken while the MCU is cutting power, with no wake lock behind
@@ -1016,7 +1122,72 @@ public final class NwdBridge {
         }
         sleepReceiver = r;
         Log.i(TAG, "sleep watch registered");
-        return "listening for " + names;
+        return "listening for " + names + startStateObserver();
+    }
+
+    /**
+     * Watch {@code mcu_state} directly, as a second route to the same fact.
+     *
+     * <h2>TWO MECHANISMS FOR ONE EVENT, DELIBERATELY</h2>
+     *
+     * <p>The broadcast above is the vendor's nudge and this is the vendor's
+     * fact — {@code AWRadioManager} re-reads the setting on every state
+     * broadcast rather than trusting the extra, so the setting is what decides.
+     * Watching it directly removes the one thing this app cannot verify from the
+     * decompile: whether the sender restricts who may receive that broadcast.
+     * Its sender is {@code com.nwd.kernel.service.KernelService}, whose manifest
+     * is not in either APK we have, so "a third-party app can receive it" is an
+     * assumption. A ContentObserver needs no such assumption and no permission.
+     *
+     * <p>THIS APP HAS SPENT THREE BUILDS ON AN ASSUMPTION LIKE THAT and has the
+     * logs to show for it: every one of them listened for
+     * {@code com.nwd.ACTION_ACCOFF_UPDATE}, which turns out to be dead code in
+     * the vendor firmware. A second, independent route is cheap; another three
+     * builds of `nothing recorded` is not.
+     *
+     * <p>WHICHEVER ARRIVES FIRST DOES THE WORK. {@code releaseSource} tests
+     * ownership before it sends anything, so the loser of the race finds FM is
+     * no longer the source and returns "skipped" without commanding the MCU.
+     * There is no double-release to guard against.
+     *
+     * @return a fragment for the caller's log line, always starting with a
+     *     separator so it can be appended unconditionally.
+     */
+    private static String startStateObserver() {
+        if (stateObserver != null) {
+            return "; mcu_state already watched";
+        }
+        try {
+            ContentObserver o = new ContentObserver(new Handler(Looper.getMainLooper())) {
+                @Override public void onChange(boolean selfChange) {
+                    int state = mcuState();
+                    if (state != 2 && state != 3) {
+                        // Not a sleep. Not noted either: this fires on every ACC
+                        // transition and on any other write to the key, and a
+                        // line per wake would push the sleep line out of a ring
+                        // that only keeps eight.
+                        return;
+                    }
+                    String what = MCU_STATE_KEY + "=" + state;
+                    String outcome = releaseOnSleep ? releaseSource() : "skipped, release is off";
+                    // Same ordering as the receiver above, for the same reason:
+                    // to disk first, on this thread, because the hop to Rust
+                    // lands in a ring that dies with the process the MCU is
+                    // about to take.
+                    CarnyxWake.noteSleep(what + ": state observer, " + outcome);
+                    safeSleep(what, outcome);
+                }
+            };
+            ctx.getContentResolver().registerContentObserver(
+                    Settings.System.getUriFor(MCU_STATE_KEY), false, o);
+            stateObserver = o;
+            return "; watching " + MCU_STATE_KEY;
+        } catch (Throwable t) {
+            // NOT FATAL. The broadcast half may still work, and a unit where
+            // this key does not exist is a unit where the whole mechanism is
+            // absent rather than broken.
+            return "; " + MCU_STATE_KEY + " watch failed: " + why(t);
+        }
     }
 
     // There is no stopIlluminationWatch, on purpose. See disconnect().

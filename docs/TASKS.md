@@ -2081,6 +2081,59 @@ pop-up's tap target and fires only when a driver taps it. `WakeReceiver` is gate
 on the vendor wake broadcasts, which no log has ever carried, and its conditional
 actions are gated again on `wasForeground`.
 
+---
+
+**2026-09-16: THE SIGNAL WAS THERE ALL ALONG AND THIS APP WAS LISTENING FOR A
+STRING THAT DOES NOT EXIST.** The owner: *"it doesn't do this when I shut the car
+off... this is what I want it to do, very badly, how do we get there?"* 645
+decompiled vendor classes later, the answer is short.
+
+**`com.nwd.ACTION_ACCOFF_UPDATE` IS DEAD CODE.** A constant in both vendor APKs,
+never sent, never registered, never compared against. #92, #95 and the runtime
+sleep watch all listened for it. Every `last sleep: nothing recorded` in every
+drive log was accurate reporting of a broadcast that is not emitted by anything.
+
+**WHAT THE VENDOR USES IS `com.nwd.action.ACTION_MCU_STATE_CHANGE` AND THE
+`mcu_state` SETTING.** `AWRadioManager.registReceiver()` — the Allwinner manager,
+which is this unit's path — registers a runtime receiver for it, then re-reads
+`Settings.System "mcu_state"` and calls `ExitFm()` when it reads 2 or 3. 1 is
+awake, 2 and 3 are going to sleep, 0 is off. See `docs/vendor/README.md` for the
+quoted handler.
+
+**AND HALF THE EXISTING TEARDOWN WAS ALWAYS A NO-OP HERE.**
+`setRadioBackServiceOn(false)` is `{ LOG.print(...); return; }` on the Allwinner,
+ARM and Sprd managers; only the MCU-radio path emits anything. The other half,
+the `ACTION_REQUEST_CHANGE_SOURCE` broadcast, has NO receiver in either APK — it
+is consumed by a third process, `com.nwd.kernel.service.KernelService`. That is
+why the handback works on a manual close and dies at ACC-off: the broadcast has
+to cross a process boundary and the SoC suspends first.
+
+**BUILT: TWO INDEPENDENT ROUTES TO THE SAME FACT.** `MCU_STATE_ACTION` joins
+`SLEEP_ACTIONS`, and `startStateObserver` registers a `ContentObserver` on
+`Settings.System.getUriFor("mcu_state")`. The observer exists because the one
+thing the decompile CANNOT settle is whether `KernelService` restricts who may
+receive its broadcast — its manifest is not in either APK. A ContentObserver
+needs no such assumption and no permission. Whichever fires first does the work;
+`releaseSource` tests ownership before it sends anything, so the loser finds FM is
+no longer the source and returns "skipped".
+
+**THE STATE ACTION IS HANDLED DIFFERENTLY FROM EVERY OTHER SLEEP ACTION**, and it
+has to be: it fires on every ACC transition INCLUDING THE WAKE. Treating it like
+the rest would hand the source back at the moment the driver starts the car. Both
+routes gate on 2-or-3, which is the vendor's own test.
+
+**A DIAGNOSTIC WORTH ONE LINE:** `getRadioType()` (transaction 29) returns 0 for
+the MCU path and 2 for Allwinner, and it decides whether half these calls do
+anything at all. NOT BUILT YET — it should be logged at launch rather than
+inferred from the part number.
+
+**STILL THE CLEAN FIX, AND STILL OUT OF REACH:** `IKernelFeature.request(byte[])`,
+transaction 1, is a genuinely blocking binder call that carries MCU frames, and
+source-change frames travel it. That would replace the broadcast with something
+that cannot lose a race. The service is not in the two APKs we have, so its
+binding action and AIDL are unknown. Getting there needs a third file off the
+unit: `com.nwd.kernel`.
+
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
 The owner supplied `docs/design/carnyx-icon.svg` — a 200-unit miniature of the

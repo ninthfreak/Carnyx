@@ -87,3 +87,141 @@ mContext.registerReceiver(mReceiver, filter);
 ```
 
 See `docs/TASKS.md` #133 for what follows from this.
+
+---
+
+# The ACC-off recipe, read off this unit's own code path
+
+Added 2026-09-16, after the owner reported that the FM handback works when Carnyx
+is closed by hand and does NOT work when the car is switched off. Everything
+below was read directly out of the two APKs above and quoted; the reading was
+done twice, once by a fan-out of agents over all 645 `com.nwd` classes and once
+by hand against the bytecode for the claims acted on.
+
+## Which radio manager this unit runs, and why it decides everything
+
+`RadioService.onCreate()` picks ONE of four implementations and the choice
+changes what every vendor call does:
+
+| picked when | class | `getRadioType()` |
+|---|---|---|
+| `isNewArmRadio()` | `ArmRadioManager` | 1 |
+| `getIsSprdRadio()` | `SprdRadioManager` | 3 |
+| `getIsAllWinnerRaido()` | `AWRadioManager` | 2 |
+| `getIsMtkRadio()` | `ArmRadioManager` | 3 |
+| otherwise | `RadioManager` (MCU) | 0 |
+
+The development unit is Allwinner, so `AWRadioManager` is the path that matters,
+and **Carnyx should log `getRadioType()` (transaction 29) once at launch** rather
+than inferring it. Everything below is the Allwinner path unless it says
+otherwise.
+
+## `setRadioBackServiceOn(false)` does nothing here
+
+    ArmRadioManager:  public void setRadioBackServiceOn(boolean p1) { return; }
+    AWRadioManager:   { LOG.print("setRadioBackServiceOn  "); return; }
+    SprdRadioManager: { LOG.print("setRadioBackServiceOn  "); return; }
+
+Only `RadioManager` — the MCU path, type 0 — emits anything. Half of Carnyx's
+teardown has been a logged no-op on this hardware.
+
+## Why the handback broadcast dies at ACC-off
+
+`com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE` has **no receiver in either APK**.
+It is consumed by a THIRD process, `com.nwd.kernel.service.KernelService`, which
+is installed on the unit but is not one of the two files here. So Carnyx's
+release has to be queued by ActivityManager, dispatched, and delivered across a
+process boundary — and at ACC-off the SoC suspends first. Closing the app by hand
+leaves the system awake, the delivery happens, and the source changes. Same code,
+opposite outcome, and that is the whole of the bug.
+
+## `com.nwd.ACTION_ACCOFF_UPDATE` IS DEAD CODE
+
+A string constant in both APKs. Never sent, never registered, never compared
+against, in 645 classes. Three builds of this app listened for it. Every
+`last sleep: nothing recorded` was accurate.
+
+## What the vendor actually listens for
+
+`AWRadioManager.registReceiver()` registers a RUNTIME receiver for six actions,
+one of which is the ACC signal:
+
+    com.nwd.action.ACTION_APP_IN_OUT
+    com.nwd.android.ACTION_EXIT_ARM_FM_RAIDO
+    com.nwd.ACTION_MEDIA_PLAY
+    com.nwd.action.ACTION_MCU_STATE_CHANGE      <- this one
+    com.nwd.action.ACTION_CHANGE_SOURCE
+    com.nwd.ACTION_KILL_OTHER_APP
+
+and its handler for that action is, in full:
+
+    int v6 = SettingTableKey.getIntValue(resolver, "mcu_state", 1);
+    if (v6 != 3 && v6 != 2) {
+        if (v6 != 0) {
+            if (v6 == 1) { if (rds.isRdsEnable()) InitFM(); ... }
+        } else { ... AWNative.PowerState = 0; }
+    } else {
+        ExitFm();
+    }
+    NewRdsManager.getInstance().notifyPowerState(v6);
+
+**`mcu_state`: 1 awake, 2 and 3 going to sleep, 0 powered down.** The vendor tears
+the tuner down on 2 and 3.
+
+TWO THINGS FOLLOW, AND BOTH ARE LOAD-BEARING:
+
+1. The handler re-reads the SETTING and ignores any extra on the intent. The
+   broadcast is a nudge; `Settings.System "mcu_state"` is the fact. It is a plain
+   integer readable with no permission, so a `ContentObserver` on
+   `Settings.System.getUriFor("mcu_state")` is a second, independent route that
+   does not depend on whether `KernelService` restricts its broadcast — which
+   cannot be determined from these two files.
+2. The action fires on EVERY transition including the wake. Anything that treats
+   it as a sleep unconditionally will hand the source back at ACC-ON.
+
+## `ACTION_KILL_OTHER_APP` releases FM, it does not kill an app
+
+In `AWRadioManager$1`:
+
+    String v9 = intent.getStringExtra("extra_package_name");
+    if (v9.equals("com.nwd.radio")) { access$4(this$0).ExitFm(); }
+
+Only that one package name is honoured and the effect is an FM audio teardown —
+not a force-stop, and nothing that touches `mcu_current_source` or the UI. The
+receiver is registered dynamically with no permission and no caller check, so a
+broadcast from Carnyx WOULD be honoured. It is a way to silence the tuner; it is
+not a way to stop the stock app resuming.
+
+## `mcu_current_source` is watched on this unit
+
+    AWRadioManager:91  registerContentObserver(getUriFor("mcu_current_source"), 1, mSourceObserver)
+    AWRadioManager$6   onChange -> if (mSourceId != v0) handleSourceChange((byte) v0)
+    handleSourceChange(byte p5) -> p5 != 4 tears playback down, == 4 restarts it
+
+A fan-out reader claimed the Allwinner manager does NOT watch this key. It does;
+the claim was wrong and was caught by reading the file. Recorded because the same
+reader was right about many other things and a single wrong claim in a long list
+is the hard kind to notice.
+
+## Dead ends, so nobody spends a day on them twice
+
+- **`sendRadioCommand(byte, byte)`**, transaction 27, the raw MCU escape hatch:
+  it is genuinely a blocking binder call, but it emits a protocol-type-3 (radio
+  family) frame while a source change is protocol-type-1, and the caller cannot
+  reach the header. No byte pair through it stops audio or releases the source.
+- On the MCU path only, the two bytes become `F0 05 03 01 00 <a> <b> <ck>`.
+  Irrelevant on Allwinner, recorded because it cost a day to establish.
+- **The stock app cannot start itself.** `com.nwd.radio` declares exactly one
+  component, a MAIN/LAUNCHER activity — no receiver, no service, no provider. Every
+  appearance of it is an explicit `startActivity` from another process, and the
+  process that does it is not in these files.
+
+## What is still unknown
+
+- Whether `KernelService` restricts who may receive `ACTION_MCU_STATE_CHANGE`.
+  The `ContentObserver` route exists precisely so this does not have to be known.
+- How to bind `IKernelFeature` — transaction 1, `request(byte[])`, a genuinely
+  blocking call that would let Carnyx hand the source back synchronously instead
+  of by broadcast. The service is not in these APKs, so its binding action and
+  AIDL are unestablished. This is the route to a clean fix and it needs a third
+  APK off the unit: `com.nwd.kernel`.
