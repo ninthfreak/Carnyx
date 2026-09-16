@@ -340,3 +340,29 @@ The one thing NOT established here: the vendor wraps its own source change with
 an `AckHelper` that expects an MCU acknowledgement and retries for three seconds.
 Sending the raw frame skips that bookkeeping. Whether the MCU is content with an
 unacknowledged frame from a stranger is a question for a drive, not a decompile.
+
+## The other three APKs: nothing that helps, two things worth knowing
+
+Surveyed 2026-09-16 for the ACC-off problem. None of them moves it forward, which
+is itself worth writing down so nobody reads them again hoping.
+
+**`com.nwd.setting.service`** shares a user id with `com.nwd.kernel`
+(`com.nwd.kernel.setting`) and exports `SettingService` on
+`com.nwd.setting.service.ACTION_SETTING_SERVICE` with no permission and no
+declared `targetSdkVersion` — so, like the kernel service, bindable. Its
+`SettingFeature` has 39 transactions and **none of them changes the audio
+source**. The closest are `setMute` (10) and `shortMute` (39), which would
+silence the output without stopping the stock app resuming, and
+`setAutoWakeup` (38), which is about the unit waking itself rather than about FM.
+A dead end for this problem.
+
+**`com.nwd.factory.setting`** exports five services with no permission at all,
+including `FactorySettingService` and an `AutoUpdateService`. Nothing in them
+touches the audio source. Recorded only because an unguarded factory service on a
+shipping head unit is the kind of thing worth having written down somewhere.
+
+**`com.nwd.backcar`** runs as `android.uid.system` and exports `BackcarService`.
+Reversing camera; irrelevant here.
+
+**`com.android.launcher.nwd.res.k24`** is a resource package with no code of
+interest.
