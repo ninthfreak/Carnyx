@@ -488,8 +488,23 @@ public final class CarnyxWake {
             // without a "skipped" line that reads like a failure.
             released = " — nothing to release";
         } else {
+            // ── BOTH ROUTES, AND THIS IS THE PATH THAT MOST NEEDS THE FAST ONE ──
+            //
+            // THIS HOOK IS THE ONE WITH EVIDENCE OF RUNNING AT ACC-OFF. The
+            // drive log carries `destroy 39s ago` recorded across an ignition
+            // cycle: the unit tears the window down and THEN force-kills, so
+            // Destroy fires on the way into the sleep. The two sleep receivers
+            // in `NwdBridge` are the paths whose ACC-off delivery is still a
+            // hypothesis — nobody has yet seen either fire on this ROM.
+            //
+            // For three commits this path called `releaseSource` alone, which is
+            // the broadcast: queued by ActivityManager and delivered to a third
+            // process, measured to work on a manual close and NOT at ACC-off.
+            // The synchronous kernel call went to the two receivers that might
+            // never run, and the one that does run kept the route that loses the
+            // race. `handBackNow` sends both, kernel first.
             try {
-                released = " — " + NwdBridge.releaseSource();
+                released = " — " + NwdBridge.handBackNow();
                 handedBack = true;
             } catch (Throwable t) {
                 released = " — release failed: " + t;

@@ -466,6 +466,29 @@ public final class NwdBridge {
         if (!releaseOnSleep) {
             return "skipped, release is off";
         }
+        return handBackNow();
+    }
+
+    /**
+     * Both routes, with the switch ALREADY CHECKED by the caller.
+     *
+     * <h2>WHY THE CHECK IS SPLIT OFF RATHER THAN REPEATED</h2>
+     *
+     * <p>{@link #releaseOnSleep} is a mirror pushed down from Rust, and
+     * {@code CarnyxWake.onAppDestroyed} does not read it — it reads the shared
+     * preferences copy, because it can and because that is the copy a cold
+     * process would see. Two readings of one switch is two chances to disagree,
+     * and the disagreement would be silent: a driver with the switch ON whose
+     * mirror had not been pushed yet would get "skipped, release is off" from a
+     * method the caller had already decided to call.
+     *
+     * <p>So the gate lives with whoever is closest to the switch. The receivers
+     * go through {@link #handBack} and are gated by the mirror; the destroy hook
+     * has read the file itself and comes here.
+     *
+     * @return one line naming both outcomes, never null.
+     */
+    static String handBackNow() {
         String direct = CarnyxKernel.handBackSource();
         String broadcast = releaseSource();
         return direct + "; " + broadcast;
@@ -1198,7 +1221,22 @@ public final class NwdBridge {
             return "; mcu_state already watched";
         }
         try {
-            ContentObserver o = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            // ── NULL HANDLER, WHICH IS THE WHOLE POINT OF THIS OBSERVER ──────
+            //
+            // A ContentObserver built with a Handler POSTS onChange to that
+            // Handler's looper; built with null it runs onChange directly on the
+            // binder thread that delivered the change. This used to pass the
+            // MAIN looper, which queued the handback behind whatever the UI
+            // thread was doing at the exact moment the MCU announced it was
+            // cutting power.
+            //
+            // That is the hazard `releaseSource` is documented against one
+            // screen up — *"this app holds no wake lock ... nothing guarantees
+            // the loop is scheduled again before the suspend"* — and the one
+            // `CarnyxKernel` exists to avoid: hopping threads to make the call
+            // "would give back exactly the property it exists to provide". The
+            // observer was giving it back.
+            ContentObserver o = new ContentObserver(null) {
                 @Override public void onChange(boolean selfChange) {
                     int state = mcuState();
                     if (state != 2 && state != 3) {
