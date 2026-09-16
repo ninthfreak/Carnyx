@@ -113,6 +113,11 @@ public final class NwdBridge {
             ctx = activity.getApplicationContext();
             mainHandler = new Handler(Looper.getMainLooper());
             Log.i(TAG, "attached");
+            // AND START BINDING THE KERNEL SERVICE NOW, because the moment it is
+            // needed is the moment there is no time to start. See CarnyxKernel:
+            // bindService is asynchronous, and the sleep this app is trying to
+            // beat arrives with the SoC already on its way down.
+            Log.i(TAG, CarnyxKernel.attach(ctx));
         }
     }
 
@@ -429,6 +434,41 @@ public final class NwdBridge {
         } else {
             releaseSource();
         }
+    }
+
+    /**
+     * Hand the FM source back by BOTH routes, and report what each managed.
+     *
+     * <h2>TWO ROUTES BECAUSE THEY FAIL DIFFERENTLY</h2>
+     *
+     * <p>THE KERNEL CALL GOES FIRST, and it is the one that can actually win at
+     * ACC-off: {@link CarnyxKernel} hands the MCU frame straight down a binder
+     * call that reaches the UART before it returns. The broadcast underneath it
+     * has to be queued, dispatched and delivered to a third process, which is
+     * measured NOT to happen once the SoC starts suspending.
+     *
+     * <p>THE BROADCAST STAYS ANYWAY. It is the route that has been proven to work
+     * on a manual close, it needs no binding to have succeeded, and it costs
+     * nothing when the kernel call already landed — {@link #releaseSource} tests
+     * ownership first and sends nothing when FM is no longer the source.
+     *
+     * <p>SENDING BOTH IS HARMLESS. The broadcast reaches the kernel service,
+     * which builds the same CHANGE_SOURCE frame this app just wrote by hand, so
+     * the worst case is the MCU being asked twice to do something it is already
+     * doing.
+     *
+     * <p>ONE SWITCH GOVERNS BOTH. A driver who has turned the release off wants
+     * the radio left alone, and that cannot mean "left alone by one mechanism".
+     *
+     * @return one line naming both outcomes, never null.
+     */
+    private static String handBack() {
+        if (!releaseOnSleep) {
+            return "skipped, release is off";
+        }
+        String direct = CarnyxKernel.handBackSource();
+        String broadcast = releaseSource();
+        return direct + "; " + broadcast;
     }
 
     /**
@@ -1093,7 +1133,7 @@ public final class NwdBridge {
                 // taken while the MCU is cutting power, with no wake lock behind
                 // it. The outcome travels with the event so the diagnostics log
                 // records what this call managed rather than what it attempted.
-                String outcome = releaseOnSleep ? releaseSource() : "skipped, release is off";
+                String outcome = handBack();
                 // WRITTEN DOWN BEFORE IT IS LOGGED, and the ordering is the
                 // point. `safeSleep` hops to Rust and queues a line into a ring
                 // that lives IN MEMORY and dies with this process — which the
@@ -1169,7 +1209,7 @@ public final class NwdBridge {
                         return;
                     }
                     String what = MCU_STATE_KEY + "=" + state;
-                    String outcome = releaseOnSleep ? releaseSource() : "skipped, release is off";
+                    String outcome = handBack();
                     // Same ordering as the receiver above, for the same reason:
                     // to disk first, on this thread, because the hop to Rust
                     // lands in a ring that dies with the process the MCU is

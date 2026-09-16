@@ -2152,12 +2152,36 @@ and four more packages off the unit within the hour, and the loop closes:
 receiver permission — the question `startStateObserver` was written to avoid
 having to answer. Both routes are real and they fail independently, so both stay.
 
-**NOT BUILT YET.** It needs a second service binding held open from launch:
-`bindService` is asynchronous and at `mcu_state` 2 there is no time to start one.
-The single thing the decompile cannot settle is whether the MCU accepts an
-unacknowledged frame from a stranger — the vendor wraps its own source change in
-an `AckHelper` with a three-second retry, and sending the raw frame skips that.
-That is a question for a drive.
+**BUILT.** `CarnyxKernel` binds `com.nwd.kernel` at attach — at ATTACH, because
+`bindService` is asynchronous and the moment this exists to serve is the moment
+there is no time left to start one — holds the binder, and at a sleep sends
+`F0 05 01 03 00 00 00 00` through transaction 1 with flags 0.
+
+**RAW `transact`, NOT A GENERATED STUB.** One transaction with one argument.
+Adding `IKernelFeature.aidl` would generate a six-method proxy to use one method
+of it and would put another vendor interface description in this tree; the
+descriptor string and the transaction number ARE the interface as far as this app
+is concerned, and they now sit beside the evidence that established them.
+
+**BOTH ROUTES FIRE, KERNEL FIRST.** `NwdBridge.handBack` calls the kernel write
+and then the broadcast. They fail differently — the binder call can win at ACC-off
+and needs a successful bind, the broadcast needs neither but is measured to lose
+the race — so neither replaces the other. Sending both is harmless: the broadcast
+reaches the kernel service, which builds the same frame this app just wrote by
+hand. One switch governs both, because a driver who turned the release off did
+not mean "off by one mechanism".
+
+**AND `com.nwd.kernel` JOINS `<queries>` IN BOTH MANIFESTS.** Without it
+`bindService` returns false on targetSdk 30+ for a package the caller cannot see,
+and the diagnostics line would have blamed the vendor for our own manifest. Free
+on this unit, which is Android 10 and filters nothing.
+
+**STILL UNANSWERABLE FROM A DECOMPILE:** whether the MCU acts on an
+unacknowledged frame from a stranger. The vendor wraps its own source change in an
+`AckHelper` with a three-second retry and this skips that bookkeeping. Every
+outcome is reported by name — `source→Android sent on the wire`, `not bound`,
+`binder is dead`, `transact returned false`, `request failed` — so one drive
+settles it.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**
