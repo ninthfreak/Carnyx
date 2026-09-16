@@ -26,12 +26,35 @@ import android.util.Log;
  * other direction, and the same reason it is in this source tree rather than in
  * {@code java/} — see that class for the class-loader rule in full.
  *
- * <p>THE PATTERN IS CONFIRMED ON THIS ROM, which is not usually something a
- * receiver can say before it has run. The stock-radio probe resolved
+ * <h2>THIS CLASS CANNOT FIRE ON THIS BUILD, AND THE ACTION IS ONLY HALF OF WHY</h2>
+ *
+ * <p>TWO INDEPENDENT FAULTS, either of which is fatal on its own.
+ *
+ * <p>FIRST, THE ACTION IS DEAD. Both spellings below are
+ * {@code ACTION_ACCOFF_UPDATE}, which the firmware decompile found is a string
+ * constant and nothing else — never sent, never registered for, never compared
+ * against, across 645 vendor classes. See {@code docs/vendor/README.md}. Every
+ * {@code last sleep: nothing recorded} this app has logged was accurate.
+ *
+ * <p>SECOND, AND THIS ONE OUTLIVES ANY FIX TO THE FIRST: the app sets
+ * {@code targetSdk = 34}, and Android 8 stopped delivering IMPLICIT broadcasts to
+ * MANIFEST receivers in any app targeting 26 or above. The vendor sends its real
+ * ACC signal with a plain one-argument {@code sendBroadcast} — no package, no
+ * component, no flags — so it is implicit, and widening the filter below to name
+ * it would buy a second filter that registers cleanly and is never delivered.
+ *
+ * <p>THE PROBE DID NOT SAY WHAT THIS DOC ONCE CLAIMED. It resolved
  * {@code com.nwd.ACTION_OS_WAKE_UP → rcv:com.ninthfreak.carfm,
- * rcv:com.ninthfreak.carnyx}: a manifest receiver of ours, for a vendor action,
- * listed by the package manager as a live handler. So vendor broadcasts do reach
- * manifest receivers here, and this one is declared exactly the same way.
+ * rcv:com.ninthfreak.carnyx}, and that was read here as proof that vendor
+ * broadcasts reach manifest receivers on this ROM. It is not: the package manager
+ * RESOLVES a filter, the broadcast queue DISPATCHES it, and the restriction lives
+ * in the queue. Resolution was never the evidence it was taken for.
+ *
+ * <p>THE WORKING COLD PATH IS IN {@link CarnyxListener}, as a RUNTIME receiver
+ * plus a ContentObserver — neither of which the restriction touches — in the one
+ * process the platform re-binds by itself. This class is left in place rather
+ * than deleted because the deletion is the owner's call and nothing here is
+ * harmful: it costs one unreachable filter.
  *
  * <h2>Both fire, and that is harmless</h2>
  *

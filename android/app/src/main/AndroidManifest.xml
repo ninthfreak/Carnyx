@@ -135,6 +135,21 @@
         -->
         <package android:name="com.nwd.radio" />
         <!--
+          THE KERNEL SERVICE, which owns the UART to the MCU. `CarnyxKernel`
+          binds it to hand the FM source back synchronously at ACC-off, because
+          the broadcast that does the same job has to cross into this very
+          process and is measured not to arrive before the SoC suspends.
+
+          WITHOUT THIS ENTRY THE BIND FAILS SILENTLY on targetSdk 30+:
+          `bindService` returns false for a package the caller cannot see, and
+          the diagnostics line would read "bindService refused" on a unit where
+          the service is present and healthy. The one failure that would look
+          like a vendor difference is the one caused by our own manifest.
+
+          Free on this unit, which is Android 10 and filters nothing.
+        -->
+        <package android:name="com.nwd.kernel" />
+        <!--
           OSMAND, all four application ids it ships under, for the turn-by-turn
           integration (`CarnyxNav`). Same rule as the two above and the same
           silent failure: without these `resolveService` returns null and

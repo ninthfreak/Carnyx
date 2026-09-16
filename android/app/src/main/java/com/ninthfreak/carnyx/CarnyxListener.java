@@ -1,8 +1,13 @@
 package com.ninthfreak.carnyx;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.database.ContentObserver;
+import android.os.Build;
+import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 import android.util.Log;
 
@@ -104,6 +109,12 @@ public final class CarnyxListener extends NotificationListenerService {
         // feature that fails must not cost the evidence.
         note("bound by the platform");
 
+        // BEFORE EVERY EARLY RETURN BELOW. The come-forward gate has four of
+        // them, and the sleep watch has nothing to do with whether the face
+        // comes forward — a driver with come-forward off still wants the radio
+        // to stop at ACC-off.
+        startSleepWatch();
+
         boolean forward;
         boolean playing;
         try {
@@ -175,6 +186,198 @@ public final class CarnyxListener extends NotificationListenerService {
             // Nothing to recover; say which, so it is diagnosable rather than
             // indistinguishable from a bind that never happened.
             note("bound, but the launch was refused: " + t);
+        }
+    }
+
+    // ── THE COLD SLEEP WATCH ────────────────────────────────────────────────
+    //
+    // WHY IT MOVED HERE FROM `SleepReceiver`, which is the component that looks
+    // like it already does this job.
+    //
+    // `SleepReceiver` is a MANIFEST receiver, and this app sets `targetSdk = 34`.
+    // Android 8 stopped delivering IMPLICIT broadcasts to manifest receivers in
+    // any app targeting 26 or above, and the vendor sends its state change with a
+    // plain one-argument `sendBroadcast` — no package, no component, no flags, so
+    // implicit. A manifest filter for it registers cleanly, resolves cleanly, and
+    // is never delivered. `SleepReceiver`'s own class doc cites the stock-radio
+    // probe listing it as a live handler for a vendor action, but the package
+    // manager RESOLVES a filter while the broadcast queue DISPATCHES it, and the
+    // restriction lives in the queue. Resolution was never the evidence it read
+    // as.
+    //
+    // A RUNTIME receiver has no such restriction, and neither does a
+    // ContentObserver. This service is the right process to hold them: the
+    // platform binds a NotificationListenerService itself and re-binds it after
+    // the vendor force-stop, which is the whole reason this class exists.
+    //
+    // WHAT THIS PATH CANNOT DO. `CarnyxKernel` — the synchronous binder call
+    // that reaches the UART before it returns — lives in `java/`, dexed into the
+    // app's own class loader, and this file is loaded by the platform. The two
+    // halves cannot meet in memory. So the cold path sends the BROADCAST only,
+    // the route measured to lose the race at ACC-off. It is worth having anyway
+    // for the case it is the only route there is: a sleep that arrives with no
+    // app process, where the alternative is nothing at all.
+
+    /** The vendor's ACC transition announcement. Matches `NwdBridge` by name. */
+    private static final String MCU_STATE_ACTION = "com.nwd.action.ACTION_MCU_STATE_CHANGE";
+
+    /** 1 awake, 2 and 3 going down, 0 powered off. Read, not trusted from extras. */
+    private static final String MCU_STATE_KEY = "mcu_state";
+
+    /** The MCU's current audio source. 4 is FM. */
+    private static final String MCU_SOURCE_KEY = "mcu_current_source";
+
+    /** The one call the source probe found that sticks. See `NwdBridge`. */
+    private static final String ACTION_CHANGE_SOURCE = "com.nwd.action.ACTION_REQUEST_CHANGE_SOURCE";
+
+    /** The driver's switch, as {@link CarnyxWake#setReleaseOnSleep} left it. */
+    private static final String KEY_RELEASE_ON_SLEEP = "release_on_sleep";
+
+    /**
+     * Registered once per process and never torn down.
+     *
+     * <p>Static because the platform may bind a NEW instance of this service
+     * without the old process having died, and two watches would send the source
+     * change twice. There is no unregister for `NwdBridge`'s reason: this watch
+     * COMMANDS the MCU, and the moment it is needed is the moment nothing else in
+     * this app is alive to do it.
+     */
+    private static boolean sleepWatched;
+
+    /** Both routes to one fact. See {@link #startSleepWatch}. */
+    private static BroadcastReceiver sleepReceiver;
+
+    /** Both routes to one fact. See {@link #startSleepWatch}. */
+    private static ContentObserver stateObserver;
+
+    /**
+     * Watch for the unit going to sleep, from the process the platform re-binds.
+     *
+     * <p>TWO MECHANISMS FOR ONE EVENT, matching {@code NwdBridge.startSleepWatch}
+     * and for its reason: the broadcast is the vendor's nudge and the setting is
+     * the vendor's fact, and whether a third-party app may receive that broadcast
+     * is an assumption this app has already been wrong about three builds
+     * running. Whichever arrives first does the work; the loser finds FM is no
+     * longer the source and sends nothing.
+     */
+    private void startSleepWatch() {
+        // ON THE CLASS, NOT THE INSTANCE. The flag is static because the guard has
+        // to hold across INSTANCES — the platform can bind a new service object in
+        // a process that already has a watch running — and a `synchronized` method
+        // would lock `this`, which is a different lock for each of them and no
+        // guard at all.
+        synchronized (CarnyxListener.class) {
+            if (sleepWatched) {
+                return;
+            }
+            sleepWatched = true;
+        }
+
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                onSleepSignal("broadcast");
+            }
+        };
+        try {
+            IntentFilter f = new IntentFilter(MCU_STATE_ACTION);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(r, f, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(r, f);
+            }
+            sleepReceiver = r;
+            note("sleep watch: listening for " + MCU_STATE_ACTION);
+        } catch (Throwable t) {
+            note("sleep watch: broadcast registration failed: " + t);
+        }
+
+        try {
+            // NULL HANDLER, so onChange runs on the binder thread that delivered
+            // it rather than being posted to a looper the suspending SoC may
+            // never schedule again. Same choice as `NwdBridge`, same reason.
+            ContentObserver o = new ContentObserver(null) {
+                @Override public void onChange(boolean selfChange) {
+                    onSleepSignal("observer");
+                }
+            };
+            getContentResolver().registerContentObserver(
+                    Settings.System.getUriFor(MCU_STATE_KEY), false, o);
+            stateObserver = o;
+            note("sleep watch: watching " + MCU_STATE_KEY);
+        } catch (Throwable t) {
+            note("sleep watch: " + MCU_STATE_KEY + " watch failed: " + t);
+        }
+    }
+
+    /**
+     * One sleep signal, from either route.
+     *
+     * <p>GATED AT 2 AND 3, which is the vendor's own test — {@code AWRadioManager}
+     * re-reads {@code mcu_state} on this broadcast and calls {@code ExitFm()} only
+     * for those. Everything else is a wake or an unrelated write, and acting on
+     * one would take the radio away at the instant the driver started the car.
+     *
+     * <p>SILENT ON A NON-SLEEP. Both routes fire on every ACC transition, and a
+     * line per wake would push the sleep line out of a ring that keeps eight.
+     */
+    private void onSleepSignal(String route) {
+        // READ ONCE. Two calls to `mcuInt` here would be two reads of a value the
+        // MCU is actively changing, and the pair could straddle a transition.
+        int state = mcuInt(MCU_STATE_KEY, 1);
+        if (state != 2 && state != 3) {
+            return;
+        }
+        // THE STATE TRAVELS WITH EVERY LINE BELOW. Which of 2 and 3 this ROM
+        // actually sends is not established — the vendor treats them alike and so
+        // does this — and the first log that carries one settles it.
+        String where = "sleep watch (" + route + ", mcu_state=" + state + ")";
+        if (!releaseOnSleep()) {
+            note(where + ": release is off");
+            return;
+        }
+        // ONLY RELEASE WHAT THIS UNIT IS ACTUALLY ON. source→0 is a command to
+        // the MCU and not a request to give back something we hold, so sending it
+        // while Bluetooth audio is the source would switch away from whatever was
+        // playing. `NwdBridge.releaseSource` makes the same test first.
+        int src = mcuInt(MCU_SOURCE_KEY, -1);
+        if (src != 4) {
+            note(where + ": FM is not the source (" + src + ")");
+            return;
+        }
+        try {
+            sendBroadcast(new Intent(ACTION_CHANGE_SOURCE)
+                    .putExtra("extra_source_id", (byte) 0));
+            note(where + ": source→0 sent");
+        } catch (Throwable t) {
+            note(where + ": source→0 FAILED: " + t);
+        }
+    }
+
+    /** One {@code Settings.System} integer, or the fallback. Never throws. */
+    private int mcuInt(String key, int fallback) {
+        try {
+            String v = Settings.System.getString(getContentResolver(), key);
+            return v == null ? fallback : Integer.parseInt(v.trim());
+        } catch (Throwable t) {
+            return fallback;
+        }
+    }
+
+    /**
+     * The driver's switch.
+     *
+     * <p>DEFAULTS TO TRUE, for {@code SleepReceiver.releaseOnSleep}'s reason: the
+     * failure here is silence — the radio playing into a parked car — and the
+     * setting's own default is on, so an unset value means a driver who has never
+     * touched the switch rather than one who turned it off.
+     */
+    private boolean releaseOnSleep() {
+        try {
+            return getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read the release switch: " + t);
+            return true;
         }
     }
 
