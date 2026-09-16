@@ -2127,12 +2127,37 @@ the MCU path and 2 for Allwinner, and it decides whether half these calls do
 anything at all. NOT BUILT YET — it should be logged at launch rather than
 inferred from the part number.
 
-**STILL THE CLEAN FIX, AND STILL OUT OF REACH:** `IKernelFeature.request(byte[])`,
-transaction 1, is a genuinely blocking binder call that carries MCU frames, and
-source-change frames travel it. That would replace the broadcast with something
-that cannot lose a race. The service is not in the two APKs we have, so its
-binding action and AIDL are unknown. Getting there needs a third file off the
-unit: `com.nwd.kernel`.
+**THE CLEAN FIX IS NO LONGER OUT OF REACH.** The owner pulled `com.nwd.kernel`
+and four more packages off the unit within the hour, and the loop closes:
+
+- `KernelService` declares an intent filter on its own class name and no
+  permission, and the manifest declares no `targetSdkVersion` — so it defaults to
+  `minSdkVersion` 19, far below the 31 where `exported` stopped defaulting to
+  true. **It is bindable by Carnyx.** Action:
+  `com.nwd.kernel.service.KernelService`, package `com.nwd.kernel`.
+- `onBind` returns an `IKernelFeature$Stub`; transaction 1 is `request(byte[])`,
+  dispatched inline with `writeNoException` and no `FLAG_ONEWAY`.
+- The chain is `request` -> `ProtocalUtil.writeDataToMCU` ->
+  `ICommunicator.writeData`. **No handler, no queue, no worker thread.** The
+  bytes are on the wire before the call returns.
+- The frame to hand the source back is `F0 05 01 03 00 00 00 00` — ACTION family,
+  CHANGE_SOURCE, front, `SOURCE_ANDROID` — and the SERVICE computes the checksum
+  into the last byte, so the caller cannot get the arithmetic wrong.
+- The UART write gate closes only at `mcu_state` 0, which is already powered
+  down. At 2 and 3 it is open. **That is the same window the `mcu_state` watch
+  fires in**, which is what makes the two changes fit together.
+
+**AND THE BROADCAST HALF IS CONFIRMED DELIVERABLE.** `SourceMgr` sends
+`ACTION_MCU_STATE_CHANGE` with the plain one-argument `sendBroadcast` and no
+receiver permission — the question `startStateObserver` was written to avoid
+having to answer. Both routes are real and they fail independently, so both stay.
+
+**NOT BUILT YET.** It needs a second service binding held open from launch:
+`bindService` is asynchronous and at `mcu_state` 2 there is no time to start one.
+The single thing the decompile cannot settle is whether the MCU accepts an
+unacknowledged frame from a stranger — the vendor wraps its own source change in
+an `AckHelper` with a three-second retry, and sending the raw frame skips that.
+That is a question for a drive.
 
 ### 132. Carnyx gets a launcher icon, legacy ladder and adaptive both
 **BOTH ARE IN. NEITHER HAS BEEN THROUGH A BUILD.**

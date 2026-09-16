@@ -225,3 +225,118 @@ is the hard kind to notice.
   of by broadcast. The service is not in these APKs, so its binding action and
   AIDL are unestablished. This is the route to a clean fix and it needs a third
   APK off the unit: `com.nwd.kernel`.
+
+---
+
+# The synchronous handback, from `com.nwd.kernel`
+
+Added 2026-09-16 from three more APKs the owner pulled off the unit:
+
+| file | package | what it is |
+|---|---|---|
+| `com.nwd.kernel_v210.apk` | `com.nwd.kernel` | the MCU/UART service — **the one that matters** |
+| `com.nwd.setting.service_v392.apk` | `com.nwd.setting.service` | the settings service |
+| `com.nwd.backcar_v176.apk` | `com.nwd.backcar` | reversing camera |
+| `com.nwd.factory.setting_v340.apk` | `com.nwd.factory.setting` | factory menu |
+| `com.android.launcher.nwd.res.k24_v1.apk` | launcher resources | no code of interest |
+
+`com.nwd.kernel` is the third process that the `ACTION_REQUEST_CHANGE_SOURCE`
+broadcast was going to all along. Having it closes the loop.
+
+## It is bindable by a third-party app
+
+    <service android:name=".service.KernelService">
+        <intent-filter>
+            <action android:name="com.nwd.kernel.service.KernelService" />
+    manifest: no targetSdkVersion declared, minSdk 19, no android:permission
+
+No `targetSdkVersion` means it defaults to `minSdkVersion` — 19, far below the 31
+where `exported` stopped defaulting to true for a component with an intent
+filter. **So it is exported, it is unguarded, and the binding action is its own
+class name.**
+
+`onBind` returns `mBinder`, a `com.nwd.kernel.aidl.IKernelFeature$Stub`.
+
+## The call, and it is blocking the whole way to the wire
+
+    IKernelFeature      descriptor "com.nwd.kernel.aidl.IKernelFeature"
+                        TRANSACTION_request = 1          void request(byte[])
+
+    Stub dispatch:      case 1: enforceInterface(...); this.request(p7.createByteArray());
+                                p8.writeNoException(); break;
+
+    KernelService$2:    public void request(byte[] p2) {
+                            if (access$1(this$0) != null)
+                                ProtocalUtil.writeDataToMCU(access$1(this$0), p2);
+                        }
+
+    ProtocalUtil:       if (isCanWriteData2Uart()) {
+                            KernelProtocal.calCheckSumAndWriteEndOfData(p4);
+                            p3.writeData(p4);          // ICommunicator — the UART
+                        }
+
+No handler, no queue, no worker thread, no `FLAG_ONEWAY`. The bytes reach the
+serial port before `request` returns. **This is the synchronous release the
+broadcast could never be.**
+
+THE CHECKSUM IS COMPUTED FOR US. `calCheckSumAndWriteEndOfData` runs inside
+`writeDataToMCU`, on our buffer, before the write — so the caller supplies the
+frame with a spare final byte and does not have to get the arithmetic right.
+
+## The frame
+
+`ActionProtocalUtil.requestChangeSource(uart, sourceId, sourceType, ack)`:
+
+    byte[] v0 = KernelProtocal.generateNullProtocal(5, 1, 3);
+    int v1 = getProtocalDataStartOffset(v0);      // 5
+    v0[v1]     = sourceType;
+    v0[v1 + 1] = sourceId;
+    writeDataToMCU(uart, v0);
+
+`generateNullProtocal(len, type, dataType)` builds `byte[len + 3]` with
+`[0] = 0xF0`, `[1] = len`, `[2] = type`, `[3] = dataType`. So:
+
+    F0 05 01 03 00 <sourceType> <sourceId> <checksum>
+       │  │  │  │                                └─ written by the service
+       │  │  │  └─ dataType 3 = CHANGE_SOURCE
+       │  │  └──── type 1 = ACTION family
+       │  └─────── length 5
+       └────────── header
+
+`sourceType` 0 is front, `sourceId` 0 is `SOURCE_ANDROID` (4 is `SOURCE_RADIO`).
+Handing the source back to Android is therefore
+**`F0 05 01 03 00 00 00 00`**, last byte ignored.
+
+## The write window is open at 2 and 3
+
+`ProtocalUtil.setCanWriteData2Uart(0)` — the gate that would make the write a
+silent no-op — is reached from `MCUDeviceManager.onGetOsSleepState` and only
+inside `if (this.mDeviceState.getMcuState() == 0)`. `mcu_state` 0 is ALREADY
+POWERED DOWN. At 2 and 3, the states that mean "going to sleep", the UART is
+still writable. That is the window, and it is the same window the
+`mcu_state` watch fires in.
+
+## And the state broadcast is unrestricted
+
+`SourceMgr$1` and `SourceMgr$2`:
+
+    Intent v3_1 = new Intent("com.nwd.action.ACTION_MCU_STATE_CHANGE");
+    v3_1.putExtra("extra_mcu_state", (byte) v2);
+    ...sendBroadcast(v3_1);
+
+The plain one-argument `sendBroadcast`, with no receiver permission. So the
+broadcast half of the `mcu_state` watch IS deliverable to a third-party app —
+the question the `ContentObserver` was added to avoid having to answer. Both
+routes are real; keep both, because they fail independently.
+
+## What building this needs
+
+BIND EARLY AND HOLD THE BINDER. `bindService` is asynchronous — the callback
+arrives on the main looper — and at `mcu_state` 2 there is no time to start
+binding. Carnyx has to be bound before the driver switches off, the way it
+already holds the radio service.
+
+The one thing NOT established here: the vendor wraps its own source change with
+an `AckHelper` that expects an MCU acknowledgement and retries for three seconds.
+Sending the raw frame skips that bookkeeping. Whether the MCU is content with an
+unacknowledged frame from a stranger is a question for a drive, not a decompile.
