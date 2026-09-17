@@ -213,18 +213,19 @@ is the hard kind to notice.
   Irrelevant on Allwinner, recorded because it cost a day to establish.
 - **The stock app cannot start itself.** `com.nwd.radio` declares exactly one
   component, a MAIN/LAUNCHER activity — no receiver, no service, no provider. Every
-  appearance of it is an explicit `startActivity` from another process, and the
-  process that does it is not in these files.
+  appearance of it is an explicit `startActivity` from another process. That
+  process is `com.nwd.kernel` — see "What launches the stock radio app, and how
+  to replace it" at the end of this file. It was not in the first two APKs but is
+  in the kernel APK.
 
 ## What is still unknown
 
 - Whether `KernelService` restricts who may receive `ACTION_MCU_STATE_CHANGE`.
   The `ContentObserver` route exists precisely so this does not have to be known.
-- How to bind `IKernelFeature` — transaction 1, `request(byte[])`, a genuinely
-  blocking call that would let Carnyx hand the source back synchronously instead
-  of by broadcast. The service is not in these APKs, so its binding action and
-  AIDL are unestablished. This is the route to a clean fix and it needs a third
-  APK off the unit: `com.nwd.kernel`.
+- ~~How to bind `IKernelFeature`.~~ RESOLVED with the `com.nwd.kernel` APK — the
+  bind action, descriptor, transaction and frame are all established and built as
+  `CarnyxKernel`. See "The synchronous handback, from `com.nwd.kernel`" above.
+  The 09-17 drive confirmed the blocking call reaches the wire.
 
 ---
 
@@ -358,11 +359,234 @@ A dead end for this problem.
 
 **`com.nwd.factory.setting`** exports five services with no permission at all,
 including `FactorySettingService` and an `AutoUpdateService`. Nothing in them
-touches the audio source. Recorded only because an unguarded factory service on a
-shipping head unit is the kind of thing worth having written down somewhere.
+touches the audio source — but one of them, `CopyFileService`, turned out to be
+the write route for the kernel remap: an unguarded, config-driven file copier
+that writes a caller-named destination. See "The factory copier writes arbitrary
+paths" near the end of this file. That an unguarded factory service on a shipping
+head unit can write `/config` is exactly why it was worth writing down.
 
 **`com.nwd.backcar`** runs as `android.uid.system` and exports `BackcarService`.
 Reversing camera; irrelevant here.
 
 **`com.android.launcher.nwd.res.k24`** is a resource package with no code of
 interest.
+
+---
+
+# What launches the stock radio app, and how to replace it
+
+Read off `com.nwd.kernel_v210` on 2026-09-17, after the 09-17 drive proved the
+handback works and the stock app still launches anyway. This is the answer to the
+question the dead-end note above left open: *"the process that does it is not in
+these files."* It is `com.nwd.kernel`, and it now is.
+
+## The kernel restores a source on power-up and launches its app
+
+`com.nwd.kernel.source.SourceMgr` owns which app serves each audio "source". On
+power-up it restores the source that was active at the last power-off and calls
+`startApp(SourceItem)`, which ends in `startActivity` on that source's app. The
+radio source is **appid 8** (`SourceConstant.APPID_RADIO`) — a different number
+from the MCU's own source id 4; do not confuse them.
+
+    SourceMgr.startApp(SourceItem item):
+      ...
+      if (mReplaceSourceList.isContain(item.getAppid())) {
+          item.setPackageName(mReplaceSourceList.findPkgNameByAppid(appid));
+          item.setClassName(mReplaceSourceList.findClassNameByAppid(appid));
+      }
+      item.setComponent(new ComponentName(pkg, cls));
+      item.addFlags(FLAG_ACTIVITY_NEW_TASK);
+      startActivity(item);            // catch -> getLaunchIntentForPackage(pkg)
+
+This closes the loop with the 09-17 log. Carnyx handed the MCU audio source back
+(`mcu_current_source` went 4 -> 0), and the radio app launched regardless,
+because the kernel restores from its OWN record, not from `mcu_current_source` at
+launch time. That record is `SourceKeeper`, a `source_keeper` SharedPreferences
+file (`key_packname` / `key_classname` / appid) inside the kernel's data.
+
+## The substitution hook: `replace_source_list.xml`
+
+`com.nwd.kernel.source.ReplaceSourceList` reads a config file and, for any appid
+it contains, overrides the package and class the kernel is about to launch:
+
+    ReplaceSourceList.CONFIG = getConfigPath() + "/app/replace_source_list.xml"
+    getConfigPath() = SystemProperties("ro.nwd.config.path", "/config")
+
+so on this unit: **`/config/app/replace_source_list.xml`**. Format, one entry per
+remapped source:
+
+    <ReplaceSourceList>
+      <ReplaceSourceItem appid="8" pkgName="com.ninthfreak.carnyx"
+                         className="android.app.NativeActivity" />
+    </ReplaceSourceList>
+
+The file lives in this tree at `docs/vendor/replace_source_list.xml`, with its
+full header. An `appid="8"` entry pointing at Carnyx makes the kernel launch
+Carnyx wherever it would have launched the stock radio app. The stock app is a
+passive MAIN/LAUNCHER-only target, so once the kernel stops pointing at it, it is
+never seen — this is #133 outcome A's substitution half, guaranteed by the code
+rather than inferred.
+
+`className` is not load-bearing: if it fails to resolve, `startApp` falls back to
+`getLaunchIntentForPackage(pkgName)`. The **package name** is the field that has
+to be right. Carnyx's is `com.ninthfreak.carnyx`, launcher activity
+`android.app.NativeActivity` (confirmed in `android/app/src/main/AndroidManifest.xml`).
+
+The kernel reloads the file live on the broadcast
+`com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE` (registered in `ReplaceSourceList`'s
+constructor, no permission to send), so a reboot is not strictly required after
+writing it.
+
+## Which app, not whether — and the release-on-sleep interaction
+
+The remap decides WHICH app the kernel launches for the radio source. It does not
+decide WHETHER the radio source is restored at all. That is
+`SourceMgr.keepCurrentSource`, which runs at power-off and reads
+`mcu_current_source`:
+
+    keepCurrentSource (mIsKeepLauncherSource=1, mNewResumeSourceMode=-1 on this ROM):
+      v1 = Settings.System getInt("mcu_current_source")
+      if (currentApp.getSourceProperty() != 0 || v1 != 0 || isNwdMedia())
+          keepSource(getTopSource())              // radio stays -> Carnyx on wake
+      else
+          keepSource(getInitSourceByAppid(4))     // launcher -> nothing on wake
+
+So `mcu_current_source` at power-off is the byte that decides whether the radio
+source (hence Carnyx) is restored. **Carnyx's release-on-sleep handback sets that
+byte to 0.** With the remap in place, "restore the radio source" *is* "launch
+Carnyx" — the goal — so the handback is now counterproductive: it can suppress
+the launch on exactly the cycles where the radio was playing. `release_on_sleep`
+therefore ships OFF as of #133 (`src/settings.rs`). It stays meaningful only on a
+unit WITHOUT the remap, where the handback is the sole lever on the wake
+relaunch.
+
+Config-flag defaults were read from `NwdConfig` (`mIsKeepLauncherSource = 1`,
+`mNewResumeSourceMode = -1`); they are overridable from the same config
+properties file, so a unit with a different config could route the power-off save
+differently.
+
+## Where the file goes, and how to write it
+
+`/config` is a system partition, and the kernel only ever reads
+`replace_source_list.xml`. But `com.nwd.factory.setting` exposes a general
+file-copier that can WRITE it — see the next section. The blunt routes remain:
+
+- root: remount `/config` rw, drop the file, `chmod 644`;
+- a recovery / ADB shell with system access.
+
+## The factory copier writes arbitrary paths, `CopyFileService` (2026-09-17)
+
+`com.nwd.factory.setting` (targetSdk **19**, no `sharedUserId`) exports
+`com.nwd.factory.copy.CopyFileService` **exported, no permission, no caller
+check** — any app or `adb shell am startservice` can drive it. It is a
+config-driven copier, and its config names the destination:
+
+    CopyFileService.onStartCommand:
+      GlobalData.setPath(intent.getStringExtra("COPY_PATH"))   // source dir
+      GlobalData.setCopyApk(intent.getBooleanExtra("COPY_APK", false))
+      // needs <COPY_PATH>/CopyFileConfig.xml (or ApkUpdateConfig.xml if COPY_APK)
+      // dialog UNLESS COPY_PATH == <config>/app  OR  <COPY_PATH>/autocopy exists
+      -> CopyFileThread
+
+    CopyFileThread.run():
+      count = getConfigCount(CopyFileConfig.xml)   // number of <PathItem>
+      if (count <= 1) ParserXMLFile(...) else ParserXMLFileEx(...)
+
+    ParserXMLFile, per <PathItem PathSrc="..." PathDes="...">:
+      src = (COPY_PATH == <config>/app) ? PathSrc : COPY_PATH + PathSrc
+      if (File(src).isDirectory()) {
+          if (IsDesDirExist(PathDes))              // true if PathDes already exists
+              for entry in src.list():
+                  CopyFile(src/entry, PathDes/entry)   // chmod 777 each
+      } else if (src is a file) {
+          if (name != "update.zip") -> "srcPath isn't dir", SKIPPED
+          else -> OTA path; with an `autocopy` marker present, MASTER_CLEAR
+      }
+
+**THE PAYLOAD MUST BE A DIRECTORY COPY, and this is not a style choice.** With a
+single `<PathItem>` the copier takes `ParserXMLFile`, which only copies the
+CONTENTS of a source DIRECTORY into the destination directory. A lone FILE source
+is logged and skipped unless it is named `update.zip` — and that branch, with an
+`autocopy` marker present, fires a `MASTER_CLEAR` **factory reset**. So the file
+approach does not work and its neighbour is dangerous.
+
+`IsDesDirExist(PathDes)` returns true when `PathDes` already exists (or is a
+mounted external/internal root). `/config/app` exists on the unit — the kernel
+reads its files — so the destination check passes and each source file is copied
+in by name.
+
+The recipe, no root:
+
+1. A dir the factory app can read — external storage; it holds
+   `WRITE_EXTERNAL_STORAGE` and targetSdk 19 predates scoped storage. Call it
+   `<SRC>`.
+2. Lay it out as a directory copy:
+
+       <SRC>/
+         CopyFileConfig.xml
+         payload/
+           replace_source_list.xml        # this repo's copy
+
+   with `CopyFileConfig.xml`:
+
+       <?xml version="1.0" encoding="utf-8"?>
+       <CopyConfig>
+         <PathItem PathSrc="/payload" PathDes="/config/app" />
+       </CopyConfig>
+
+   The parser only keys on `PathItem` elements and their `PathSrc` / `PathDes`
+   attributes; the root element name is not checked. `PathSrc` is relative to
+   `COPY_PATH`, `PathDes` is absolute.
+3. **No `autocopy` marker.** Omitting it keeps the payload away from the
+   `update.zip`/`MASTER_CLEAR` branch entirely AND means the copy only proceeds
+   when a human taps OK on the copier's confirmation dialog — the right gate for
+   a system-partition write.
+4. Start it:
+
+       am startservice -n com.nwd.factory.setting/com.nwd.factory.copy.CopyFileService \
+         --es COPY_PATH <SRC>
+
+   Because it is exported and permissionless, Carnyx issues this `startService`
+   itself — see "Carnyx installs it itself" below.
+
+## Carnyx installs it itself: the `InstallRadioRemap` action
+
+`CarnyxRemap.java` (dexed by `build.rs`) does exactly the recipe above:
+`getExternalFilesDir(null)/carnyx-remap/` as `<SRC>`, `payload/` holding the
+remap, one `CopyFileConfig.xml`, no `autocopy`, then `startService` on
+`CopyFileService`. `com.nwd.factory.setting` is in `<queries>` so the package is
+visible on targetSdk 30+. Two settings rows drive it — "Install radio takeover
+(writes to /config)" and "Check radio takeover" — the second reads
+`/config/app/replace_source_list.xml` back and reports whether it arrived and
+names Carnyx. The seam is `src/android/remap.rs`.
+
+## THE ONE UNKNOWN THIS CANNOT SETTLE: is `/config` writable by that process?
+
+`com.nwd.factory.setting` has NO `sharedUserId=android.uid.system`. Its
+Android permissions (`WRITE_SECURE_SETTINGS`, `MOUNT_UNMOUNT_FILESYSTEMS`, …)
+are not filesystem ownership of `/config`. Whether its `FileOutputStream` and
+`chmod 777` on `/config/app` succeed depends on that partition's unix
+permissions and SELinux policy on the running unit, which a decompile cannot
+show. The evidence FOR is that the vendor's own copier treats `<config>/app` as
+a first-class destination and this app is the provisioning tool; the evidence
+AGAINST certainty is the missing system uid.
+
+Settle it cheaply on the device before trusting the route:
+
+    ls -laZ /config /config/app          # ownership, mode, SELinux context
+
+or just run the copy once and check whether
+`/config/app/replace_source_list.xml` appears. If the factory process cannot
+write there, the route degrades to root / recovery, and Carnyx cannot
+self-install the remap.
+
+This is why the remap is outcome A's clean answer, and why whether Carnyx can
+install it ITSELF is a single yes/no about one partition's permissions.
+
+## Provenance
+
+`com.nwd.kernel_v210` (`com.nwd.kernel`):
+`SourceMgr` (`startApp`, `keepCurrentSource`, `SourceKeeper`),
+`ReplaceSourceList`, `SourceConstant.APPID_RADIO = 8`,
+`NwdConfig` (`mIsKeepLauncherSource`, `mNewResumeSourceMode`),
+`NwdConfigUtils.getConfigPath` -> `ro.nwd.config.path` default `/config`.

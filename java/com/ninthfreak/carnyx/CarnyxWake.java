@@ -157,6 +157,24 @@ public final class CarnyxWake {
         } catch (Throwable t) {
             Log.w(TAG, "could not record the foreground flag: " + t);
         }
+        // ── COMING TO THE FRONT RETIRES ANY SIGHTING ────────────────────────
+        //
+        // THE PATH THIS CLOSES: `SLEEP_ACTIONS` includes `ACTION_SCREEN_OFF`, so
+        // a screen blank with FM playing takes a sighting and writes the durable
+        // flag. If the screen then comes back, the driver switches FM off, and
+        // the unit kills the app later without a Destroy, nothing ever overwrote
+        // that flag — and the listener brings the face forward citing a radio
+        // that was turned off half an hour earlier. The reasserting-window
+        // defect again, by its last remaining road.
+        //
+        // A driver looking at the face is the proof the sighting is spent: the
+        // app is alive and in front, so whatever happens next will be recorded
+        // by the shutdown that follows it. The 30-second window covers the
+        // in-memory half; this covers the durable one.
+        if (front) {
+            fmAtSleepElapsed = Long.MIN_VALUE;
+            setRadioPlaying(false);
+        }
     }
 
     /**
@@ -408,6 +426,23 @@ public final class CarnyxWake {
         } catch (Throwable t) {
             Log.w(TAG, "could not record the come-forward switch: " + t);
         }
+        // ── TURNING IT ON DISCARDS ANY SIGHTING FROM WHILE IT WAS OFF ────────
+        //
+        // `radio_playing` is spent on read by `CarnyxListener`, but ONLY on the
+        // path where come-forward is on — the switch is tested first and returns
+        // before the consume. So a sighting taken while the switch was off is
+        // never spent and simply waits. Flip the switch on a week later and the
+        // very next platform bind acts on it: the face arrives over whatever the
+        // driver is doing, citing a radio that stopped playing days ago. That is
+        // the reasserting-window defect with a longer fuse.
+        //
+        // ONLY ON THE WAY ON. Turning the switch OFF leaves the flag alone,
+        // because nothing reads it while it is off and the next shutdown
+        // overwrites it anyway.
+        if (on) {
+            fmAtSleepElapsed = Long.MIN_VALUE;
+            setRadioPlaying(false);
+        }
     }
 
     /**
@@ -470,10 +505,16 @@ public final class CarnyxWake {
         }
         boolean wasPlaying = src == 4;
 
-        boolean on = true;
+        // FALSE ON A FAILED OR ABSENT READ, matching the shipped default since
+        // #133. An unreadable key means the app has never pushed the mirror,
+        // which on a fresh install means it has barely run — and the default it
+        // would have pushed is off, because the kernel remap is the intended way
+        // to stop the relaunch and the handback fights it. See
+        // `Settings::release_on_sleep`.
+        boolean on = false;
         try {
             on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, false);
         } catch (Throwable t) {
             Log.w(TAG, "could not read the release switch: " + t);
         }
@@ -516,10 +557,21 @@ public final class CarnyxWake {
         // `releaseSource`'s own ownership test, this records "not playing" for a
         // radio that is — and the cost of that is a face that does not come
         // forward. The opposite mistake is the defect being fixed.
-        boolean playing = wasPlaying && !handedBack;
+        //
+        // AND A SLEEP ROUTE MAY HAVE GOT HERE FIRST, which is the 2026-09-17
+        // defect. By the time this hook runs, the state observer and the runtime
+        // watch have usually already handed the source back, so `wasPlaying` is
+        // read off an MCU this app has itself just changed. `noteFmAtSleep` is
+        // the sighting they took BEFORE doing it. See that method.
+        boolean playing = (wasPlaying && !handedBack) || fmSeenAtSleepRecently();
         setRadioPlaying(playing);
-        return note("shutdown: " + (playing ? "FM left playing" : "FM not playing")
-                + " (mcu_current_source was " + src + ")" + released);
+        // "WAS PLAYING" AND NOT "LEFT PLAYING", which is the wording this line
+        // carried while it meant the other thing. The flag now answers what the
+        // driver had on going into the sleep, not what this app left behind.
+        return note("shutdown: " + (playing ? "FM was playing" : "FM not playing")
+                + " (mcu_current_source was " + src
+                + (fmSeenAtSleepRecently() ? ", FM seen by a sleep route" : "")
+                + ")" + released);
     }
 
     /**
@@ -551,5 +603,86 @@ public final class CarnyxWake {
         } catch (Throwable t) {
             Log.w(TAG, "could not record the radio state: " + t);
         }
+    }
+
+    // ── THE HANDBACK USED TO ERASE THE FACT IT WAS SUPPOSED TO PRESERVE ──────
+    //
+    // MEASURED, 2026-09-17, and the log reads as a clean success right up until
+    // the last line:
+    //
+    //     11:11:40  mcu_state=3: state observer, kernel: source→Android sent
+    //     11:11:42  shutdown: FM not playing (mcu_current_source was 0)
+    //     11:11:43  bound, come-forward on, but the radio was not playing
+    //
+    // FM WAS PLAYING. `releaseSource` tests ownership before it sends anything
+    // and it sent, so the source was 4 at 11:11:40. Two seconds later the
+    // shutdown hook read the MCU, found 0 — because the handback had just worked
+    // — and recorded "not playing". The listener then declined to come forward,
+    // correctly, on a fact that was false.
+    //
+    // So the two features cancelled each other out: the better the handback
+    // worked, the more reliably the come-forward gate was told the radio had
+    // been off. `radio_playing` could not be true on any cycle where the thing
+    // it gates on had actually happened.
+    //
+    // THE FIX IS TO RECORD IT WHERE IT IS STILL TRUE — in the route that hands
+    // back, which has just tested for FM and knows. #133's outcome A asks about
+    // the state BEFORE the sleep — *"If the radio wasn't playing when the unit
+    // went to sleep"* — and that is what this now measures, rather than what is
+    // left after this app has finished tidying up.
+
+    /**
+     * How long a sleep-time sighting of FM stays good, in milliseconds.
+     *
+     * <p>BOUNDED BECAUSE {@code SLEEP_ACTIONS} INCLUDES {@code ACTION_SCREEN_OFF}.
+     * An unbounded flag would let a screen blank with FM playing mark the process
+     * for the rest of its life, so a driver who then turned the radio off and
+     * closed the app would still be recorded as having left it playing — the
+     * come-forward defect, re-entered by a side door.
+     *
+     * <p>THIRTY SECONDS against a measured two. The gap between the handback at
+     * 11:11:40 and the shutdown read at 11:11:42 is the interval this has to
+     * cover, and an order of magnitude over it is enough for a slower cycle
+     * without being long enough to span a driver changing their mind.
+     */
+    private static final long FM_AT_SLEEP_WINDOW_MS = 30_000L;
+
+    /** When a sleep route last saw FM as the MCU's source. See below. */
+    private static volatile long fmAtSleepElapsed = Long.MIN_VALUE;
+
+    /**
+     * Record that a sleep route found FM playing, BEFORE it hands the source
+     * back.
+     *
+     * <p>BOTH HALVES, because either one alone has a hole. The durable write is
+     * for the cycle where this process is killed without a Destroy and the
+     * shutdown hook never runs at all; the in-memory stamp is for the ordinary
+     * cycle, where the hook DOES run two seconds later and would otherwise read
+     * the MCU we have just changed and overwrite the durable one with false.
+     *
+     * <p>ELAPSED REALTIME, which counts through a suspend, rather than
+     * {@code uptimeMillis}, which stops. A stamp that froze with the SoC would
+     * read as fresh on the far side of an ignition cycle.
+     */
+    static synchronized void noteFmAtSleep() {
+        fmAtSleepElapsed = SystemClock.elapsedRealtime();
+        setRadioPlaying(true);
+    }
+
+    /**
+     * Whether a sleep route saw FM recently enough to believe.
+     *
+     * <p>The lower guard is not superstition: {@code elapsedRealtime} is
+     * monotonic, but a negative age would mean the stamp came from the future,
+     * and answering "yes, recent" to that is the one reading that cannot be
+     * right.
+     */
+    private static boolean fmSeenAtSleepRecently() {
+        long stamped = fmAtSleepElapsed;
+        if (stamped == Long.MIN_VALUE) {
+            return false;
+        }
+        long age = SystemClock.elapsedRealtime() - stamped;
+        return age >= 0 && age <= FM_AT_SLEEP_WINDOW_MS;
     }
 }

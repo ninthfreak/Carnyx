@@ -489,6 +489,16 @@ public final class NwdBridge {
      * @return one line naming both outcomes, never null.
      */
     static String handBackNow() {
+        // ── THE SIGHTING COMES BEFORE THE HANDBACK, AND THAT IS THE POINT ────
+        //
+        // This is the last instant at which "was the driver listening to FM?"
+        // can be answered, because the next two calls are what make it stop
+        // being true. `CarnyxWake.onAppDestroyed` used to answer it afterwards
+        // and got the opposite of the truth on every cycle where this worked.
+        // See `CarnyxWake.noteFmAtSleep` for the log that showed it.
+        if (mcuSource() == 4) {
+            CarnyxWake.noteFmAtSleep();
+        }
         String direct = CarnyxKernel.handBackSource();
         String broadcast = releaseSource();
         return direct + "; " + broadcast;
@@ -896,10 +906,12 @@ public final class NwdBridge {
      *
      * <p>Volatile, not synchronized: it is read on a binder thread and written
      * on the UI thread, and a stale read costs one ignition cycle of the old
-     * behaviour. TRUE by default, matching `Settings::default`, so a build where
-     * the mirror never runs still releases.
+     * behaviour. FALSE by default since #133, matching `Settings::default`, so a
+     * build where the mirror never runs leaves the radio alone — which is what
+     * the kernel remap wants, since the handback fights it. See
+     * `Settings::release_on_sleep`.
      */
-    private static volatile boolean releaseOnSleep = true;
+    private static volatile boolean releaseOnSleep = false;
 
     /**
      * See {@link #releaseOnSleep}. Called from Rust whenever the switch moves.

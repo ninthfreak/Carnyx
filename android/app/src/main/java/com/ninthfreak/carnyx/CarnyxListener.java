@@ -341,8 +341,26 @@ public final class CarnyxListener extends NotificationListenerService {
         // playing. `NwdBridge.releaseSource` makes the same test first.
         int src = mcuInt(MCU_SOURCE_KEY, -1);
         if (src != 4) {
+            // NOTHING IS WRITTEN ON THIS BRANCH, and the restraint is the whole
+            // reason this gate is safe. Seeing a source that is not FM here does
+            // NOT mean FM was off: the app's own routes run in another process,
+            // fire on the same signal, and may have handed the source back
+            // milliseconds ago. Writing `radio_playing = false` from here would
+            // be this process clobbering a true the app had just recorded
+            // correctly — the 2026-09-17 defect, re-created across the process
+            // boundary. The flag is cleared by the shutdown hook and spent on
+            // read below; this route only ever adds a sighting.
             note(where + ": FM is not the source (" + src + ")");
             return;
+        }
+        // RECORDED BEFORE THE RELEASE. See `CarnyxWake.noteFmAtSleep`: after the
+        // next line this fact stops being observable, and this may be the only
+        // process still alive to observe it.
+        try {
+            getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_RADIO_PLAYING, true).commit();
+        } catch (Throwable t) {
+            note(where + ": FM was playing but the flag could not be recorded: " + t);
         }
         try {
             sendBroadcast(new Intent(ACTION_CHANGE_SOURCE)
@@ -366,18 +384,21 @@ public final class CarnyxListener extends NotificationListenerService {
     /**
      * The driver's switch.
      *
-     * <p>DEFAULTS TO TRUE, for {@code SleepReceiver.releaseOnSleep}'s reason: the
-     * failure here is silence — the radio playing into a parked car — and the
-     * setting's own default is on, so an unset value means a driver who has never
-     * touched the switch rather than one who turned it off.
+     * <p>DEFAULTS TO FALSE SINCE #133, matching {@code Settings::default}. The
+     * switch shipped on while the handback was the only lever on the wake
+     * relaunch; the kernel remap in {@code docs/vendor/replace_source_list.xml}
+     * is the real one, and it fights the handback — so off is the default, and an
+     * unset key means an install whose app has not pushed the mirror yet, which
+     * takes the same off. A driver on a unit without the remap turns it back on
+     * in the UI, which writes the key and never reaches this fallback.
      */
     private boolean releaseOnSleep() {
         try {
             return getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, false);
         } catch (Throwable t) {
             Log.w(TAG, "could not read the release switch: " + t);
-            return true;
+            return false;
         }
     }
 

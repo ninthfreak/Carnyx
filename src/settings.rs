@@ -215,6 +215,24 @@ pub enum Action {
     /// removed, and the row's own sub-line says so, because "notification
     /// access" on a radio is a thing a driver is right to look twice at.
     AskListenerPermission,
+    /// Install the kernel source remap. See `CarnyxRemap.java` and
+    /// `docs/vendor/README.md`.
+    ///
+    /// THE ONLY ROW THAT WRITES A SYSTEM PARTITION, which is why it is last and
+    /// why its answer is never assumed. It asks the vendor's own exported file
+    /// copier to drop `replace_source_list.xml` into `/config/app`, after which
+    /// the head unit's kernel launches Carnyx wherever it would have launched the
+    /// stock radio app — #133 outcome A. Whether the factory process can write
+    /// `/config` is not knowable from the firmware, so the tap only REQUESTS it
+    /// and [`Action::CheckRadioRemap`] reads the result back.
+    InstallRadioRemap,
+    /// Read the installed remap back. See [`Action::InstallRadioRemap`].
+    ///
+    /// A SEPARATE ROW BECAUSE THE COPY IS ANOTHER PROCESS' WORK, asynchronous and
+    /// behind a confirmation dialog. Install asks; this checks whether
+    /// `/config/app/replace_source_list.xml` actually arrived and names Carnyx.
+    /// Useful on its own, too — it reports the current state whenever tapped.
+    CheckRadioRemap,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -274,6 +292,22 @@ pub fn diag_actions() -> Vec<DiagAction> {
             sub: String::new(),
             divider_above: false,
             action: Action::AskListenerPermission,
+        },
+        // Its own group above "Clear log", because it is the one row that writes
+        // outside this app — the kernel remap that is outcome A's clean answer.
+        // The pair is ordered install-then-check, and the check sits directly
+        // under the install so the finger that tapped one finds the other.
+        DiagAction {
+            label: "Install radio takeover (writes to /config)".into(),
+            sub: String::new(),
+            divider_above: true,
+            action: Action::InstallRadioRemap,
+        },
+        DiagAction {
+            label: "Check radio takeover".into(),
+            sub: String::new(),
+            divider_above: false,
+            action: Action::CheckRadioRemap,
         },
         DiagAction {
             label: "Clear log".into(),
@@ -634,12 +668,27 @@ pub struct Settings {
     /// Hand the FM source back when the head unit says it is going to sleep
     /// (#92).
     ///
-    /// DEFAULT ON, which is the only default that matches what it is for. The
-    /// MCU remembers the current source across a sleep and restores it on ACC-on,
-    /// so a unit left on FM comes back into FM and the stock radio app launches
-    /// itself. Handing the source back means there is nothing for it to restore.
-    /// Off is for a driver who would rather Carnyx kept it, and for finding out
-    /// whether this path is the cause of something else.
+    /// DEFAULT OFF SINCE THE KERNEL REMAP (#133). The switch exists to stop the
+    /// stock radio app relaunching on wake: hand the MCU source back to Android
+    /// at sleep and there is nothing for the unit to restore into FM. It works,
+    /// but it is a workaround for not being able to touch the launch, and the
+    /// firmware read in `docs/vendor/` found the real lever —
+    /// `replace_source_list.xml` remaps the radio source (appid 8) to Carnyx, so
+    /// the kernel launches THIS app wherever it would have launched the stock
+    /// one.
+    ///
+    /// The two fight. `SourceMgr.keepCurrentSource` decides at power-off whether
+    /// to restore the radio source at all, and it reads `mcu_current_source` —
+    /// the exact byte this switch sets to 0. With the remap in place, "restore
+    /// the radio source" IS "launch Carnyx", so releasing suppresses the very
+    /// launch outcome A wants. Off is therefore the default that matches the
+    /// remap.
+    ///
+    /// ON is still meaningful on a unit WITHOUT the remap installed (no root, no
+    /// provisioning access): there the handback is the only thing that quiets FM
+    /// at ACC-off and on a force-close, so a driver who cannot write
+    /// `/config` turns it back on and gets outcome B/C. See
+    /// `docs/vendor/replace_source_list.xml`.
     pub release_on_sleep: bool,
     /// The status-bar clock (§4.8). Default ON.
     ///
@@ -732,7 +781,7 @@ impl Default for Settings {
             permissions_asked: false,
             clearing_logos: false,
             details_open: false,
-            release_on_sleep: true,
+            release_on_sleep: false,
             clock_on: true,
             nav_on: true,
             nav_hide_on_map: true,
@@ -850,13 +899,16 @@ mod tests {
                 "Ask for notification permission",
                 "Allow drawing over other apps",
                 "Allow notification access",
+                "Install radio takeover (writes to /config)",
+                "Check radio takeover",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, false, false, false, true],
-            "the log well runs into the first row; rules open the platform rows and close them"
+            [false, true, false, false, false, false, true, false, true],
+            "the log well runs into the first row; rules open the platform rows, \
+             the takeover pair, and the clear"
         );
         // THE ROWS THAT CHANGE SOMETHING SIT BELOW BOTH PROBES, so a mis-tap on
         // a probe costs a wasted read rather than a screen the driver did not
@@ -871,6 +923,13 @@ mod tests {
                 Action::AskListenerPermission
             ],
             "the three requests stay below both probes, in that order"
+        );
+        // THE ONE ROW THAT WRITES A SYSTEM PARTITION, and its check, sit last
+        // before "Clear log" — install then check, so the finger finds both.
+        assert_eq!(
+            rows[6..8].iter().map(|a| a.action).collect::<Vec<_>>(),
+            [Action::InstallRadioRemap, Action::CheckRadioRemap],
+            "the takeover install and its check are the last pair, in that order"
         );
     }
 

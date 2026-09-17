@@ -5589,6 +5589,20 @@ impl App {
             _ => None,
         };
 
+        // ── AND THE REMAP INSTALL/CHECK, FOR THE SAME REASON ────────────────
+        //
+        // Both cross into JNI — one stages a payload and starts the factory
+        // service, the other reads `/config` back — and both take no App state,
+        // so they run BEFORE the borrow and hand their line in, exactly as the
+        // three permission errands above do. Neither is deferred: staging three
+        // small files plus a `startService` is not the package-manager walk the
+        // probes defer for, and the read is a single file.
+        let remap_line = match action {
+            settings::Action::InstallRadioRemap => Some(crate::android::remap_install()),
+            settings::Action::CheckRadioRemap => Some(crate::android::remap_verify()),
+            _ => None,
+        };
+
         let saving = {
             let mut s = self.state.borrow_mut();
             match action {
@@ -5640,6 +5654,23 @@ impl App {
                     // for no other, so the fallback is unreachable rather than a
                     // default worth choosing.
                     let line = permission_line.unwrap_or_default();
+                    s.settings.log.push(&stamp(), &line);
+                    s.settings.set_note(action, line.clone());
+                    s.diag_status = line;
+                    None
+                }
+                // ── INSTALL THE KERNEL REMAP, OR CHECK IT ─────────────────────
+                //
+                // INLINE like the permission errands, and for the same reason:
+                // the JNI call ran above this borrow and left its line in
+                // `remap_line`. Install asks the factory copier and returns
+                // "requested"; Check reads `/config` back and returns the real
+                // state. One arm for both because the bodies are identical —
+                // write the line to the log, the row's note and the status
+                // strip — and the call that distinguishes them already happened.
+                settings::Action::InstallRadioRemap | settings::Action::CheckRadioRemap => {
+                    // Set by the match above for exactly these two actions.
+                    let line = remap_line.unwrap_or_default();
                     s.settings.log.push(&stamp(), &line);
                     s.settings.set_note(action, line.clone());
                     s.diag_status = line;
@@ -6968,19 +6999,19 @@ mod tests {
         let (ui, driver) = app_for("release-mirror");
         assert_eq!(
             crate::android::last_release_mirror(),
-            Some(true),
-            "start-up pushes the restored switch, which defaults on"
+            Some(false),
+            "start-up pushes the restored switch, which defaults off since #133"
         );
 
         // AND EVERY MOVE pushes the new one.
-        ui.invoke_settings_set_release_on_sleep(false);
+        ui.invoke_settings_set_release_on_sleep(true);
         assert_eq!(
             crate::android::last_release_mirror(),
-            Some(false),
-            "turning it off reaches the receiver too"
+            Some(true),
+            "turning it on reaches the receiver too"
         );
-        ui.invoke_settings_set_release_on_sleep(true);
-        assert_eq!(crate::android::last_release_mirror(), Some(true), "and back on");
+        ui.invoke_settings_set_release_on_sleep(false);
+        assert_eq!(crate::android::last_release_mirror(), Some(false), "and back off");
         drop(driver);
     }
 
@@ -7002,6 +7033,10 @@ mod tests {
         let _ui_lock = harness::ui_lock();
         let (_ui, driver) = app_for("sleepwatch");
         driver.drain_events();
+        // Release ships off since #133; this test proves the WATCH is armed via
+        // the source going back, so it opts the release in. See
+        // `Settings::release_on_sleep`.
+        driver.state.borrow_mut().settings.release_on_sleep = true;
 
         // Through the TUNER, which stays silent unless someone armed the watch.
         let tuner = driver.state.borrow().tuner.clone();
@@ -7042,6 +7077,9 @@ mod tests {
             Some(4),
             "the face holds FM before the kill"
         );
+        // Release ships off since #133; this test is about the handback, so it
+        // opts in. See `Settings::release_on_sleep`.
+        driver.state.borrow_mut().settings.release_on_sleep = true;
 
         // The receiver rewrites the action to carry the package it matched, so
         // the log says which name the cleaner used rather than just that one did.
@@ -7093,6 +7131,12 @@ mod tests {
         );
         assert!(driver.state.borrow().audio);
 
+        // RELEASE IS OFF BY DEFAULT SINCE #133 — the kernel remap is the intended
+        // lever on the wake relaunch and the handback fights it. This half tests
+        // what the switch does when a driver on an un-remapped unit turns it ON,
+        // so opt in explicitly.
+        driver.state.borrow_mut().settings.release_on_sleep = true;
+
         crate::android::ingest_sleep("com.nwd.ACTION_ACCOFF_UPDATE".into(), String::new());
         driver.drain_events();
 
@@ -7124,7 +7168,7 @@ mod tests {
 
         // ── AND THE SWITCH REALLY SWITCHES IT OFF ─────────────────────────────
         //
-        // Default ON, so the half above is the shipped behaviour. Off must leave
+        // Off is the shipped default now; the half above opted in. Off must leave
         // the source alone — and must STILL LOG the broadcast, because which one
         // arrives is the open question and is worth answering on a unit where the
         // driver does not want the release.

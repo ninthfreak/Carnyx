@@ -193,6 +193,15 @@ name = "com.nwd.radio"
 [[package.metadata.android.queries.package]]
 name = "com.nwd.kernel"
 
+# THE FACTORY SETTINGS APP, for its exported permissionless CopyFileService — the
+# file copier `CarnyxRemap` drives to write `/config/app/replace_source_list.xml`
+# and install the kernel source remap without root. Same silent-failure rule as
+# the others: without this entry `startService` cannot see the package on
+# targetSdk 30+ and the install row reports it unreachable on a unit that has it.
+# Kept in step with android/app/src/main/AndroidManifest.xml.
+[[package.metadata.android.queries.package]]
+name = "com.nwd.factory.setting"
+
 # OSMAND, all four application ids it ships under, for the turn-by-turn
 # integration. Same rule as the two above: from targetSdk 30 a package cannot see
 # another it has not declared, and the filtering is SILENT — `resolveService`
