@@ -65,14 +65,18 @@
   where <config> is SystemProperties "ro.nwd.config.path", default "/config".
   On this unit that resolves to /config/app/replace_source_list.xml.
 
-  /config is a system partition. Nothing in the shipped firmware writes this
-  file — the kernel only READS it, and no vendor service exposes an
-  app-reachable write. Installing it therefore needs one of:
+  /config is a system partition. The kernel only READS this file, but the
+  factory app's exported, permissionless CopyFileService can WRITE it — Carnyx
+  drives that from the "Install radio takeover" settings row (see CarnyxRemap
+  and docs/vendor/README.md, "The factory copier writes arbitrary paths"). The
+  blunt routes remain:
 
     * root (remount /config rw, drop the file, chmod 644), or
-    * a recovery/ADB shell with system access, or
-    * the vendor factory USB-import path, if this unit's factory tool copies
-      /config from external media.
+    * a recovery/ADB shell with system access.
+
+  Whichever writes it, the payload for the factory copier is a DIRECTORY copy,
+  not this file alone — the copier skips a lone non-update.zip file, and its
+  update.zip branch triggers a factory reset. README.md has the exact layout.
 
   After the file exists, either reboot or broadcast
   `com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE` (the kernel registers a receiver

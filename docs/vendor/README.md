@@ -488,42 +488,77 @@ config-driven copier, and its config names the destination:
       // dialog UNLESS COPY_PATH == <config>/app  OR  <COPY_PATH>/autocopy exists
       -> CopyFileThread
 
-    CopyFileThread, per <PathItem PathSrc="..." PathDes="..."> in that config:
-      dst = PathDes                     // used literally
-      src = (COPY_PATH == <config>/app) ? PathSrc : COPY_PATH + PathSrc
-      IsDesDirExist(dst) -> mkdirs()    // creates the dest dir
-      CopyFile(src, dst)                // then `chmod 777 dst` via Runtime.exec
+    CopyFileThread.run():
+      count = getConfigCount(CopyFileConfig.xml)   // number of <PathItem>
+      if (count <= 1) ParserXMLFile(...) else ParserXMLFileEx(...)
 
-So `PathDes` is a caller-controlled literal destination — set it to
-`/config/app/replace_source_list.xml` and the copier writes there, making the
-directory if absent. The confirmation dialog is skipped when the source dir
-holds an empty file named `autocopy`.
+    ParserXMLFile, per <PathItem PathSrc="..." PathDes="...">:
+      src = (COPY_PATH == <config>/app) ? PathSrc : COPY_PATH + PathSrc
+      if (File(src).isDirectory()) {
+          if (IsDesDirExist(PathDes))              // true if PathDes already exists
+              for entry in src.list():
+                  CopyFile(src/entry, PathDes/entry)   // chmod 777 each
+      } else if (src is a file) {
+          if (name != "update.zip") -> "srcPath isn't dir", SKIPPED
+          else -> OTA path; with an `autocopy` marker present, MASTER_CLEAR
+      }
+
+**THE PAYLOAD MUST BE A DIRECTORY COPY, and this is not a style choice.** With a
+single `<PathItem>` the copier takes `ParserXMLFile`, which only copies the
+CONTENTS of a source DIRECTORY into the destination directory. A lone FILE source
+is logged and skipped unless it is named `update.zip` — and that branch, with an
+`autocopy` marker present, fires a `MASTER_CLEAR` **factory reset**. So the file
+approach does not work and its neighbour is dangerous.
+
+`IsDesDirExist(PathDes)` returns true when `PathDes` already exists (or is a
+mounted external/internal root). `/config/app` exists on the unit — the kernel
+reads its files — so the destination check passes and each source file is copied
+in by name.
 
 The recipe, no root:
 
-1. A dir the factory app can read — external storage works, it holds
+1. A dir the factory app can read — external storage; it holds
    `WRITE_EXTERNAL_STORAGE` and targetSdk 19 predates scoped storage. Call it
    `<SRC>`.
-2. In `<SRC>`, three files:
-   - `replace_source_list.xml` — the remap (this repo's copy);
-   - `autocopy` — empty, to skip the dialog;
-   - `CopyFileConfig.xml`:
+2. Lay it out as a directory copy:
 
-         <?xml version="1.0" encoding="utf-8"?>
-         <CopyConfig>
-           <PathItem PathSrc="/replace_source_list.xml"
-                     PathDes="/config/app/replace_source_list.xml" />
-         </CopyConfig>
+       <SRC>/
+         CopyFileConfig.xml
+         payload/
+           replace_source_list.xml        # this repo's copy
 
-     The parser only keys on `PathItem` elements and their `PathSrc` / `PathDes`
-     attributes; the root element name is not checked.
-3. Start it:
+   with `CopyFileConfig.xml`:
+
+       <?xml version="1.0" encoding="utf-8"?>
+       <CopyConfig>
+         <PathItem PathSrc="/payload" PathDes="/config/app" />
+       </CopyConfig>
+
+   The parser only keys on `PathItem` elements and their `PathSrc` / `PathDes`
+   attributes; the root element name is not checked. `PathSrc` is relative to
+   `COPY_PATH`, `PathDes` is absolute.
+3. **No `autocopy` marker.** Omitting it keeps the payload away from the
+   `update.zip`/`MASTER_CLEAR` branch entirely AND means the copy only proceeds
+   when a human taps OK on the copier's confirmation dialog — the right gate for
+   a system-partition write.
+4. Start it:
 
        am startservice -n com.nwd.factory.setting/com.nwd.factory.copy.CopyFileService \
          --es COPY_PATH <SRC>
 
-   Because it is exported and permissionless, Carnyx could issue this
-   `startService` itself (add `com.nwd.factory.setting` to `<queries>` first).
+   Because it is exported and permissionless, Carnyx issues this `startService`
+   itself — see "Carnyx installs it itself" below.
+
+## Carnyx installs it itself: the `InstallRadioRemap` action
+
+`CarnyxRemap.java` (dexed by `build.rs`) does exactly the recipe above:
+`getExternalFilesDir(null)/carnyx-remap/` as `<SRC>`, `payload/` holding the
+remap, one `CopyFileConfig.xml`, no `autocopy`, then `startService` on
+`CopyFileService`. `com.nwd.factory.setting` is in `<queries>` so the package is
+visible on targetSdk 30+. Two settings rows drive it — "Install radio takeover
+(writes to /config)" and "Check radio takeover" — the second reads
+`/config/app/replace_source_list.xml` back and reports whether it arrived and
+names Carnyx. The seam is `src/android/remap.rs`.
 
 ## THE ONE UNKNOWN THIS CANNOT SETTLE: is `/config` writable by that process?
 

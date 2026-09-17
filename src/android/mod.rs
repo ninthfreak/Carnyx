@@ -50,6 +50,8 @@ pub mod nwd;
 #[cfg(target_os = "android")]
 pub mod probe;
 #[cfg(target_os = "android")]
+pub mod remap;
+#[cfg(target_os = "android")]
 pub mod service;
 #[cfg(target_os = "android")]
 pub mod stock;
@@ -912,6 +914,30 @@ pub fn stock_radio_report() -> Vec<String> {
 #[cfg(not(target_os = "android"))]
 pub fn stock_radio_report() -> Vec<String> {
     Vec::new()
+}
+
+/// Install the kernel source remap through the factory copier. See `remap`.
+#[cfg(target_os = "android")]
+pub fn remap_install() -> String {
+    remap::install()
+}
+
+/// The host has no `/config` to write and no factory copier. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn remap_install() -> String {
+    "radio takeover: only on the unit".into()
+}
+
+/// Read the installed remap back and report. See `remap`.
+#[cfg(target_os = "android")]
+pub fn remap_verify() -> String {
+    remap::verify()
+}
+
+/// The host has no `/config` to read back. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn remap_verify() -> String {
+    "radio takeover: only on the unit".into()
 }
 
 /// Take the station pop-up down; the driver is back on the face.

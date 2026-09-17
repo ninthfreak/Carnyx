@@ -5589,6 +5589,20 @@ impl App {
             _ => None,
         };
 
+        // ── AND THE REMAP INSTALL/CHECK, FOR THE SAME REASON ────────────────
+        //
+        // Both cross into JNI — one stages a payload and starts the factory
+        // service, the other reads `/config` back — and both take no App state,
+        // so they run BEFORE the borrow and hand their line in, exactly as the
+        // three permission errands above do. Neither is deferred: staging three
+        // small files plus a `startService` is not the package-manager walk the
+        // probes defer for, and the read is a single file.
+        let remap_line = match action {
+            settings::Action::InstallRadioRemap => Some(crate::android::remap_install()),
+            settings::Action::CheckRadioRemap => Some(crate::android::remap_verify()),
+            _ => None,
+        };
+
         let saving = {
             let mut s = self.state.borrow_mut();
             match action {
@@ -5640,6 +5654,23 @@ impl App {
                     // for no other, so the fallback is unreachable rather than a
                     // default worth choosing.
                     let line = permission_line.unwrap_or_default();
+                    s.settings.log.push(&stamp(), &line);
+                    s.settings.set_note(action, line.clone());
+                    s.diag_status = line;
+                    None
+                }
+                // ── INSTALL THE KERNEL REMAP, OR CHECK IT ─────────────────────
+                //
+                // INLINE like the permission errands, and for the same reason:
+                // the JNI call ran above this borrow and left its line in
+                // `remap_line`. Install asks the factory copier and returns
+                // "requested"; Check reads `/config` back and returns the real
+                // state. One arm for both because the bodies are identical —
+                // write the line to the log, the row's note and the status
+                // strip — and the call that distinguishes them already happened.
+                settings::Action::InstallRadioRemap | settings::Action::CheckRadioRemap => {
+                    // Set by the match above for exactly these two actions.
+                    let line = remap_line.unwrap_or_default();
                     s.settings.log.push(&stamp(), &line);
                     s.settings.set_note(action, line.clone());
                     s.diag_status = line;
