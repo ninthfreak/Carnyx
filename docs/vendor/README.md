@@ -213,18 +213,19 @@ is the hard kind to notice.
   Irrelevant on Allwinner, recorded because it cost a day to establish.
 - **The stock app cannot start itself.** `com.nwd.radio` declares exactly one
   component, a MAIN/LAUNCHER activity — no receiver, no service, no provider. Every
-  appearance of it is an explicit `startActivity` from another process, and the
-  process that does it is not in these files.
+  appearance of it is an explicit `startActivity` from another process. That
+  process is `com.nwd.kernel` — see "What launches the stock radio app, and how
+  to replace it" at the end of this file. It was not in the first two APKs but is
+  in the kernel APK.
 
 ## What is still unknown
 
 - Whether `KernelService` restricts who may receive `ACTION_MCU_STATE_CHANGE`.
   The `ContentObserver` route exists precisely so this does not have to be known.
-- How to bind `IKernelFeature` — transaction 1, `request(byte[])`, a genuinely
-  blocking call that would let Carnyx hand the source back synchronously instead
-  of by broadcast. The service is not in these APKs, so its binding action and
-  AIDL are unestablished. This is the route to a clean fix and it needs a third
-  APK off the unit: `com.nwd.kernel`.
+- ~~How to bind `IKernelFeature`.~~ RESOLVED with the `com.nwd.kernel` APK — the
+  bind action, descriptor, transaction and frame are all established and built as
+  `CarnyxKernel`. See "The synchronous handback, from `com.nwd.kernel`" above.
+  The 09-17 drive confirmed the blocking call reaches the wire.
 
 ---
 
@@ -366,3 +367,120 @@ Reversing camera; irrelevant here.
 
 **`com.android.launcher.nwd.res.k24`** is a resource package with no code of
 interest.
+
+---
+
+# What launches the stock radio app, and how to replace it
+
+Read off `com.nwd.kernel_v210` on 2026-09-17, after the 09-17 drive proved the
+handback works and the stock app still launches anyway. This is the answer to the
+question the dead-end note above left open: *"the process that does it is not in
+these files."* It is `com.nwd.kernel`, and it now is.
+
+## The kernel restores a source on power-up and launches its app
+
+`com.nwd.kernel.source.SourceMgr` owns which app serves each audio "source". On
+power-up it restores the source that was active at the last power-off and calls
+`startApp(SourceItem)`, which ends in `startActivity` on that source's app. The
+radio source is **appid 8** (`SourceConstant.APPID_RADIO`) — a different number
+from the MCU's own source id 4; do not confuse them.
+
+    SourceMgr.startApp(SourceItem item):
+      ...
+      if (mReplaceSourceList.isContain(item.getAppid())) {
+          item.setPackageName(mReplaceSourceList.findPkgNameByAppid(appid));
+          item.setClassName(mReplaceSourceList.findClassNameByAppid(appid));
+      }
+      item.setComponent(new ComponentName(pkg, cls));
+      item.addFlags(FLAG_ACTIVITY_NEW_TASK);
+      startActivity(item);            // catch -> getLaunchIntentForPackage(pkg)
+
+This closes the loop with the 09-17 log. Carnyx handed the MCU audio source back
+(`mcu_current_source` went 4 -> 0), and the radio app launched regardless,
+because the kernel restores from its OWN record, not from `mcu_current_source` at
+launch time. That record is `SourceKeeper`, a `source_keeper` SharedPreferences
+file (`key_packname` / `key_classname` / appid) inside the kernel's data.
+
+## The substitution hook: `replace_source_list.xml`
+
+`com.nwd.kernel.source.ReplaceSourceList` reads a config file and, for any appid
+it contains, overrides the package and class the kernel is about to launch:
+
+    ReplaceSourceList.CONFIG = getConfigPath() + "/app/replace_source_list.xml"
+    getConfigPath() = SystemProperties("ro.nwd.config.path", "/config")
+
+so on this unit: **`/config/app/replace_source_list.xml`**. Format, one entry per
+remapped source:
+
+    <ReplaceSourceList>
+      <ReplaceSourceItem appid="8" pkgName="com.ninthfreak.carnyx"
+                         className="android.app.NativeActivity" />
+    </ReplaceSourceList>
+
+The file lives in this tree at `docs/vendor/replace_source_list.xml`, with its
+full header. An `appid="8"` entry pointing at Carnyx makes the kernel launch
+Carnyx wherever it would have launched the stock radio app. The stock app is a
+passive MAIN/LAUNCHER-only target, so once the kernel stops pointing at it, it is
+never seen — this is #133 outcome A's substitution half, guaranteed by the code
+rather than inferred.
+
+`className` is not load-bearing: if it fails to resolve, `startApp` falls back to
+`getLaunchIntentForPackage(pkgName)`. The **package name** is the field that has
+to be right. Carnyx's is `com.ninthfreak.carnyx`, launcher activity
+`android.app.NativeActivity` (confirmed in `android/app/src/main/AndroidManifest.xml`).
+
+The kernel reloads the file live on the broadcast
+`com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE` (registered in `ReplaceSourceList`'s
+constructor, no permission to send), so a reboot is not strictly required after
+writing it.
+
+## Which app, not whether — and the release-on-sleep interaction
+
+The remap decides WHICH app the kernel launches for the radio source. It does not
+decide WHETHER the radio source is restored at all. That is
+`SourceMgr.keepCurrentSource`, which runs at power-off and reads
+`mcu_current_source`:
+
+    keepCurrentSource (mIsKeepLauncherSource=1, mNewResumeSourceMode=-1 on this ROM):
+      v1 = Settings.System getInt("mcu_current_source")
+      if (currentApp.getSourceProperty() != 0 || v1 != 0 || isNwdMedia())
+          keepSource(getTopSource())              // radio stays -> Carnyx on wake
+      else
+          keepSource(getInitSourceByAppid(4))     // launcher -> nothing on wake
+
+So `mcu_current_source` at power-off is the byte that decides whether the radio
+source (hence Carnyx) is restored. **Carnyx's release-on-sleep handback sets that
+byte to 0.** With the remap in place, "restore the radio source" *is* "launch
+Carnyx" — the goal — so the handback is now counterproductive: it can suppress
+the launch on exactly the cycles where the radio was playing. `release_on_sleep`
+therefore ships OFF as of #133 (`src/settings.rs`). It stays meaningful only on a
+unit WITHOUT the remap, where the handback is the sole lever on the wake
+relaunch.
+
+Config-flag defaults were read from `NwdConfig` (`mIsKeepLauncherSource = 1`,
+`mNewResumeSourceMode = -1`); they are overridable from the same config
+properties file, so a unit with a different config could route the power-off save
+differently.
+
+## Where the file goes, and why installing the APK is not enough
+
+`/config` is a system partition. Nothing in the shipped firmware writes
+`replace_source_list.xml` — the kernel only reads it, and no vendor service
+(checked across all six APKs) exposes an app-reachable write. Installing it needs
+one of:
+
+- root: remount `/config` rw, drop the file, `chmod 644`;
+- a recovery / ADB shell with system access;
+- the vendor factory USB-import path, if this unit's factory tool copies `/config`
+  from external media.
+
+This is why the remap is outcome A's clean answer but not one Carnyx can install
+itself on an unrooted unit.
+
+## Provenance
+
+`com.nwd.kernel_v210` (`com.nwd.kernel`):
+`SourceMgr` (`startApp`, `keepCurrentSource`, `SourceKeeper`),
+`ReplaceSourceList`, `SourceConstant.APPID_RADIO = 8`,
+`NwdConfig` (`mIsKeepLauncherSource`, `mNewResumeSourceMode`),
+`NwdConfigUtils.getConfigPath` -> `ro.nwd.config.path` default `/config`.

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  THE VENDOR'S OWN SOURCE-SUBSTITUTION HOOK, aimed at Carnyx.
+
+  This file makes the head unit's kernel launch Carnyx wherever it would
+  otherwise launch the stock FM radio app. It is READ BY THE FIRMWARE, not by
+  Carnyx, and it is NOT installed by installing the APK — see "WHERE THIS GOES"
+  below. It is kept here as the artifact plus its evidence.
+
+  ── WHAT THE KERNEL DOES WITH IT ────────────────────────────────────────────
+
+  `com.nwd.kernel` decides which app owns each audio "source". Radio is source
+  appid 8 (com.nwd.kernel.source.SourceConstant.APPID_RADIO), which is a
+  DIFFERENT number from the MCU's own source id 4 — do not confuse them.
+
+  On power-up the kernel restores whatever source was active when the unit
+  slept. If that source is the radio, `SourceMgr.startApp` launches the radio
+  app with `startActivity`. Immediately before it does, it consults this file:
+
+      com.nwd.kernel.source.SourceMgr, startApp():
+        if (mReplaceSourceList.isContain(appid)) {
+            item.setPackageName(findPkgNameByAppid(appid));   // -> here
+            item.setClassName(findClassNameByAppid(appid));   // -> here
+        }
+        ...
+        item.addFlags(FLAG_ACTIVITY_NEW_TASK);
+        startActivity(item);
+
+  So a single entry for appid 8 redirects the launch to Carnyx. The stock radio
+  app is a passive target — its whole manifest is one MAIN/LAUNCHER activity,
+  no receivers, no services — so it never appears once the kernel stops being
+  pointed at it.
+
+  ── THE className FALLBACK, WHY THE PACKAGE IS WHAT MATTERS ──────────────────
+
+  Carnyx's launcher activity is android.app.NativeActivity (Slint/winit ships
+  no named Activity of its own). If that class ever fails to resolve,
+  `startApp` catches the exception and falls back to
+  `getPackageManager().getLaunchIntentForPackage(pkgName)` — i.e. it launches
+  the package's declared launcher activity regardless. So the package name is
+  the load-bearing field; the class name only has to be close.
+
+  ── WHAT THIS DOES AND DOES NOT DECIDE ──────────────────────────────────────
+
+  It controls WHICH app the kernel launches for the radio source. It does NOT
+  control WHETHER the kernel restores the radio source at all — that is decided
+  at power-off by `SourceMgr.keepCurrentSource`, which reads Settings.System
+  "mcu_current_source" and saves either the current source or the launcher
+  (appid 4). Config defaults on this ROM: mIsKeepLauncherSource = 1,
+  mNewResumeSourceMode = -1.
+
+  Consequence for Carnyx: turn RELEASE-ON-SLEEP OFF when this file is in place.
+  That switch hands the MCU source back to Android at sleep, setting
+  mcu_current_source to 0 — which is the exact value `keepCurrentSource` reads
+  to decide NOT to restore the radio source. With the remap, "restore the radio
+  source" IS "launch Carnyx", so releasing works against the goal. The default
+  was flipped to off for this reason.
+
+  ── WHERE THIS GOES ─────────────────────────────────────────────────────────
+
+  The kernel reads it from:
+
+      <config>/app/replace_source_list.xml
+
+  where <config> is SystemProperties "ro.nwd.config.path", default "/config".
+  On this unit that resolves to /config/app/replace_source_list.xml.
+
+  /config is a system partition. Nothing in the shipped firmware writes this
+  file — the kernel only READS it, and no vendor service exposes an
+  app-reachable write. Installing it therefore needs one of:
+
+    * root (remount /config rw, drop the file, chmod 644), or
+    * a recovery/ADB shell with system access, or
+    * the vendor factory USB-import path, if this unit's factory tool copies
+      /config from external media.
+
+  After the file exists, either reboot or broadcast
+  `com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE` (the kernel registers a receiver
+  for it and reloads on the spot — no permission required to send it).
+
+  ── PROVENANCE ──────────────────────────────────────────────────────────────
+
+  Read off com.nwd.kernel_v210 (com.nwd.kernel):
+    - SourceMgr.startApp / keepCurrentSource
+    - ReplaceSourceList (loadConfig, findPkgNameByAppid, findClassNameByAppid)
+    - SourceConstant.APPID_RADIO = 8
+    - NwdConfig (mIsKeepLauncherSource, mNewResumeSourceMode defaults)
+    - NwdConfigUtils.getConfigPath -> ro.nwd.config.path, default "/config"
+-->
+<ReplaceSourceList>
+    <ReplaceSourceItem appid="8" pkgName="com.ninthfreak.carnyx" className="android.app.NativeActivity" />
+</ReplaceSourceList>

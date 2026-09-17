@@ -505,10 +505,16 @@ public final class CarnyxWake {
         }
         boolean wasPlaying = src == 4;
 
-        boolean on = true;
+        // FALSE ON A FAILED OR ABSENT READ, matching the shipped default since
+        // #133. An unreadable key means the app has never pushed the mirror,
+        // which on a fresh install means it has barely run — and the default it
+        // would have pushed is off, because the kernel remap is the intended way
+        // to stop the relaunch and the handback fights it. See
+        // `Settings::release_on_sleep`.
+        boolean on = false;
         try {
             on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, false);
         } catch (Throwable t) {
             Log.w(TAG, "could not read the release switch: " + t);
         }

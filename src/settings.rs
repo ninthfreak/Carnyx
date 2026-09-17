@@ -634,12 +634,27 @@ pub struct Settings {
     /// Hand the FM source back when the head unit says it is going to sleep
     /// (#92).
     ///
-    /// DEFAULT ON, which is the only default that matches what it is for. The
-    /// MCU remembers the current source across a sleep and restores it on ACC-on,
-    /// so a unit left on FM comes back into FM and the stock radio app launches
-    /// itself. Handing the source back means there is nothing for it to restore.
-    /// Off is for a driver who would rather Carnyx kept it, and for finding out
-    /// whether this path is the cause of something else.
+    /// DEFAULT OFF SINCE THE KERNEL REMAP (#133). The switch exists to stop the
+    /// stock radio app relaunching on wake: hand the MCU source back to Android
+    /// at sleep and there is nothing for the unit to restore into FM. It works,
+    /// but it is a workaround for not being able to touch the launch, and the
+    /// firmware read in `docs/vendor/` found the real lever —
+    /// `replace_source_list.xml` remaps the radio source (appid 8) to Carnyx, so
+    /// the kernel launches THIS app wherever it would have launched the stock
+    /// one.
+    ///
+    /// The two fight. `SourceMgr.keepCurrentSource` decides at power-off whether
+    /// to restore the radio source at all, and it reads `mcu_current_source` —
+    /// the exact byte this switch sets to 0. With the remap in place, "restore
+    /// the radio source" IS "launch Carnyx", so releasing suppresses the very
+    /// launch outcome A wants. Off is therefore the default that matches the
+    /// remap.
+    ///
+    /// ON is still meaningful on a unit WITHOUT the remap installed (no root, no
+    /// provisioning access): there the handback is the only thing that quiets FM
+    /// at ACC-off and on a force-close, so a driver who cannot write
+    /// `/config` turns it back on and gets outcome B/C. See
+    /// `docs/vendor/replace_source_list.xml`.
     pub release_on_sleep: bool,
     /// The status-bar clock (§4.8). Default ON.
     ///
@@ -732,7 +747,7 @@ impl Default for Settings {
             permissions_asked: false,
             clearing_logos: false,
             details_open: false,
-            release_on_sleep: true,
+            release_on_sleep: false,
             clock_on: true,
             nav_on: true,
             nav_hide_on_map: true,

@@ -264,7 +264,7 @@ export component AppWindow inherits Window {
     in property <bool> settings-details-open: false;
     in property <[TunerDetail]> settings-tuner-details;
     in property <[TunerSource]> settings-sources;
-    in property <bool> settings-release-on-sleep: true;
+    in property <bool> settings-release-on-sleep: false;
     in property <bool> settings-clock-on: true;
     /// What the Clock row says underneath — it REPORTS the 12/24 format that
     /// Android is in, it does not offer it. See `crate::clock::sub_line`.

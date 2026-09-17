@@ -140,20 +140,19 @@ public final class SleepReceiver extends BroadcastReceiver {
     /**
      * The driver's switch, as {@link CarnyxWake#setReleaseOnSleep} last left it.
      *
-     * <p>DEFAULTS TO TRUE, which is the opposite of {@code WakeReceiver}'s
-     * choice about its own flag and for the opposite reason. There, acting on an
-     * unreadable flag would take the screen from whatever the driver was
-     * looking at. Here the failure is silence — the radio playing into a parked
-     * car — and the setting's own default is on, so an unset value means a
-     * driver who has never touched the switch rather than one who turned it off.
+     * <p>DEFAULTS TO FALSE SINCE #133, matching {@code Settings::default}. This
+     * whole receiver is unreachable on the shipped build — see the class doc —
+     * so the value only matters if a future build revives it. It tracks the same
+     * default as every other read of this key: off, because the kernel remap is
+     * the intended lever on the wake relaunch and the handback fights it.
      */
     private boolean releaseOnSleep(Context context) {
         try {
             SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            return p.getBoolean(KEY_RELEASE_ON_SLEEP, true);
+            return p.getBoolean(KEY_RELEASE_ON_SLEEP, false);
         } catch (Throwable t) {
             Log.w(TAG, "could not read the release switch: " + t);
-            return true;
+            return false;
         }
     }
 

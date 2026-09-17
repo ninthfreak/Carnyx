@@ -384,18 +384,21 @@ public final class CarnyxListener extends NotificationListenerService {
     /**
      * The driver's switch.
      *
-     * <p>DEFAULTS TO TRUE, for {@code SleepReceiver.releaseOnSleep}'s reason: the
-     * failure here is silence — the radio playing into a parked car — and the
-     * setting's own default is on, so an unset value means a driver who has never
-     * touched the switch rather than one who turned it off.
+     * <p>DEFAULTS TO FALSE SINCE #133, matching {@code Settings::default}. The
+     * switch shipped on while the handback was the only lever on the wake
+     * relaunch; the kernel remap in {@code docs/vendor/replace_source_list.xml}
+     * is the real one, and it fights the handback — so off is the default, and an
+     * unset key means an install whose app has not pushed the mirror yet, which
+     * takes the same off. A driver on a unit without the remap turns it back on
+     * in the UI, which writes the key and never reaches this fallback.
      */
     private boolean releaseOnSleep() {
         try {
             return getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_RELEASE_ON_SLEEP, true);
+                    .getBoolean(KEY_RELEASE_ON_SLEEP, false);
         } catch (Throwable t) {
             Log.w(TAG, "could not read the release switch: " + t);
-            return true;
+            return false;
         }
     }
 

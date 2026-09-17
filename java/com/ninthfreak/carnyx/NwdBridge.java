@@ -906,10 +906,12 @@ public final class NwdBridge {
      *
      * <p>Volatile, not synchronized: it is read on a binder thread and written
      * on the UI thread, and a stale read costs one ignition cycle of the old
-     * behaviour. TRUE by default, matching `Settings::default`, so a build where
-     * the mirror never runs still releases.
+     * behaviour. FALSE by default since #133, matching `Settings::default`, so a
+     * build where the mirror never runs leaves the radio alone — which is what
+     * the kernel remap wants, since the handback fights it. See
+     * `Settings::release_on_sleep`.
      */
-    private static volatile boolean releaseOnSleep = true;
+    private static volatile boolean releaseOnSleep = false;
 
     /**
      * See {@link #releaseOnSleep}. Called from Rust whenever the switch moves.

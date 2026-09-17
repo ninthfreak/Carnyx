@@ -1261,7 +1261,7 @@ export component SettingsOverlay inherits Rectangle {
     in property <[TunerSource]> sources;
 
     // ── TUNER: what happens at the ends of an ignition cycle ──
-    in property <bool> release-on-sleep: true;
+    in property <bool> release-on-sleep: false;
     in property <bool> clock-on: true;
     /// The Clock row's sub-line, which REPORTS the system's 12/24 format rather
     /// than offering it. Decided in Rust.
