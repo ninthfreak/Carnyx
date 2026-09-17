@@ -78,6 +78,13 @@
   not this file alone — the copier skips a lone non-update.zip file, and its
   update.zip branch triggers a factory reset. README.md has the exact layout.
 
+  AND IF A replace_source_list.xml IS ALREADY THERE, DO NOT JUST OVERWRITE IT.
+  This is a LIST: the kernel remaps every ReplaceSourceItem in the file, and the
+  factory copier deletes the destination before writing. An existing file may
+  carry remaps for other sources that belong to whoever set the unit up. Merge
+  the entry below into it and keep the rest — which is what Carnyx's own
+  "Install radio takeover" row does, backing the original up first.
+
   After the file exists, either reboot or broadcast
   `com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE` (the kernel registers a receiver
   for it and reloads on the spot — no permission required to send it).
