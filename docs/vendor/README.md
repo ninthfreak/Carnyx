@@ -359,8 +359,11 @@ A dead end for this problem.
 
 **`com.nwd.factory.setting`** exports five services with no permission at all,
 including `FactorySettingService` and an `AutoUpdateService`. Nothing in them
-touches the audio source. Recorded only because an unguarded factory service on a
-shipping head unit is the kind of thing worth having written down somewhere.
+touches the audio source — but one of them, `CopyFileService`, turned out to be
+the write route for the kernel remap: an unguarded, config-driven file copier
+that writes a caller-named destination. See "The factory copier writes arbitrary
+paths" near the end of this file. That an unguarded factory service on a shipping
+head unit can write `/config` is exactly why it was worth writing down.
 
 **`com.nwd.backcar`** runs as `android.uid.system` and exports `BackcarService`.
 Reversing camera; irrelevant here.
@@ -462,20 +465,88 @@ Config-flag defaults were read from `NwdConfig` (`mIsKeepLauncherSource = 1`,
 properties file, so a unit with a different config could route the power-off save
 differently.
 
-## Where the file goes, and why installing the APK is not enough
+## Where the file goes, and how to write it
 
-`/config` is a system partition. Nothing in the shipped firmware writes
-`replace_source_list.xml` — the kernel only reads it, and no vendor service
-(checked across all six APKs) exposes an app-reachable write. Installing it needs
-one of:
+`/config` is a system partition, and the kernel only ever reads
+`replace_source_list.xml`. But `com.nwd.factory.setting` exposes a general
+file-copier that can WRITE it — see the next section. The blunt routes remain:
 
 - root: remount `/config` rw, drop the file, `chmod 644`;
-- a recovery / ADB shell with system access;
-- the vendor factory USB-import path, if this unit's factory tool copies `/config`
-  from external media.
+- a recovery / ADB shell with system access.
 
-This is why the remap is outcome A's clean answer but not one Carnyx can install
-itself on an unrooted unit.
+## The factory copier writes arbitrary paths, `CopyFileService` (2026-09-17)
+
+`com.nwd.factory.setting` (targetSdk **19**, no `sharedUserId`) exports
+`com.nwd.factory.copy.CopyFileService` **exported, no permission, no caller
+check** — any app or `adb shell am startservice` can drive it. It is a
+config-driven copier, and its config names the destination:
+
+    CopyFileService.onStartCommand:
+      GlobalData.setPath(intent.getStringExtra("COPY_PATH"))   // source dir
+      GlobalData.setCopyApk(intent.getBooleanExtra("COPY_APK", false))
+      // needs <COPY_PATH>/CopyFileConfig.xml (or ApkUpdateConfig.xml if COPY_APK)
+      // dialog UNLESS COPY_PATH == <config>/app  OR  <COPY_PATH>/autocopy exists
+      -> CopyFileThread
+
+    CopyFileThread, per <PathItem PathSrc="..." PathDes="..."> in that config:
+      dst = PathDes                     // used literally
+      src = (COPY_PATH == <config>/app) ? PathSrc : COPY_PATH + PathSrc
+      IsDesDirExist(dst) -> mkdirs()    // creates the dest dir
+      CopyFile(src, dst)                // then `chmod 777 dst` via Runtime.exec
+
+So `PathDes` is a caller-controlled literal destination — set it to
+`/config/app/replace_source_list.xml` and the copier writes there, making the
+directory if absent. The confirmation dialog is skipped when the source dir
+holds an empty file named `autocopy`.
+
+The recipe, no root:
+
+1. A dir the factory app can read — external storage works, it holds
+   `WRITE_EXTERNAL_STORAGE` and targetSdk 19 predates scoped storage. Call it
+   `<SRC>`.
+2. In `<SRC>`, three files:
+   - `replace_source_list.xml` — the remap (this repo's copy);
+   - `autocopy` — empty, to skip the dialog;
+   - `CopyFileConfig.xml`:
+
+         <?xml version="1.0" encoding="utf-8"?>
+         <CopyConfig>
+           <PathItem PathSrc="/replace_source_list.xml"
+                     PathDes="/config/app/replace_source_list.xml" />
+         </CopyConfig>
+
+     The parser only keys on `PathItem` elements and their `PathSrc` / `PathDes`
+     attributes; the root element name is not checked.
+3. Start it:
+
+       am startservice -n com.nwd.factory.setting/com.nwd.factory.copy.CopyFileService \
+         --es COPY_PATH <SRC>
+
+   Because it is exported and permissionless, Carnyx could issue this
+   `startService` itself (add `com.nwd.factory.setting` to `<queries>` first).
+
+## THE ONE UNKNOWN THIS CANNOT SETTLE: is `/config` writable by that process?
+
+`com.nwd.factory.setting` has NO `sharedUserId=android.uid.system`. Its
+Android permissions (`WRITE_SECURE_SETTINGS`, `MOUNT_UNMOUNT_FILESYSTEMS`, …)
+are not filesystem ownership of `/config`. Whether its `FileOutputStream` and
+`chmod 777` on `/config/app` succeed depends on that partition's unix
+permissions and SELinux policy on the running unit, which a decompile cannot
+show. The evidence FOR is that the vendor's own copier treats `<config>/app` as
+a first-class destination and this app is the provisioning tool; the evidence
+AGAINST certainty is the missing system uid.
+
+Settle it cheaply on the device before trusting the route:
+
+    ls -laZ /config /config/app          # ownership, mode, SELinux context
+
+or just run the copy once and check whether
+`/config/app/replace_source_list.xml` appears. If the factory process cannot
+write there, the route degrades to root / recovery, and Carnyx cannot
+self-install the remap.
+
+This is why the remap is outcome A's clean answer, and why whether Carnyx can
+install it ITSELF is a single yes/no about one partition's permissions.
 
 ## Provenance
 
