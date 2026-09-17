@@ -556,9 +556,33 @@ The recipe, no root:
 remap, one `CopyFileConfig.xml`, no `autocopy`, then `startService` on
 `CopyFileService`. `com.nwd.factory.setting` is in `<queries>` so the package is
 visible on targetSdk 30+. Two settings rows drive it — "Install radio takeover
-(writes to /config)" and "Check radio takeover" — the second reads
-`/config/app/replace_source_list.xml` back and reports whether it arrived and
-names Carnyx. The seam is `src/android/remap.rs`.
+(writes to /config)" and "Check radio takeover". The seam is
+`src/android/remap.rs`.
+
+**IT MERGES, IT DOES NOT REPLACE, AND THAT IS NOT A NICETY.**
+`ReplaceSourceList` is a LIST — the kernel remaps every `ReplaceSourceItem` in
+the file — and `CopyFile` runs `if (dst.exists()) dst.delete()` before writing.
+So staging a one-entry file and firing the copier blind would delete any other
+source remap the unit already had, silently and unrecoverably. The file exists so
+an integrator can repoint sources at their own apps, so it is not ours to
+overwrite. `install()` therefore reads `/config/app/replace_source_list.xml`
+first and:
+
+- absent → writes ours alone;
+- already maps appid 8 to Carnyx → does nothing at all and says so, so a second
+  tap costs no system write;
+- present with other entries → keeps every one, replaces only the appid 8 entry,
+  and stages a byte-exact backup as `replace_source_list.xml.carnyx-backup` in
+  `/config/app` (written once, so a later install cannot back up its own output
+  over the true original);
+- present but unreadable or malformed → **refuses**. Overwriting a file it cannot
+  read would discard contents nobody has seen.
+
+The rebuild is lossless for everything the kernel reads: `loadConfig` takes
+exactly `appid`, `pkgName` and `className` per item. Comments and formatting are
+not preserved, which is why the original is backed up rather than trusted to the
+rebuild. `verify()` parses the file rather than substring-matching it, and
+reports which package owns the radio entry plus how many other entries survived.
 
 ## THE ONE UNKNOWN THIS CANNOT SETTLE: is `/config` writable by that process?
 
