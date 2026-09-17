@@ -341,8 +341,26 @@ public final class CarnyxListener extends NotificationListenerService {
         // playing. `NwdBridge.releaseSource` makes the same test first.
         int src = mcuInt(MCU_SOURCE_KEY, -1);
         if (src != 4) {
+            // NOTHING IS WRITTEN ON THIS BRANCH, and the restraint is the whole
+            // reason this gate is safe. Seeing a source that is not FM here does
+            // NOT mean FM was off: the app's own routes run in another process,
+            // fire on the same signal, and may have handed the source back
+            // milliseconds ago. Writing `radio_playing = false` from here would
+            // be this process clobbering a true the app had just recorded
+            // correctly — the 2026-09-17 defect, re-created across the process
+            // boundary. The flag is cleared by the shutdown hook and spent on
+            // read below; this route only ever adds a sighting.
             note(where + ": FM is not the source (" + src + ")");
             return;
+        }
+        // RECORDED BEFORE THE RELEASE. See `CarnyxWake.noteFmAtSleep`: after the
+        // next line this fact stops being observable, and this may be the only
+        // process still alive to observe it.
+        try {
+            getSharedPreferences(CarnyxNotes.PREFS, Context.MODE_PRIVATE)
+                    .edit().putBoolean(KEY_RADIO_PLAYING, true).commit();
+        } catch (Throwable t) {
+            note(where + ": FM was playing but the flag could not be recorded: " + t);
         }
         try {
             sendBroadcast(new Intent(ACTION_CHANGE_SOURCE)

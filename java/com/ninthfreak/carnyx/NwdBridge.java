@@ -489,6 +489,16 @@ public final class NwdBridge {
      * @return one line naming both outcomes, never null.
      */
     static String handBackNow() {
+        // ── THE SIGHTING COMES BEFORE THE HANDBACK, AND THAT IS THE POINT ────
+        //
+        // This is the last instant at which "was the driver listening to FM?"
+        // can be answered, because the next two calls are what make it stop
+        // being true. `CarnyxWake.onAppDestroyed` used to answer it afterwards
+        // and got the opposite of the truth on every cycle where this worked.
+        // See `CarnyxWake.noteFmAtSleep` for the log that showed it.
+        if (mcuSource() == 4) {
+            CarnyxWake.noteFmAtSleep();
+        }
         String direct = CarnyxKernel.handBackSource();
         String broadcast = releaseSource();
         return direct + "; " + broadcast;
