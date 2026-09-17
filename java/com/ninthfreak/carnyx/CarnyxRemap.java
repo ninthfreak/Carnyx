@@ -103,9 +103,52 @@ final class CarnyxRemap {
     private static final String PAYLOAD_SUBDIR = "payload";
     private static final String CONFIG_NAME = "CopyFileConfig.xml";
 
+    /** How long to watch {@link #DEST} for the copier's write, in milliseconds.
+     *  Generous because the copy waits on a human tapping the vendor's
+     *  confirmation dialog, and a driver may be looking at the radio first. */
+    private static final long WATCH_MS = 120_000L;
+
+    /** How often to look. Cheap — one {@code stat} and a small read. */
+    private static final long POLL_MS = 500L;
+
     private static Context ctx;
 
+    /**
+     * What {@link #DEST} held before this session's install, and whether it was
+     * there at all.
+     *
+     * <p>THE "BEFORE" HALF OF THE ANSWER. Reading the destination to merge into
+     * it already tells us what was there; keeping it is what lets the watcher and
+     * {@link #verify} say whether anything actually CHANGED, rather than only
+     * what the file says now. "It reads as installed" and "we installed it" are
+     * different claims, and only the second one answers whether the copier could
+     * write {@code /config}.
+     *
+     * <p>IN-SESSION, NOT DURABLE. The verdict is pushed into the diagnostics log
+     * as soon as it is known, so the driver does not have to be holding this
+     * state to see it. Persisting it would mean a fourth durable note ring
+     * across the class-loader divide for a case — process death between the two
+     * taps — that the log line already covers.
+     */
+    private static String beforeBody;
+
+    private static boolean beforeExisted;
+
+    /** One watcher at a time. See {@link #startWatcher}. */
+    private static volatile boolean watching;
+
     private CarnyxRemap() {}
+
+    /**
+     * Java → Rust: put a line in the diagnostics log from the watcher thread.
+     *
+     * <p>Registered by hand in `src/android/remap.rs`, as `CarnyxLocation`'s
+     * `nativeNote` is. The watcher finishes long after the tap that started it
+     * returned, so it has no return value to travel back on — this is the
+     * channel, and on this unit the diagnostics panel is the only one a driver
+     * can read.
+     */
+    private static native void nativeRemapNote(String line);
 
     /**
      * One {@code ReplaceSourceItem}, holding exactly what the kernel reads.
@@ -275,11 +318,136 @@ final class CarnyxRemap {
             // entry), or the service is not present on this unit.
             return "remap install: could not reach " + FACTORY_PKG + " — " + t;
         }
+        // ── THE "BEFORE" IS KEPT, AND THEN WATCHED FOR ───────────────────────
+        //
+        // Asking the copier is not the same as the copier succeeding, and the
+        // first cut of this returned "asked…" and left the driver to tap Check
+        // at a moment of their own choosing. The copy lands whenever the vendor
+        // dialog is confirmed, so there is no moment this method could
+        // sensibly check for itself — a watcher can, and it reports the verdict
+        // into the log the instant it knows.
+        beforeBody = existing;
+        beforeExisted = existing != null;
+        startWatcher();
         return "remap install: asked " + FACTORY_PKG + " to write " + REMAP_NAME
                 + " into " + CONFIG_APP_DIR
-                + (existing == null ? " (new file)" : " (kept " + kept + " existing entr"
-                        + (kept == 1 ? "y" : "ies") + (backing ? ", backed up" : "") + ")")
-                + " — confirm the copy dialog if it appears, then Check";
+                + (existing == null ? " (no file there before)"
+                        : " (was " + kept + " other entr" + (kept == 1 ? "y" : "ies")
+                                + (backing ? ", backed up" : "") + ")")
+                + " — confirm the copy dialog if it appears; the result posts here itself";
+    }
+
+    /**
+     * Watch {@link #DEST} until it changes, or until {@link #WATCH_MS} is up.
+     *
+     * <p>ON ITS OWN THREAD, because the thing it waits for is a human tapping a
+     * dialog in another app. A daemon thread so it can never hold the process
+     * open, and one at a time so repeated taps do not stack watchers.
+     *
+     * <p>WHAT IT CAN SAY THAT A READ CANNOT. "The file names Carnyx" is
+     * ambiguous — it could have said that before this app ever ran. Comparing
+     * against the recorded before-state separates the three answers that matter:
+     * the copier wrote what we asked, the copier wrote something else, or
+     * nothing changed at all — which is the signature of {@code /config} not
+     * being writable by the factory process, the one thing the firmware could
+     * not tell us.
+     */
+    private static void startWatcher() {
+        if (watching) {
+            return;
+        }
+        watching = true;
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    long deadline = System.currentTimeMillis() + WATCH_MS;
+                    while (System.currentTimeMillis() < deadline) {
+                        try {
+                            Thread.sleep(POLL_MS);
+                        } catch (InterruptedException e) {
+                            return;
+                        }
+                        String now = currentBody();
+                        boolean exists = new File(DEST).exists();
+                        if (exists != beforeExisted
+                                || (now != null && !now.equals(beforeBody))) {
+                            post("radio takeover: " + describe(now, exists));
+                            return;
+                        }
+                    }
+                    post("radio takeover: nothing changed at " + DEST + " in "
+                            + (WATCH_MS / 1000) + "s — "
+                            + (beforeExisted ? "it still reads as it did before the tap"
+                                    : "the file was never created")
+                            + ". Either the copy dialog was not confirmed, or the factory"
+                            + " app cannot write /config on this unit");
+                } finally {
+                    watching = false;
+                }
+            }
+        }, "carnyx-remap-watch");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** {@link #DEST}'s contents, or null when absent or unreadable. */
+    private static String currentBody() {
+        File f = new File(DEST);
+        if (!f.exists() || !f.canRead()) {
+            return null;
+        }
+        try {
+            return readFile(f);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** What a body reads as: installed, something else, or gone. */
+    private static String describe(String body, boolean exists) {
+        if (!exists) {
+            return DEST + " was deleted and not replaced";
+        }
+        if (body == null) {
+            return DEST + " changed but cannot be read here";
+        }
+        List<Item> items;
+        try {
+            items = parseItems(body);
+        } catch (Throwable t) {
+            return DEST + " changed but will not parse — the kernel loads no remaps"
+                    + " in this state (" + t + ")";
+        }
+        int others = 0;
+        Item radio = null;
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).appid == RADIO_APPID) {
+                radio = items.get(i);
+            } else {
+                others++;
+            }
+        }
+        String also = others == 0 ? "" : ", " + others + " other entr"
+                + (others == 1 ? "y" : "ies") + " kept";
+        if (radio == null) {
+            return DEST + " changed but has no appid " + RADIO_APPID + " entry" + also;
+        }
+        if (SELF_PKG.equals(radio.pkg)) {
+            return "INSTALLED — the copier wrote it; the radio source now launches Carnyx"
+                    + also;
+        }
+        return DEST + " changed but the radio source points at " + radio.pkg + also;
+    }
+
+    /** One line to the diagnostics log, or to logcat if the native is not bound. */
+    private static void post(String line) {
+        try {
+            nativeRemapNote(line);
+        } catch (Throwable t) {
+            // A host build or a dex whose natives were never registered. The
+            // line is still worth having somewhere.
+            Log.i(TAG, line);
+        }
     }
 
     /**
@@ -326,12 +494,26 @@ final class CarnyxRemap {
                 return "remap check: NOT installed — " + DEST + " has no appid "
                         + RADIO_APPID + " entry" + also + tail;
             }
+            // ── AND WHETHER THIS SESSION'S INSTALL IS WHAT PUT IT THERE ──────
+            //
+            // Only sayable when an install ran in this process. Without it the
+            // row reports the state and not the CAUSE, and "it was already like
+            // this" reads identically to "we just did it" — which is the
+            // difference between knowing /config is writable and assuming it.
+            String since = "";
+            if (beforeExisted || beforeBody != null) {
+                since = body.equals(beforeBody)
+                        ? "; unchanged since this session's install — the copier did not write"
+                        : "; changed since this session's install";
+            } else if (watching) {
+                since = "; still watching for the copier's write";
+            }
             if (SELF_PKG.equals(radio.pkg)) {
                 return "remap check: INSTALLED — " + DEST + " maps the radio source to Carnyx"
-                        + also + tail;
+                        + also + since + tail;
             }
             return "remap check: NOT installed — the radio source is mapped to "
-                    + radio.pkg + also + tail;
+                    + radio.pkg + also + since + tail;
         } catch (Throwable t) {
             return "remap check: could not read " + DEST + " — " + t;
         }

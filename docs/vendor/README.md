@@ -584,6 +584,27 @@ not preserved, which is why the original is backed up rather than trusted to the
 rebuild. `verify()` parses the file rather than substring-matching it, and
 reports which package owns the radio entry plus how many other entries survived.
 
+**IT CHECKS BEFORE AND AFTER, NOT JUST BEFORE.** Asking the copier is not the
+copier succeeding, and the copy lands whenever a human confirms the vendor
+dialog — so there is no moment `install()` could usefully check for itself. It
+keeps the before-state it already read, then a daemon watcher polls `DEST` every
+500 ms for up to 120 s and posts the verdict into the diagnostics log the instant
+it knows, through a hand-registered `nativeRemapNote` (the pattern
+`CarnyxLocation.nativeNote` uses). That comparison is what separates the three
+answers that matter:
+
+- the file changed and the radio entry is now Carnyx → the copier wrote it, so
+  `/config` **is** writable by the factory process;
+- the file changed to something else → somebody else's write won;
+- **nothing changed in 120 s** → either the dialog was never confirmed or the
+  factory app cannot write `/config` — which is the one question the firmware
+  could not answer.
+
+Without the before-state, "the file names Carnyx" is ambiguous: it could have
+said that before this app ever ran. `verify()` reports the same comparison when
+an install ran in the same process, so a manual Check distinguishes "we just did
+this" from "it was already like this".
+
 ## THE ONE UNKNOWN THIS CANNOT SETTLE: is `/config` writable by that process?
 
 `com.nwd.factory.setting` has NO `sharedUserId=android.uid.system`. Its

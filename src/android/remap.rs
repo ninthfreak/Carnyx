@@ -13,10 +13,11 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
+use jni::errors::Error;
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::refs::Global;
 use jni::strings::JNIStr;
-use jni::{jni_sig, jni_str, Env, JavaVM};
+use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM, NativeMethod};
 
 const CLASS: &JNIStr = jni_str!("com/ninthfreak/carnyx/CarnyxRemap");
 
@@ -27,7 +28,54 @@ static CLASS_REF: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 /// line, which is a lie on the unit where `build.rs` dexes this class.
 static INIT_ERR: OnceLock<String> = OnceLock::new();
 
-/// Load the class and hand it the context.
+/// Java → Rust. One method, because one fact crosses: what the copier did.
+///
+/// `extern "system"` and registered by hand below — an exported symbol would not
+/// be found, for `CarnyxLocation`'s reason. The watcher thread that calls this
+/// finishes long after the settings tap returned, so there is no return value for
+/// its verdict to travel back on and this is the channel.
+extern "system" fn native_note<'a>(
+    mut env: EnvUnowned<'a>,
+    _class: JClass<'a>,
+    line: JString<'a>,
+) {
+    // Through `guard`, like every other native in this tree: a panic unwinding
+    // across the JNI boundary is undefined behaviour.
+    guard(&mut env, |env| {
+        let text = if line.is_null() {
+            String::new()
+        } else {
+            line.try_to_string(env).unwrap_or_default()
+        };
+        super::ingest_note(text);
+        Ok(())
+    });
+}
+
+/// Identical to `location`'s: run the body, and turn any panic or error into a
+/// thrown RuntimeException rather than letting it unwind into the JVM.
+fn guard<'a>(unowned: &mut EnvUnowned<'a>, body: impl FnOnce(&mut Env) -> Result<(), Error>) {
+    unowned
+        .with_env(body)
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+}
+
+fn natives() -> Vec<NativeMethod<'static>> {
+    // SAFETY: the signature matches both the Java declaration
+    // (`private static native void nativeRemapNote(String)`) and this function's
+    // parameter list. The three are written together and must be changed
+    // together — a mismatch is not a compile error on either side, it is a crash
+    // the first time the watcher reports.
+    unsafe {
+        vec![NativeMethod::from_raw_parts(
+            jni_str!("nativeRemapNote"),
+            jni_str!("(Ljava/lang/String;)V"),
+            native_note as *mut c_void,
+        )]
+    }
+}
+
+/// Load the class, bind the callback, and hand it the context.
 ///
 /// # Safety
 ///
@@ -57,6 +105,8 @@ unsafe fn load(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::Tune
         let context = unsafe { JObject::from_raw(env, activity.cast()) };
         let class = super::dex::load_class(env, &context, CLASS)
             .map_err(|e| TunerError::Java(format!("loading {CLASS:?}: {e}")))?;
+        unsafe { env.register_native_methods(&class, &natives()) }
+            .map_err(|e| TunerError::Java(format!("RegisterNatives: {e}")))?;
         env.call_static_method(
             &class,
             jni_str!("attach"),
