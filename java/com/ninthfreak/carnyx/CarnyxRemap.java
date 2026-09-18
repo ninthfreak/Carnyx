@@ -409,6 +409,69 @@ final class CarnyxRemap {
         t.start();
     }
 
+    /**
+     * What the copier's own gates will see, as far as this process can tell.
+     *
+     * <h2>WHY THIS EXISTS: A DIALOG THAT APPEARED RULED OUT THE FIRST GUESS</h2>
+     *
+     * <p>2026-09-18. The install failed with a missing-path error and the first
+     * reading was that the factory app could not see the staging directory. The
+     * owner then reported that it HAD asked permission to copy — and that dialog
+     * only appears inside the branch guarded by
+     * {@code IsHaveXmlFile()}, which is {@code new File(COPY_PATH +
+     * "/CopyFileConfig.xml").exists()}. So the copier found and stat'd the
+     * config in an app-specific directory, and the guess was wrong.
+     *
+     * <p>THE TWO CANDIDATES LEFT BOTH READ AS "path does not exist":
+     *
+     * <ul>
+     *   <li>{@code <COPY_PATH>/payload} not visible to the copier —
+     *       {@code ParserXMLFile} logs
+     *       {@code "<srcPath isn't exists, please check xml write correctly!>"};
+     *   <li>{@code /config/app} not existing — {@code IsDesDirExist(PathDes)} is
+     *       a plain {@code exists()} on the DESTINATION directory and it gates
+     *       the copy, so a unit that never had one skips the write entirely.
+     *       Nothing proves this directory exists: the kernel only ever READS
+     *       from it, and an absent one makes `loadConfig` do nothing in silence.
+     * </ul>
+     *
+     * <p>A DECOMPILE CANNOT TELL THESE APART and neither can a guess, so this
+     * reports both from the unit.
+     *
+     * <p>READ AS THIS APP'S UID, which is the caveat that has to travel with it:
+     * the copier runs as a different one, so "readable here" is evidence and not
+     * proof. Existence is the part that carries — a directory that is not there
+     * is not there for either of us.
+     */
+    private static String pathReport() {
+        return describePath(new File("/config"))
+                + "; " + describePath(new File(CONFIG_APP_DIR))
+                + "; " + describePath(new File(new File(
+                        android.os.Environment.getExternalStoragePublicDirectory(
+                                android.os.Environment.DIRECTORY_DOWNLOADS),
+                        STAGE_DIR), PAYLOAD_SUBDIR));
+    }
+
+    /** One path's existence, kind, access and child count. Never throws. */
+    private static String describePath(File f) {
+        try {
+            if (!f.exists()) {
+                return f.getPath() + ": ABSENT";
+            }
+            StringBuilder b = new StringBuilder(f.getPath());
+            b.append(": ").append(f.isDirectory() ? "dir" : "file");
+            b.append(f.canRead() ? ", readable" : ", NOT readable");
+            b.append(f.canWrite() ? ", writable" : ", not writable");
+            String[] kids = f.list();
+            if (kids != null) {
+                b.append(", ").append(kids.length).append(" entries");
+            }
+            return b.toString();
+        } catch (Throwable t) {
+            return f.getPath() + ": could not be read (" + t + ")";
+        }
+    }
+
     /** {@link #DEST}'s contents, or null when absent or unreadable. */
     private static String currentBody() {
         File f = new File(DEST);
@@ -478,7 +541,11 @@ final class CarnyxRemap {
         File f = new File(DEST);
         try {
             if (!f.exists()) {
-                return "remap check: NOT installed — " + DEST + " is not present";
+                // THE PATHS COME WITH IT. "Not present" was the whole answer for
+                // two attempts and it named nothing that could be acted on; the
+                // gates that decide whether the copier ever writes are these.
+                return "remap check: NOT installed — " + DEST + " is not present. "
+                        + pathReport();
             }
             if (!f.canRead()) {
                 return "remap check: " + DEST + " exists but is not readable here";
