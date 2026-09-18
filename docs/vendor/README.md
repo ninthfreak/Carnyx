@@ -517,8 +517,13 @@ in by name.
 
 The recipe, no root:
 
-1. A dir the factory app can read — external storage; it holds
-   `WRITE_EXTERNAL_STORAGE` and targetSdk 19 predates scoped storage. Call it
+1. A dir the factory app can read. **NOT an app-specific directory.** Measured
+   2026-09-18: staging in `getExternalFilesDir(null)` —
+   `/storage/emulated/0/Android/data/<pkg>/` — made the copier report a missing
+   path and write nothing, because Android 10 walls that subtree off from other
+   apps regardless of their legacy-storage status. Use a shared location;
+   `Download/` is proven on this unit, since `NwdBridge.writeLog` puts the
+   diagnostics log there and it comes off the device as an ordinary file. Call it
    `<SRC>`.
 2. Lay it out as a directory copy:
 
@@ -552,9 +557,13 @@ The recipe, no root:
 ## Carnyx installs it itself: the `InstallRadioRemap` action
 
 `CarnyxRemap.java` (dexed by `build.rs`) does exactly the recipe above:
-`getExternalFilesDir(null)/carnyx-remap/` as `<SRC>`, `payload/` holding the
-remap, one `CopyFileConfig.xml`, no `autocopy`, then `startService` on
-`CopyFileService`. `com.nwd.factory.setting` is in `<queries>` so the package is
+`Download/carnyx-remap/` as `<SRC>`, `payload/` holding the remap, one
+`CopyFileConfig.xml`, no `autocopy`, then `startService` on `CopyFileService`.
+The staged files go through MediaStore, because a targetSdk 34 app cannot open a
+`FileOutputStream` anywhere in shared storage — and the app-specific directory it
+CAN write is the one the factory app cannot read (see the measurement above).
+Each file is deleted before it is re-inserted, or a second install would leave
+`name (1).xml` beside it and the copier takes everything in the directory. `com.nwd.factory.setting` is in `<queries>` so the package is
 visible on targetSdk 30+. Two settings rows drive it — "Install radio takeover
 (writes to /config)" and "Check radio takeover". The seam is
 `src/android/remap.rs`.

@@ -274,36 +274,51 @@ final class CarnyxRemap {
         int kept = keep.size() - 1;
         boolean backing = false;
         try {
-            File ext = ctx.getExternalFilesDir(null);
-            if (ext == null) {
-                return "remap install: no external storage to stage the payload";
+            // ── STAGED IN DOWNLOADS, NOT IN THIS APP'S OWN DIRECTORY ─────────
+            //
+            // MEASURED 2026-09-18. The first cut staged in
+            // `getExternalFilesDir(null)`, which lives under
+            // `/storage/emulated/0/Android/data/<pkg>/`, and the copier reported
+            // a missing path and wrote nothing: Android 10 walls that subtree off
+            // from OTHER apps, and the factory app — a different uid — could not
+            // see the payload it was pointed at. The staging directory has to be
+            // somewhere a foreign process can read.
+            //
+            // DOWNLOADS IS PROVEN ON THIS UNIT. `NwdBridge.writeLog` puts the
+            // diagnostics log there through MediaStore and the owner takes those
+            // files off the device, so it is writable by us and readable as an
+            // ordinary path — which is exactly what the factory app, legacy
+            // storage on targetSdk 19, needs.
+            File downloads = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS);
+            if (downloads == null) {
+                return "remap install: no Downloads directory to stage the payload";
             }
-            root = new File(ext, STAGE_DIR);
-            File payload = new File(root, PAYLOAD_SUBDIR);
-            // CLEARED EACH RUN. The copier copies whatever is in this directory,
-            // so a file staged by a previous attempt would be copied again —
-            // including a backup this run decided not to make.
-            clearDir(payload);
-            if (!payload.exists() && !payload.mkdirs()) {
-                return "remap install: could not create " + payload;
-            }
-            writeFile(new File(payload, REMAP_NAME), mergedXml(keep));
-            // THE BACKUP GOES TO /config/app TOO, not just to this app's storage,
-            // so it outlives a reinstall — and it is written ONLY when there is
-            // no backup there already, because a second install would otherwise
+            root = new File(downloads, STAGE_DIR);
+            String rel = android.os.Environment.DIRECTORY_DOWNLOADS + "/" + STAGE_DIR;
+            String relPayload = rel + "/" + PAYLOAD_SUBDIR;
+
+            writeShared(relPayload, REMAP_NAME, mergedXml(keep));
+            // THE BACKUP GOES TO /config/app TOO, not just to Downloads, so it
+            // outlives a reinstall — and it is written ONLY when there is no
+            // backup there already, because a second install would otherwise
             // back up its own merged output over the true original.
             if (existing != null && !new File(CONFIG_APP_DIR, BACKUP_NAME).exists()) {
-                writeFile(new File(payload, BACKUP_NAME), existing);
-                makeReadable(new File(payload, BACKUP_NAME));
+                writeShared(relPayload, BACKUP_NAME, existing);
                 backing = true;
+            } else {
+                // A backup staged by a PREVIOUS attempt would otherwise be copied
+                // again by this one. The copier takes everything in the payload
+                // directory, so what is not wanted has to be removed.
+                deleteShared(relPayload, BACKUP_NAME);
             }
-            writeFile(new File(root, CONFIG_NAME), copyConfigXml());
-            // WORLD-READABLE, because the factory app is a different uid and has
-            // to traverse and read these. Best effort — the verify step is what
-            // actually decides whether it worked.
+            writeShared(rel, CONFIG_NAME, copyConfigXml());
+            // WORLD-READABLE, best effort. Files written through MediaStore are
+            // owned by the media provider and these calls may do nothing; the
+            // watcher is what decides whether it actually worked.
             makeReadable(root);
-            makeReadable(payload);
-            makeReadable(new File(payload, REMAP_NAME));
+            makeReadable(new File(root, PAYLOAD_SUBDIR));
+            makeReadable(new File(new File(root, PAYLOAD_SUBDIR), REMAP_NAME));
             makeReadable(new File(root, CONFIG_NAME));
         } catch (Throwable t) {
             return "remap install: staging failed — " + t;
@@ -329,8 +344,12 @@ final class CarnyxRemap {
         beforeBody = existing;
         beforeExisted = existing != null;
         startWatcher();
-        return "remap install: asked " + FACTORY_PKG + " to write " + REMAP_NAME
-                + " into " + CONFIG_APP_DIR
+        // THE STAGING PATH IS IN THE LINE, because the 2026-09-18 failure was
+        // about that path and the log could not show which one had been handed
+        // over. If the copier reports a missing path again, this says what it was
+        // given.
+        return "remap install: staged in " + root.getAbsolutePath() + ", asked "
+                + FACTORY_PKG + " to write " + REMAP_NAME + " into " + CONFIG_APP_DIR
                 + (existing == null ? " (no file there before)"
                         : " (was " + kept + " other entr" + (kept == 1 ? "y" : "ies")
                                 + (backing ? ", backed up" : "") + ")")
@@ -595,16 +614,75 @@ final class CarnyxRemap {
                 .replace("\"", "&quot;");
     }
 
-    /** Empty the staging directory, so only this run's files are copied. */
-    private static void clearDir(File dir) {
-        File[] kids = dir.listFiles();
-        if (kids == null) {
+    /**
+     * Write one file into shared storage, where another app can read it.
+     *
+     * <p>THROUGH MediaStore ON API 29+, because a targetSdk 34 app cannot open a
+     * {@code FileOutputStream} anywhere in shared storage — and the app-specific
+     * directory it CAN write is the one the factory app cannot read. MediaStore
+     * creates the directories named by {@code rel} on the way.
+     *
+     * <p>DELETE FIRST, ALWAYS. A second insert with the same display name does
+     * not replace the first, it creates {@code name (1).xml} beside it — and the
+     * copier copies every file in the payload directory, so the stale one would
+     * travel too.
+     *
+     * @param rel the relative directory, e.g. {@code Download/carnyx-remap/payload}
+     */
+    private static void writeShared(String rel, String name, String body) throws IOException {
+        byte[] bytes = body.getBytes("utf-8");
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            deleteShared(rel, name);
+            android.content.ContentResolver resolver = ctx.getContentResolver();
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name);
+            values.put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/xml");
+            values.put(android.provider.MediaStore.Downloads.RELATIVE_PATH, rel);
+            android.net.Uri uri = resolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("MediaStore insert returned null for " + rel + "/" + name);
+            }
+            java.io.OutputStream out = resolver.openOutputStream(uri);
+            if (out == null) {
+                throw new IOException("openOutputStream returned null for " + rel + "/" + name);
+            }
+            try {
+                out.write(bytes);
+            } finally {
+                out.close();
+            }
             return;
         }
-        for (int i = 0; i < kids.length; i++) {
-            if (!kids[i].delete()) {
-                Log.w(TAG, "could not clear stale payload file " + kids[i]);
+        // Below 29 the public directory is writable directly. Unused on this
+        // unit, kept so the class is not silently API-29-only.
+        File dir = new File(android.os.Environment.getExternalStorageDirectory(), rel);
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("could not create " + dir);
+        }
+        File f = new File(dir, name);
+        writeFile(f, body);
+        makeReadable(f);
+    }
+
+    /** Remove a staged file, so a previous run's leftovers are not copied. */
+    private static void deleteShared(String rel, String name) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                // RELATIVE_PATH is stored with a trailing separator.
+                ctx.getContentResolver().delete(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        android.provider.MediaStore.Downloads.RELATIVE_PATH + "=? AND "
+                                + android.provider.MediaStore.Downloads.DISPLAY_NAME + "=?",
+                        new String[] {rel + "/", name});
+                return;
             }
+            File f = new File(new File(android.os.Environment.getExternalStorageDirectory(), rel), name);
+            if (f.exists() && !f.delete()) {
+                Log.w(TAG, "could not delete stale " + f);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "could not clear stale " + rel + "/" + name + ": " + t);
         }
     }
 
