@@ -510,10 +510,32 @@ is logged and skipped unless it is named `update.zip` — and that branch, with 
 `autocopy` marker present, fires a `MASTER_CLEAR` **factory reset**. So the file
 approach does not work and its neighbour is dangerous.
 
-`IsDesDirExist(PathDes)` returns true when `PathDes` already exists (or is a
-mounted external/internal root). `/config/app` exists on the unit — the kernel
-reads its files — so the destination check passes and each source file is copied
-in by name.
+### `/config/app` DOES NOT EXIST, and the destination gate is why three attempts failed
+
+`IsDesDirExist(PathDes)` returns true only when `PathDes` **already exists** (or
+is a mounted external/internal root). Measured on the unit, 2026-09-24:
+
+    /config: dir, readable, not writable, 2 entries
+    /config/app: ABSENT
+
+So naming `/config/app` as `PathDes` fails the gate and the copy is skipped
+outright — no error about `/config`, no write attempted. An earlier note here
+asserted `/config/app` exists "because the kernel reads its files". That was an
+assumption and it was wrong: the kernel only ever READS that path, and
+`ReplaceSourceList.loadConfig` finds `!file.exists()` and returns in silence, so
+an absent directory looks identical to an empty one from the firmware side.
+
+**The way through is the copier's own directory-creating branch.** In
+`ParserXMLFile`, each entry of the source directory that is NOT a file goes to
+`CopyFolder`, and `CopyFolder` opens with `new File(dst).mkdirs()`. So:
+
+    PathDes = /config                      # exists, so the gate passes
+    PathSrc = /payload
+    <COPY_PATH>/payload/app/replace_source_list.xml
+
+gives `CopyFolder(<COPY_PATH>/payload/app, /config/app)`, which **creates**
+`/config/app` and copies the file in. The destination directory is carried as
+part of the payload rather than assumed to be there.
 
 The recipe, no root:
 
@@ -525,18 +547,20 @@ The recipe, no root:
    `Download/` is proven on this unit, since `NwdBridge.writeLog` puts the
    diagnostics log there and it comes off the device as an ordinary file. Call it
    `<SRC>`.
-2. Lay it out as a directory copy:
+2. Lay it out as a directory copy, with the destination directory carried
+   INSIDE the payload (see the gate above — `/config/app` does not exist):
 
        <SRC>/
          CopyFileConfig.xml
          payload/
-           replace_source_list.xml        # this repo's copy
+           app/
+             replace_source_list.xml      # this repo's copy
 
    with `CopyFileConfig.xml`:
 
        <?xml version="1.0" encoding="utf-8"?>
        <CopyConfig>
-         <PathItem PathSrc="/payload" PathDes="/config/app" />
+         <PathItem PathSrc="/payload" PathDes="/config" />
        </CopyConfig>
 
    The parser only keys on `PathItem` elements and their `PathSrc` / `PathDes`

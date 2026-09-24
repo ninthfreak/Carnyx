@@ -75,11 +75,35 @@ final class CarnyxRemap {
     private static final String FACTORY_PKG = "com.nwd.factory.setting";
     private static final String COPY_SERVICE = "com.nwd.factory.copy.CopyFileService";
 
-    /** Where the kernel reads the remap. {@code /config} is the default
-     *  {@code ro.nwd.config.path}; the copier makes the dir if absent. */
-    private static final String CONFIG_APP_DIR = "/config/app";
+    /**
+     * The config root, and the COPY DESTINATION.
+     *
+     * <h2>/config AND NOT /config/app, WHICH IS THE WHOLE TRICK</h2>
+     *
+     * <p>MEASURED 2026-09-24: {@code /config} is a directory with 2 entries and
+     * {@code /config/app} is <b>ABSENT</b> on this unit. The copier gates every
+     * write on {@code IsDesDirExist(PathDes)}, which is a bare
+     * {@code new File(PathDes).exists()} — so naming the absent
+     * {@code /config/app} as the destination skipped the copy outright, which is
+     * exactly what three attempts did.
+     *
+     * <p>Naming {@code /config} instead passes the gate, and the copier creates
+     * the rest itself: {@code ParserXMLFile} hands each entry of the source
+     * directory that is NOT a file to {@code CopyFolder}, and {@code CopyFolder}
+     * opens with {@code new File(dst).mkdirs()}. So a payload holding a
+     * DIRECTORY named {@code app} becomes {@code CopyFolder(payload/app,
+     * /config/app)} — the destination is made on the way in.
+     */
+    private static final String CONFIG_ROOT = "/config";
+
+    /** Where the kernel reads the remap. Created by the copier — see
+     *  {@link #CONFIG_ROOT}. */
+    private static final String CONFIG_APP_DIR = CONFIG_ROOT + "/app";
     private static final String REMAP_NAME = "replace_source_list.xml";
     private static final String DEST = CONFIG_APP_DIR + "/" + REMAP_NAME;
+
+    /** The payload subdirectory whose NAME becomes the created directory. */
+    private static final String APP_SUBDIR = "app";
 
     /**
      * Where the ORIGINAL goes before it is replaced.
@@ -297,28 +321,43 @@ final class CarnyxRemap {
             root = new File(downloads, STAGE_DIR);
             String rel = android.os.Environment.DIRECTORY_DOWNLOADS + "/" + STAGE_DIR;
             String relPayload = rel + "/" + PAYLOAD_SUBDIR;
+            // THE FILES GO A LEVEL DEEPER THAN THE COPIER READS, deliberately.
+            // The copier lists `payload/` and copies each ENTRY; the entry is the
+            // directory `app`, which `CopyFolder` recreates under the
+            // destination. See CONFIG_ROOT.
+            String relPayloadApp = relPayload + "/" + APP_SUBDIR;
 
-            writeShared(relPayload, REMAP_NAME, mergedXml(keep));
+            // A PREVIOUS BUILD STAGED THE FILES ONE LEVEL UP, directly in
+            // `payload/`. Left there they would be copied into /config itself,
+            // beside the `app` directory — harmless but wrong, and confusing to
+            // find later.
+            deleteShared(relPayload, REMAP_NAME);
+            deleteShared(relPayload, BACKUP_NAME);
+
+            writeShared(relPayloadApp, REMAP_NAME, mergedXml(keep));
             // THE BACKUP GOES TO /config/app TOO, not just to Downloads, so it
             // outlives a reinstall — and it is written ONLY when there is no
             // backup there already, because a second install would otherwise
             // back up its own merged output over the true original.
             if (existing != null && !new File(CONFIG_APP_DIR, BACKUP_NAME).exists()) {
-                writeShared(relPayload, BACKUP_NAME, existing);
+                writeShared(relPayloadApp, BACKUP_NAME, existing);
                 backing = true;
             } else {
                 // A backup staged by a PREVIOUS attempt would otherwise be copied
                 // again by this one. The copier takes everything in the payload
                 // directory, so what is not wanted has to be removed.
-                deleteShared(relPayload, BACKUP_NAME);
+                deleteShared(relPayloadApp, BACKUP_NAME);
             }
             writeShared(rel, CONFIG_NAME, copyConfigXml());
             // WORLD-READABLE, best effort. Files written through MediaStore are
             // owned by the media provider and these calls may do nothing; the
             // watcher is what decides whether it actually worked.
+            File payloadDir = new File(root, PAYLOAD_SUBDIR);
+            File appDir = new File(payloadDir, APP_SUBDIR);
             makeReadable(root);
-            makeReadable(new File(root, PAYLOAD_SUBDIR));
-            makeReadable(new File(new File(root, PAYLOAD_SUBDIR), REMAP_NAME));
+            makeReadable(payloadDir);
+            makeReadable(appDir);
+            makeReadable(new File(appDir, REMAP_NAME));
             makeReadable(new File(root, CONFIG_NAME));
         } catch (Throwable t) {
             return "remap install: staging failed — " + t;
@@ -444,12 +483,13 @@ final class CarnyxRemap {
      * is not there for either of us.
      */
     private static String pathReport() {
-        return describePath(new File("/config"))
+        File payloadApp = new File(new File(new File(
+                android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS),
+                STAGE_DIR), PAYLOAD_SUBDIR), APP_SUBDIR);
+        return describePath(new File(CONFIG_ROOT))
                 + "; " + describePath(new File(CONFIG_APP_DIR))
-                + "; " + describePath(new File(new File(
-                        android.os.Environment.getExternalStoragePublicDirectory(
-                                android.os.Environment.DIRECTORY_DOWNLOADS),
-                        STAGE_DIR), PAYLOAD_SUBDIR));
+                + "; " + describePath(payloadApp);
     }
 
     /** One path's existence, kind, access and child count. Never throws. */
@@ -611,11 +651,17 @@ final class CarnyxRemap {
      * <p>{@code PathSrc} is relative to {@code COPY_PATH} and names the payload
      * subdir the copier lists; {@code PathDes} is the absolute destination
      * directory. See the class doc for why a directory copy and not a file one.
+     *
+     * <p>{@code PathDes} IS {@code /config}, NOT {@code /config/app}. The gate in
+     * front of the copy is an {@code exists()} on this exact string, and
+     * {@code /config/app} is absent on this unit — see {@link #CONFIG_ROOT}. The
+     * {@code app} directory is carried INSIDE the payload so the copier's own
+     * {@code CopyFolder} creates it.
      */
     private static String copyConfigXml() {
         return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
                 + "<CopyConfig>\n"
-                + "    <PathItem PathSrc=\"/" + PAYLOAD_SUBDIR + "\" PathDes=\"" + CONFIG_APP_DIR + "\" />\n"
+                + "    <PathItem PathSrc=\"/" + PAYLOAD_SUBDIR + "\" PathDes=\"" + CONFIG_ROOT + "\" />\n"
                 + "</CopyConfig>\n";
     }
 
