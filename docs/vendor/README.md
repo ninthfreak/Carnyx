@@ -537,6 +537,29 @@ gives `CopyFolder(<COPY_PATH>/payload/app, /config/app)`, which **creates**
 `/config/app` and copies the file in. The destination directory is carried as
 part of the payload rather than assumed to be there.
 
+### THE ROUTE IS CLOSED ON THIS UNIT: `/config` is not writable by the copier (2026-09-25)
+
+The layout above was built, staged correctly and confirmed at the dialog — and
+`/config/app` was still ABSENT afterward:
+
+    12:26:07 (before the fixed build)  payload/app: dir, 1 entries  /config/app: ABSENT
+    12:59:33 (after, dialog confirmed) payload/app: dir, 1 entries  /config/app: ABSENT
+
+`CopyFolder` runs `new File("/config/app").mkdirs()` and **ignores the result**;
+on failure it proceeds, the `FileOutputStream` throws, the throw is caught, and
+nothing is written. An absent `/config/app` after a confirmed copy therefore
+means the `mkdirs` failed — i.e. `/config` is not writable by the factory
+process. This is the one question the firmware could not answer, and the unit
+has now answered it: **the unprivileged file-drop route cannot install the
+remap.** Getting the file into `/config/app` needs root, or a recovery / ADB
+shell with system access.
+
+Not yet examined, and the only remaining unprivileged lead: `com.nwd.backcar`
+runs as `android.uid.system`. If it — or any system-uid vendor service — exposes
+a file write, that could reach `/config` where the factory app (an ordinary uid)
+cannot. Speculative; not worth a drive without first finding such an operation
+in its decompile.
+
 The recipe, no root:
 
 1. A dir the factory app can read. **NOT an app-specific directory.** Measured
