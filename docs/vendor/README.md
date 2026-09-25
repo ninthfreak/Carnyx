@@ -554,11 +554,18 @@ has now answered it: **the unprivileged file-drop route cannot install the
 remap.** Getting the file into `/config/app` needs root, or a recovery / ADB
 shell with system access.
 
-Not yet examined, and the only remaining unprivileged lead: `com.nwd.backcar`
-runs as `android.uid.system`. If it — or any system-uid vendor service — exposes
-a file write, that could reach `/config` where the factory app (an ordinary uid)
-cannot. Speculative; not worth a drive without first finding such an operation
-in its decompile.
+The `com.nwd.backcar` lead — a system-uid app that COULD write `/config` — was
+examined 2026-09-25 and is a dead end. It runs as `android.uid.system` and
+exports four components, none drivable by a caller: `BackcarService.onBind`
+returns null and its `onStartCommand` reads nothing from the intent;
+`BootReceiver` only fires on boot and starts that service; `TestActivity` and
+`BlackActivity` are camera-test UI. No component takes a path or writes a
+caller-named file, and there is no provider. The system uid is real but there is
+no operation to hand it, so it cannot be reached from an unprivileged app.
+
+That exhausts the unprivileged surface across all six APKs. Installing the remap
+into `/config/app` needs root, or a recovery / ADB shell with system access.
+There is no application-code route on this unit.
 
 The recipe, no root:
 
