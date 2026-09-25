@@ -22,7 +22,7 @@
 //! ## The line back up is the only evidence this feature can produce
 //!
 //! Everything the receiver does happens with no face on screen, on a unit with
-//! no adb. Whether the vendor broadcast arrives at all, whether the flag said
+//! no readable logcat. Whether the vendor broadcast arrives at all, whether the flag said
 //! what was expected, and whether Android 10's background-activity-start
 //! restriction refused the launch are three different outcomes that look
 //! identical from the driver's seat — the app is simply not there. The note

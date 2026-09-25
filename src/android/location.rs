@@ -73,7 +73,7 @@ fn guard<'a>(unowned: &mut EnvUnowned<'a>, body: impl FnOnce(&mut Env) -> Result
 /// Java → Rust, the second fact that crosses: WHICH providers actually
 /// registered.
 ///
-/// The unit has no adb, so `Log.i` reaches nobody. Time-to-first-fix is the
+/// Logcat reaches nobody here, so `Log.i` reaches nobody. Time-to-first-fix is the
 /// thing this file gets wrong in ways that are invisible from the outside — a
 /// skipped provider looks exactly like a slow one — so the answer has to land
 /// somewhere the driver can read it, which is the diagnostics panel.

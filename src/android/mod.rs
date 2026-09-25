@@ -1060,6 +1060,18 @@ pub fn process_age_seconds() -> Option<u64> {
     None
 }
 
+/// What kind of ROM this is, and whether `adb root` could work. See `service`.
+#[cfg(target_os = "android")]
+pub fn build_kind() -> Option<String> {
+    service::build_kind()
+}
+
+/// A host build is not a ROM and has no `adb` to root. See the Android arm.
+#[cfg(not(target_os = "android"))]
+pub fn build_kind() -> Option<String> {
+    None
+}
+
 /// The clock's two facts. See [`service::clock_now`].
 #[cfg(target_os = "android")]
 pub fn clock_now() -> Option<(u32, u32, bool)> {
@@ -1389,7 +1401,7 @@ pub trait Tuner: Send + Sync {
     ///
     /// RETURNS A LINE FOR THE DIAGNOSTICS LOG, empty for "nothing to say". It
     /// returned nothing at all, and the Java said what it had done to logcat —
-    /// which on a unit with no adb reaches nobody, so "the receiver never
+    /// which on a unit whose logcat nobody reads reaches nobody, so "the receiver never
     /// registered" and "the broadcast never arrived" were indistinguishable from
     /// the driver's seat and need different fixes.
     fn start_sleep_watch(&self) -> String {

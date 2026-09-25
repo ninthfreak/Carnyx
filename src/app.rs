@@ -1562,7 +1562,7 @@ impl App {
         // the comment describing it.
         // AND WHAT IT MANAGED, into the log. The receiver either registered or it
         // did not, and until now it said so only to logcat — so on a unit with
-        // no adb, "the watch never registered" and "the broadcast never arrived"
+        // no readable logcat, "the watch never registered" and "the broadcast never arrived"
         // looked the same and need different fixes. Empty on the host, so no
         // screenshot moves.
         // THE SWITCH THE RECEIVER READS. It runs on a binder thread and cannot
@@ -8134,7 +8134,7 @@ mod tests {
     ///
     /// The row existed and did nothing: every action but "Clear log" fell into a
     /// `_` arm that wrote "not available without the head unit" into the very log
-    /// it had been asked to export. This unit has no adb, so the only way a log
+    /// it had been asked to export. Nobody can read logcat from the driver's seat, so the only way a log
     /// left it was a screenshot of the last few lines while the ring held 200 —
     /// which is why the panel-key gap line that #86 turns on could not have been
     /// read.
@@ -8224,57 +8224,6 @@ mod tests {
         assert!(last.contains("the log is empty"), "and it says why, got {last:?}");
     }
 
-    /// THE NEW PROBE'S ROW RUNS AND SAYS SOMETHING, on a build where it cannot
-    /// possibly succeed.
-    ///
-    /// The host has no vendor power manager and no class to load, so the report
-    /// is empty — and an empty report must still leave a line. A tap that writes
-    /// nothing reads as a broken row, which is exactly the failure the five
-    /// removed rows had: they wrote "not available without the head unit" into
-    /// the log and looked like a build limitation rather than an unwritten
-    /// function. This one is honest about which it is.
-    #[test]
-    fn the_keep_alive_probe_leaves_a_line_even_where_it_cannot_run() {
-        let _ui_lock = harness::ui_lock();
-        let (ui, driver) = app_for("keepalive");
-        driver.drain_events();
-        let before = driver.state.borrow().settings.log.lines().len();
-
-        ui.invoke_settings_pick_diag_action(row_index("What could keep Carnyx alive through sleep"));
-
-        // THE TAP ANSWERS BEFORE THE WORK. The row defers the binder walk by a
-        // frame so the well can repaint; what the driver sees FIRST is this.
-        let after_tap = driver.state.borrow().settings.log.lines();
-        assert!(after_tap.len() > before, "the tap wrote something immediately");
-        assert!(
-            after_tap.last().unwrap().contains("keep-alive probe: reading"),
-            "and it says the probe has started, got {:?}",
-            after_tap.last()
-        );
-
-        // Then the deferred half, driven directly — waiting on a timer here
-        // would be a test of the clock.
-        driver.run_pending_probe();
-        let lines = driver.state.borrow().settings.log.lines();
-        assert!(lines.len() > after_tap.len(), "the deferred half wrote too");
-        assert!(
-            lines.last().unwrap().contains("keep-alive probe"),
-            "and it names the probe, got {:?}",
-            lines.last()
-        );
-
-        // AND IT ONLY RUNS ONCE. `pending_probe` is taken, so a second tick with
-        // no tap behind it must write nothing — otherwise every frame after a
-        // tap would re-walk the package manager.
-        let settled = driver.state.borrow().settings.log.lines().len();
-        driver.run_pending_probe();
-        assert_eq!(
-            driver.state.borrow().settings.log.lines().len(),
-            settled,
-            "a tick with nothing pending does nothing"
-        );
-    }
-
     /// THE ROW THAT WAS TAPPED SAYS WHAT HAPPENED, UNDER ITSELF.
     ///
     /// The owner's drive log had the stock-radio probe run three times and the
@@ -8299,29 +8248,29 @@ mod tests {
                 .map(|a| a.sub.to_string())
                 .unwrap_or_else(|| panic!("no row labelled {label:?}"))
         };
-        const KEEP: &str = "What could keep Carnyx alive through sleep";
-        const STOCK: &str = "Where the stock radio app can be intercepted";
+        // TWO LIVE ROWS THAT BOTH CARRY NOTES. It used to be the two probes,
+        // which are parked; the rule outlived them. The listener row is
+        // deliberately not one of the pair — its sub-line reports the platform
+        // grant rather than what the tap did, and has its own test.
+        const OVERLAY: &str = "Allow drawing over other apps";
+        const TAKEOVER: &str = "Check radio takeover";
 
-        assert_eq!(sub_of(KEEP), "", "nothing has run yet");
-        assert_eq!(sub_of(STOCK), "", "on either row");
+        assert_eq!(sub_of(OVERLAY), "", "nothing has run yet");
+        assert_eq!(sub_of(TAKEOVER), "", "on either row");
 
-        ui.invoke_settings_pick_diag_action(row_index(KEEP));
-        assert_eq!(sub_of(KEEP), "Reading…", "the tap marks its own row at once");
-        assert_eq!(sub_of(STOCK), "", "and only its own row");
+        ui.invoke_settings_pick_diag_action(row_index(OVERLAY));
+        assert!(!sub_of(OVERLAY).is_empty(), "the tap marks its own row");
+        assert_eq!(sub_of(TAKEOVER), "", "and only its own row");
 
-        driver.run_pending_probe();
-        let done = sub_of(KEEP);
-        assert!(
-            done.contains("lines at") || done.contains("Nothing to report"),
-            "the result replaces the reading state on the same row, got {done:?}"
-        );
-        assert!(done.contains("the log above"), "and points at where the output went: {done:?}");
-        assert_eq!(sub_of(STOCK), "", "the neighbour is still untouched");
+        ui.invoke_settings_pick_diag_action(row_index(TAKEOVER));
+        assert!(!sub_of(TAKEOVER).is_empty(), "the neighbour marks itself when tapped");
+        assert!(!sub_of(OVERLAY).is_empty(), "and does not wipe the first");
 
         // A CLEAR TAKES THE NOTES WITH IT. They describe output that was in the
         // log; a note that outlives its lines points at nothing.
         ui.invoke_settings_pick_diag_action(row_index("Clear log"));
-        assert_eq!(sub_of(KEEP), "", "cleared with the log");
+        assert_eq!(sub_of(OVERLAY), "", "cleared with the log");
+        assert_eq!(sub_of(TAKEOVER), "", "both of them");
     }
 
     /// THE LOG WELL IS TOLD ABOUT EVERY APPEND, INCLUDING THE ONES THAT EVICT.
@@ -8417,38 +8366,6 @@ mod tests {
         crate::android::set_foreground(true);
     }
 
-    /// THE SAME BAR FOR THE SECOND PROBE ROW, and it earns its own test rather
-    /// than riding on the shared helper: the two rows reach different classes
-    /// through different seams, and a row wired to the wrong one would pass any
-    /// test that only exercised the helper.
-    #[test]
-    fn the_stock_radio_probe_leaves_a_line_even_where_it_cannot_run() {
-        let _ui_lock = harness::ui_lock();
-        let (ui, driver) = app_for("stockradio");
-        driver.drain_events();
-        let before = driver.state.borrow().settings.log.lines().len();
-
-        ui.invoke_settings_pick_diag_action(row_index(
-            "Where the stock radio app can be intercepted",
-        ));
-
-        let after_tap = driver.state.borrow().settings.log.lines();
-        assert!(after_tap.len() > before, "the tap wrote something immediately");
-        assert!(
-            after_tap.last().unwrap().contains("stock radio probe: reading"),
-            "and it says the probe has started, got {:?}",
-            after_tap.last()
-        );
-
-        driver.run_pending_probe();
-        let lines = driver.state.borrow().settings.log.lines();
-        assert!(
-            lines.last().unwrap().contains("stock radio probe"),
-            "and it names the probe, got {:?}",
-            lines.last()
-        );
-    }
-
     /// EVERY ROW RUNS ITS OWN ACTION, AND EVERY ACTION HAS A ROW.
     ///
     /// The failure this catches is the one a copied `DiagAction` block produces
@@ -8468,56 +8385,31 @@ mod tests {
             );
             seen.push(row.action);
         }
+        // THE LIVE SET ONLY. Four variants are parked with no row on purpose —
+        // `settings::every_action_row_can_still_do_something_on_this_unit` is
+        // what holds them to that, and listing them here would contradict it.
         for action in [
             settings::Action::SaveLog,
             settings::Action::ClearLog,
-            settings::Action::ProbeKeepAlive,
-            settings::Action::ProbeStockRadio,
-            settings::Action::AskNotifyPermission,
             settings::Action::AskOverlayPermission,
+            settings::Action::AskListenerPermission,
+            settings::Action::CheckRadioRemap,
         ] {
             assert!(seen.contains(&action), "{action:?} has no row");
         }
     }
 
-    /// THE PERMISSION ROW LEAVES A LINE ON A BUILD THAT CANNOT ASK.
+    /// THE OVERLAY ROW LEAVES A LINE, AND ON EVERY BUILD.
     ///
-    /// The host has no permission model and the row still has to say something —
-    /// a tap that writes nothing reads as a broken row, which is the failure the
-    /// five removed diagnostics rows had and the reason
-    /// `the_keep_alive_probe_leaves_a_line_even_where_it_cannot_run` exists
-    /// beside this.
+    /// THE RULE THIS CARRIES ALONE NOW. It used to be one of four tests making
+    /// the same point — a tap that writes nothing reads as a broken row, which
+    /// is the failure the five removed diagnostics rows had. The other three
+    /// drove rows that are now parked, so this is where the rule lives.
     ///
-    /// It also pins the row as INLINE. The two probes defer through
-    /// `pending_probe` and a timer, so their line is not there when the tap
-    /// returns; this one's must be, and asserting on the log immediately after
-    /// the tap is what says so.
-    #[test]
-    fn the_permission_row_leaves_a_line_even_where_it_cannot_ask() {
-        let _ui_lock = harness::ui_lock();
-        let (ui, driver) = app_for("notifyperm");
-        driver.drain_events();
-
-        ui.invoke_settings_pick_diag_action(row_index("Ask for notification permission"));
-
-        // IMMEDIATELY, WITH NO `drain_events` AND NO TIMER. That is the half of
-        // this that pins the row as inline: the two probes defer through
-        // `pending_probe`, and if this one were ever moved onto that path its
-        // line would not be here yet.
-        let last = driver.state.borrow().settings.log.lines().pop().unwrap_or_default();
-        assert!(
-            last.contains("notification permission"),
-            "the tap has to leave its own line, and left: {last:?}"
-        );
-    }
-
-    /// THE OVERLAY ROW LEAVES A LINE TOO, AND ON EVERY BUILD.
-    ///
-    /// Its sibling above covers a permission that does not exist below API 33;
-    /// this one covers a permission that exists on every Android this app
-    /// supports and that NO version will show a dialog for. So there is no
-    /// "not needed" answer here — the row either opens a screen or says the ROM
-    /// has none, and on the host it says neither, which still has to be a line.
+    /// It covers a permission that exists on every Android this app supports and
+    /// that NO version will show a dialog for. So there is no "not needed"
+    /// answer — the row either opens a screen or says the ROM has none, and on
+    /// the host it says neither, which still has to be a line.
     #[test]
     fn the_overlay_row_leaves_a_line_even_where_there_is_no_window_manager() {
         let _ui_lock = harness::ui_lock();

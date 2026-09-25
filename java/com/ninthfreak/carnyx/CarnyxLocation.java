@@ -149,7 +149,7 @@ public final class CarnyxLocation {
     private static native void nativePosition(
         double lat, double lon, boolean fix, float speedMps, boolean hasSpeed);
 
-    /** One line into the diagnostics panel. The unit has no adb, so `Log.i`
+    /** One line into the diagnostics panel. Logcat reaches nobody here, so `Log.i`
      *  reaches nobody and a skipped provider looks exactly like a slow one. */
     private static native void nativeNote(String line);
 

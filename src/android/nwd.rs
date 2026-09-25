@@ -224,7 +224,7 @@ fn call_void(
 /// can read. `android.util.Log` is on the system class loader, so this works
 /// even when the dex load itself is what failed.
 ///
-/// THE SECOND CHANNEL, NOT THE ONE THAT MATTERS. This unit has no adb, so
+/// THE SECOND CHANNEL, NOT THE ONE THAT MATTERS. Nobody here can read logcat, so
 /// nothing written here reaches the driver; it is kept for a bench unit that
 /// does, and for the window before `set_event_sink` (src/app.rs:1488) has given
 /// `ingest_note` anywhere to put a line — until then `emit` is a no-op, as

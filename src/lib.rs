@@ -259,7 +259,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     // THE PANIC HOOK, before anything that can panic. A crash on this unit was
-    // undiagnosable — no adb, no console, and the diagnostics log dies with the
+    // undiagnosable — no readable logcat, no console, and the diagnostics log dies with the
     // process — so the next launch reads what this leaves behind. See
     // `crashlog`.
     crashlog::install(&files_dir_for_prefs);
@@ -380,7 +380,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // stays: this prevents the restarts it can, and the restore covers the rest.
     //
     // AND THE OUTCOME GOES IN THE APP'S OWN LOG, not just logcat. This unit has
-    // no adb, so a `Log.i` from Java reaches nobody; the settings panel's log is
+    // nobody reads logcat, so a `Log.i` from Java reaches nobody; the settings panel's log is
     // the only channel a driver can read. It already carries the `session:`
     // line, which says `app #N in this process` — so the two lines answer the
     // question together, and neither does alone:
@@ -391,7 +391,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     //
     // SAFETY: same pointers, same lifetime argument as the tuner above.
     // The nav class's receipt, in the driver-readable log — same rule as the
-    // service line below: this unit has no adb, and "the class never loaded"
+    // service line below: logcat reaches nobody here, and "the class never loaded"
     // and "OsmAnd is not installed" must not read identically.
     match &nav_ready {
         Ok(()) => _driver.log_platform("nav: seam ready"),
@@ -466,7 +466,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
 
     // AND WHAT THE RECEIVER DID, if it ran at all. THIS IS THE ONLY EVIDENCE
     // THIS FEATURE CAN PRODUCE: the receiver runs in a process with no face, on
-    // a unit with no adb, so "the broadcast never arrived", "the flag said the
+    // a unit whose logcat nobody reads, so "the broadcast never arrived", "the flag said the
     // driver was elsewhere" and "Android refused a background activity start"
     // are three different outcomes that look identical from the driver's seat.
     // Taken and cleared, so the line belongs to the drive it describes.
@@ -547,6 +547,21 @@ fn android_main(android_app: slint::android::AndroidApp) {
         None => _driver.log_platform("process: age unavailable in this build"),
     }
 
+    // ── WHAT KIND OF ROM THIS IS, AND WHETHER adb root COULD WORK ────────────
+    //
+    // A LAUNCH LINE AND NOT A ROW, because it is a fact about the unit rather
+    // than a question to ask it: it never changes, it belongs in every log
+    // without being remembered, and the one thing worse than not knowing is
+    // knowing only on the drives where somebody thought to tap.
+    //
+    // WHY THE APP CARES. #133's remap needs a write into `/config` that no app
+    // code can make — measured 2026-09-25, the vendor's own copier failed at it.
+    // What is left is a privileged shell, which on Android means `adb root`, and
+    // that only works on a userdebug/eng build. See `CarnyxProcess.buildKind`.
+    if let Some(kind) = android::build_kind() {
+        _driver.log_platform(&kind);
+    }
+
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The
     // variable is set at the top of this function; this line is the only evidence
     // a driver can get that the renderer saw it, since the alternative — Slint
@@ -586,7 +601,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
             // FAULTS. `start` answers false both for a grant nobody has tapped
             // Allow on and for a unit whose `LocationManager` had no provider to
             // register against — and the old line, "waiting for the permission
-            // grant", asserted the first for both. On a unit with no adb that
+            // grant", asserted the first for both. On a unit whose logcat nobody reads, that
             // sentence IS the diagnosis, and it sent the reading in the wrong
             // direction: a missing provider is not something a driver can grant
             // their way out of, and no amount of waiting produces one.

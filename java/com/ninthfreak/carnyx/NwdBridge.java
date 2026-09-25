@@ -786,7 +786,7 @@ public final class NwdBridge {
     // NO SAF AND NO PICKER ACTIVITY. CarFM's note: the SAF picker crashed on units
     // with no DocumentsUI, and this head unit is one of them. Downloads is a
     // standard location a file manager can see and copy to a USB stick, which is
-    // the only way anything leaves this unit — it has no adb.
+    // the only way anything leaves this unit — logcat reaches nobody.
     //
     // API 29+ goes through MediaStore and needs no permission at all. Below that
     // the public Downloads directory is written directly, which needs
@@ -799,7 +799,7 @@ public final class NwdBridge {
      * <p>THE RETURN VALUE CARRIES THE FAILURE, prefixed with "!". A thrown
      * exception would reach Rust as a bare {@code Error::JavaException} with the
      * message left pending on the JVM, and the message is the whole point: this
-     * unit has no adb and no logcat a driver can read, so the only place a reason
+     * unit has no logcat a driver can read, so the only place a reason
      * can be shown is the diagnostics panel that asked for the save.
      */
     public static String writeLog(String text) {
@@ -1597,7 +1597,7 @@ public final class NwdBridge {
         synchronized (SEEK_LOCK) {
             // NOT FM'S FRONT END, NOT OUR SEEK. Taken first, inside the lock, so
             // no caller can reach the reflection below without passing it.
-            // Reported rather than dropped: this unit has no adb, so a level
+            // Reported rather than dropped: logcat reaches nobody here, so a level
             // that simply stops updating is indistinguishable from a broken one
             // in the only place a driver can look.
             if (mcuSource() != 4) {
