@@ -1025,7 +1025,7 @@ Desktop x86; the unit is 32-bit ARM. A real move still costs what it costs.
 
 ### 80. Make a crash on the unit say what it was
 **DONE.** "The whole app crashes if I stay on the window too long" had nothing
-behind it: a Rust panic goes to logcat, the unit has no adb, and the diagnostics
+behind it: a Rust panic goes to logcat, which nobody here reads, and the diagnostics
 log dies with the process. `src/crashlog.rs` is a panic hook that writes the
 message and location to a file beside the session snapshot; the next launch reads
 it into the settings log as `crash: the last run panicked — …` and deletes it.
@@ -1288,7 +1288,7 @@ catch-all left to write.
 
 **Kept, and why.** The log ring, the settings panel's view of it, "Save to file",
 "Clear log" and the "Tuner log" master switch. That is the MECHANISM rather than
-an investigation: this unit has no adb, so a line written into that ring and read
+an investigation: logcat reaches nobody here, so a line written into that ring and read
 back out of Downloads is the only channel there is, and every new diagnostic this
 project needs will be built on it. The station pop-up's own evidence line (#88),
 `service: started`, `lifecycle:` and the crash report all go through it already.
@@ -1443,7 +1443,7 @@ install is impossible without removing the system copy — which needs root.
    available: `notification listener: nothing enabled on this unit`,
    `accessibility: not Carnyx (1 other(s) enabled)`, `usage access: not granted
    (mode 3)`. Either of the first two grants the exemption; the third is how
-   Carnyx would notice. All three are granted by the driver in Settings, no adb.
+   Carnyx would notice. All three are granted by the driver in Settings, no shell.
    They are also the only mechanisms here that survive a force-stop, because the
    platform binds and re-binds them itself.
 3. **Get off the cleaner's list.** `system whitelist_packagename = null` and
@@ -3471,7 +3471,7 @@ post, and `tools/check-osmand-aidl.sh` re-reads it. A first attempt to research
 this with a fan-out of agents lost nine of thirteen to a session limit, and the
 four that lived were the ones reading THIS repository; the OsmAnd half was then
 done by hand against `raw.githubusercontent.com`, which is where it should have
-been done anyway — a wrong AIDL signature is a crash on a device with no adb.
+been done anyway — a wrong AIDL signature is a crash on a device nobody can attach a debugger to.
 
 **THE API, AND HOW LITTLE OF IT THERE IS.** `registerForNavigationUpdates`
 delivers `ADirectionInfo`: `distanceTo`, `turnType`, `isLeftSide`, and nothing
@@ -4670,7 +4670,7 @@ in the receiver (a process that may be torn down the moment `onReceive` returns)
 — opposite choices, opposite reasons.
 
 **THE NOTE BACK UP IS THE ONLY EVIDENCE THIS FEATURE CAN EVER PRODUCE.** The
-receiver runs with no face on screen, on a unit with no adb, so a `Log.i` from it
+receiver runs with no face on screen, where logcat reaches nobody, so a `Log.i` from it
 reaches nobody — and "the broadcast never arrived", "the flag said the driver was
 elsewhere" and "Android 10 refused a background activity start" are three
 different outcomes that look identical from the driver's seat: the app is simply
@@ -5061,7 +5061,7 @@ the picker crashing on units with no DocumentsUI. Filename
 `maxSdkVersion="32"`, CarFM's own value, for the pre-29 branch only. The failure
 comes back as a return value prefixed `!` rather than a thrown exception: a Java
 exception reaches jni-rs as a bare `Error::JavaException` with the message left
-pending, and the message is the whole point on a unit with no adb. `FakeTuner`
+pending, and the message is the whole point where logcat reaches nobody. `FakeTuner`
 writes a real file too, so the host build exercises the same path.
 
 Pinned by `saving_the_log_writes_every_line_the_ring_holds` — which pushes

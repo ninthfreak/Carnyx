@@ -116,7 +116,7 @@ pub unsafe fn init(vm: *mut c_void, activity: *mut c_void) -> Result<(), super::
 /// where they have been.
 ///
 /// RETURNS WHAT HAPPENED, not whether it worked. Every way of failing used to
-/// come back as `false` with the reason in logcat, which on a unit with no adb
+/// come back as `false` with the reason in logcat, which on a unit whose logcat nobody reads
 /// reaches nobody — and the ways differ in what a person has to do about them:
 /// notifications off is a Settings toggle, a downgraded channel needs a new
 /// channel id and cannot be fixed from code, and a clean "posted" with no banner

@@ -238,7 +238,7 @@ public final class CarnyxNav {
         String turnName, String turnType, int turnDistance, int turnImminent,
         String afterName, String afterType);
 
-    /** One line into the diagnostics panel; the unit has no adb. */
+    /** One line into the diagnostics panel; logcat reaches nobody here. */
     private static native void nativeNavNote(String line);
 
     /**
@@ -500,7 +500,7 @@ public final class CarnyxNav {
                     // ONE LINE PER EDGE, WITH THE REASON. The fault that taught
                     // this lesson was a BadParcelableException thrown on every
                     // poll of a drive — visible nowhere, because this catch
-                    // logged only to logcat and the unit has no adb.
+                    // logged only to logcat, which nobody here can read.
                     if (!pollFaultReported) {
                         pollFaultReported = true;
                         safeNote("nav: getAppInfo failing — " + why(t));
@@ -955,7 +955,7 @@ public final class CarnyxNav {
      * crossing fired {@code updateNavigationInfo} that many times, and
      * {@link #stop} could hand back only the last pair of ids. The
      * once-a-second note that went with it wiped the 600-line diagnostics ring
-     * every ten minutes, which on a unit with no adb is the whole channel.
+     * every ten minutes, which on a unit whose logcat nobody reads is the whole channel.
      *
      * <p>THE NOTE IS EDGE-TRIGGERED, like {@link #pollFaultReported}: one line
      * when the outage opens, one when a retry mends it, nothing in between.

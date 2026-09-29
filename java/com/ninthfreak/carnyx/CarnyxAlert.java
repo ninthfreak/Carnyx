@@ -262,7 +262,7 @@ public final class CarnyxAlert {
      * @return WHAT HAPPENED, for the diagnostics log — "posted, channel
      *     importance 4, toast queued", "notifications are off for this app",
      *     "notify threw: …". It returned a bool and told logcat the reason,
-     *     which on a unit with no adb reaches nobody: every way of failing
+     *     which on a unit whose logcat nobody reads reaches nobody: every way of failing
      *     printed the same "not posted", and they need different fixes — one is
      *     a driver's Settings toggle, one needs a new channel id, one is
      *     SystemUI's. THE LAST CLAUSE IS THE TOAST, which on this ROM is the

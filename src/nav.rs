@@ -748,7 +748,7 @@ impl Nav {
 
     /// One line for the diagnostics log, or `None` when there is nothing to say.
     ///
-    /// The unit has no adb, so this is the only way a drive can report what the
+    /// Logcat reaches nobody here, so this is the only way a drive can report what the
     /// integration actually received.
     pub fn log_line(&self, now: u64, units: Units) -> Option<String> {
         let head = match self.state(now) {

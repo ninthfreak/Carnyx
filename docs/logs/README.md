@@ -1,7 +1,7 @@
 # Drive logs off the unit
 
 Exports of the in-app diagnostics log, as the owner sent them. The head unit has
-no adb, so this is the ONLY channel a fault on the device can reach a developer
+no readable logcat, so this is the ONLY channel a fault on the device can reach a developer
 through — and a log that is read once, for one question, and then discarded takes
 every other answer in it with it.
 

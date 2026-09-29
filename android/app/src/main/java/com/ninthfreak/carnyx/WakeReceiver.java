@@ -65,7 +65,7 @@ import android.util.Log;
  * Android 10, but if the launch is refused there is no crash and no visible
  * effect. So the refusal is WRITTEN DOWN rather than swallowed — into the
  * shared preferences {@link CarnyxWake#takeLastWake} reads back, because a
- * {@code Log.w} on a unit with no adb reaches nobody.
+ * {@code Log.w} on a unit whose logcat nobody reads reaches nobody.
  */
 public final class WakeReceiver extends BroadcastReceiver {
     private static final String TAG = "CarnyxWake";

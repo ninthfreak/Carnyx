@@ -43,7 +43,7 @@ import android.util.Log;
  *
  * <p>{@link #takeLastWake} reads back the note {@code WakeReceiver} leaves when
  * it fires. THAT IS THE ONLY EVIDENCE THIS FEATURE CAN EVER PRODUCE. Everything
- * the receiver does happens in a process with no face, on a unit with no adb,
+ * the receiver does happens in a process with no face, where logcat reaches nobody,
  * so a {@code Log.i} from it reaches nobody; the app reads the note on its way
  * up and puts it in the diagnostics log, which is a channel a driver can
  * actually see. Without it, "the broadcast never arrived" and "the launch was

@@ -146,7 +146,7 @@ pub struct DiagAction {
 /// dump every tuner getter, probe `NwdFmManager`. Those were built to answer
 /// CarFM's questions, and porting them was reading someone else's notebook as a
 /// specification. They are gone. What is left is somewhere to write a line and a
-/// way to read it back on a unit with no adb, which is what any NEW diagnostic
+/// way to read it back on a unit whose logcat nobody reads, which is what any NEW diagnostic
 /// this project needs will be built on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -161,6 +161,9 @@ pub enum Action {
     /// built its wake design around it, and nobody has ever checked whether this
     /// ROM has the keep-alive list vendor Androids usually do. The answer
     /// decides whether the wake receiver (#95) is the whole story.
+    /// PARKED — no row in [`diag_actions`]. The question is settled: the
+    /// notification listener is what survives, established by the drive logs and
+    /// the firmware read rather than by this probe.
     ProbeKeepAlive,
     /// Ask where the stock radio app could be intercepted. See
     /// `CarnyxStockRadio.java`.
@@ -171,6 +174,10 @@ pub enum Action {
     /// needs root, which this unit does not have. This row asks the question
     /// that is left: what an UNPRIVILEGED app can do about the stock radio
     /// launching itself on ACC-on.
+    /// PARKED — no row in [`diag_actions`]. The question is settled and the
+    /// answer came from the firmware, not from here: the stock app is launched by
+    /// `com.nwd.kernel`, and the interception point is its source remap. See
+    /// `docs/vendor/README.md`.
     ProbeStockRadio,
     /// Ask Android for the notification permission. See
     /// `CarnyxAlert.requestPostNotifications`.
@@ -190,6 +197,9 @@ pub enum Action {
     /// was no way to fix that from inside the app on any unit newer than this
     /// one. Present on every unit rather than hidden below 33, because a row
     /// that only appears on hardware nobody here owns is a row nobody can check.
+    /// PARKED — no row in [`diag_actions`]. The permission arrived in API 33 and
+    /// this unit is 29, so the row could only ever report that there is nothing
+    /// to ask. A unit at 33+ wants it back.
     AskNotifyPermission,
     /// Send the driver to Android's "Display over other apps" screen. See
     /// `CarnyxOverlay`.
@@ -225,6 +235,10 @@ pub enum Action {
     /// stock radio app — #133 outcome A. Whether the factory process can write
     /// `/config` is not knowable from the firmware, so the tap only REQUESTS it
     /// and [`Action::CheckRadioRemap`] reads the result back.
+    /// PARKED — no row in [`diag_actions`]. Measured 2026-09-25: the vendor
+    /// copier runs as an ordinary uid and its `mkdirs` on `/config/app` fails, so
+    /// this cannot install anything on this unit however it is driven. The
+    /// machinery is correct and stays for a unit whose `/config` is writable.
     InstallRadioRemap,
     /// Read the installed remap back. See [`Action::InstallRadioRemap`].
     ///
@@ -248,39 +262,35 @@ pub fn diag_actions() -> Vec<DiagAction> {
             divider_above: false,
             action: Action::SaveLog,
         },
-        DiagAction {
-            label: "What could keep Carnyx alive through sleep".into(),
-            sub: String::new(),
-            divider_above: true,
-            action: Action::ProbeKeepAlive,
-        },
-        // Beneath the keep-alive row and above the divider it shares, because
-        // the two are one investigation from opposite ends: whether Carnyx can
-        // survive the sleep, and what to do about the app that wakes instead.
-        DiagAction {
-            label: "Where the stock radio app can be intercepted".into(),
-            sub: String::new(),
-            divider_above: false,
-            action: Action::ProbeStockRadio,
-        },
-        // With them rather than beside "Clear log", because like the two above it
-        // is a question about the platform and not about the log. It differs in
-        // that it can CHANGE something, which is why it is last of the three: a
-        // mis-tap on the row above costs a wasted read, and a mis-tap here can
-        // put a dialog on the screen.
-        DiagAction {
-            label: "Ask for notification permission".into(),
-            sub: String::new(),
-            divider_above: false,
-            action: Action::AskNotifyPermission,
-        },
-        // Beside the notification request because the two are the same errand —
-        // a permission the app cannot grant itself — and this one is what the
-        // station pop-up actually needs on every Android, not just a newer one.
+        // ── FOUR ROWS ARE PARKED, NOT DELETED ────────────────────────────────
+        //
+        // Each answered its question, or cannot act on this unit. Their `Action`
+        // variants and handlers are intact, so restoring one is adding its
+        // `DiagAction` back here — see the enum for what each did.
+        //
+        // * ProbeKeepAlive and ProbeStockRadio — both questions are settled, and
+        //   by the firmware decompile rather than by the probes. What keeps
+        //   Carnyx alive through a sleep is the notification listener, and where
+        //   the stock app can be intercepted is `com.nwd.kernel`'s source remap.
+        //   See docs/vendor/README.md. Re-reading the package manager cannot add
+        //   to either answer.
+        //
+        // * AskNotifyPermission — the permission it asks for arrived in API 33
+        //   and this unit is 29, so the row can only ever report that there is
+        //   nothing to ask. It was kept visible on the argument that a row hidden
+        //   below 33 is a row nobody here can check; that held while it was the
+        //   newest thing in the panel and does not now. A unit at 33+ wants it
+        //   back.
+        //
+        // * InstallRadioRemap — measured 2026-09-25: the vendor copier runs as an
+        //   ordinary uid and its `mkdirs` on `/config/app` fails, so this row
+        //   cannot install anything on this unit however it is driven. The CHECK
+        //   below stays, because it still reports the truth about `/config` and
+        //   would confirm a remap placed by a privileged shell.
         DiagAction {
             label: "Allow drawing over other apps".into(),
             sub: String::new(),
-            divider_above: false,
+            divider_above: true,
             action: Action::AskOverlayPermission,
         },
         // Third of the three permission errands. Last of them because it is the
@@ -293,20 +303,14 @@ pub fn diag_actions() -> Vec<DiagAction> {
             divider_above: false,
             action: Action::AskListenerPermission,
         },
-        // Its own group above "Clear log", because it is the one row that writes
-        // outside this app — the kernel remap that is outcome A's clean answer.
-        // The pair is ordered install-then-check, and the check sits directly
-        // under the install so the finger that tapped one finds the other.
-        DiagAction {
-            label: "Install radio takeover (writes to /config)".into(),
-            sub: String::new(),
-            divider_above: true,
-            action: Action::InstallRadioRemap,
-        },
+        // Its own group above "Clear log". The install it used to sit beside is
+        // parked — see the note at the top of this list — and this one stays
+        // because it still answers a live question: what `/config` actually holds,
+        // and whether a remap placed there by a privileged shell took.
         DiagAction {
             label: "Check radio takeover".into(),
             sub: String::new(),
-            divider_above: false,
+            divider_above: true,
             action: Action::CheckRadioRemap,
         },
         DiagAction {
@@ -874,63 +878,59 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// SEVEN ROWS IN THREE GROUPS, AND A DIVIDER MEANS A CHANGE OF SUBJECT.
+    /// FIVE ROWS, AND EVERY ONE OF THEM CAN STILL DO SOMETHING.
     ///
-    /// This test used to enumerate seven and assert which of them appeared under
-    /// which conditions. Five were CarFM's vendor probes — export the raw
-    /// capture, dump the boot settings, probe the trampoline, dump every getter,
-    /// probe `NwdFmManager` — and none of them had ever been written. They are
-    /// gone, and with them the whole idea of a list that changes shape.
+    /// The list has been cut twice for the same reason. Five of CarFM's vendor
+    /// probes went first — none had ever been written. Four more are parked now:
+    /// the two probes whose questions the firmware decompile answered, the
+    /// notification request for a permission this unit's API is too old to have,
+    /// and the remap install that the unit is measured to refuse. See the note in
+    /// [`diag_actions`] for each.
     ///
-    /// It also used to say every row after the first carries a rule, which was
-    /// true of a list where no two rows belonged together. The two PROBES do:
-    /// one asks whether Carnyx can survive the sleep, the other what to do about
-    /// the app that wakes instead, and a rule between them would read as two
-    /// unrelated tools.
+    /// WHAT THE RULE IS, and it has survived both cuts: a row earns its place by
+    /// being able to change or report something HERE. A row that can only say
+    /// "nothing to do on this unit" is a row that trains a driver to ignore the
+    /// panel.
     #[test]
-    fn the_action_rows_are_the_mechanism_two_probes_and_three_requests() {
+    fn every_action_row_can_still_do_something_on_this_unit() {
         let rows = diag_actions();
         assert_eq!(
             rows.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
             [
                 "Save to file",
-                "What could keep Carnyx alive through sleep",
-                "Where the stock radio app can be intercepted",
-                "Ask for notification permission",
                 "Allow drawing over other apps",
                 "Allow notification access",
-                "Install radio takeover (writes to /config)",
                 "Check radio takeover",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, false, false, false, true, false, true],
-            "the log well runs into the first row; rules open the platform rows, \
-             the takeover pair, and the clear"
+            [false, true, false, true, true],
+            "the log well runs into the first row; rules open the permission pair, \
+             the takeover check, and the clear"
         );
-        // THE ROWS THAT CHANGE SOMETHING SIT BELOW BOTH PROBES, so a mis-tap on
-        // a probe costs a wasted read rather than a screen the driver did not
-        // ask for. The three of them keep their order too: the two pop-up
-        // permissions, then the listener, which is the one whose reason a driver
-        // cannot see from the row alone.
+        // THE TWO PERMISSION ERRANDS KEEP THEIR ORDER: the overlay the pop-up
+        // needs, then the listener, which is the one whose reason a driver cannot
+        // see from the row alone.
         assert_eq!(
-            rows[3..6].iter().map(|a| a.action).collect::<Vec<_>>(),
-            [
-                Action::AskNotifyPermission,
-                Action::AskOverlayPermission,
-                Action::AskListenerPermission
-            ],
-            "the three requests stay below both probes, in that order"
+            rows[1..3].iter().map(|a| a.action).collect::<Vec<_>>(),
+            [Action::AskOverlayPermission, Action::AskListenerPermission],
+            "the two requests stay together, in that order"
         );
-        // THE ONE ROW THAT WRITES A SYSTEM PARTITION, and its check, sit last
-        // before "Clear log" — install then check, so the finger finds both.
-        assert_eq!(
-            rows[6..8].iter().map(|a| a.action).collect::<Vec<_>>(),
-            [Action::InstallRadioRemap, Action::CheckRadioRemap],
-            "the takeover install and its check are the last pair, in that order"
-        );
+        // AND THE PARKED ONES ARE REALLY GONE FROM THE PANEL. Their variants and
+        // handlers remain — this is what proves the rows do not.
+        for parked in [
+            Action::ProbeKeepAlive,
+            Action::ProbeStockRadio,
+            Action::AskNotifyPermission,
+            Action::InstallRadioRemap,
+        ] {
+            assert!(
+                !rows.iter().any(|r| r.action == parked),
+                "{parked:?} is parked and must not have a row"
+            );
+        }
     }
 
     /// THE NOTIFICATION-ACCESS ROW ANSWERS FROM THE PLATFORM, NOT FROM THE TAP.

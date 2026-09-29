@@ -240,4 +240,59 @@ public final class CarnyxProcess {
             return "";
         }
     }
+
+    /**
+     * What kind of build this ROM is, and whether {@code adb root} could work.
+     *
+     * <h2>WHY THE APP REPORTS THIS AT ALL</h2>
+     *
+     * <p>The kernel source remap (#133) has to be written into {@code /config},
+     * and 2026-09-25 established that nothing reachable from ordinary app code
+     * can do it — the vendor's own file copier runs as an ordinary uid and its
+     * {@code mkdirs} on {@code /config/app} failed. What is left needs a
+     * privileged shell, and on Android that means {@code adb root}, which only
+     * works on a {@code userdebug} or {@code eng} build (or a {@code user} build
+     * left with {@code ro.debuggable=1}).
+     *
+     * <p>THIS SAVES A TRIP TO THE CAR. Getting adb onto a head unit in a driveway
+     * is awkward — the right cable, the right port, developer options — and doing
+     * all of that only to be told {@code adbd cannot run as root in production
+     * builds} is the wasted evening this line exists to prevent. These are
+     * ordinary system properties any app may read.
+     *
+     * <p>{@code Build.TYPE} and {@code Build.TAGS} are public API.
+     * {@code ro.debuggable} is not, so it goes through reflection on
+     * {@code SystemProperties} — the same route `NwdBridge` uses for the vendor
+     * framework classes — and its absence is reported rather than guessed at.
+     *
+     * @return one line for the diagnostics log, never null.
+     */
+    public static String buildKind() {
+        String type;
+        String tags;
+        try {
+            type = Build.TYPE == null ? "?" : Build.TYPE;
+            tags = Build.TAGS == null ? "?" : Build.TAGS;
+        } catch (Throwable t) {
+            return "build: could not be read (" + t + ")";
+        }
+        String debuggable;
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            Object v = sp.getMethod("get", String.class, String.class)
+                    .invoke(null, "ro.debuggable", "");
+            debuggable = v == null ? "" : v.toString();
+        } catch (Throwable t) {
+            debuggable = "";
+        }
+        // THE VERDICT IS SPELLED OUT rather than left to whoever reads the log.
+        // "userdebug" means nothing to most people and the whole point of the
+        // line is to answer one question: is it worth carrying a cable out there.
+        boolean rootable = "userdebug".equals(type) || "eng".equals(type) || "1".equals(debuggable);
+        return "build: " + type + "/" + tags
+                + (debuggable.isEmpty() ? "" : ", ro.debuggable=" + debuggable)
+                + (rootable
+                        ? " — adb root should work"
+                        : " — adb root will be refused on a build of this kind");
+    }
 }
