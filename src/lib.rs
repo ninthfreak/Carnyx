@@ -11,6 +11,7 @@ pub mod app;
 pub mod arrow;
 pub mod callsigns;
 pub mod clock;
+pub mod comaps;
 pub mod crashlog;
 pub mod eggs;
 pub mod fake;
@@ -348,6 +349,13 @@ fn android_main(android_app: slint::android::AndroidApp) {
     //
     // SAFETY: same pointers, same lifetime argument as the tuner above.
     let nav_ready = unsafe { android::nav::init(vm, activity) };
+    // COMAPS' CLASS, FOR THE SAME REASON AND IN THE SAME PLACE (#134): the
+    // constructor asks `CarnyxComaps.installedPackage` and, with CoMaps chosen,
+    // starts the watch — so a class loaded after `with_tuner` would answer a
+    // question already asked, with "" and no watch.
+    //
+    // SAFETY: same pointers, same lifetime argument as the tuner above.
+    let comaps_ready = unsafe { android::comaps::init(vm, activity) };
 
     let _driver = app::App::with_tuner(
         &ui,
@@ -396,6 +404,10 @@ fn android_main(android_app: slint::android::AndroidApp) {
     match &nav_ready {
         Ok(()) => _driver.log_platform("nav: seam ready"),
         Err(e) => _driver.log_platform(&format!("nav: seam unavailable — {e}")),
+    }
+    match &comaps_ready {
+        Ok(()) => _driver.log_platform("nav: CoMaps seam ready"),
+        Err(e) => _driver.log_platform(&format!("nav: CoMaps seam unavailable — {e}")),
     }
 
     let started = unsafe { android::service::init(vm, activity) }.is_ok()

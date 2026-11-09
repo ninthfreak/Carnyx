@@ -145,7 +145,17 @@ impl Units {
     /// and it did read wrong: a unit whose locale carries no country signed a US
     /// driver's turns in kilometres while OsmAnd spoke them in miles.
     pub fn resolve(osmand: i32, country: &str) -> Units {
-        if let Some(u) = Self::from_osmand(osmand) {
+        Self::resolve_said(Self::from_osmand(osmand), country)
+    }
+
+    /// [`Units::resolve`] with step 1 already read, from whichever app said it.
+    ///
+    /// THE SAME ORDER, A SECOND SOURCE FOR THE FIRST RUNG. OsmAnd's answer is a
+    /// preference code; CoMaps' is the unit word on the distances it writes
+    /// (`crate::comaps::Reading::units`). Both are "what the driver chose in
+    /// the app giving directions", so both outrank the locale the same way.
+    pub fn resolve_said(said: Option<Units>, country: &str) -> Units {
+        if let Some(u) = said {
             return u;
         }
         let c = country.trim();

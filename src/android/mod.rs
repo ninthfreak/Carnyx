@@ -40,6 +40,8 @@ pub mod alert;
 #[cfg(target_os = "android")]
 mod dex;
 #[cfg(target_os = "android")]
+pub mod comaps;
+#[cfg(target_os = "android")]
 pub mod location;
 #[cfg(target_os = "android")]
 pub mod nav;
@@ -434,6 +436,14 @@ pub enum TunerEvent {
     /// connected-apps whitelist `OsmandAidlServiceV2.getApi` checks on every
     /// call. See `CarnyxNav.afterPoll`.
     NavRefused(bool),
+    /// One CoMaps `/live` row, RAW — column names and their values as strings,
+    /// a null cell as `None` — exactly as `CarnyxComaps.queryOnce` read them.
+    /// `crate::comaps::read` decides what they mean. An empty pair of vectors is
+    /// an empty cursor: CoMaps has no route cached.
+    ComapsRow { names: Vec<String>, values: Vec<Option<String>> },
+    /// Where the CoMaps link stands, as `CarnyxComaps.LINK_*`. See
+    /// `crate::comaps::Link::from_code`.
+    ComapsLink(i32),
     /// A location fix, or the loss of one.
     ///
     /// Not a tuner event, and it travels on the tuner's queue anyway: there is
@@ -515,10 +525,14 @@ struct Shared {
     /// The motion verdict, kept because the thresholds have hysteresis and
     /// hysteresis is a function of the answer you last gave.
     moving: bool,
+    /// The last fix's speed in m/s, or `None` when the fix had none, was not a
+    /// fix, or there has not been one. Read by [`last_speed_mps`] for CoMaps'
+    /// stage ladder (`crate::comaps::imminent`), which has no ladder of its own.
+    speed: Option<f32>,
 }
 
 static SHARED: Mutex<Shared> =
-    Mutex::new(Shared { cal: Calibration::NEW, sink: None, moving: false });
+    Mutex::new(Shared { cal: Calibration::NEW, sink: None, moving: false, speed: None });
 
 /// Lock without ever panicking on poison.
 ///
@@ -560,6 +574,13 @@ pub fn reset_calibration() {
     let mut g = shared();
     g.cal = Calibration::NEW;
     g.moving = false;
+    // AND THE SPEED, for the same test-order reason as `moving`.
+    g.speed = None;
+}
+
+/// The last fix's speed, in m/s. See [`Shared::speed`].
+pub fn last_speed_mps() -> Option<f32> {
+    shared().speed
 }
 
 /// Deliver an event.
@@ -633,6 +654,10 @@ pub fn ingest_position(lat: f64, lon: f64, fix: bool, speed_mps: f32, has_speed:
         // A lost fix is not a moving car. Without this the verdict would latch
         // on at the moment the antenna went dark and stay there.
         g.moving = fix && sane && settle_motion(g.moving, speed_mps, has_speed);
+        // THE SAME GUARDS AS THE VERDICT: no fix, no speed, or a speed that is
+        // not a number is no reading — not zero, which would be a claim.
+        g.speed = (fix && sane && has_speed && speed_mps.is_finite() && speed_mps >= 0.0)
+            .then_some(speed_mps);
         g.moving
     };
     emit(TunerEvent::Position { lat, lon, fix: fix && sane, in_motion });
@@ -1234,6 +1259,19 @@ pub use crate::nav::Route as NavRoute;
 
 pub fn ingest_nav_info(route: NavRoute) {
     emit(TunerEvent::NavInfo(route));
+}
+
+/// One CoMaps row. Called on `CarnyxComaps`' own worker thread.
+///
+/// NO JNI TYPES IN THE SIGNATURE, so one function serves the seam and the host
+/// tests alike — the seam has already turned the two `String[]` into vectors.
+pub fn ingest_comaps_row(names: Vec<String>, values: Vec<Option<String>>) {
+    emit(TunerEvent::ComapsRow { names, values });
+}
+
+/// The CoMaps link's state edge. See [`TunerEvent::ComapsLink`].
+pub fn ingest_comaps_link(code: i32) {
+    emit(TunerEvent::ComapsLink(code));
 }
 
 pub fn ingest_illumination(action: String, extras: String, ui_mode: String) {

@@ -103,6 +103,84 @@ pub fn theme_chips() -> Vec<String> {
     Theme::ORDER.iter().map(|t| t.label().to_string()).collect()
 }
 
+// ── Navigation app ───────────────────────────────────────────────────────────
+
+/// Which app Settings ▸ NAVIGATION ▸ Nav integration reads turns from (#134).
+///
+/// TWO, AND ONLY ONE AT A TIME. Both describe the same drive, and two feeds
+/// into one maneuver layer would need a rule for which turn wins — a rule
+/// nobody asked for, about a situation (two maps apps routing at once) nobody
+/// is in. The driver picks one; the other is not bound, watched or asked.
+///
+/// OSMAND IS THE DEFAULT because it was the only one: a file written before
+/// this setting existed comes back reading OsmAnd, exactly as it did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NavApp {
+    #[default]
+    OsmAnd,
+    CoMaps,
+}
+
+impl NavApp {
+    /// The picker's order. OsmAnd first, because it was first.
+    pub const ORDER: [NavApp; 2] = [NavApp::OsmAnd, NavApp::CoMaps];
+
+    /// The row title, which is the app's own name.
+    pub fn name(self) -> &'static str {
+        match self {
+            NavApp::OsmAnd => "OsmAnd",
+            NavApp::CoMaps => "CoMaps",
+        }
+    }
+}
+
+/// What the picker knows about one app on this unit.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NavAppFound {
+    /// The application id that answered, or empty.
+    pub package: String,
+    /// An id that is installed but cannot be used — today only a CoMaps from
+    /// before its navigation provider existed. Empty otherwise.
+    pub outdated: String,
+}
+
+/// The picker's rows, in [`NavApp::ORDER`], under the source picker's shape.
+///
+/// THE SAME ROW AS "Tuner source" — radio mark, name, second line, badge —
+/// because it is the same question: which one of these should the radio use.
+/// The second line is the package that answered, so a driver with two OsmAnd
+/// builds can see which one is in use, and says why when there is none.
+///
+/// EVERY ROW IS TAPPABLE, installed or not. Choosing an app before installing
+/// it is a reasonable order to do things in, and the sub-line under the switch
+/// already says "not installed" for whichever is chosen.
+pub fn nav_apps(chosen: NavApp, osmand: &NavAppFound, comaps: &NavAppFound) -> Vec<SourceRow> {
+    NavApp::ORDER
+        .iter()
+        .map(|&app| {
+            let found = match app {
+                NavApp::OsmAnd => osmand,
+                NavApp::CoMaps => comaps,
+            };
+            let (kind, badge, lit) = if !found.package.is_empty() {
+                (found.package.clone(), "Detected", true)
+            } else if !found.outdated.is_empty() {
+                (format!("{} — too old to share navigation", found.outdated), "Update", false)
+            } else {
+                ("Not installed".to_string(), "Not detected", false)
+            };
+            SourceRow {
+                name: app.name().to_string(),
+                kind,
+                badge: badge.to_string(),
+                badge_lit: lit,
+                available: true,
+                selected: app == chosen,
+            }
+        })
+        .collect()
+}
+
 // ── Battery ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -699,7 +777,13 @@ pub struct Settings {
     /// ON, unlike the navigation switch beside it, because it costs nothing and
     /// starts nothing: it is a second read off a timer this app already runs.
     pub clock_on: bool,
-    /// Turn-by-turn directions from OsmAnd. See `crate::nav`.
+    /// Turn-by-turn directions from a navigation app — Settings ▸ NAVIGATION ▸
+    /// Nav integration. See `crate::nav`, and [`Settings::nav_app`] for which.
+    ///
+    /// THE ROW WAS "OsmAnd integration" UNTIL COMAPS (#134), and everything
+    /// below was written about OsmAnd and is still true of it. CoMaps costs
+    /// less on the same argument: watching its provider binds nothing and
+    /// starts nothing, and rows arrive only while CoMaps itself is navigating.
     ///
     /// ── DEFAULT ON, AND IT WAS OFF UNTIL §4.9 SAID OTHERWISE ────────────────
     ///
@@ -718,6 +802,12 @@ pub struct Settings {
     /// returns without a bind. The cost falls only on someone who chose to
     /// install it.
     pub nav_on: bool,
+    /// Which app [`Settings::nav_on`] reads from. Default OsmAnd. See [`NavApp`].
+    ///
+    /// REMEMBERED WHILE THE SWITCH IS OFF, because the picker is only drawn
+    /// while it is on: a driver who switches off and back on gets the app they
+    /// chose, not the default.
+    pub nav_app: NavApp,
     /// Hide the maneuver layer while OsmAnd's own map is in front (§4.9).
     ///
     /// DEFAULT ON, which the spec states and which is also the only default
@@ -788,6 +878,7 @@ impl Default for Settings {
             release_on_sleep: false,
             clock_on: true,
             nav_on: true,
+            nav_app: NavApp::OsmAnd,
             nav_hide_on_map: true,
             // OFF. See the field's own note: looping costs positional memory,
             // and the design bundle asks for it opt-in.
@@ -1185,5 +1276,27 @@ mod tests {
         assert_eq!(Theme::parse("DARK"), Some(Theme::Dark));
         assert_eq!(Theme::parse("Dark"), None);
         assert_eq!(Theme::parse(""), None);
+    }
+
+    /// THE NAV PICKER: two rows, the chosen one lit, each naming what it found.
+    #[test]
+    fn the_nav_picker_names_what_each_app_found_and_lights_the_chosen_one() {
+        let osmand = NavAppFound { package: "net.osmand.plus".into(), ..NavAppFound::default() };
+        let comaps = NavAppFound::default();
+        let rows = nav_apps(NavApp::CoMaps, &osmand, &comaps);
+        assert_eq!(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["OsmAnd", "CoMaps"]);
+        assert!(!rows[0].selected && rows[1].selected, "the chosen row, and only it");
+        assert_eq!((rows[0].kind.as_str(), rows[0].badge.as_str()), ("net.osmand.plus", "Detected"));
+        assert!(rows[0].badge_lit);
+        assert_eq!((rows[1].kind.as_str(), rows[1].badge.as_str()), ("Not installed", "Not detected"));
+        // CHOOSABLE WHETHER OR NOT IT IS INSTALLED — see `nav_apps`.
+        assert!(rows.iter().all(|r| r.available));
+
+        let old = NavAppFound { outdated: "app.comaps.fdroid".into(), ..NavAppFound::default() };
+        let rows = nav_apps(NavApp::OsmAnd, &osmand, &old);
+        assert!(rows[1].kind.starts_with("app.comaps.fdroid"), "{}", rows[1].kind);
+        assert_eq!(rows[1].badge, "Update");
+        assert!(!rows[1].badge_lit);
+        assert_eq!(Settings::default().nav_app, NavApp::OsmAnd, "OsmAnd stays the default");
     }
 }

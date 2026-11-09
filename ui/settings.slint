@@ -1268,10 +1268,14 @@ export component SettingsOverlay inherits Rectangle {
     in property <string> clock-sub;
     // ── NAVIGATION (§4.9) ──
     in property <bool> nav-on: true;
-    /// Why nothing is showing — no OsmAnd, off here, OsmAnd closed, OsmAnd open
-    /// with no route, or hidden behind its map. Decided in Rust like every other
-    /// string here; see `crate::nav::sub_line`.
+    /// Why nothing is showing, for whichever app the picker has chosen — not
+    /// installed, off here, the app closed or idle, a permission still to grant,
+    /// or hidden behind its map. Decided in Rust like every other string here;
+    /// see `crate::nav::sub_line` and `crate::comaps::sub_line`.
     in property <string> nav-sub;
+    /// The picker's rows (#134): OsmAnd, CoMaps. The tuner picker's shape —
+    /// see `crate::settings::nav_apps` for what each line says.
+    in property <[TunerSource]> nav-apps;
     in property <bool> nav-hide-on-map: true;
     in property <string> nav-hide-sub;
 
@@ -1384,6 +1388,9 @@ export component SettingsOverlay inherits Rectangle {
     callback set-release-on-sleep(bool);
     callback set-clock-on(bool);
     callback set-nav-on(bool);
+    /// The index into `nav-apps`. Rust holds the choice, the switch-over and
+    /// the CoMaps permission ask that a tap on its row also is.
+    callback pick-nav-app(int);
     callback set-nav-hide-on-map(bool);
     callback set-preset-loop(bool);
     in property <bool> come-forward: false;
@@ -1548,11 +1555,35 @@ export component SettingsOverlay inherits Rectangle {
             SectionLabel { label: "NAVIGATION"; }
             GroupCard {
                 pad: Metrics.s(card.narrow ? 8 : 10);
+                // "Nav integration", AND IT WAS "OsmAnd integration" (#134).
+                // The switch is still the one switch — on means "read turns
+                // from a navigation app" — and which app is the picker's below.
                 SwitchRow {
-                    title: "OsmAnd integration";
+                    title: "Nav integration";
                     sub: root.nav-sub;
                     on: root.nav-on;
                     toggled(v) => { root.set-nav-on(v); }
+                }
+
+                // ── THE PICKER, ONLY WHILE THE SWITCH IS ON ─────────────────
+                //
+                // The owner's spec: the switch "will then expand to a selector of
+                // either OsmAnd or CoMaps". The tuner picker's rows — radio mark,
+                // the app's name, the install it found, a badge — because it is
+                // the tuner picker's question: which one should the radio use.
+                //
+                // THE ROWS BELOW THE SWITCH MOVE, and the note on the hide-on-map
+                // row about not reflowing under a finger still holds where it
+                // matters: the switch itself does not move, so the finger that
+                // just flipped it is still on it.
+                if root.nav-on: VerticalLayout {
+                    spacing: 0px;
+                    RowDivider { }
+                    SubLabel { label: "Navigation app"; }
+                    for app[i] in root.nav-apps: SourceRow {
+                        source: app;
+                        clicked => { root.pick-nav-app(i); }
+                    }
                 }
 
                 RowDivider { }

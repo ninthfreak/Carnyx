@@ -6,7 +6,8 @@
 import { Pal, Metrics, Font } from "tokens.slint";
 import { EggTheme, BandGear } from "types.slint";
 import { SignalWaves, StereoCone, GearIcon, WarningTriangle, GpsSatellite, MotionCar,
-         ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon, OsmAndMark } from "icons.slint";
+         ZeppelinRunes, DrumIcon, SmileyIcon, AirshipIcon, BoltIcon, OsmAndMark,
+         CoMapsMark } from "icons.slint";
 import { NearbyDisc } from "nearby-disc.slint";
 
 // One of the little status letters. Lit = full weight with a soft dark drop; off
@@ -661,16 +662,20 @@ component OutOfBandPill inherits Rectangle {
 export component DrivingStatus inherits HorizontalLayout {
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
-    /// Settings ▸ TUNER ▸ Turn-by-turn. Off means no tell at all (§4.9).
-    in property <bool> osmand-on: false;
-    /// The AIDL service is bound AND answering. See `App::push_nav`.
-    in property <bool> osmand-linked: false;
+    /// Settings ▸ NAVIGATION ▸ Nav integration. Off means no tell at all (§4.9).
+    in property <bool> nav-on: false;
+    /// The chosen app is on the other end — OsmAnd's poll answering, or
+    /// CoMaps' feed being watched. See `App::nav_linked`.
+    in property <bool> nav-linked: false;
+    /// CoMaps is the chosen app, so CoMaps' mark is drawn instead of OsmAnd's
+    /// (#134). The slot, the size class and the lit/dim language are the same.
+    in property <bool> nav-comaps: false;
     /// The band theme, for the airship alone.
     in property <EggTheme> egg;
-    /// A tap on the mark itself — bring OsmAnd to the front. Fires whether or
-    /// not `osmand-linked` is true; a driver watching a dim mark still wants
-    /// the tap to try.
-    callback open-osmand();
+    /// A tap on the mark itself — bring the chosen app to the front. Fires
+    /// whether or not `nav-linked` is true; a driver watching a dim mark still
+    /// wants the tap to try.
+    callback open-nav-app();
 
     // A slow ~2.6s breathe — gentler than TA's 1.1s.
     property <float> breathe: 1.0;
@@ -725,7 +730,7 @@ export component DrivingStatus inherits HorizontalLayout {
     // this face's safety colour and this is somebody else's brand. Routing it
     // through the palette would let a band theme restyle it, and §4.9 forbids
     // exactly that for the maneuver layer.
-    if root.osmand-on: Rectangle {
+    if root.nav-on && !root.nav-comaps: Rectangle {
         // The mark's own rendered width, so the row's 12px spacing is the whole
         // gap. §4.9 asks for "small negative margins" to close an optical gap;
         // those cancel per-tile padding the reference carries and this build
@@ -737,7 +742,7 @@ export component DrivingStatus inherits HorizontalLayout {
         // side, and this mark is no smaller than the GPS tell beside it, which
         // has never needed one.
         mark-touch := TouchArea {
-            clicked => { root.open-osmand(); }
+            clicked => { root.open-nav-app(); }
         }
         OsmAndMark {
             // NUDGED DOWN 2dp so the DISC's centre lands on the row's, which is
@@ -748,12 +753,41 @@ export component DrivingStatus inherits HorizontalLayout {
             // 1.7px. §4.9 rounds it to 2.
             y: 2px;
             size: 30px;
-            color: root.osmand-linked ? #FF8800 : Pal.text;
+            color: root.nav-linked ? #FF8800 : Pal.text;
             // NOT `mark-touch.pressed` HERE — this opacity already carries the
             // linked/unlinked state (1.0 / 0.30), and folding a press-state
             // into the same property would flash a linked mark toward
             // "unlinked" for the length of every tap.
-            opacity: root.osmand-linked ? 1.0 : 0.30;
+            opacity: root.nav-linked ? 1.0 : 0.30;
+        }
+    }
+    // ── THE SAME TELL, FOR COMAPS (#134) ───────────────────────────────────
+    //
+    // ONE SLOT, ONE MARK AT A TIME: the picker chooses one app, and the mark
+    // names the app the face is reading from. Same rules as OsmAnd's above —
+    // absent when the switch is off, the brand colour once linked, the flat
+    // text colour at ~30% when not, and a tap brings the app forward.
+    //
+    // THE GREEN IS COMAPS' OWN #588157, a literal for the reason OsmAnd's
+    // orange is one: it is somebody else's brand, and a band theme must not
+    // restyle it. It is their launcher icon's plate colour (`bg_app_icon_release`
+    // in their `colors.xml`). Measured against `Pal.bg`: 3.95:1 on the light
+    // page (#EEF1F5) and 3.35:1 on the dark one (#24272C) — both above the 3:1
+    // a glyph needs, the dark one with the less to spare. (OsmAnd's orange is
+    // the other way round: 6.26:1 dark, 2.11:1 light.)
+    //
+    // 27 × 27, which puts the ring's diameter within a third of a pixel of
+    // OsmAnd's 26.7px disc, so swapping the app does not visibly resize the
+    // slot. The ring is centred in its own box, so no nudge.
+    if root.nav-on && root.nav-comaps: Rectangle {
+        width: 27px; height: 30px;
+        comaps-touch := TouchArea {
+            clicked => { root.open-nav-app(); }
+        }
+        CoMapsMark {
+            size: 27px;
+            color: root.nav-linked ? #588157 : Pal.text;
+            opacity: root.nav-linked ? 1.0 : 0.30;
         }
     }
     // Always present: it communicates lock state. With no fix it is not greyed
@@ -866,14 +900,15 @@ export component StatusBar inherits Rectangle {
     in property <bool> dead: false;
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
-    /// The OsmAnd tell (§4.9). See `DrivingStatus`.
-    in property <bool> osmand-on: false;
-    in property <bool> osmand-linked: false;
+    /// The navigation tell (§4.9, #134). See `DrivingStatus`.
+    in property <bool> nav-on: false;
+    in property <bool> nav-linked: false;
+    in property <bool> nav-comaps: false;
     in property <bool> reordering: false;
 
     callback open-settings();
     callback open-nearby();
-    callback open-osmand();
+    callback open-nav-app();
     callback done-reordering();
 
     HorizontalLayout {
@@ -1011,10 +1046,11 @@ export component StatusBar inherits Rectangle {
                     DrivingStatus {
                         gps-fix: root.gps-fix;
                         in-motion: root.in-motion;
-                        osmand-on: root.osmand-on;
-                        osmand-linked: root.osmand-linked;
+                        nav-on: root.nav-on;
+                        nav-linked: root.nav-linked;
+                        nav-comaps: root.nav-comaps;
                         egg: root.egg;
-                        open-osmand => { root.open-osmand(); }
+                        open-nav-app => { root.open-nav-app(); }
                     }
                 }
                 gear := Rectangle {

@@ -189,6 +189,8 @@ pub fn ingest_nav(_distance_to: jni::sys::jint, _turn_type: jni::sys::jint, _lef
 pub fn ingest_nav_voice(_cmds: Vec<String>, _played: Vec<String>) {}
 pub fn ingest_nav_refused(_refused: jni::sys::jboolean) {}
 pub fn ingest_nav_info(_route: NavRoute) {}
+pub fn ingest_comaps_row(_names: Vec<String>, _values: Vec<Option<String>>) {}
+pub fn ingest_comaps_link(_code: i32) {}
 pub fn ingest_position(_lat: f64, _lon: f64, _fix: bool, _speed_mps: f32, _has_speed: bool) {}
 
 /// Stands in for `crate::nav::Route`, which `android::mod` re-exports as
@@ -227,7 +229,7 @@ for f in names:
     body = body.replace("super::is_foreground()", "crate::is_foreground()")
     # NOT `f`: that is the loop's filename and shadowing it made every generated
     # module `pub mod ingest_`.
-    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_refused", "ingest_nav_info", "ingest_nav", "ingest_position", "NavRoute"):
+    for edge in ("ingest_note", "ingest_nav_voice", "ingest_nav_refused", "ingest_nav_info", "ingest_nav", "ingest_comaps_row", "ingest_comaps_link", "ingest_position", "NavRoute"):
         body = body.replace("super::" + edge, "crate::" + edge)
     body = body.replace("super::TunerError", "crate::TunerError")
     # NO `use super::*` EITHER, for the same reason: the three stubs are reached

@@ -1306,6 +1306,99 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
+**BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change
+Carnyx' option for OsmAnd integration to "Nav Integration" that will then expand
+to a selector of either OsmAnd or CoMaps. Where the OsmAnd icon appears on
+Carnyx' display, this should instead be CoMaps' icon when CoMaps is selected.
+Build the CoMaps integration."* Preceded by an investigation-only pass at the
+owner's request ("Don't do any coding yet").
+
+**What CoMaps offers, read in its source** (the GitHub mirror `comaps/comaps`;
+Codeberg is refused by this container's proxy). Since v2026.07.16 CoMaps exports
+`NavigationContentProvider` — authority `<applicationId>.provider.navigation`,
+one row at `/live`, behind `<applicationId>.permission.READ_NAVIGATION_DATA`,
+protection level `dangerous`. The application id is `app.comaps` plus
+`.fdroid`, `.google`, `.huawei` or nothing ("web"), one codebase. Organic Maps
+has no such provider. Columns: session state, car direction, distance to turn
+and to destination (as DISPLAY STRINGS — "0.2 mi", "1,3 km"), seconds left,
+current and next street, exit number, completion; v2026.08.31 added route
+geometry and the destination.
+
+**Two facts in CoMaps' code decided the design.**
+
+1. `NavigationService.onLocationUpdated` calls `notifyChange` on `/live` on
+   every GPS fix while navigating — so the feed PUSHES.
+2. `RoutingController.mCachedRoutingInfo` is never cleared: after a route ends
+   the provider keeps answering with the last row, state still `OnRoute`. A poll
+   like OsmAnd's would draw a finished route forever.
+
+So `CarnyxComaps.java` WATCHES `/live` with a `ContentObserver` and queries only
+in answer to a change; when CoMaps stops navigating the changes stop and
+`Nav::EXPIRY` clears the face as it does for a silent OsmAnd poll. A
+`route_point_count` of 0 (v2026.08.31+) also reads as "no route" whatever the
+state column says.
+
+**Built.**
+
+- Settings ▸ NAVIGATION: the switch is now **Nav integration**; while it is on, a
+  **Navigation app** picker (the tuner picker's radio rows) offers OsmAnd and
+  CoMaps, each naming the install it found. The choice persists (`navApp` in
+  `prefs.json`, default OsmAnd, so an old file reads as before). Only the chosen
+  app is started; switching stops the old one, clears the face, starts the new.
+- The status-bar tell draws `CoMapsMark` in CoMaps' `#588157` when CoMaps is
+  chosen — CoMaps' own `ic_logo_monochrome.xml`, same slot, same lit/dim rule,
+  same tap-to-open. Contrast measured 3.95:1 light, 3.35:1 dark. NOTICE.md
+  records it.
+- `src/comaps.rs` reads a row into the same `nav::Route` OsmAnd's poll fills:
+  `CarDirection` names to `Turn` (16 drawn, 2 not turns), the distance strings
+  back to metres to CoMaps' own formatter rules, off-route and both rebuild
+  states to a quiet off-route, seconds left to an ETA, and the unit word to the
+  driver's units (#113's CoMaps counterpart). The stage ladder, which CoMaps
+  does not send, is derived from CoMaps' OWN voice timing
+  (`turns_notification_manager.cpp`: turn-now at speed × 8 s within 35–150 m,
+  first warning 30 s earlier within 200–2000 m / 500–5000 ft) against Carnyx's
+  GPS speed, now kept by `ingest_position`.
+- The permission is asked on a TAP only — choosing CoMaps, or tapping its row —
+  and the worker re-checks every 2 s until it lands; the sub-line says
+  "Waiting for permission: tap CoMaps below, then Allow."
+- Both manifests declare the four package queries and the four permissions.
+- `Turn::xml` (the inverse of `from_xml`, round-trip tested) carries CoMaps'
+  turns through the one turn encoding the face reads. `NavState::OffRoute`
+  now says "not given" (−1) for a missing deviation instead of "0 m".
+
+**NOT available from CoMaps, so absent on that provider:** the `THEN` block
+(CoMaps computes the turn after next but does not export it), the spoken
+instruction line, and "map in front" — the hide row says it has no effect with
+CoMaps. Left-hand-traffic roundabouts draw as right-hand (not exported).
+
+**Checked here.** 399 host tests pass, 18 of them new (13 in `comaps`, 2 in
+`nav`, 1 each in `settings` and `prefs`, and an end-to-end app test through the
+window's own callbacks), plus the reload test extended to `nav_app`.
+`tools/check-jni.sh` type-checks the new seam; `tools/check-java.sh` compiles
+`CarnyxComaps.java` against the Android 14 framework jar with no warnings of its
+own. New shots: `driving-comaps`, `-dim`, `-dark`, `nav-comaps`,
+`settings-nav-comaps` and its portrait. Against `main`, 95 shots were rendered on
+both sides and pixel-compared: 74 identical; the settings shots scrolled past
+NAVIGATION differ by the picker's rows; every other difference is a shot that
+also differs between two renders of `main` itself.
+
+**Found on the way, not fixed:** a full `cargo run --example shot` panics on
+`main` at `settings-diagnostics-full` — it looks up the "What could keep…" row,
+which the diagnostics clean-up parked (`examples/shot.rs`, `.expect("the
+keep-alive row")`). The comparison above therefore excludes that state's two
+shots.
+
+**What one drive settles.**
+
+- That the CoMaps row reads "Detected" with the package beside it.
+- That tapping CoMaps raises Android's dialog. OPEN QUESTION: Android 10 may not
+  offer a permission whose app was installed AFTER Carnyx; if the log says
+  "asked" and no dialog appears, reinstalling Carnyx is the fix to try.
+- A `nav: CoMaps: watching content://…/live` line, the green mark lit, and a
+  route on the face that clears within twelve seconds of ending it in CoMaps.
+- Whether any `nav: CoMaps distance not understood` line appears.
+
 ### 133. The sleep/wake behaviour: what the owner asked for, and why two builds could never have delivered it
 **OPEN. THE NEXT FOCUS OF DEVELOPMENT.** *"I want to work on the sleep/wake
 behavior, it's the next focus of development."*

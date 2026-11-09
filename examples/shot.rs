@@ -80,6 +80,16 @@ const SURFACES: &[(&str, u32, u32, bool, State)] = &[
     ("audio-released", 1024, 614, false, State::AudioReleased),
     ("tuner-error", 1024, 614, false, State::TunerError),
     ("driving", 1024, 614, false, State::Driving),
+    // THE SAME SLOT WITH COMAPS CHOSEN (#134): its mark in its green, lit; the
+    // same mark dim while the permission is still to grant; and dark, because
+    // the green's contrast against the dark page is the claim worth checking.
+    ("driving-comaps", 1024, 614, false, State::DrivingComaps),
+    ("driving-comaps-dim", 1024, 614, false, State::DrivingComapsDim),
+    ("driving-comaps-dark", 1024, 614, true, State::DrivingComaps),
+    // A COMAPS ROUTE ON THE FACE, fed through `ingest_comaps_row` — the seam
+    // `CarnyxComaps` calls — so the turn, the distance text, the stage ladder
+    // and the ETA are `crate::comaps::read`'s, not properties.
+    ("nav-comaps", 1024, 614, false, State::NavComaps),
     // §4.9's maneuver layer at stage 1, on both tracks. Driven through the real
     // nav seam so the arrow, the distance and the ETA are the ones the device
     // would compute, not properties pushed past the logic.
@@ -161,6 +171,10 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("settings-head-unit", 1024, 614, false, State::Settings, 0.0),
     ("settings-head-unit-dark", 1024, 614, true, State::Settings, 0.0),
     ("settings-scrolled-mid", 1024, 614, false, State::Settings, -2.0),
+    // NAVIGATION with CoMaps chosen (#134): the "Nav integration" switch, the
+    // picker it opens, and the hide row's CoMaps sub-line.
+    ("settings-nav-comaps", 1024, 614, false, State::SettingsComaps, -3.5),
+    ("settings-nav-comaps-portrait", 360, 800, false, State::SettingsComaps, -5.0),
     ("settings-scrolled-end", 1024, 614, false, State::Settings, -8.0),
     ("settings-diagnostics-open", 1024, 614, false, State::SettingsDiag, -7.0),
     ("settings-diagnostics-full", 1024, 614, false, State::SettingsDiagFull, -9.0),
@@ -315,6 +329,14 @@ enum State {
     /// vehicle crosses a route geometry node. This shot must look like
     /// `nav-approach`: same strip yield, same countdown, same ETA.
     NavPollOnly,
+    /// `Driving` with CoMaps chosen and its feed watched — CoMaps' mark, lit.
+    DrivingComaps,
+    /// The same, waiting on the permission — CoMaps' mark, dim.
+    DrivingComapsDim,
+    /// A route from CoMaps, through `ingest_comaps_row`.
+    NavComaps,
+    /// Settings with CoMaps chosen in NAVIGATION's picker.
+    SettingsComaps,
     /// A strong carrier arriving in pieces: dotted outer arcs, mono, no RDS.
     WeakAndLossy,
     NoPresets,
@@ -648,6 +670,46 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_settings_nav_on(true);
             ui.set_nav_linked(true);
         }
+        // COMAPS' TELL (#134), THROUGH THE REAL CALLBACK AND THE REAL EDGE: the
+        // picker's own `pick-nav-app`, then the link state `CarnyxComaps` sends
+        // — so `App::nav_linked` decides the lit state, not a property push.
+        State::DrivingComaps | State::DrivingComapsDim => {
+            driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
+            ui.set_tp(true);
+            ui.set_ta(true);
+            ui.invoke_settings_pick_nav_app(1);
+            carnyx::android::ingest_comaps_link(if state == State::DrivingComaps { 2 } else { 1 });
+            driver.drain_events();
+        }
+        State::NavComaps => {
+            driver.set_position(FakeLocation { in_motion: true, ..FakeLocation::default() });
+            driver.set_clock_for_test(8, 5, false);
+            ui.invoke_settings_pick_nav_app(1);
+            carnyx::android::ingest_comaps_link(2);
+            // TWO ROWS, for the hairline's reason in the arm below: the first
+            // sets the leg's baseline (0.5 mi), the second is the reading.
+            // 21 minutes left against a clock at 8:05 is an 8:26 ETA, always.
+            let row = |to_turn: &str| {
+                let cells = [
+                    ("session_state", "OnRoute"),
+                    ("car_direction", "TURN_RIGHT"),
+                    ("dist_to_turn", to_turn),
+                    ("dist_to_target", "5.8\u{00A0}mi"),
+                    ("total_time_seconds", "1260"),
+                    ("current_street", "University Ave"),
+                    ("next_street", "Whitney Way"),
+                    ("exit_num", "0"),
+                ];
+                carnyx::android::ingest_comaps_row(
+                    cells.iter().map(|(k, _)| k.to_string()).collect(),
+                    cells.iter().map(|(_, v)| Some(v.to_string())).collect(),
+                );
+            };
+            row("0.5\u{00A0}mi");
+            driver.drain_events();
+            row("0.2\u{00A0}mi");
+            driver.drain_events();
+        }
         // The three stages share one setup and differ only in the rung OsmAnd
         // reports — which is the claim worth photographing: the same route data
         // moves through three layouts on `next_turn_imminent` alone.
@@ -949,6 +1011,10 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.set_overlay(Overlay::Nearby);
         }
         State::Settings => ui.set_overlay(Overlay::Settings),
+        State::SettingsComaps => {
+            ui.invoke_settings_pick_nav_app(1);
+            ui.set_overlay(Overlay::Settings);
+        }
         State::SettingsDiag => {
             // Through the real callback, so the nested switches, the action rows
             // and the log all come from `settings::Settings` deciding.

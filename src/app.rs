@@ -706,6 +706,20 @@ struct State {
     /// and asking the package manager on every republish would put a binder call
     /// in the path of ordinary radio traffic.
     nav_package: String,
+    /// What `CarnyxComaps` found: the CoMaps with the navigation provider, or a
+    /// CoMaps too old to have one. Read once at start-up, for `nav_package`'s
+    /// reason.
+    comaps_found: settings::NavAppFound,
+    /// Where the CoMaps link stands. Set by the `ComapsLink` edge.
+    comaps_link: crate::comaps::Link,
+    /// The units CoMaps last wrote a distance in — the driver's own choice in
+    /// CoMaps, read off the unit word. See `crate::comaps::Reading::units`.
+    comaps_units: Option<crate::units::Units>,
+    /// The last unreadable CoMaps distance logged, so a string that does not
+    /// parse is reported once and not once a second.
+    comaps_unread: String,
+    /// The nav picker's rows as last published, under `last_sources`' rule.
+    last_nav_apps: Option<Vec<TunerSource>>,
     /// How many re-commands the LIVE hold has left. Re-armed when a step takes a
     /// hold, so a budget one press spent is not inherited by the next.
     reasserts_left: u8,
@@ -1394,6 +1408,11 @@ impl App {
                 clock_test: None,
                 nav_said: String::new(),
                 nav_package: String::new(),
+                comaps_found: settings::NavAppFound::default(),
+                comaps_link: crate::comaps::Link::Off,
+                comaps_units: None,
+                comaps_unread: String::new(),
+                last_nav_apps: None,
                 // The DECODER is not seeded, only the published state. A decoder
                 // restored from disk would have consensus tallies it never
                 // earned, and the first corrupt group off the air would then
@@ -1453,6 +1472,7 @@ impl App {
                     release_on_sleep: saved.release_on_sleep,
                     clock_on: saved.clock_on,
                     nav_on: saved.nav_on,
+                    nav_app: saved.nav_app,
                     nav_hide_on_map: saved.nav_hide_on_map,
                     preset_loop: saved.preset_loop,
                     come_forward: saved.come_forward,
@@ -1593,21 +1613,23 @@ impl App {
         // something nobody asked for on a screen nobody is looking at.
         {
             let found = app.nav_installed_package();
-            // AND WHICH UNITS TO DRAW DISTANCES IN (§4.9). OsmAnd is not bound
-            // this early, so this first read can only reach the locale and the
-            // fallback; `refresh_units` takes OsmAnd's own answer the moment
-            // there is one.
+            // COMAPS IS LOOKED FOR TOO, whichever app is chosen: the picker
+            // names what it found on both rows (#134).
+            let comaps = app.comaps_installed();
+            // AND WHICH UNITS TO DRAW DISTANCES IN (§4.9). Neither app has
+            // answered this early, so this first read can only reach the locale
+            // and the fallback; `refresh_units` takes the app's own answer the
+            // moment there is one.
             //
             // THE LOCALE IS READ HERE AND NOWHERE ELSE. It is kept in `country`
             // for `refresh_units` to re-use — see that field for the once-a-second
             // JNI call this replaced.
             let country = crate::android::country_code();
-            let units = crate::units::Units::resolve(
-                crate::android::osmand_metric_system(),
-                &country,
-            );
+            let said = app.said_units();
+            let units = crate::units::Units::resolve_said(said, &country);
             let mut s = app.state.borrow_mut();
             s.nav_package = found;
+            s.comaps_found = comaps;
             s.country = country;
             s.units = units;
         }
@@ -2021,6 +2043,58 @@ impl App {
     fn apply_event(&self, event: TunerEvent) {
         let mut s = self.state.borrow_mut();
         match event {
+            // ── A FEED FROM THE APP THAT IS NOT CHOSEN IS DROPPED (#134) ─────
+            //
+            // Only the chosen app is started, so this should never fire. It is
+            // here for the tail: a stop is asynchronous on both sides — a poll
+            // mid-flight, a row already on the queue — and the last update from
+            // the app the driver just switched AWAY from must not land in the
+            // model after `nav.clear()` and sit on the face for twelve seconds.
+            TunerEvent::Nav { .. } | TunerEvent::NavVoice { .. } | TunerEvent::NavInfo(_)
+                if s.settings.nav_app != settings::NavApp::OsmAnd => {}
+            TunerEvent::ComapsRow { .. } if s.settings.nav_app != settings::NavApp::CoMaps => {}
+            // ── COMAPS: ONE ROW, READ WHERE IT CAN BE TESTED ─────────────────
+            //
+            // `crate::comaps::read` makes the row into the same `Route` the
+            // OsmAnd poll fills, so everything from here on — the expiry, the
+            // ranking, the stage, the hairline — is the code OsmAnd already
+            // exercises. A row arriving IS the liveness: CoMaps pushes one per
+            // GPS fix while navigating and none otherwise, so `Nav::EXPIRY`
+            // clears a finished route the way it clears a silent poll.
+            TunerEvent::ComapsRow { names, values } => {
+                let now = crate::session::now_unix();
+                let reading = crate::comaps::read(
+                    &crate::comaps::Row::new(names, values),
+                    now as i64 * 1000,
+                    crate::android::last_speed_mps(),
+                );
+                if reading.units.is_some() {
+                    s.comaps_units = reading.units;
+                }
+                // ONCE PER RUN, the first string that did not read — the
+                // number in it changes every second, so a per-change edge
+                // would still be a line a second.
+                let unread = reading.unread.filter(|_| s.comaps_unread.is_empty());
+                if let Some(text) = &unread {
+                    s.comaps_unread = text.clone();
+                }
+                s.nav.poll(reading.route, now);
+                if let Some(text) = unread {
+                    let at = stamp();
+                    s.settings
+                        .log
+                        .push(&at, &format!("nav: CoMaps distance not understood — {text}"));
+                }
+                drop(s);
+                self.push_nav();
+            }
+            TunerEvent::ComapsLink(code) => {
+                s.comaps_link = crate::comaps::Link::from_code(code);
+                drop(s);
+                // The mark and the sub-line both follow it, and both are
+                // push_nav's — so the row changes the moment Allow is tapped.
+                self.push_nav();
+            }
             // ── OSMAND, AND EVERY DECISION ABOUT IT IS ONE CALL AWAY ─────────
             //
             // The three integers go into `crate::nav` exactly as OsmAnd sent
@@ -3391,6 +3465,28 @@ impl App {
             ui.set_settings_sources(ModelRc::from(Rc::new(VecModel::from(sources.clone()))));
         }
 
+        // THE NAV PICKER (#134), the same row shape and the same rule: it moves
+        // on a tap here and on nothing a frequency report can change.
+        let osmand_found = settings::NavAppFound {
+            package: s.nav_package.clone(),
+            outdated: String::new(),
+        };
+        let nav_apps: Vec<TunerSource> = settings::nav_apps(cfg.nav_app, &osmand_found, &s.comaps_found)
+            .iter()
+            .map(|r| TunerSource {
+                name: r.name.as_str().into(),
+                kind: r.kind.as_str().into(),
+                badge: r.badge.as_str().into(),
+                badge_lit: r.badge_lit,
+                available: r.available,
+                selected: r.selected,
+            })
+            .collect();
+        let nav_apps_changed = s.last_nav_apps.as_ref() != Some(&nav_apps);
+        if nav_apps_changed {
+            ui.set_settings_nav_apps(ModelRc::from(Rc::new(VecModel::from(nav_apps.clone()))));
+        }
+
         ui.set_settings_theme(cfg.theme.label().into());
         ui.set_settings_battery(match cfg.battery {
             settings::Battery::Checking => BatteryState::Checking,
@@ -3417,7 +3513,7 @@ impl App {
         // the only place they can be told apart. `crate::nav::sub_line` holds
         // the wording and the ordering; this only gathers the facts.
         ui.set_settings_nav_sub(self.nav_sub_line().into());
-        ui.set_settings_nav_hide_sub(crate::nav::hide_sub_line().into());
+        ui.set_settings_nav_hide_sub(self.nav_hide_sub_line().into());
         ui.set_settings_preset_loop(cfg.preset_loop);
         ui.set_settings_preset_loop_sub(settings::preset_loop_sub(cfg.preset_loop).into());
         // THE GRANT IS ASKED FOR ON EVERY PUBLISH, not cached. The driver can
@@ -3525,6 +3621,9 @@ impl App {
             }
             if sources_changed {
                 s.last_sources = Some(sources);
+            }
+            if nav_apps_changed {
+                s.last_nav_apps = Some(nav_apps);
             }
             if actions_changed {
                 s.last_diag_actions = Some(diag_actions);
@@ -3637,18 +3736,64 @@ impl App {
     /// `push_settings`, the row froze on whatever was true when the panel was
     /// last painted, which for a panel open during a drive is exactly when it
     /// is being read.
+    ///
+    /// AND ONE SENTENCE PER APP (#134). Whichever app the picker has chosen
+    /// answers for itself — even with the switch off, so the row says which app
+    /// turning it on would read from and whether that app is here.
     fn nav_sub_line(&self) -> String {
         let s = self.state.borrow();
         let route = s.nav.route(crate::session::now_unix());
-        crate::nav::sub_line(&crate::nav::Link {
-            package: &s.nav_package,
-            on: s.settings.nav_on,
-            refused: s.nav_refused,
-            linked: route.is_some(),
-            navigating: route.is_some_and(crate::nav::Route::navigating),
-            map_visible: route.is_some_and(|r| r.map_visible),
-            hide_on_map: s.settings.nav_hide_on_map,
-        })
+        match s.settings.nav_app {
+            settings::NavApp::OsmAnd => crate::nav::sub_line(&crate::nav::Link {
+                package: &s.nav_package,
+                on: s.settings.nav_on,
+                refused: s.nav_refused,
+                linked: route.is_some(),
+                navigating: route.is_some_and(crate::nav::Route::navigating),
+                map_visible: route.is_some_and(|r| r.map_visible),
+                hide_on_map: s.settings.nav_hide_on_map,
+            }),
+            settings::NavApp::CoMaps => crate::comaps::sub_line(&crate::comaps::Status {
+                package: &s.comaps_found.package,
+                outdated: &s.comaps_found.outdated,
+                on: s.settings.nav_on,
+                link: s.comaps_link,
+                navigating: route.is_some_and(crate::nav::Route::navigating),
+            }),
+        }
+    }
+
+    /// The sub-line under "Hide when the map is showing", for the chosen app.
+    fn nav_hide_sub_line(&self) -> String {
+        match self.state.borrow().settings.nav_app {
+            settings::NavApp::OsmAnd => crate::nav::hide_sub_line(),
+            settings::NavApp::CoMaps => crate::comaps::hide_sub_line(),
+        }
+    }
+
+    /// Is the chosen app's link up? The status-bar mark's lit state.
+    ///
+    /// TWO DIFFERENT FACTS, ONE MEANING: "the app is on the other end". For
+    /// OsmAnd that is a fresh poll answer — see `push_nav`. CoMaps answers
+    /// nothing while it is not navigating, by design (see `crate::comaps`'
+    /// header), so its mark is lit by the observer being registered: the
+    /// permission is granted and every route it drives will arrive.
+    fn nav_linked(&self) -> bool {
+        let s = self.state.borrow();
+        match s.settings.nav_app {
+            settings::NavApp::OsmAnd => s.nav.route(crate::session::now_unix()).is_some(),
+            settings::NavApp::CoMaps => s.comaps_link == crate::comaps::Link::Watching,
+        }
+    }
+
+    /// The units the chosen app says the driver picked, if it has said.
+    fn said_units(&self) -> Option<crate::units::Units> {
+        match self.state.borrow().settings.nav_app {
+            settings::NavApp::OsmAnd => {
+                crate::units::Units::from_osmand(crate::android::osmand_metric_system())
+            }
+            settings::NavApp::CoMaps => self.state.borrow().comaps_units,
+        }
     }
 
     /// Which OsmAnd is installed, or `""`. See `CarnyxNav.installedPackage`.
@@ -3667,12 +3812,36 @@ impl App {
         String::new()
     }
 
+    /// Which CoMaps is installed — the one with the navigation provider, and
+    /// one without it. See `CarnyxComaps.installedPackage`.
+    #[cfg(target_os = "android")]
+    fn comaps_installed(&self) -> settings::NavAppFound {
+        settings::NavAppFound {
+            package: crate::android::comaps::installed_package(),
+            outdated: crate::android::comaps::outdated_package(),
+        }
+    }
+
+    /// The host has no CoMaps. See the Android arm.
+    #[cfg(not(target_os = "android"))]
+    fn comaps_installed(&self) -> settings::NavAppFound {
+        settings::NavAppFound::default()
+    }
+
+    /// Start or stop the CHOSEN app's link. Returns a line for the log, with
+    /// the app's name in front so a log with both in it reads unambiguously.
     #[cfg(target_os = "android")]
     fn set_nav_running(&self, on: bool) -> String {
-        if on {
-            crate::android::nav::start()
-        } else {
-            crate::android::nav::stop()
+        let app = self.state.borrow().settings.nav_app;
+        match (app, on) {
+            (settings::NavApp::OsmAnd, true) => crate::android::nav::start(),
+            (settings::NavApp::OsmAnd, false) => crate::android::nav::stop(),
+            (settings::NavApp::CoMaps, true) => {
+                format!("CoMaps: {}", crate::android::comaps::start())
+            }
+            (settings::NavApp::CoMaps, false) => {
+                format!("CoMaps: {}", crate::android::comaps::stop())
+            }
         }
     }
 
@@ -3682,15 +3851,37 @@ impl App {
         String::new()
     }
 
-    /// Bring OsmAnd to the front. The status-bar mark's tap.
+    /// Ask the driver for CoMaps' navigation permission. Returns a log line.
+    ///
+    /// ONLY EVER ON A TAP — the CoMaps row in the picker — and never at launch.
+    /// The location offer is made once at launch because it unlocks the whole
+    /// face; this one unlocks a feature the driver has just chosen, and the
+    /// moment they chose it is the moment a dialog makes sense.
     #[cfg(target_os = "android")]
-    fn launch_osmand(&self) -> String {
-        crate::android::nav::launch()
+    fn ask_comaps_permission(&self) -> String {
+        format!("CoMaps: {}", crate::android::comaps::request_permission())
     }
 
     /// See the Android arm.
     #[cfg(not(target_os = "android"))]
-    fn launch_osmand(&self) -> String {
+    fn ask_comaps_permission(&self) -> String {
+        String::new()
+    }
+
+    /// Bring the chosen navigation app to the front. The status-bar mark's tap.
+    #[cfg(target_os = "android")]
+    fn launch_nav_app(&self) -> String {
+        match self.state.borrow().settings.nav_app {
+            settings::NavApp::OsmAnd => crate::android::nav::launch(),
+            settings::NavApp::CoMaps => {
+                format!("CoMaps: {}", crate::android::comaps::launch())
+            }
+        }
+    }
+
+    /// See the Android arm.
+    #[cfg(not(target_os = "android"))]
+    fn launch_nav_app(&self) -> String {
         String::new()
     }
 
@@ -3787,15 +3978,10 @@ impl App {
     /// a correction and not a flap, and refusing it would mean holding the wrong
     /// units for the whole drive to avoid one redraw in the first second of it.
     fn refresh_units(&self) {
+        let said = self.said_units();
         let (before, found) = {
             let s = self.state.borrow();
-            (
-                s.units,
-                crate::units::Units::resolve(
-                    crate::android::osmand_metric_system(),
-                    &s.country,
-                ),
-            )
+            (s.units, crate::units::Units::resolve_said(said, &s.country))
         };
         if before == found {
             return;
@@ -3826,10 +4012,16 @@ impl App {
         let (active, turn, distance) = match state {
             NavState::Idle => (false, String::new(), String::new()),
             NavState::Waiting => (true, String::new(), String::new()),
+            // A NEGATIVE DEVIATION IS "NOT GIVEN" — CoMaps never gives one —
+            // and draws no distance rather than "0 m". See `NavState::OffRoute`.
             NavState::OffRoute { metres } => (
                 true,
                 "off route".to_string(),
-                crate::nav::Nav::distance_label(metres, units),
+                if metres < 0 {
+                    String::new()
+                } else {
+                    crate::nav::Nav::distance_label(metres, units)
+                },
             ),
             NavState::Turn { turn, metres } => (
                 true,
@@ -3867,7 +4059,12 @@ impl App {
         // talking, which is what a lit tell should claim. An idle OsmAnd still
         // lights it; one that has gone away goes dim within twelve seconds, on
         // the same clock that ages the turn.
-        ui.set_nav_linked(route.is_some());
+        //
+        // THAT PARAGRAPH IS OSMAND'S, AND COMAPS HAS ITS OWN (#134): it answers
+        // nothing between routes, so its mark is lit by the observer standing.
+        // See `nav_linked`. And WHICH mark is drawn follows the picker.
+        ui.set_nav_linked(self.nav_linked());
+        ui.set_nav_comaps(self.state.borrow().settings.nav_app == settings::NavApp::CoMaps);
 
         let r = route.unwrap_or_default();
         ui.set_nav_street(r.street.clone().unwrap_or_default().into());
@@ -4584,6 +4781,14 @@ impl App {
             // callback and would go on paying for a transaction per location fix
             // for a face that is no longer drawing it.
             let outcome = app.set_nav_running(v);
+            // SWITCHING ON WITH COMAPS CHOSEN IS A TAP, and the permission is
+            // asked on taps (see `ask_comaps_permission`). Already granted, it
+            // costs one `checkSelfPermission` and says so in the log.
+            let asked = if v && app.state.borrow().settings.nav_app == settings::NavApp::CoMaps {
+                app.ask_comaps_permission()
+            } else {
+                String::new()
+            };
             {
                 let at = stamp();
                 let mut s = app.state.borrow_mut();
@@ -4593,9 +4798,67 @@ impl App {
                     // twelve seconds after the driver switched it off.
                     s.nav.clear();
                     s.nav_said.clear();
+                    s.comaps_unread.clear();
                 }
-                if !outcome.is_empty() {
-                    s.settings.log.push(&at, &format!("nav: {outcome}"));
+                for line in [outcome, asked] {
+                    if !line.is_empty() {
+                        s.settings.log.push(&at, &format!("nav: {line}"));
+                    }
+                }
+            }
+            app.push_nav();
+            app.push_settings();
+        });
+        on!(on_settings_pick_nav_app, |app, i| {
+            // THE PICKER (#134). Index into `NavApp::ORDER`, which is the order
+            // `settings::nav_apps` built the rows in.
+            let Some(&chosen) = usize::try_from(i).ok().and_then(|i| settings::NavApp::ORDER.get(i))
+            else {
+                return;
+            };
+            let (was, on) = {
+                let s = app.state.borrow();
+                (s.settings.nav_app, s.settings.nav_on)
+            };
+            let mut lines = Vec::new();
+            if chosen != was {
+                // ONE APP AT A TIME, so the old one is let go BEFORE the new one
+                // starts — and `set_nav_running` reads the chosen app, so the
+                // stop has to run while `nav_app` still names the old one.
+                if on {
+                    lines.push(app.set_nav_running(false));
+                }
+                {
+                    let mut s = app.state.borrow_mut();
+                    s.settings.nav_app = chosen;
+                    // The old app's turn must not survive into the new one's
+                    // face, for the same reason the switch clears it.
+                    //
+                    // `nav_refused` IS DELIBERATELY KEPT. It is OsmAnd's own
+                    // fact, read only while OsmAnd is chosen, and `CarnyxNav`
+                    // reports it on an EDGE it remembers across a stop — so
+                    // clearing it here would lose a refusal that is still true
+                    // and never be told again on the way back to OsmAnd.
+                    s.nav.clear();
+                    s.nav_said.clear();
+                    s.comaps_unread.clear();
+                }
+                if on {
+                    lines.push(app.set_nav_running(true));
+                }
+            }
+            // TAPPING COMAPS IS THE ASK, chosen already or not: a driver who
+            // dismissed the dialog gets it back by tapping the row again.
+            if on && chosen == settings::NavApp::CoMaps {
+                lines.push(app.ask_comaps_permission());
+            }
+            {
+                let at = stamp();
+                let mut s = app.state.borrow_mut();
+                for line in lines {
+                    if !line.is_empty() {
+                        s.settings.log.push(&at, &format!("nav: {line}"));
+                    }
                 }
             }
             app.push_nav();
@@ -4629,13 +4892,14 @@ impl App {
             app.state.borrow_mut().settings.preset_loop = v;
             app.push_settings();
         });
-        on!(on_open_osmand, |app| {
+        on!(on_open_nav_app, |app| {
             // TAPPING THE MARK, NOT THE SWITCH. §4.9 draws it only while the
             // integration is on, so this fires only from that state — but the
             // mark itself may still be dim (bound and refused, or the poll has
-            // not landed yet), and a tap should still try to bring OsmAnd
-            // forward rather than waiting on the feed to catch up first.
-            let outcome = app.launch_osmand();
+            // not landed yet), and a tap should still try to bring the app
+            // forward rather than waiting on the feed to catch up first. WHICH
+            // app is the picker's (#134), and so is which mark was tapped.
+            let outcome = app.launch_nav_app();
             if !outcome.is_empty() {
                 let at = stamp();
                 app.state.borrow_mut().settings.log.push(&at, &format!("nav: {outcome}"));
@@ -4950,6 +5214,7 @@ impl App {
             release_on_sleep: s.settings.release_on_sleep,
             clock_on: s.settings.clock_on,
             nav_on: s.settings.nav_on,
+            nav_app: s.settings.nav_app,
             nav_hide_on_map: s.settings.nav_hide_on_map,
             preset_loop: s.settings.preset_loop,
             come_forward: s.settings.come_forward,
@@ -6908,6 +7173,7 @@ mod tests {
             release_on_sleep: false,
             clock_on: false,
             nav_on: false,
+            nav_app: settings::NavApp::CoMaps,
             nav_hide_on_map: false,
             preset_loop: true,
             come_forward: true,
@@ -6937,6 +7203,7 @@ mod tests {
             assert!(!cfg.release_on_sleep, "the sleep release");
             assert!(!cfg.clock_on, "the clock switch");
             assert!(!cfg.nav_on, "the OsmAnd switch");
+            assert_eq!(cfg.nav_app, settings::NavApp::CoMaps, "the nav app");
             assert!(!cfg.nav_hide_on_map, "the hide-on-map switch");
             assert!(cfg.preset_loop, "the rail-wrap switch");
             assert!(cfg.come_forward, "the come-forward switch");
@@ -6959,6 +7226,7 @@ mod tests {
         );
         assert_eq!(back.clock_on, chosen.clock_on, "the clock switch survived");
         assert_eq!(back.nav_on, chosen.nav_on, "the OsmAnd switch survived");
+        assert_eq!(back.nav_app, chosen.nav_app, "the nav app survived");
         assert_eq!(
             back.nav_hide_on_map, chosen.nav_hide_on_map,
             "the hide-on-map switch survived"
@@ -7907,6 +8175,113 @@ mod tests {
         crate::android::ingest_nav_refused(false);
         driver.drain_events();
         assert!(!ui.get_settings_nav_sub().to_string().contains("Plugins"));
+    }
+
+    /// A CoMaps `/live` row as `CarnyxComaps.queryOnce` would hand it across.
+    fn comaps_row(cells: &[(&str, &str)]) {
+        crate::android::ingest_comaps_row(
+            cells.iter().map(|(k, _)| k.to_string()).collect(),
+            cells.iter().map(|(_, v)| Some(v.to_string())).collect(),
+        );
+    }
+
+    /// THE PICKER (#134): the switch is "Nav integration", CoMaps can be
+    /// chosen, the choice persists, and the mark and the row follow it.
+    ///
+    /// DRIVEN THROUGH THE WINDOW'S OWN CALLBACK, `settings-pick-nav-app`, and
+    /// through `ingest_comaps_row` / `ingest_comaps_link` — the functions
+    /// `CarnyxComaps`' natives call — so the plumbing is what is under test.
+    #[test]
+    fn choosing_comaps_moves_the_feed_the_mark_and_the_row_over_to_it() {
+        use slint::Model as _;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-comaps");
+
+        // TWO ROWS, OSMAND CHOSEN — the default, so an old file reads as before.
+        let rows: Vec<TunerSource> = ui.get_settings_nav_apps().iter().collect();
+        assert_eq!(
+            rows.iter().map(|r| r.name.to_string()).collect::<Vec<_>>(),
+            ["OsmAnd", "CoMaps"]
+        );
+        assert!(rows[0].selected && !rows[1].selected);
+        assert!(!ui.get_nav_comaps(), "OsmAnd's mark by default");
+
+        // A COMAPS ROW WHILE OSMAND IS CHOSEN IS DROPPED — see `apply_event`.
+        let live = [
+            ("session_state", "OnRoute"),
+            ("car_direction", "TURN_LEFT"),
+            ("dist_to_turn", "0.3\u{00A0}mi"),
+            ("dist_to_target", "4.2\u{00A0}mi"),
+            ("total_time_seconds", "540"),
+            ("next_street", "Whitney Way"),
+            ("exit_num", "0"),
+        ];
+        comaps_row(&live);
+        driver.drain_events();
+        assert!(!ui.get_nav_active(), "not the chosen app, not on the face");
+
+        // CHOOSE COMAPS.
+        ui.invoke_settings_pick_nav_app(1);
+        assert_eq!(driver.state.borrow().settings.nav_app, settings::NavApp::CoMaps);
+        assert_eq!(
+            crate::prefs::load(&driver.state.borrow().prefs_dir).nav_app,
+            settings::NavApp::CoMaps,
+            "and it persists"
+        );
+        let rows: Vec<TunerSource> = ui.get_settings_nav_apps().iter().collect();
+        assert!(!rows[0].selected && rows[1].selected, "the picker lights CoMaps");
+        assert!(ui.get_nav_comaps(), "the status bar draws CoMaps' mark");
+        // The host has no CoMaps, and the row answers for CoMaps now.
+        let sub = ui.get_settings_nav_sub().to_string();
+        assert!(sub.contains("CoMaps is not installed"), "{sub}");
+        assert!(
+            ui.get_settings_nav_hide_sub().to_string().contains("no effect while CoMaps"),
+            "the hide row says it does nothing here: {}",
+            ui.get_settings_nav_hide_sub()
+        );
+
+        // THE MARK IS DIM UNTIL THE FEED IS WATCHED, and lit once it is.
+        driver.state.borrow_mut().comaps_found.package = "app.comaps.fdroid".into();
+        crate::android::ingest_comaps_link(1);
+        driver.drain_events();
+        assert!(!ui.get_nav_linked(), "waiting for the permission is not linked");
+        assert!(ui.get_settings_nav_sub().to_string().contains("tap CoMaps below"));
+        crate::android::ingest_comaps_link(2);
+        driver.drain_events();
+        assert!(ui.get_nav_linked(), "watching is linked, route or no route");
+        assert!(ui.get_settings_nav_sub().to_string().contains("no route running"));
+
+        // A ROW NOW REACHES THE FACE — the same layer OsmAnd's poll fills.
+        comaps_row(&live);
+        driver.drain_events();
+        assert!(ui.get_nav_active(), "navigating");
+        assert_eq!(ui.get_nav_turn().to_string(), "left");
+        assert_eq!(ui.get_nav_street().to_string(), "Whitney Way");
+        assert_eq!(ui.get_nav_turn_xml().to_string(), "TL");
+        // MILES BECAUSE COMAPS WROTE MILES — its unit word is the driver's choice.
+        assert_eq!(ui.get_nav_distance().to_string(), "0.3 mi");
+        assert_eq!(driver.state.borrow().units, crate::units::Units::Imperial);
+        assert!(ui.get_settings_nav_sub().to_string().contains("Showing the next turn"));
+        // NOTHING COMAPS DOES NOT SEND IS INVENTED.
+        assert_eq!(ui.get_nav_after_street().to_string(), "");
+        assert_eq!(ui.get_nav_instruction().to_string(), "");
+
+        // OFF THE ROUTE IS QUIET, with no "0 m" for a deviation never given.
+        comaps_row(&[("session_state", "OffRoute"), ("dist_to_target", "4.2\u{00A0}mi")]);
+        driver.drain_events();
+        assert_eq!(ui.get_nav_turn().to_string(), "off route");
+        assert_eq!(ui.get_nav_distance().to_string(), "");
+
+        // BACK TO OSMAND: CoMaps' turn goes with the switch-over, at once.
+        comaps_row(&live);
+        driver.drain_events();
+        ui.invoke_settings_pick_nav_app(0);
+        assert!(!ui.get_nav_active(), "the old app's turn does not survive the change");
+        assert!(!ui.get_nav_comaps(), "OsmAnd's mark again");
+        assert_eq!(
+            crate::prefs::load(&driver.state.borrow().prefs_dir).nav_app,
+            settings::NavApp::OsmAnd
+        );
     }
 
     /// THE HIDDEN PICKER DRESSES THE FACE, WHICH IS THE ONLY REASON IT IS BACK.
