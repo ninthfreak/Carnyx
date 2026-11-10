@@ -1031,23 +1031,33 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
             driver.settle_meter_for_test();
-            // AND ONE PROBE ROW, TAPPED, so the shot shows what a row says under
-            // itself afterwards (#126). Through the real callback and the real
-            // deferred half; on this host the class does not exist, so the row
-            // reads "Nothing to report — see the log above", which is the
-            // honest answer and the one the shot is of.
+            // AND ONE CHECK ROW, TAPPED, so the shot shows what a row says under
+            // itself afterwards (#126). Through the real callback; on this host
+            // there is no `/config` to read back, so the row reads "radio
+            // takeover: only on the unit", which is the honest answer and the
+            // one the shot is of.
+            //
+            // IT WAS THE KEEP-ALIVE PROBE, AND THAT ROW IS PARKED. 6a4a62f took
+            // "What could keep…" out of `diag_actions` and left this lookup
+            // behind, so `.expect` panicked here and every shot after this one
+            // in the run was never drawn. "Check radio takeover" is the row
+            // that still answers under itself. The lookup still panics if it
+            // goes too — a shot of a tap that never happened would be a picture
+            // of the wrong thing — but it names the row and the fix.
             {
                 use slint::Model;
+                const ROW: &str = "Check radio takeover";
                 let rows = ui.get_settings_diag_actions();
-                let keep = (0..rows.row_count())
-                    .find(|&i| {
-                        rows.row_data(i)
-                            .map(|a| a.label.starts_with("What could keep"))
-                            .unwrap_or(false)
-                    })
-                    .expect("the keep-alive row") as i32;
-                ui.invoke_settings_pick_diag_action(keep);
-                driver.run_pending_probe();
+                let check = (0..rows.row_count())
+                    .find(|&i| rows.row_data(i).map(|a| a.label == ROW).unwrap_or(false))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "settings-diagnostics-full taps the {ROW:?} row, and \
+                             `settings::diag_actions` no longer has one — point \
+                             this shot at a row that answers under itself"
+                        )
+                    }) as i32;
+                ui.invoke_settings_pick_diag_action(check);
             }
             ui.set_overlay(Overlay::Settings);
         }

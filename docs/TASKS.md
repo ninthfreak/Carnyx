@@ -1383,11 +1383,12 @@ both sides and pixel-compared: 74 identical; the settings shots scrolled past
 NAVIGATION differ by the picker's rows; every other difference is a shot that
 also differs between two renders of `main` itself.
 
-**Found on the way, not fixed:** a full `cargo run --example shot` panics on
-`main` at `settings-diagnostics-full` — it looks up the "What could keep…" row,
-which the diagnostics clean-up parked (`examples/shot.rs`, `.expect("the
-keep-alive row")`). The comparison above therefore excludes that state's two
-shots.
+**Found on the way, and fixed after:** a full `cargo run --example shot`
+panicked on `main` at `settings-diagnostics-full` — it looked up the "What could
+keep…" row, which the diagnostics clean-up (6a4a62f) parked, so every shot after
+it in the run was never drawn. The comparison above therefore excludes that
+state's two shots. The shot now taps "Check radio takeover", the remaining row
+that answers under itself, and all 103 shots render in one run.
 
 **What one drive settles.**
 
