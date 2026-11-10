@@ -457,6 +457,15 @@ public final class CarnyxComaps {
                 }
                 return;
             }
+            // STOPPED WHILE THE QUERY RAN? Then this row is for a watch that no
+            // longer exists, and delivering it would put a turn on a face whose
+            // switch is off. The check at the top cannot see a stop that lands
+            // during the cross-process query; this one can. (#134's bug check;
+            // the Rust side drops it too, so a stop landing after THIS line is
+            // still covered.)
+            if (myGen != gen) {
+                return;
+            }
             String[] names = c.getColumnNames();
             if (names == null || !c.moveToFirst()) {
                 safeRow(new String[0], new String[0]);

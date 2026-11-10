@@ -166,13 +166,167 @@ pub fn turn(direction: &str) -> Option<Turn> {
 const FOOT: f64 = 0.3048;
 const MILE: f64 = 1609.344;
 
+/// Which of CoMaps' four distance units a word names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Word {
+    Metre,
+    Kilometre,
+    Foot,
+    Mile,
+}
+
+impl Word {
+    /// Metres per one of this unit, and which system it belongs to.
+    fn scale(self) -> (f64, Units) {
+        match self {
+            Word::Metre => (1.0, Units::Metric),
+            Word::Kilometre => (1000.0, Units::Metric),
+            Word::Foot => (FOOT, Units::Imperial),
+            Word::Mile => (MILE, Units::Imperial),
+        }
+    }
+}
+
+/// EVERY UNIT WORD COMAPS WRITES, IN EVERY TRANSLATION IT SHIPS.
+///
+/// GENERATED, NOT REMEMBERED. Read out of `android/sdk/src/main/res/values*/
+/// strings.xml` — the `m`, `km`, `ft` and `mi` strings, 59 files — at CoMaps
+/// `bf5945db` (2026-11-09): 75 distinct words, and NO word names two different
+/// units in two languages, which is what makes one flat table safe.
+///
+/// THIS USED TO BE FOUR LATIN WORDS AND FOUR CYRILLIC ONES, under a comment
+/// claiming every translation but one used them. About forty do not — Spanish
+/// writes feet as `pie`, Danish `fod`, Greek metres as `μ`, Chinese `米`,
+/// Portuguese `Km` — and an unread unit is not a missing distance but a missing
+/// TURN: `Nav::polled_state` needs a distance to draw one, so in those languages
+/// the whole countdown, arrow and street went blank (#134's bug check).
+///
+/// A NEW TRANSLATION CAN STILL ADD A WORD, and that is reported rather than
+/// guessed: `read` names the string in `Reading::unread`, and the app logs it
+/// once as "CoMaps distance not understood".
+const WORDS: &[(&str, Word)] = &[
+    ("m", Word::Metre),
+    ("μ", Word::Metre),
+    ("м", Word::Metre),
+    ("מ׳", Word::Metre),
+    ("متر", Word::Metre),
+    ("मी", Word::Metre),
+    ("মি", Word::Metre),
+    ("மீ", Word::Metre),
+    ("ม.", Word::Metre),
+    ("ມ", Word::Metre),
+    ("公尺", Word::Metre),
+    ("米", Word::Metre),
+    ("Km", Word::Kilometre),
+    ("km", Word::Kilometre),
+    ("χλμ", Word::Kilometre),
+    ("км", Word::Kilometre),
+    ("ק״מ", Word::Kilometre),
+    ("كم", Word::Kilometre),
+    ("کیلومتر", Word::Kilometre),
+    ("किमी", Word::Kilometre),
+    ("কিমি", Word::Kilometre),
+    ("கி.மீ", Word::Kilometre),
+    ("กม.", Word::Kilometre),
+    ("ກມ", Word::Kilometre),
+    ("公里", Word::Kilometre),
+    ("Addım", Word::Foot),
+    ("fit", Word::Foot),
+    ("fod", Word::Foot),
+    ("fot", Word::Foot),
+    ("ft", Word::Foot),
+    ("jalga", Word::Foot),
+    ("kaki", Word::Foot),
+    ("láb", Word::Foot),
+    ("oin", Word::Foot),
+    ("pie", Word::Foot),
+    ("pé", Word::Foot),
+    ("pėd.", Word::Foot),
+    ("stopa", Word::Foot),
+    ("vt.", Word::Foot),
+    ("čevlji", Word::Foot),
+    ("πόδια", Word::Foot),
+    ("стопа", Word::Foot),
+    ("фут", Word::Foot),
+    ("רגל", Word::Foot),
+    ("قدم", Word::Foot),
+    ("پای", Word::Foot),
+    ("फूट", Word::Foot),
+    ("ফুট", Word::Foot),
+    ("அடி", Word::Foot),
+    ("ฟุต", Word::Foot),
+    ("ຟຸດ", Word::Foot),
+    ("英尺", Word::Foot),
+    ("풋", Word::Foot),
+    ("dặm", Word::Mile),
+    ("mf", Word::Mile),
+    ("mi", Word::Mile),
+    ("mil", Word::Mile),
+    ("milj", Word::Mile),
+    ("myl", Word::Mile),
+    ("myl.", Word::Mile),
+    ("míl", Word::Mile),
+    ("o meu", Word::Mile),
+    ("μιλ", Word::Mile),
+    ("ми", Word::Mile),
+    ("міля", Word::Mile),
+    ("מייל", Word::Mile),
+    ("مایل", Word::Mile),
+    ("ميل", Word::Mile),
+    ("میل", Word::Mile),
+    ("মাইল", Word::Mile),
+    ("மை", Word::Mile),
+    ("ไมล์", Word::Mile),
+    ("ໄມລ໌", Word::Mile),
+    ("英哩", Word::Mile),
+    ("英里", Word::Mile),
+];
+
+/// A gap between number and unit: Java's U+00A0, the native side's U+202F, or
+/// an ordinary space.
+fn is_gap(c: char) -> bool {
+    c.is_whitespace() || c == '\u{00A0}' || c == '\u{202F}'
+}
+
+/// Split a distance string into its number and its unit word.
+///
+/// BY SUFFIX, NOT AT THE LAST SPACE, because one unit is two words: Galician
+/// writes miles as `o meu`. A table word counts only when a gap stands in front
+/// of it, so `m` never matches the tail of `km`, nor `ม.` the tail of `กม.` —
+/// and the longest match wins, for the same reason.
+///
+/// CASE IS FORGIVEN AS A FALLBACK, on the last word only: the table is exact,
+/// and a translation that later capitalises `Mi` should not cost the driver
+/// their turn arrow.
+fn split_unit(text: &str) -> Option<(&str, Word)> {
+    let exact = WORDS
+        .iter()
+        .filter_map(|&(w, word)| {
+            let rest = text.strip_suffix(w)?;
+            rest.ends_with(is_gap).then_some((rest, word, w.len()))
+        })
+        .max_by_key(|&(_, _, len)| len)
+        .map(|(rest, word, _)| (rest, word));
+    if exact.is_some() {
+        return exact;
+    }
+    let cut = text.rfind(is_gap)?;
+    let (rest, last) = text.split_at(cut);
+    let last = last.trim_start_matches(is_gap).to_lowercase();
+    WORDS
+        .iter()
+        .find(|(w, _)| w.to_lowercase() == last)
+        .map(|&(_, word)| (rest, word))
+}
+
 /// One of CoMaps' distance strings, back in metres, and the units it was in.
 ///
 /// ── THE FORMAT, FROM COMAPS' OWN SOURCE ─────────────────────────────────────
 ///
-/// `Distance.toString(context)` is `mDistanceStr + ' ' + unit`, where the
-/// unit is the app's localised `R.string.m` / `km` / `ft` / `mi` and the number
-/// comes from `measurement_utils::ToStringPrecisionLocale`:
+/// `Distance.toString(context)` is `mDistanceStr + '\u{00A0}' + unit`, where
+/// the unit is the app's localised `R.string.m` / `km` / `ft` / `mi` (every one
+/// of them is in [`WORDS`]) and the number comes from
+/// `measurement_utils::ToStringPrecisionLocale`:
 ///
 /// * ONE DECIMAL, and only on km or mi below 10 — "0.2 mi", "9.5 km" — with
 ///   the LOCALE's decimal mark ("1,2 km" in German).
@@ -182,24 +336,16 @@ const MILE: f64 = 1609.344;
 /// separator is grouping. That rule needs no locale table, and it is exact for
 /// every string that formatter can produce.
 ///
-/// THE UNIT WORDS are the Latin four every CoMaps translation but one uses, and
-/// the Cyrillic four (`м`, `км`, `фут`, `ми`) of the one that differs. Anything
-/// else is `None`, and the turn is drawn with no distance rather than a guess.
+/// A unit word not in [`WORDS`] is `None`, and the turn waits for a distance
+/// rather than being drawn against a guess.
 pub fn distance(text: &str) -> Option<(i32, Units)> {
-    let text = text.trim();
-    // THE SPACE IS U+00A0 from Java, but the native side uses U+202F and a
-    // plain space is what a hand-typed test would hold, so all three split.
-    let split = text.rfind(|c: char| c.is_whitespace() || c == '\u{00A0}' || c == '\u{202F}')?;
-    let (number, unit) = text.split_at(split);
-    let unit = unit.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{00A0}' || c == '\u{202F}');
-    let (per_unit, units) = match unit {
-        "m" | "м" => (1.0, Units::Metric),
-        "km" | "км" => (1000.0, Units::Metric),
-        "ft" | "фут" => (FOOT, Units::Imperial),
-        "mi" | "ми" => (MILE, Units::Imperial),
-        _ => return None,
-    };
-    let value = read_number(number.trim())?;
+    // EVERY KIND OF GAP BECOMES ONE SPACE FIRST, so the two-word unit matches
+    // whether its inner gap is the translation's plain space or something that
+    // turned it non-breaking on the way.
+    let text: String = text.trim().chars().map(|c| if is_gap(c) { ' ' } else { c }).collect();
+    let (number, word) = split_unit(&text)?;
+    let (per_unit, units) = word.scale();
+    let value = read_number(number.trim_matches(is_gap))?;
     let metres = (value * per_unit).round();
     if !metres.is_finite() || metres < 0.0 || metres > f64::from(i32::MAX) {
         return None;
@@ -401,32 +547,43 @@ pub struct Status<'a> {
 /// on the same rule `the_sub_line_never_reads_as_a_fault` holds for OsmAnd.
 pub fn sub_line(s: &Status) -> String {
     const WHAT: &str = "Show CoMaps' next turn on the face.";
-    if s.package.is_empty() {
+    // THE LIVE LINK OUTRANKS THE INSTALL RECORD. A watcher that is watching, or
+    // waiting on the permission, has FOUND a CoMaps with the provider — the Java
+    // side looked it up itself — so "not installed" from a record read earlier
+    // would contradict a mark that is lit and a turn on the face, which is what
+    // #134's bug check caught. `App::refresh_nav_installs` keeps the record
+    // fresh on taps; this keeps the sentence true between them.
+    let live = s.on && matches!(s.link, Link::Watching | Link::NeedsPermission);
+    if s.package.is_empty() && !live {
+        // WHEN THE SWITCH IS ON, THE PICKER IS SHOWING, AND THE FIX IS A TAP:
+        // install or update CoMaps, then tap its row, which looks again.
+        let then = if s.on { " Once it is, tap CoMaps below." } else { "" };
         if !s.outdated.is_empty() {
+            let then = if s.on { " After updating, tap CoMaps below." } else { "" };
             return format!(
                 "{WHAT} The installed CoMaps ({}) is too old to share its navigation; \
-                 version 2026.07.16 or newer can.",
+                 version 2026.07.16 or newer can.{then}",
                 s.outdated
             );
         }
-        return format!("{WHAT} CoMaps is not installed.");
+        return format!("{WHAT} CoMaps is not installed.{then}");
     }
+    let name = if s.package.is_empty() { "CoMaps" } else { s.package };
     if !s.on {
-        return format!("{WHAT} Off. Found {}.", s.package);
+        return format!("{WHAT} Off. Found {name}.");
     }
     match s.link {
         Link::NeedsPermission => format!(
             "{WHAT} Waiting for permission: tap CoMaps below, then Allow."
         ),
         Link::Failed => format!(
-            "{WHAT} Could not connect to {}'s navigation feed. The log says why.",
-            s.package
+            "{WHAT} Could not connect to {name}'s navigation feed. The log says why."
         ),
-        Link::Off => format!("{WHAT} Connecting to {}.", s.package),
+        Link::Off => format!("{WHAT} Connecting to {name}."),
         Link::Watching if !s.navigating => {
-            format!("{WHAT} Connected to {}, with no route running.", s.package)
+            format!("{WHAT} Connected to {name}, with no route running.")
         }
-        Link::Watching => format!("{WHAT} Showing the next turn from {}.", s.package),
+        Link::Watching => format!("{WHAT} Showing the next turn from {name}."),
     }
 }
 
@@ -474,8 +631,9 @@ mod tests {
 
     /// EVERY `CarDirection` COMAPS DECLARES, against its own file.
     ///
-    /// Transcribed from `android/sdk/.../routing/CarDirection.java`, eighteen
-    /// constants. Sixteen draw; the two that are not turns do not.
+    /// Transcribed from `android/sdk/.../routing/CarDirection.java`, SEVENTEEN
+    /// constants. Fifteen draw; the two that are not turns do not. (This said
+    /// eighteen and sixteen until #134's bug check counted the file.)
     #[test]
     fn every_comaps_direction_is_read_or_refused_on_purpose() {
         let drawn = [
@@ -495,6 +653,7 @@ mod tests {
             ("EXIT_HIGHWAY_TO_LEFT", Turn::KeepLeft),
             ("EXIT_HIGHWAY_TO_RIGHT", Turn::KeepRight),
         ];
+        assert_eq!(drawn.len(), 15, "fifteen of CoMaps' seventeen draw");
         for (name, t) in drawn {
             assert_eq!(turn(name), Some(t), "{name}");
         }
@@ -519,12 +678,52 @@ mod tests {
         // THE NATIVE SIDE'S NARROW SPACE, and a plain one.
         assert_eq!(distance("40\u{202F}m"), Some((40, Units::Metric)));
         assert_eq!(distance("40 m"), Some((40, Units::Metric)));
-        // THE ONE TRANSLATION WITH ITS OWN WORDS.
+        // TRANSLATIONS WITH THEIR OWN WORDS — the ones the bug check found
+        // blanking the turn, and the Cyrillic pair that worked before.
         assert_eq!(distance(&nb("500 фут")), Some((152, Units::Imperial)));
         assert_eq!(distance(&nb("2,5 км")), Some((2500, Units::Metric)));
+        assert_eq!(distance(&nb("350 pie")), Some((107, Units::Imperial)), "Spanish feet");
+        assert_eq!(distance(&nb("350 fod")), Some((107, Units::Imperial)), "Danish feet");
+        assert_eq!(distance(&nb("1,2 Km")), Some((1200, Units::Metric)), "Portuguese km");
+        assert_eq!(distance(&nb("120 μ")), Some((120, Units::Metric)), "Greek metres");
+        assert_eq!(distance(&nb("1,2 χλμ")), Some((1200, Units::Metric)), "Greek km");
+        assert_eq!(distance(&nb("120 米")), Some((120, Units::Metric)), "Chinese metres");
+        assert_eq!(distance(&nb("0.3 英里")), Some((483, Units::Imperial)), "Chinese miles");
+        // A SUFFIX THAT IS ANOTHER WORD'S TAIL: Thai metres `ม.` end Thai km
+        // `กม.`, Greek `μ` ends `χλμ`, and `m` ends `km`. Each must read as
+        // its own unit, not the shorter one.
+        assert_eq!(distance(&nb("120 ม.")), Some((120, Units::Metric)));
+        assert_eq!(distance(&nb("1.2 กม.")), Some((1200, Units::Metric)));
+        // THE TWO-WORD UNIT, Galician miles — the reason the split is by suffix.
+        // As CoMaps writes it (U+00A0 before the word, a plain space inside
+        // it), and with every gap non-breaking.
+        assert_eq!(distance("0,3\u{00A0}o meu"), Some((483, Units::Imperial)));
+        assert_eq!(distance(&nb("0,3 o meu")), Some((483, Units::Imperial)));
+        // CASE FORGIVEN ON THE LAST WORD, for a translation that changes it later.
+        assert_eq!(distance(&nb("4.2 MI")), Some((6759, Units::Imperial)));
         // NOT A DISTANCE: refused rather than guessed.
-        for bad in ["", "ft", "350", "350 yd", "-5 m", "about 3 km", "3. km"] {
+        for bad in ["", "ft", "350", "350 yd", "-5 m", "about 3 km", "3. km", "350km"] {
             assert_eq!(distance(&nb(bad)), None, "{bad:?}");
+        }
+    }
+
+    /// EVERY WORD IN THE TABLE READS AS ITS OWN UNIT, and none names two.
+    ///
+    /// The table is generated from CoMaps' translations (see [`WORDS`]); this is
+    /// what holds a hand edit to it honest.
+    #[test]
+    fn every_comaps_unit_word_reads_and_no_word_names_two_units() {
+        assert_eq!(WORDS.len(), 75, "the table as generated from CoMaps bf5945db");
+        for &(w, word) in WORDS {
+            let (per, units) = word.scale();
+            let expect = (7.0 * per).round() as i32;
+            assert_eq!(distance(&format!("7\u{00A0}{w}")), Some((expect, units)), "{w:?}");
+        }
+        let mut seen = std::collections::BTreeMap::new();
+        for &(w, word) in WORDS {
+            if let Some(was) = seen.insert(w, word) {
+                panic!("{w:?} is listed twice, as {was:?} and {word:?}");
+            }
         }
     }
 
@@ -707,6 +906,28 @@ mod tests {
                 assert!(!line.contains(word), "{line:?} reads as a fault");
             }
         }
+    }
+
+    /// A LIT LINK IS NEVER CALLED "NOT INSTALLED" — #134's bug check, where the
+    /// record read at launch said one thing and the watcher, which looks the
+    /// package up itself, said the other.
+    #[test]
+    fn a_live_link_outranks_a_stale_not_installed_record() {
+        let stale = |link| Status { on: true, link, ..Status::default() };
+        let showing = sub_line(&Status { navigating: true, ..stale(Link::Watching) });
+        assert_eq!(showing, "Show CoMaps' next turn on the face. Showing the next turn from CoMaps.");
+        let waiting = sub_line(&stale(Link::NeedsPermission));
+        assert!(waiting.contains("Waiting for permission"), "{waiting}");
+        // A link that is NOT up still believes the record, and with the switch
+        // on the sentence now says how to recover.
+        assert_eq!(
+            sub_line(&stale(Link::Off)),
+            "Show CoMaps' next turn on the face. CoMaps is not installed. Once it is, tap CoMaps below."
+        );
+        let old = sub_line(&Status { outdated: "app.comaps.fdroid", ..stale(Link::Off) });
+        assert!(old.ends_with("After updating, tap CoMaps below."), "{old}");
+        // SWITCHED OFF, a stale lit link counts for nothing: the record speaks.
+        assert!(sub_line(&Status { on: false, ..stale(Link::Watching) }).ends_with("CoMaps is not installed."));
     }
 
     #[test]

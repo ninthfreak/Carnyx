@@ -1351,7 +1351,7 @@ state column says.
   same tap-to-open. Contrast measured 3.95:1 light, 3.35:1 dark. NOTICE.md
   records it.
 - `src/comaps.rs` reads a row into the same `nav::Route` OsmAnd's poll fills:
-  `CarDirection` names to `Turn` (16 drawn, 2 not turns), the distance strings
+  `CarDirection` names to `Turn` (15 drawn, 2 not turns), the distance strings
   back to metres to CoMaps' own formatter rules, off-route and both rebuild
   states to a quiet off-route, seconds left to an ETA, and the unit word to the
   driver's units (#113's CoMaps counterpart). The stage ladder, which CoMaps
@@ -1389,6 +1389,33 @@ keep…" row, which the diagnostics clean-up (6a4a62f) parked, so every shot aft
 it in the run was never drawn. The comparison above therefore excludes that
 state's two shots. The shot now taps "Check radio takeover", the remaining row
 that answers under itself, and all 103 shots render in one run.
+
+**Bug check, at the owner's request, and all four findings fixed.** Each of the
+three behavioural ones was first reproduced by running it, then fixed, and now
+has a regression test.
+
+1. *CoMaps installed while Carnyx runs never connected, and the row said "not
+   installed".* The install was read once at launch, and re-tapping CoMaps did
+   not restart a watcher that had given up. Now the picker tap and the switch
+   going on re-read both installs (`App::refresh_nav_installs`, logging any
+   change), a re-tap of the chosen app starts it if it is not running, a live
+   link outranks a stale "not installed" in the sub-line, and the not-installed
+   line says "Once it is, tap CoMaps below."
+2. *A non-English CoMaps lost the turn entirely.* About forty translations write
+   units the parser did not know (`pie`, `fod`, `μ`, `米`, `Km`…), and a turn
+   with no readable distance is not drawn. The parser now carries every unit word
+   CoMaps ships — 75, generated from its 59 translation files at `bf5945db`, no
+   word naming two units — matched by suffix so Galician's two-word `o meu`
+   reads, with a case-insensitive fallback on the last word.
+3. *A row arriving after the switch went off was drawn.* The event gate checked
+   which app was chosen, not whether the switch was on; it now checks both, for
+   OsmAnd's feed too, and `CarnyxComaps.queryOnce` re-checks for a stop after
+   its query and before delivering.
+4. *Wrong count.* CoMaps' `CarDirection` has 17 constants, 15 drawn; this entry
+   and a test comment said 18 and 16.
+
+404 host tests pass; `check-java.sh`, `check-jni.sh` and `check-docs.py` are
+clean; all 103 shots render.
 
 **What one drive settles.**
 

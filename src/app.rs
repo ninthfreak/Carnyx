@@ -677,6 +677,10 @@ struct State {
     /// for that one platform call and nothing else — the formatting, the 12/24
     /// branch and the timezone arithmetic all still run for real.
     clock_test: Option<(u32, u32, bool)>,
+    /// What `refresh_nav_installs` reads instead of the package manager, in a
+    /// test — the OsmAnd id and what CoMaps has. `clock_test`'s arrangement: it
+    /// stands in for the platform calls and nothing else.
+    installs_test: Option<(String, settings::NavAppFound)>,
     /// Feet and miles, or metres and kilometres (§4.9).
     ///
     /// TWO INPUTS ON TWO DIFFERENT CLOCKS. The locale below is read once at
@@ -701,14 +705,16 @@ struct State {
     /// The settings row branches on it, because bound-but-refused and
     /// bound-but-idle look identical on the face and only one has a fix.
     nav_refused: bool,
-    /// Which OsmAnd `CarnyxNav` found, or empty. Read once at start-up: an app
-    /// is not installed and uninstalled while a driver is looking at a switch,
-    /// and asking the package manager on every republish would put a binder call
-    /// in the path of ordinary radio traffic.
+    /// Which OsmAnd `CarnyxNav` found, or empty. Read at start-up and again on
+    /// the two taps that choose a nav app (`refresh_nav_installs`) — never on a
+    /// republish, which would put a binder call in the path of ordinary radio
+    /// traffic. This said "read once", on the reasoning that nothing is
+    /// installed while a driver looks at a switch; on a head unit that runs
+    /// Carnyx all day, installing the nav app while it runs is the usual order.
     nav_package: String,
     /// What `CarnyxComaps` found: the CoMaps with the navigation provider, or a
-    /// CoMaps too old to have one. Read once at start-up, for `nav_package`'s
-    /// reason.
+    /// CoMaps too old to have one. Read when `nav_package` is, and for its
+    /// reasons.
     comaps_found: settings::NavAppFound,
     /// Where the CoMaps link stands. Set by the `ComapsLink` edge.
     comaps_link: crate::comaps::Link,
@@ -1406,6 +1412,7 @@ impl App {
                 units: crate::units::Units::default(),
                 country: String::new(),
                 clock_test: None,
+                installs_test: None,
                 nav_said: String::new(),
                 nav_package: String::new(),
                 comaps_found: settings::NavAppFound::default(),
@@ -2050,9 +2057,15 @@ impl App {
             // mid-flight, a row already on the queue — and the last update from
             // the app the driver just switched AWAY from must not land in the
             // model after `nav.clear()` and sit on the face for twelve seconds.
+            //
+            // AND SO IS ONE THAT LANDS AFTER THE SWITCH WENT OFF, for the same
+            // tail: a read in flight at the moment of the tap. #134's bug check
+            // drew a CoMaps turn on the face with the switch off; the gate used
+            // to ask only WHICH app was chosen. It now asks whether any is.
             TunerEvent::Nav { .. } | TunerEvent::NavVoice { .. } | TunerEvent::NavInfo(_)
-                if s.settings.nav_app != settings::NavApp::OsmAnd => {}
-            TunerEvent::ComapsRow { .. } if s.settings.nav_app != settings::NavApp::CoMaps => {}
+                if !s.settings.nav_on || s.settings.nav_app != settings::NavApp::OsmAnd => {}
+            TunerEvent::ComapsRow { .. }
+                if !s.settings.nav_on || s.settings.nav_app != settings::NavApp::CoMaps => {}
             // ── COMAPS: ONE ROW, READ WHERE IT CAN BE TESTED ─────────────────
             //
             // `crate::comaps::read` makes the row into the same `Route` the
@@ -3828,6 +3841,44 @@ impl App {
         settings::NavAppFound::default()
     }
 
+    /// Ask the package manager again which OsmAnd and which CoMaps are here.
+    ///
+    /// ── ON A TAP, BECAUSE "READ ONCE AT START-UP" WAS WRONG FOR COMAPS ──────
+    ///
+    /// `nav_package`'s note says an app is not installed while a driver looks
+    /// at a switch. On a head unit that is exactly backwards: Carnyx runs all
+    /// the time, so the natural order is to install CoMaps WHILE it is running
+    /// and then come and choose it. With the answer read only at launch, the
+    /// picker said "Not installed", the row said "CoMaps is not installed" even
+    /// with turns on the face, and — because the watcher had given up at launch
+    /// — nothing connected until the switch was cycled (#134's bug check).
+    ///
+    /// So the two taps that mean "use this app" — the picker row and the switch
+    /// going on — ask again first. Two package-manager reads on a tap, never on
+    /// a tick. A change is logged, so a drive log says when CoMaps appeared.
+    fn refresh_nav_installs(&self) {
+        let test = self.state.borrow().installs_test.clone();
+        let (osmand, comaps) = match test {
+            Some(found) => found,
+            None => (self.nav_installed_package(), self.comaps_installed()),
+        };
+        let at = stamp();
+        let mut s = self.state.borrow_mut();
+        if s.nav_package != osmand {
+            let line = format!("nav: OsmAnd install now reads {:?}", osmand);
+            s.settings.log.push(&at, &line);
+            s.nav_package = osmand;
+        }
+        if s.comaps_found != comaps {
+            let line = format!(
+                "nav: CoMaps install now reads {:?} (too old: {:?})",
+                comaps.package, comaps.outdated
+            );
+            s.settings.log.push(&at, &line);
+            s.comaps_found = comaps;
+        }
+    }
+
     /// Start or stop the CHOSEN app's link. Returns a line for the log, with
     /// the app's name in front so a log with both in it reads unambiguously.
     #[cfg(target_os = "android")]
@@ -4780,6 +4831,13 @@ impl App {
             // unsubscribe rather than just stop reading: OsmAnd holds our
             // callback and would go on paying for a transaction per location fix
             // for a face that is no longer drawing it.
+            //
+            // SWITCHING ON ASKS THE PACKAGE MANAGER AGAIN FIRST (#134's bug
+            // check): an app installed since launch must be found here, not at
+            // the next ignition. See `refresh_nav_installs`.
+            if v {
+                app.refresh_nav_installs();
+            }
             let outcome = app.set_nav_running(v);
             // SWITCHING ON WITH COMAPS CHOSEN IS A TAP, and the permission is
             // asked on taps (see `ask_comaps_permission`). Already granted, it
@@ -4820,6 +4878,9 @@ impl App {
                 let s = app.state.borrow();
                 (s.settings.nav_app, s.settings.nav_on)
             };
+            // A TAP HERE MEANS "USE THIS APP", so first find out what is
+            // installed NOW — not what was at launch. See `refresh_nav_installs`.
+            app.refresh_nav_installs();
             let mut lines = Vec::new();
             if chosen != was {
                 // ONE APP AT A TIME, so the old one is let go BEFORE the new one
@@ -4846,6 +4907,15 @@ impl App {
                 if on {
                     lines.push(app.set_nav_running(true));
                 }
+            } else if on {
+                // THE SAME APP, TAPPED AGAIN: start it if it is not running.
+                // Both clients' `start` is idempotent ("already watching",
+                // "already bound"), so this costs nothing when it is up — and
+                // when it is NOT, because the app was missing when it last
+                // tried, this is the tap that brings it up. Without it a CoMaps
+                // installed after launch never connected until the switch was
+                // cycled (#134's bug check).
+                lines.push(app.set_nav_running(true));
             }
             // TAPPING COMAPS IS THE ASK, chosen already or not: a driver who
             // dismissed the dialog gets it back by tapping the row again.
@@ -5045,6 +5115,12 @@ impl App {
     /// strings itself would be evidence about the shot. The host has no platform
     /// clock — `android::clock_now` answers `None` there, which is why no
     /// ordinary render carries a time.
+    /// Stand in for the package manager in `refresh_nav_installs`, for a test
+    /// that installs an app after launch.
+    pub fn set_installs_for_test(self: &Rc<App>, osmand: &str, comaps: settings::NavAppFound) {
+        self.state.borrow_mut().installs_test = Some((osmand.to_string(), comaps));
+    }
+
     pub fn set_clock_for_test(self: &Rc<App>, hour24: u32, minute: u32, is_24h: bool) {
         self.state.borrow_mut().clock_test = Some((hour24, minute, is_24h));
         // THROUGH THE REAL PATH rather than writing the three properties here.
@@ -8175,6 +8251,92 @@ mod tests {
         crate::android::ingest_nav_refused(false);
         driver.drain_events();
         assert!(!ui.get_settings_nav_sub().to_string().contains("Plugins"));
+    }
+
+    /// #134'S BUG CHECK, FINDING 1: CoMaps installed while Carnyx runs.
+    ///
+    /// The record was read once at launch, so the picker and the row went on
+    /// saying "not installed" after the install, and re-tapping CoMaps did not
+    /// restart a watcher that had given up. A tap now reads again.
+    #[test]
+    fn comaps_installed_after_launch_is_found_by_the_next_tap() {
+        use slint::Model as _;
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-comaps-late");
+        ui.invoke_settings_pick_nav_app(1);
+        assert!(ui.get_settings_nav_sub().to_string().ends_with(
+            "CoMaps is not installed. Once it is, tap CoMaps below."
+        ));
+
+        // THE DRIVER INSTALLS COMAPS, with Carnyx still running, and taps it.
+        driver.set_installs_for_test(
+            "",
+            settings::NavAppFound { package: "app.comaps.fdroid".into(), ..Default::default() },
+        );
+        ui.invoke_settings_pick_nav_app(1);
+        let rows: Vec<TunerSource> = ui.get_settings_nav_apps().iter().collect();
+        assert_eq!(rows[1].kind.to_string(), "app.comaps.fdroid", "the picker found it");
+        assert_eq!(rows[1].badge.to_string(), "Detected");
+        let sub = ui.get_settings_nav_sub().to_string();
+        assert!(!sub.contains("not installed"), "the row found it too: {sub}");
+        assert!(
+            driver.state.borrow().settings.log.lines().iter().any(|l| l.contains("CoMaps install now reads")),
+            "and the log says when it appeared"
+        );
+
+        // AND A LIT LINK IS NEVER CALLED "NOT INSTALLED", record or no record.
+        driver.set_installs_for_test("", settings::NavAppFound::default());
+        ui.invoke_settings_pick_nav_app(1);
+        crate::android::ingest_comaps_link(2);
+        driver.drain_events();
+        let sub = ui.get_settings_nav_sub().to_string();
+        assert!(sub.contains("Connected to CoMaps"), "{sub}");
+    }
+
+    /// #134'S BUG CHECK, FINDING 3: a row landing after the switch went off.
+    #[test]
+    fn a_comaps_row_after_the_switch_goes_off_is_not_drawn() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-comaps-off");
+        ui.invoke_settings_pick_nav_app(1);
+        ui.invoke_settings_set_nav_on(false);
+        comaps_row(&[
+            ("session_state", "OnRoute"),
+            ("car_direction", "TURN_LEFT"),
+            ("dist_to_turn", "350\u{00A0}ft"),
+            ("next_street", "Whitney Way"),
+        ]);
+        driver.drain_events();
+        assert!(!ui.get_nav_active(), "off means off, for a late row too");
+        assert_eq!(ui.get_nav_turn().to_string(), "");
+        // AND OSMAND'S FEED, which had the same gap.
+        ui.invoke_settings_pick_nav_app(0);
+        crate::android::ingest_nav(240, 5, false);
+        driver.drain_events();
+        assert!(!ui.get_nav_active(), "an OsmAnd update after off is dropped as well");
+    }
+
+    /// #134'S BUG CHECK, FINDING 2: a non-English CoMaps keeps its turn.
+    #[test]
+    fn a_spanish_comaps_keeps_its_turn_on_the_face() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("nav-comaps-es");
+        ui.invoke_settings_pick_nav_app(1);
+        comaps_row(&[
+            ("session_state", "OnRoute"),
+            ("car_direction", "TURN_LEFT"),
+            ("dist_to_turn", "350\u{00A0}pie"),
+            ("dist_to_target", "4,2\u{00A0}mi"),
+            ("next_street", "Calle Mayor"),
+        ]);
+        driver.drain_events();
+        assert_eq!(ui.get_nav_turn().to_string(), "left");
+        assert_eq!(ui.get_nav_distance().to_string(), "350 ft");
+        assert!(!ui.get_nav_arrow().is_empty());
+        assert!(
+            !driver.state.borrow().settings.log.lines().iter().any(|l| l.contains("not understood")),
+            "and nothing was reported unread"
+        );
     }
 
     /// A CoMaps `/live` row as `CarnyxComaps.queryOnce` would hand it across.
