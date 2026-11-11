@@ -7,7 +7,8 @@
 #   bash radio-takeover.sh install [IP[:PORT]] [-y]  make Carnyx the radio app
 #   bash radio-takeover.sh undo    [IP[:PORT]] [-y]  put it back as it was
 #
-# With no IP it looks for the head unit itself (see `find_unit`).
+# With no IP it looks for the head unit itself (see `find_unit`). Lines that
+# start with "|" are adb's or the head unit's own words, unedited.
 #
 # ── WHAT "THE RADIO TAKEOVER" IS ─────────────────────────────────────────────
 #
@@ -46,6 +47,13 @@
 # image, Carnyx not installed, or root refused — each stops with a sentence
 # saying so, before anything is written.
 #
+# AND IT SAYS WHY, in adb's words: every failure prints what adb or the unit
+# answered, unedited, under the sentence it explains. Output is thrown away in
+# three places only, each because failing there is the expected answer: the
+# port scan (a closed port on 253 addresses), the interface lookup (`ip` and
+# `ifconfig` stand in for each other, and both are shown when neither finds an
+# address) and letting go of a device that is not the unit.
+#
 # ── TESTED ON THE HOST, NOT ON THE UNIT ─────────────────────────────────────
 #
 # `tools/test-radio-takeover.sh` runs every branch against a fake `adb` that
@@ -77,11 +85,33 @@ REMOUNTED=0   # this run remounted <config> read-write
 ASSUME_YES=0
 TMPD=""
 
+SAID=""       # why the last `exists` or `has_package` could not tell
+WRITE_SAID="" # what the last `writable` test answered
+
 say() { printf '%s\n' "$*"; }
+
+# adb's or the head unit's own words, unedited, under the line they explain.
+quote() {
+    if [ -n "$1" ]; then printf '%s\n' "$1" | sed 's/^/  | /'; else say "  | (said nothing)"; fi
+}
+
+# Stop, saying why — and, given them, the words adb or the unit answered.
 die() {
-    printf '\nSTOPPED: %s\n' "$*" >&2
+    printf '\nSTOPPED: %s\n' "$1" >&2
+    if [ "$#" -gt 1 ]; then quote "$2" >&2; fi
     cleanup_device
     exit 1
+}
+
+# An adb command that has to work. When it does not, the run stops with `what`
+# and every word adb or the unit said: the reason is in those, not in `what`.
+must() {
+    local what=$1 out rc
+    shift
+    out=$("$@" 2>&1 | tr -d '\r')
+    rc=$?
+    [ "$rc" = 0 ] && return 0
+    die "$what" "${out:-(no message; exit status $rc)}"
 }
 
 # One command on the head unit, its \r stripped (older adb clients add one).
@@ -100,26 +130,50 @@ with_port() {
 
 # Connect and wait for the unit to say "device". `unauthorized` is the head
 # unit showing its "Allow USB debugging?" prompt, which only a tap can answer.
+#
+# ADB'S ANSWERS ARE PRINTED AS THEY CHANGE. What `adb connect` and
+# `adb get-state` say is the only account of why a wait is a wait, and all there
+# is to go on when it ends without a connection — so none of it is kept back.
+# ("already connected to X" counts as no change from "connected to X".)
 connect() {
-    local target=$1 tries=0 state told=0
-    "$ADB" connect "$target" >/dev/null 2>&1
+    local target=$1 tries=0 said state last_said="" last_state="" told=0 waited=0
+    local limit=${CONNECT_TRIES:-30}
     while :; do
+        said=$("$ADB" connect "$target" 2>&1 | tr -d '\r')
         state=$("$ADB" -s "$target" get-state 2>&1 | tr -d '\r')
+        if [ "$state" = device ]; then
+            [ "$waited" = 1 ] && say "  It says \"device\" now."
+            return 0
+        fi
+        if [ "${said#already }" != "$last_said" ]; then
+            say "  adb connect $target:"
+            quote "$said"
+            last_said=${said#already }
+        fi
+        if [ "$state" != "$last_state" ]; then
+            say "  adb -s $target get-state:"
+            quote "$state"
+            last_state=$state
+        fi
         case "$state" in
-            device) return 0 ;;
             *unauthorized*)
-                if [ "$told" = 0 ]; then
-                    say "  $target is asking for permission — tap Allow on the head unit's screen."
-                    told=1
-                fi
-                ;;
+                [ "$told" = 1 ] || say "  -> Tap Allow on the head unit's screen (\"Allow USB debugging?\")."
+                told=1 ;;
         esac
         tries=$((tries + 1))
-        [ "$tries" -ge "${CONNECT_TRIES:-30}" ] && return 1
+        if [ "$tries" -ge "$limit" ]; then
+            say "  Gave up after $tries tries."
+            return 1
+        fi
+        [ "$waited" = 1 ] || say "  Waiting for it to say \"device\" (up to $limit tries)…"
+        waited=1
         sleep "${CONNECT_PAUSE:-1}"
-        "$ADB" connect "$target" >/dev/null 2>&1
     done
 }
+
+# Done with a device that is not the unit. Its answer is not wanted: it may
+# already be gone, and either way there is nothing to do about it.
+let_go() { "$ADB" disconnect "$1" >/dev/null 2>&1; }
 
 # ── Finding the head unit ───────────────────────────────────────────────────
 
@@ -131,6 +185,10 @@ connect() {
 # people's devices. So interfaces are kept by name — the hotspot is `ap0`,
 # `swlan0`, `softap0` or `wlanN` depending on the phone — and addresses by
 # range.
+#
+# EITHER TOOL MAY BE MISSING OR BLOCKED, which is why both are asked and their
+# complaints dropped here; `find_unit` prints both in full when neither yields
+# an address.
 local_prefixes() {
     {
         ip -4 -o addr show 2>/dev/null | awk '{ print $2, $4 }'
@@ -151,6 +209,8 @@ local_prefixes() {
 # A /24 EVEN WHEN THE NETWORK IS SMALLER — an iPhone hotspot is a /28 — because
 # that covers it and a phone does not reliably report its mask to an app.
 # Sixty-four at a time, one second each: the whole range in about four seconds.
+# A refused or silent port is the expected answer from nearly every address, so
+# those are not reported.
 scan() {
     local prefix=$1 own=$2 port=$3 n
     for n in $(seq 1 254); do
@@ -162,18 +222,28 @@ scan() {
 }
 
 # The head unit, found: something answering on ADB's port that has the NWD
-# kernel installed. Anything else that answers is listed and left alone — this
-# script asks for root, and it does not ask a device it cannot identify.
+# kernel installed. Anything else that answers is left alone, with the reason —
+# this script asks for root, and it does not ask a device it cannot identify.
 find_unit() {
-    local port=${1:-$DEFAULT_PORT} prefix own h
-    local -a hits=() units=() others=()
+    local port=${1:-$DEFAULT_PORT} prefix own h nets=0
+    local -a hits=() units=()
     while read -r prefix own; do
         [ -n "$prefix" ] || continue
+        nets=$((nets + 1))
         say "Looking for ADB on $prefix.1-254 (this device is $own)…"
         while read -r h; do
             [ -n "$h" ] && hits+=("$h")
         done < <(scan "$prefix" "$own" "$port")
     done < <(local_prefixes)
+    if [ "$nets" = 0 ]; then
+        say "Found no Wi-Fi or Ethernet address on this device to search from."
+        say "ip -4 -o addr show:"
+        quote "$(ip -4 -o addr show 2>&1)"
+        say "ifconfig:"
+        quote "$(ifconfig 2>&1)"
+        say "Pass the head unit's address instead: bash radio-takeover.sh check 192.168.x.y"
+        return 1
+    fi
     if [ "${#hits[@]}" = 0 ]; then
         say "Nothing on this network is listening for ADB on port $port."
         say "Check the head unit is on this Wi-Fi and has network ADB switched on, or pass"
@@ -181,14 +251,20 @@ find_unit() {
         return 1
     fi
     for h in "${hits[@]}"; do
-        if connect "$h:$port" && "$ADB" -s "$h:$port" shell "pm path $KERNEL" 2>/dev/null | tr -d '\r' | grep -q '^package:'; then
-            units+=("$h:$port")
-        else
-            others+=("$h:$port")
-            "$ADB" disconnect "$h:$port" >/dev/null 2>&1
+        h=$h:$port
+        say "$h answers on ADB's port. Asking what it is…"
+        if ! connect "$h"; then
+            say "  Could not connect to $h; adb's answers are above. Left alone."
+            let_go "$h"
+            continue
         fi
+        has_package "$KERNEL" "$h"
+        case $? in
+            0) units+=("$h") ;;
+            1) say "  $h has no $KERNEL: it is not an NWD head unit. Left alone."; let_go "$h" ;;
+            2) say "  Could not ask $h what is installed:"; quote "$SAID"; say "  Left alone."; let_go "$h" ;;
+        esac
     done
-    for h in "${others[@]}"; do say "  $h answers ADB but is not an NWD head unit (or did not allow this computer)."; done
     case "${#units[@]}" in
         0) say "No NWD head unit among them."; return 1 ;;
         1) T=${units[0]}; say "Head unit: $T"; return 0 ;;
@@ -214,30 +290,61 @@ facts() {
     say "config: $CFG (ro.nwd.config.path)"
 }
 
-carnyx_installed() { on_unit "pm path $PKG" 2>/dev/null | grep -q '^package:'; }
+# Whether a package is installed on the unit (`$T`, or the serial given):
+# 0 yes, 1 no, 2 could not tell — and then SAID holds why. "No" only when the
+# unit's own shell ran `pm path` and it printed nothing, which is how Android 10
+# answers for a package it does not have; a dropped connection, or `pm`
+# complaining, is not an answer.
+has_package() {
+    local raw
+    raw=$("$ADB" -s "${2:-$T}" shell "pm path $1; echo ':asked'" 2>&1 | tr -d '\r')
+    SAID=$(printf '%s\n' "$raw" | grep -vx ':asked')
+    if printf '%s\n' "$raw" | grep -q '^package:'; then return 0; fi
+    [ "$raw" = ":asked" ] && return 1
+    return 2
+}
+
+# Whether a path is on the unit: 0 yes, 1 no, 2 could not tell — and then SAID
+# holds why. "No" only when the unit itself said "No such file or directory": a
+# directory the shell may not look into, or a dropped connection, is not an
+# answer, and reading either as "absent" is how a wrong report gets made.
+exists() {
+    local rc
+    SAID=$(on_unit "ls -d '$1'" 2>&1)
+    rc=$?
+    case "$SAID" in *"No such file or directory"*) return 1 ;; esac
+    [ "$rc" = 0 ] && return 0
+    return 2
+}
 
 # ── Root, and a writable <config> ───────────────────────────────────────────
 
 become_root() {
-    local out
+    local out rc uid
     if [ "$(on_unit 'id -u')" = 0 ]; then return 0; fi
     say "Asking for adb root…"
     out=$("$ADB" -s "$T" root 2>&1 | tr -d '\r')
+    rc=$?
+    quote "$out"
     case "$out" in
         *"cannot run as root"* | *"not permitted"* | *"unable"*)
-            die "the head unit refused adb root: \"$out\". This ROM is a production build, and
-without root the takeover cannot be written (README.md: /config is not writable otherwise)." ;;
+            die "the head unit refused adb root (its answer is above). This ROM is a production
+build, and without root the takeover cannot be written (README.md: /config is
+not writable otherwise)." ;;
     esac
+    [ "$rc" = 0 ] || die "adb root failed with exit status $rc; its answer is above."
     ROOTED=1
     # adbd restarts as root, which drops the network connection.
     sleep "${ROOT_PAUSE:-2}"
-    connect "$T" || die "lost the head unit after adb root — run the command again."
-    if [ "$(on_unit 'id -u')" != 0 ]; then
-        die "adb root answered \"$out\", but the shell is still not root."
+    connect "$T" || die "lost the head unit after adb root (adb's answers are above) — run the command again."
+    uid=$(on_unit 'id -u' 2>&1)
+    if [ "$uid" != 0 ]; then
+        die "adb root answered as above, but the shell is still not root. 'id -u' said:" "$uid"
     fi
 }
 
-writable() { on_unit "touch '$CFG/.carnyx-write-test' && rm -f '$CFG/.carnyx-write-test'" >/dev/null 2>&1; }
+# WRITE_SAID keeps the answer, for the sentence that explains a refusal.
+writable() { WRITE_SAID=$(on_unit "touch '$CFG/.carnyx-write-test' && rm -f '$CFG/.carnyx-write-test'" 2>&1); }
 
 # Writable already, or its own read-only mount that can be remounted. NEVER the
 # system image: a `<config>` that is a plain directory on a read-only root needs
@@ -249,39 +356,51 @@ make_writable() {
     if [ -z "$mnt" ]; then
         die "$CFG is not writable, and it is not a mount of its own: it is part of the
 read-only system image. Making that writable means 'adb disable-verity', a reboot
-and 'adb remount'. This script will not do that on its own; ask first."
+and 'adb remount'. This script will not do that on its own; ask first.
+A test write in $CFG answered:" "$WRITE_SAID"
     fi
-    say "$CFG is mounted read-only — remounting it read-write for this change."
+    say "$CFG is not writable. A test write answered:"
+    quote "$WRITE_SAID"
+    say "It is its own mount — remounting it read-write for this change."
     say "  ($mnt)"
-    on_unit "mount -o rw,remount '$CFG'" >/dev/null 2>&1 || die "the remount of $CFG failed."
+    must "the remount of $CFG failed." on_unit "mount -o rw,remount '$CFG'"
     REMOUNTED=1
-    writable || die "$CFG was remounted and is still not writable."
+    writable || die "$CFG was remounted and is still not writable. A test write answered:" "$WRITE_SAID"
 }
 
 # Put the unit back the way this run found it: the mount read-only again if it
 # was, and adbd unprivileged again if this run raised it.
 cleanup_device() {
+    local out
     if [ "$REMOUNTED" = 1 ]; then
-        if on_unit "mount -o ro,remount '$CFG'" >/dev/null 2>&1; then
+        REMOUNTED=0
+        if out=$(on_unit "mount -o ro,remount '$CFG'" 2>&1); then
             say "$CFG remounted read-only again."
         else
-            say "Could not remount $CFG read-only again; a reboot will."
+            say "Could not remount $CFG read-only again; a reboot will. The unit answered:"
+            quote "$out"
         fi
-        REMOUNTED=0
     fi
     if [ "$ROOTED" = 1 ]; then
-        "$ADB" -s "$T" unroot >/dev/null 2>&1 && say "adbd is unprivileged again."
         ROOTED=0
+        if out=$("$ADB" -s "$T" unroot 2>&1 | tr -d '\r'); then
+            say "adbd is unprivileged again."
+        else
+            say "adb unroot failed; a reboot will drop root. adb answered:"
+            quote "$out"
+        fi
     fi
 }
 
 # ── The file ────────────────────────────────────────────────────────────────
 
 reload() {
-    if on_unit "am broadcast -a $RELOAD" >/dev/null 2>&1; then
+    local out
+    if out=$(on_unit "am broadcast -a $RELOAD" 2>&1); then
         say "Told the kernel to reload the list."
     else
-        say "The reload broadcast failed; a reboot will load the file instead."
+        say "The reload broadcast failed; a reboot will load the file instead. The unit answered:"
+        quote "$out"
     fi
 }
 
@@ -337,64 +456,107 @@ confirm() {
 # ── The four commands ───────────────────────────────────────────────────────
 
 do_check() {
-    local file=$CFG/app/$NAME
-    if carnyx_installed; then say "Carnyx: installed."; else say "Carnyx: NOT installed on the head unit."; fi
-    if on_unit "test -f '$file'" >/dev/null 2>&1; then
-        say "$file:"
-        on_unit "cat '$file'" | sed 's/^/  /'
-        "$ADB" -s "$T" pull "$file" "$TMPD/now.xml" >/dev/null 2>&1
-        if [ -s "$TMPD/now.xml" ] && has_ours "$TMPD/now.xml"; then
-            say "=> The takeover IS installed: the kernel will launch Carnyx for the radio."
-        else
-            say "=> The file is there, but it does not send the radio to Carnyx."
-        fi
-    else
-        say "$file: absent — the takeover is not installed."
-    fi
-    if on_unit "test -f '$CFG/app/$BACKUP'" >/dev/null 2>&1; then
-        say "A backup of the file as it was before Carnyx is at $CFG/app/$BACKUP."
+    local file=$CFG/app/$NAME out seen
+    has_package "$PKG"
+    case $? in
+        0) say "Carnyx: installed." ;;
+        1) say "Carnyx: NOT installed on the head unit." ;;
+        2) say "Carnyx: could not tell whether it is installed. 'pm path $PKG' answered:"; quote "$SAID" ;;
+    esac
+    exists "$file"
+    seen=$?
+    case $seen in
+        0)
+            if out=$("$ADB" -s "$T" pull "$file" "$TMPD/now.xml" 2>&1 | tr -d '\r'); then
+                say "$file:"
+                sed 's/^/  /' "$TMPD/now.xml"
+                if has_ours "$TMPD/now.xml"; then
+                    say "=> The takeover IS installed: the kernel will launch Carnyx for the radio."
+                else
+                    say "=> The file is there, but it does not send the radio to Carnyx."
+                fi
+            else
+                say "$file is there, but reading it failed. adb answered:"
+                quote "$out"
+            fi ;;
+        1) say "$file: absent — the takeover is not installed." ;;
+        2) say "$file: could not tell whether it is there (check asks for no root). The unit answered:"
+           quote "$SAID" ;;
+    esac
+    # The backup sits beside the file: when the file could not be looked for,
+    # neither can it, and that answer was just printed.
+    if [ "$seen" != 2 ]; then
+        exists "$CFG/app/$BACKUP"
+        case $? in
+            0) say "A backup of the file as it was before Carnyx is at $CFG/app/$BACKUP." ;;
+            2) say "Could not tell whether $CFG/app/$BACKUP is there. The unit answered:"; quote "$SAID" ;;
+        esac
     fi
 }
 
 do_install() {
-    local app=$CFG/app file=$CFG/app/$NAME
-    carnyx_installed || die "Carnyx is not installed on the head unit. The takeover would point
-the radio at an app that is not there; install Carnyx first."
-    # ALREADY THERE? Reading needs no root, so a second run asks for nothing.
-    if "$ADB" -s "$T" pull "$file" "$TMPD/now.xml" >/dev/null 2>&1 && has_ours "$TMPD/now.xml"; then
-        say "The takeover is already installed; nothing to change."
-        reload
-        return 0
-    fi
+    local app=$CFG/app file=$CFG/app/$NAME out
+    has_package "$PKG"
+    case $? in
+        1) die "Carnyx is not installed on the head unit. The takeover would point
+the radio at an app that is not there; install Carnyx first." ;;
+        2) die "could not tell whether Carnyx is installed on the head unit. 'pm path $PKG' answered:" "$SAID" ;;
+    esac
+    # ALREADY THERE? Looked for without root first, so a second run asks for
+    # nothing — where an unprivileged shell may read <config>. Where it may not,
+    # that is said, and the look is made again as root below.
+    exists "$file"
+    case $? in
+        0)
+            if out=$("$ADB" -s "$T" pull "$file" "$TMPD/now.xml" 2>&1 | tr -d '\r'); then
+                if has_ours "$TMPD/now.xml"; then
+                    say "The takeover is already installed; nothing to change."
+                    reload
+                    return 0
+                fi
+            else
+                say "Could not read $file without root; will look again as root. adb answered:"
+                quote "$out"
+            fi ;;
+        2) say "Could not see whether $file is there without root; will look again as root. The unit answered:"
+           quote "$SAID" ;;
+    esac
     confirm "Make Carnyx the head unit's radio app by editing $file?"
     become_root
     make_writable
-    on_unit "mkdir -p '$app' && chmod 755 '$app'" >/dev/null 2>&1 || die "could not create $app."
-    if on_unit "test -f '$file'" >/dev/null 2>&1; then
-        "$ADB" -s "$T" pull "$file" "$TMPD/before.xml" >/dev/null 2>&1 || die "could not read $file."
-        if has_ours "$TMPD/before.xml"; then
-            say "The takeover is already in the file; nothing to write."
-            reload
-            cleanup_device
-            return 0
-        fi
-        merge "$TMPD/before.xml" "$TMPD/after.xml"
-        if ! on_unit "test -f '$app/$BACKUP'" >/dev/null 2>&1; then
-            on_unit "cp '$file' '$app/$BACKUP'" >/dev/null 2>&1 || die "could not back up $file — nothing changed."
-            say "Backed the original up to $app/$BACKUP."
-        fi
-    else
-        fresh "$TMPD/after.xml"
-    fi
-    "$ADB" -s "$T" push "$TMPD/after.xml" "$file" >/dev/null 2>&1 || die "could not write $file."
-    on_unit "chmod 644 '$file'" >/dev/null 2>&1
+    must "could not create $app." on_unit "mkdir -p '$app' && chmod 755 '$app'"
+    exists "$file"
+    case $? in
+        0)
+            must "could not read $file." "$ADB" -s "$T" pull "$file" "$TMPD/before.xml"
+            if has_ours "$TMPD/before.xml"; then
+                say "The takeover is already in the file; nothing to write."
+                reload
+                cleanup_device
+                return 0
+            fi
+            merge "$TMPD/before.xml" "$TMPD/after.xml"
+            exists "$app/$BACKUP"
+            case $? in
+                1)
+                    must "could not back up $file — nothing changed." on_unit "cp '$file' '$app/$BACKUP'"
+                    say "Backed the original up to $app/$BACKUP." ;;
+                2) die "could not tell whether $app/$BACKUP is there, even as root — nothing changed. The unit answered:" "$SAID" ;;
+            esac ;;
+        1) fresh "$TMPD/after.xml" ;;
+        2) die "could not tell whether $file is there, even as root — nothing changed. The unit answered:" "$SAID" ;;
+    esac
+    must "could not write $file." "$ADB" -s "$T" push "$TMPD/after.xml" "$file"
+    must "wrote $file, but could not make it readable (chmod 644), so the kernel may not read it." \
+        on_unit "chmod 644 '$file'"
     reload
-    "$ADB" -s "$T" pull "$file" "$TMPD/check.xml" >/dev/null 2>&1
-    if [ -s "$TMPD/check.xml" ] && has_ours "$TMPD/check.xml"; then
+    must "wrote $file, but could not read it back." "$ADB" -s "$T" pull "$file" "$TMPD/check.xml"
+    if has_ours "$TMPD/check.xml"; then
         say "Read back: the takeover is installed."
         sed 's/^/  /' "$TMPD/check.xml"
     else
-        die "the file was written but does not read back with the Carnyx entry."
+        die "the file was written but does not read back with the Carnyx entry. It reads:" \
+            "$(cat "$TMPD/check.xml")"
     fi
     cleanup_device
     say ""
@@ -404,20 +566,37 @@ the radio at an app that is not there; install Carnyx first."
 }
 
 do_undo() {
-    local app=$CFG/app file=$CFG/app/$NAME
-    if ! on_unit "test -f '$file' || test -f '$app/$BACKUP'" >/dev/null 2>&1; then
+    local app=$CFG/app file=$CFG/app/$NAME f b
+    # Looked for without root first, so "nothing to undo" asks for nothing.
+    exists "$file"
+    f=$?
+    [ "$f" = 2 ] && { say "Could not see whether $file is there without root. The unit answered:"; quote "$SAID"; }
+    exists "$app/$BACKUP"
+    b=$?
+    [ "$b" = 2 ] && { say "Could not see whether $app/$BACKUP is there without root. The unit answered:"; quote "$SAID"; }
+    if [ "$f" = 1 ] && [ "$b" = 1 ]; then
         say "There is no $file and no backup: nothing to undo."
         return 0
     fi
     confirm "Remove Carnyx's radio takeover from $file?"
     become_root
+    exists "$app/$BACKUP"
+    b=$?
+    [ "$b" = 2 ] && die "could not tell whether $app/$BACKUP is there, even as root. The unit answered:" "$SAID"
+    exists "$file"
+    f=$?
+    [ "$f" = 2 ] && die "could not tell whether $file is there, even as root. The unit answered:" "$SAID"
+    if [ "$f" = 1 ] && [ "$b" = 1 ]; then
+        say "There is no $file and no backup: nothing to undo."
+        cleanup_device
+        return 0
+    fi
     make_writable
-    if on_unit "test -f '$app/$BACKUP'" >/dev/null 2>&1; then
-        on_unit "cp '$app/$BACKUP' '$file' && rm -f '$app/$BACKUP'" >/dev/null 2>&1 \
-            || die "could not restore $app/$BACKUP."
+    if [ "$b" = 0 ]; then
+        must "could not restore $app/$BACKUP." on_unit "cp '$app/$BACKUP' '$file' && rm -f '$app/$BACKUP'"
         say "Restored the original $NAME from the backup."
     else
-        "$ADB" -s "$T" pull "$file" "$TMPD/before.xml" >/dev/null 2>&1 || die "could not read $file."
+        must "could not read $file." "$ADB" -s "$T" pull "$file" "$TMPD/before.xml"
         if ! has_ours "$TMPD/before.xml"; then
             say "$file has no Carnyx entry; left as it is."
         else
@@ -426,11 +605,12 @@ do_undo() {
                   if (gsub(ENVIRON["RX"], "", line) > 0 && line ~ /^[ \t]*$/) next
                   print line }' "$TMPD/before.xml" > "$TMPD/after.xml"
             if [ "$(count '<ReplaceSourceItem' "$TMPD/after.xml")" = 0 ]; then
-                on_unit "rm -f '$file'" >/dev/null 2>&1 || die "could not remove $file."
+                must "could not remove $file." on_unit "rm -f '$file'"
                 say "Removed $file — Carnyx's entry was all it held."
             else
-                "$ADB" -s "$T" push "$TMPD/after.xml" "$file" >/dev/null 2>&1 || die "could not write $file."
-                on_unit "chmod 644 '$file'" >/dev/null 2>&1
+                must "could not write $file." "$ADB" -s "$T" push "$TMPD/after.xml" "$file"
+                must "wrote $file, but could not make it readable (chmod 644), so the kernel may not read it." \
+                    on_unit "chmod 644 '$file'"
                 say "Removed Carnyx's entry and kept the rest."
             fi
         fi
@@ -441,7 +621,7 @@ do_undo() {
 }
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -466,7 +646,7 @@ main() {
     if [ -n "$target" ]; then
         T=$(with_port "$target")
         say "Connecting to $T…"
-        connect "$T" || { say "Could not connect to $T (is network ADB on, and did the unit allow it?)."; exit 1; }
+        connect "$T" || { say "Could not connect to $T. adb's answers are above."; exit 1; }
     else
         find_unit || exit 1
     fi

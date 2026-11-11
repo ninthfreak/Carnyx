@@ -1332,10 +1332,36 @@ It runs in Termux (`pkg install android-tools`) or on any machine with `adb`.
 - `check` prints the build and whether `adb root` can work — the same answer as
   Carnyx's `build:` launch line, without needing the log.
 
-**Checked here:** `tools/test-radio-takeover.sh`, 71 checks against a fake
+**Checked here:** `tools/test-radio-takeover.sh`, 103 checks against a fake
 `adb` whose fake `/config` refuses writes without root or on a read-only mount,
 plus the port scan against a real listener and the interface filter against
 fake `ip`/`ifconfig` output. ShellCheck 0.11 is clean on both scripts.
+
+**First run on the unit, and what it exposed.** From the owner's phone, on the
+hotspot: `find` and `check 10.81.250.244` both reached the unit's ADB port and
+both ended in a sentence of the script's own — "answers ADB but is not an NWD
+head unit (or did not allow this computer)", "Could not connect" — because the
+script sent every `adb` answer to `/dev/null`. The owner, verbatim: *"Why would
+you ever make a script hide errors? Passing errors through seems like an
+obvious thing to do."* It was a mistake, made for a tidier transcript, and it
+removed the one thing a failure needs. Fixed:
+
+- Every failure now prints what adb or the unit answered, unedited, on lines
+  marked `|` under the sentence they explain: `adb connect` and `get-state` as
+  their answers change, `adb root`, every push, pull, `mkdir`, `cp`, `rm`,
+  `chmod`, remount, `unroot` and the reload broadcast (`must`, `quote`).
+- The two probes answer yes, no or COULD NOT TELL. `exists` says "no" only on
+  the unit's own "No such file or directory", and `has_package` only when `pm
+  path` ran and printed nothing; a dropped connection, or a `/config` an
+  unprivileged shell may not look into, used to read as "absent" and is now
+  reported with its words (and looked at again as root).
+- `find` gives each passed-over device's reason, and with no Wi-Fi address to
+  search from it says so and prints `ip`/`ifconfig` instead of "Nothing on this
+  network is listening".
+- Output is discarded in three places, named in the script's header: the port
+  scan, the interface lookup and `let_go`.
+
+The unit's actual answer at 10.81.250.244 is NOT KNOWN YET: the next run prints it.
 
 **What one run on the unit settles:** whether its ADB listens on the network,
 whether `adb root` is allowed, and how `/config` is mounted — the three things no
