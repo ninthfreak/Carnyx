@@ -640,6 +640,21 @@ main() {
     esac
     command -v "$ADB" >/dev/null 2>&1 \
         || { say "No adb here. In Termux: pkg install android-tools"; exit 1; }
+    # ADB ITSELF HAS TO RUN before any device is asked anything. A binary that
+    # cannot start fails every call identically, and thirty tries of that read
+    # as a head unit that will not answer — measured: the first runs on the unit
+    # were exactly this, a Termux adb newer than its libc++.
+    local ver
+    if ! ver=$("$ADB" version 2>&1 | tr -d '\r'); then
+        say "adb is installed here but does not run. It said:"
+        quote "$ver"
+        case "$ver" in
+            *"CANNOT LINK EXECUTABLE"*)
+                say "That is adb built against newer libraries than this machine has."
+                say "In Termux, bring every package up to date together:  pkg upgrade" ;;
+        esac
+        exit 1
+    fi
     TMPD=$(mktemp -d) || exit 1
     trap 'rm -rf "$TMPD"' EXIT
 

@@ -1361,7 +1361,17 @@ removed the one thing a failure needs. Fixed:
 - Output is discarded in three places, named in the script's header: the port
   scan, the interface lookup and `let_go`.
 
-The unit's actual answer at 10.81.250.244 is NOT KNOWN YET: the next run prints it.
+**The next run printed the reason, and it was not the unit.** Both of adb's
+answers were Android's program loader refusing to start adb on the phone:
+`CANNOT LINK EXECUTABLE "adb": cannot locate symbol
+"_ZNSt6__ndk113__hash_memoryEPKvm"` — a libc++ symbol, so Termux's adb was
+built against a newer `libc++` package than the one installed. EVERY EARLIER
+"could not connect" WAS THIS: the head unit has not yet been asked anything by
+adb. (Port 5555 answering is still real — the scan uses bash's `/dev/tcp`, not
+adb.) The script now runs `adb version` first and stops at once with the
+loader's words and `pkg upgrade`, instead of thirty identical tries; 107 checks.
+
+The unit's own answer at 10.81.250.244 is NOT KNOWN YET.
 
 **What one run on the unit settles:** whether its ADB listens on the network,
 whether `adb root` is allowed, and how `/config` is mounted — the three things no
