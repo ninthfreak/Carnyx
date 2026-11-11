@@ -586,7 +586,8 @@ into any existing file with a backup (`replace_source_list.xml.carnyx-backup`,
 mount and adbd back. It stops before writing anything if root is refused, if
 `<config>` is part of the read-only system image (that would need dm-verity
 off and a reboot — a person's call), if Carnyx is not installed, or if an
-existing file has a shape it cannot edit safely.
+existing file has a shape it cannot edit safely. Every failure prints what adb
+or the unit answered, word for word, on lines starting with `|`.
 
 From a phone, in Termux (F-Droid build):
 

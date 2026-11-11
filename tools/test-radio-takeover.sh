@@ -19,6 +19,9 @@
 # * `getprop`, `id`, `pm`, `am`, `mount` and `/proc/mounts` answer from the
 #   scenario's state, so a test can say "a user build", "Carnyx not installed",
 #   "/config is part of the system image".
+# * FAILURES COME WITH adb's OWN MESSAGES — "Connection refused", "device
+#   offline", the unauthorized text, "Permission denied" on a read — because
+#   what the tests hold the script to is that those words reach the screen.
 #
 # WHAT IT CANNOT SAY is anything about the real unit: whether its ADB listens,
 # whether root is allowed, how `/config` is really mounted. Those are what
@@ -61,15 +64,34 @@ cmd=${1:-}
 shift || true
 cfg=$(get cfg)
 under_cfg() { case "$1" in "$cfg" | "$cfg"/*) return 0 ;; esac; return 1; }
+# `refuse` names a target (or "all") that nothing answers for.
+refused() { [ "$(get refuse)" = all ] || [ "$(get refuse)" = "$1" ]; }
 case "$cmd" in
-    connect) echo "connected to $1" ;;
+    connect)
+        if refused "$1"; then echo "failed to connect to '$1': Connection refused"; exit 1; fi
+        echo "connected to $1" ;;
     disconnect) ;;
-    get-state) get auth ;;
+    get-state)
+        if refused "$serial"; then echo "error: device '$serial' not found" >&2; exit 1; fi
+        case "$(get auth)" in
+            device) echo device ;;
+            unauthorized)
+                printf '%s\n' "error: device unauthorized." \
+                    "This adb server's \$ADB_VENDOR_KEYS is not set" \
+                    "Try 'adb kill-server' if that seems wrong." \
+                    "Otherwise check for a confirmation dialog on your device." >&2
+                exit 1 ;;
+            *) echo "error: device $(get auth)" >&2; exit 1 ;;
+        esac ;;
     root)
         if [ "$(get rootable)" = 1 ]; then put root 1; echo "restarting adbd as root"
         else echo "adbd cannot run as root in production builds"; fi ;;
     unroot) put root 0; echo "restarting adbd as non root" ;;
-    pull) cp "$1" "$2" 2>/dev/null || { echo "adb: error: remote object '$1' does not exist" >&2; exit 1; } ;;
+    pull)
+        if under_cfg "$1" && [ "$(get noread)" = 1 ] && [ "$(get root)" != 1 ]; then
+            echo "adb: error: failed to stat remote object '$1': Permission denied" >&2; exit 1
+        fi
+        cp "$1" "$2" 2>/dev/null || { echo "adb: error: remote object '$1' does not exist" >&2; exit 1; } ;;
     push)
         if under_cfg "$2" && { [ "$(get root)" != 1 ] || [ "$(get ro)" = 1 ]; }; then
             echo "adb: error: failed to copy '$1' to '$2': Read-only file system" >&2; exit 1
@@ -122,10 +144,27 @@ pm() {
         com.ninthfreak.carnyx) [ "$(get carnyx)" = 1 ] && echo "package:/data/app/com.ninthfreak.carnyx-1/base.apk" ;;
     esac
 }
-am() { echo "$*" >> "$S/broadcasts"; echo "Broadcast completed: result=0"; }
+# `noread`: an unprivileged shell may not look into /config at all.
+ls() {
+    local a
+    for a in "$@"; do
+        case "$a" in "$MOCK_CFG"/*)
+            if [ "$(get noread)" = 1 ] && [ "$(get root)" != 1 ]; then
+                echo "ls: $a: Permission denied" >&2; return 1
+            fi ;;
+        esac
+    done
+    command ls "$@"
+}
+am() {
+    if [ "$(get amfail)" = 1 ]; then echo "Error: Activity manager is not running" >&2; return 1; fi
+    echo "$*" >> "$S/broadcasts"; echo "Broadcast completed: result=0"
+}
+# `stuck`: the remount says yes and changes nothing.
 mount() {
     if [ "$1" = -o ]; then
         [ "$(get root)" = 1 ] || { echo "mount: Permission denied" >&2; return 1; }
+        [ "$(get stuck)" = 1 ] && return 0
         case "$2" in rw,remount) put ro 0 ;; ro,remount) put ro 1 ;; esac
     fi
 }
@@ -323,7 +362,59 @@ check "radio entry split over lines: unchanged" cmp -s "$(file)" "$S/original.xm
 unit unauthorized auth=unauthorized
 run check 10.0.0.7
 check "unanswered prompt: exits 1" rc 1
-check "unanswered prompt: says to tap Allow" said "tap Allow"
+check "unanswered prompt: says to tap Allow" said "Tap Allow"
+check "unanswered prompt: prints adb's own message" said "Otherwise check for a confirmation dialog"
+
+# ── adb's own words, on every failure ────────────────────────────────────────
+unit offline auth=offline
+run check 10.0.0.7
+check "offline: exits 1" rc 1
+check "offline: prints what get-state said" said "| error: device offline"
+check "offline: names the command that said it" said "adb -s 10.0.0.7:5555 get-state:"
+check "offline: says it gave up, and after how much" said "Gave up after 3 tries"
+check "offline: prints it once, not once a try" test "$(grep -c 'device offline' "$S/out")" = 1
+
+unit refused refuse=all
+run check 10.0.0.7
+check "connection refused: exits 1" rc 1
+check "connection refused: prints what adb connect said" said "| failed to connect to '10.0.0.7:5555': Connection refused"
+check "connection refused: prints what get-state said" said "not found"
+
+unit refused-root type=user debuggable=0 rootable=0
+run install 10.0.0.7
+check "root refused: prints adb's answer" said "| adbd cannot run as root in production builds"
+
+unit system-image-words ownmount=0
+run install 10.0.0.7
+check "/config in the system image: prints the write test's answer" said "Read-only file system"
+
+unit stuck-remount stuck=1
+run install 10.0.0.7
+check "remount that changes nothing: exits 1" rc 1
+check "remount that changes nothing: says so" said "remounted and is still not writable"
+check "remount that changes nothing: prints why" said "| $S/unit/config/.carnyx-write-test: Read-only file system"
+check "remount that changes nothing: writes nothing" not test -e "$S/unit/config/app"
+
+unit no-broadcast amfail=1
+run install 10.0.0.7
+check "reload refused: still installs" has "$(file)" "$ITEM"
+check "reload refused: prints the unit's answer" said "| Error: Activity manager is not running"
+
+# A shell that may not look into /config is not told "absent".
+unit unreadable noread=1
+run check 10.0.0.7
+check "unreadable /config: check exits 0" rc 0
+check "unreadable /config: check does not call the file absent" not said "absent"
+check "unreadable /config: check says it could not tell" said "could not tell whether it is there"
+check "unreadable /config: check prints why" said "Permission denied"
+run install 10.0.0.7
+check "unreadable /config: install says it will look as root" said "will look again as root"
+check "unreadable /config: install installs" has "$(file)" "$ITEM"
+run install 10.0.0.7
+check "unreadable /config: a second install finds it as root" said "already in the file"
+check "unreadable /config: still one entry" test "$(items "$(file)")" = 1
+run undo 10.0.0.7
+check "unreadable /config: undo removes it" not test -e "$(file)"
 
 unit writable ro=0
 run install 10.0.0.7
@@ -408,6 +499,24 @@ got=$(MOCK_STATE=$S ADB=$WORK/bin/adb CONNECT_PAUSE=0 CONNECT_TRIES=3 bash -c "
     scan() { echo 192.168.43.30; }
     find_unit; echo \"rc=\$? T=\$T\"")
 check "find: an unidentified ADB device is not chosen" grep -q 'rc=1 T=$' <<< "$got"
+check "find: says why it was not chosen" grep -qF "192.168.43.30:5555 has no com.nwd.kernel" <<< "$got"
+
+unit find-refused refuse=192.168.43.30:5555 unit_serial=192.168.43.20:5555
+got=$(MOCK_STATE=$S ADB=$WORK/bin/adb CONNECT_PAUSE=0 CONNECT_TRIES=3 bash -c "
+    source '$SCRIPT'
+    local_prefixes() { echo '192.168.43 192.168.43.1'; }
+    scan() { printf '%s\n' 192.168.43.30 192.168.43.20; }
+    find_unit; echo \"rc=\$? T=\$T\"")
+check "find: a device that will not connect is passed over" grep -q 'rc=0 T=192.168.43.20:5555$' <<< "$got"
+check "find: and adb's reason is printed" grep -qF "| failed to connect to '192.168.43.30:5555': Connection refused" <<< "$got"
+
+got=$(PATH="$WORK/fakenet2:$PATH" bash -c "
+    source '$SCRIPT'
+    local_prefixes() { :; }
+    find_unit; echo \"rc=\$?\"")
+check "find with no Wi-Fi address: exits 1" grep -q 'rc=1$' <<< "$got"
+check "find with no Wi-Fi address: does not claim the network is empty" not grep -q "Nothing on this network" <<< "$got"
+check "find with no Wi-Fi address: prints what ifconfig reported" grep -qF "| swlan0" <<< "$got"
 
 echo
 echo "$PASS passed, $FAIL failed"
