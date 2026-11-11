@@ -1306,6 +1306,41 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 135. Install the radio takeover from a phone, over network ADB
+**BUILT. NOT YET RUN AGAINST THE UNIT.** #133's outcome A needs
+`<config>/app/replace_source_list.xml` written, and the unit measured that no
+unprivileged app can write it (`docs/vendor/README.md`, "The route is closed on
+this unit"). What remains is a privileged ADB shell. The owner asked for the
+work to be automatable from a phone, a script being acceptable — *"Let's go for
+the script. Would the script also be able to find the IP of devices connected
+to the hotspot?"*
+
+**Built:** `tools/radio-takeover.sh`, with `find`, `check`, `install` and `undo`.
+It runs in Termux (`pkg install android-tools`) or on any machine with `adb`.
+
+- *Finding the unit:* with no address, it tries ADB's port on every address of
+  the phone's Wi-Fi/hotspot /24 — interfaces kept by name (`ap`, `swlan`,
+  `softap`, `wlan`, `eth`…), private ranges only, so the cellular interface is
+  never scanned — and keeps only a device with `com.nwd.kernel` installed.
+- *Install:* `adb root`, a remount only if `<config>` is its own read-only mount,
+  a MERGE with backup into any existing file, the reload broadcast, a read-back,
+  and the mount and adbd put back. A second run sees the entry without root and
+  changes nothing.
+- *Refusals, each before anything is written:* root refused, `<config>` in the
+  read-only system image, Carnyx not installed, an unfamiliar file, a radio
+  entry split over lines.
+- `check` prints the build and whether `adb root` can work — the same answer as
+  Carnyx's `build:` launch line, without needing the log.
+
+**Checked here:** `tools/test-radio-takeover.sh`, 71 checks against a fake
+`adb` whose fake `/config` refuses writes without root or on a read-only mount,
+plus the port scan against a real listener and the interface filter against
+fake `ip`/`ifconfig` output. ShellCheck 0.11 is clean on both scripts.
+
+**What one run on the unit settles:** whether its ADB listens on the network,
+whether `adb root` is allowed, and how `/config` is mounted — the three things no
+host test can know. Then whether the radio source comes back as Carnyx on wake.
+
 ### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
 **BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change
 Carnyx' option for OsmAnd integration to "Nav Integration" that will then expand
