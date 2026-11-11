@@ -51,9 +51,11 @@ export component Face inherits Rectangle {
 
     in property <bool> gps-fix: false;
     in property <bool> in-motion: false;
-    /// The OsmAnd tell (§4.9): the switch, and whether the service is answering.
-    in property <bool> osmand-on: false;
-    in property <bool> osmand-linked: false;
+    /// The navigation tell (§4.9): the switch, whether the chosen app is on the
+    /// other end, and whether that app is CoMaps rather than OsmAnd (#134).
+    in property <bool> nav-on: false;
+    in property <bool> nav-linked: false;
+    in property <bool> nav-comaps: false;
 
     // ── The maneuver layer (§4.9) ──
     /// Which of the three stages, or `idle` for "nothing to draw" — which covers
@@ -108,8 +110,8 @@ export component Face inherits Rectangle {
     callback toggle-save();
     callback open-settings();
     callback open-nearby();
-    /// A tap on the OsmAnd status-bar mark — bring OsmAnd to the front.
-    callback open-osmand();
+    /// A tap on the status-bar mark — bring the chosen nav app to the front.
+    callback open-nav-app();
     /// The reorder-mode logo badge on preset `i` (§6.4).
     callback open-logo-search(int);
     callback claim-audio();
@@ -201,12 +203,13 @@ export component Face inherits Rectangle {
             dead: root.dead;
             gps-fix: root.gps-fix;
             in-motion: root.in-motion;
-            osmand-on: root.osmand-on;
-            osmand-linked: root.osmand-linked;
+            nav-on: root.nav-on;
+            nav-linked: root.nav-linked;
+            nav-comaps: root.nav-comaps;
             reordering: root.reordering;
             open-settings => { root.open-settings(); }
             open-nearby => { root.open-nearby(); }
-            open-osmand => { root.open-osmand(); }
+            open-nav-app => { root.open-nav-app(); }
             done-reordering => { root.done-reordering(); }
         }
 

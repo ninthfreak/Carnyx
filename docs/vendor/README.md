@@ -567,6 +567,38 @@ That exhausts the unprivileged surface across all six APKs. Installing the remap
 into `/config/app` needs root, or a recovery / ADB shell with system access.
 There is no application-code route on this unit.
 
+### The ADB route, scripted: `tools/radio-takeover.sh` (#135)
+
+If the unit's ADB listens on the network AND the ROM accepts `adb root`, the
+remap goes in from a phone on the same hotspot or Wi-Fi — no PC, no USB. The
+script does the whole job and refuses rather than guesses:
+
+    bash radio-takeover.sh check     # what is there, and whether adb root can work
+    bash radio-takeover.sh install   # make Carnyx the radio app
+    bash radio-takeover.sh undo      # put it back
+
+With no address it finds the unit: it tries ADB's port on every address of the
+phone's Wi-Fi/hotspot network (never the cellular one) and keeps only a device
+with `com.nwd.kernel` installed. `install` asks for `adb root`, remounts
+`<config>` read-write only if it is its own read-only mount, MERGES the entry
+into any existing file with a backup (`replace_source_list.xml.carnyx-backup`,
+`CarnyxRemap`'s name), broadcasts the reload, reads the file back, and puts the
+mount and adbd back. It stops before writing anything if root is refused, if
+`<config>` is part of the read-only system image (that would need dm-verity
+off and a reboot — a person's call), if Carnyx is not installed, or if an
+existing file has a shape it cannot edit safely.
+
+From a phone, in Termux (F-Droid build):
+
+    pkg install android-tools
+    curl -LO https://raw.githubusercontent.com/ninthfreak/Carnyx/main/tools/radio-takeover.sh
+    bash radio-takeover.sh check
+
+`tools/test-radio-takeover.sh` runs every branch against a fake `adb` and a fake
+`/config` on the host. NONE OF IT HAS RUN AGAINST THE UNIT: whether its ADB
+listens, whether root is allowed and how `/config` is mounted are exactly what
+`check` reports the first time it does.
+
 The recipe, no root:
 
 1. A dir the factory app can read. **NOT an app-specific directory.** Measured

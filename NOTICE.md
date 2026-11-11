@@ -51,3 +51,18 @@ vendor's own package namespace. CarFM's `docs/LICENSING.md` sets the standing
 scope rule these were produced under — interoperability with our own device,
 read-only, local, **no redistribution of decompiled code, modified APKs or
 firmware** — and that rule travels with them.
+
+## Third-party marks
+
+The status bar names the navigation app the face is reading turns from with
+that app's own mark. Both are path data in `ui/icons.slint`, and both are used
+nominatively — to say which app is connected — and are to be confirmed with
+their projects before shipping, replaced by a neutral route glyph if declined:
+
+- **OsmAnd** — `OsmAndMark`, from OsmAnd's
+  `res/drawable/ic_launcher_osmand_monochrome.xml` (GPL), in OsmAnd's orange.
+- **CoMaps** — `CoMapsMark`, from CoMaps' `android/app/src/main/res/drawable/
+  ic_logo_monochrome.xml`, in CoMaps' green (`#588157`, its launcher icon's
+  plate colour). CoMaps is licensed under the Apache License 2.0; its NOTICE
+  reads "Copyright 2020 My.com B.V. (Mail.Ru Group), Copyright 2025 Organic
+  Maps Contributors, Copyright 2026 CoMaps Contributors" (#134).

@@ -39,7 +39,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::logos::json::{self, Json};
-use crate::settings::{Settings, Source, Theme};
+use crate::settings::{NavApp, Settings, Source, Theme};
 
 /// The file, inside the app's own data directory.
 pub const FILE: &str = "prefs.json";
@@ -82,6 +82,9 @@ pub struct Prefs {
     pub clock_on: bool,
     /// See `settings::Settings::nav_on`. Defaults ON.
     pub nav_on: bool,
+    /// See `settings::Settings::nav_app`. Defaults to OsmAnd, so a file from
+    /// before CoMaps was an option reads exactly as it did.
+    pub nav_app: NavApp,
     /// See `settings::Settings::nav_hide_on_map`. Defaults ON.
     pub nav_hide_on_map: bool,
     /// See `settings::Settings::preset_loop`. Defaults OFF.
@@ -106,6 +109,7 @@ impl Default for Prefs {
             release_on_sleep: s.release_on_sleep,
             clock_on: s.clock_on,
             nav_on: s.nav_on,
+            nav_app: s.nav_app,
             nav_hide_on_map: s.nav_hide_on_map,
             preset_loop: s.preset_loop,
             come_forward: s.come_forward,
@@ -129,6 +133,21 @@ fn source_from(name: &str) -> Option<Source> {
         "nwd" => Some(Source::Nwd),
         "fyt" => Some(Source::Fyt),
         "auto" => Some(Source::Auto),
+        _ => None,
+    }
+}
+
+fn nav_app_name(a: NavApp) -> &'static str {
+    match a {
+        NavApp::OsmAnd => "osmand",
+        NavApp::CoMaps => "comaps",
+    }
+}
+
+fn nav_app_from(name: &str) -> Option<NavApp> {
+    match name {
+        "osmand" => Some(NavApp::OsmAnd),
+        "comaps" => Some(NavApp::CoMaps),
         _ => None,
     }
 }
@@ -223,6 +242,13 @@ fn from_json(text: &str) -> Option<Prefs> {
             p.theme = t;
         }
     }
+    // AN UNKNOWN APP KEEPS THE DEFAULT, the theme's rule: a file from a newer
+    // build naming a third app must not land this one on nothing.
+    if let Some(s) = v.get("navApp").and_then(Json::as_str) {
+        if let Some(a) = nav_app_from(s) {
+            p.nav_app = a;
+        }
+    }
     let flag = |key: &str, cur: bool| -> bool {
         match v.get(key) {
             Some(Json::Bool(b)) => *b,
@@ -266,7 +292,7 @@ pub fn to_json(p: &Prefs) -> String {
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
             "\"logosOn\":{},\"permissionsAsked\":{},\"releaseOnSleep\":{},",
-            "\"clockOn\":{},\"navOn\":{},",
+            "\"clockOn\":{},\"navOn\":{},\"navApp\":{},",
             "\"navHideOnMap\":{},\"presetLoop\":{},\"comeForward\":{},\"diagOn\":{}}}"
         ),
         presets.join(","),
@@ -277,6 +303,7 @@ pub fn to_json(p: &Prefs) -> String {
         p.release_on_sleep,
         p.clock_on,
         p.nav_on,
+        json::quote(nav_app_name(p.nav_app)),
         p.nav_hide_on_map,
         p.preset_loop,
         p.come_forward,
@@ -373,6 +400,9 @@ mod tests {
             release_on_sleep: false,
             clock_on: false,
             nav_on: true,
+            // NOT THE DEFAULT, so the round trip proves the key is written and
+            // read rather than falling back to OsmAnd both ways.
+            nav_app: NavApp::CoMaps,
             nav_hide_on_map: false,
             preset_loop: true,
             come_forward: true,
@@ -380,6 +410,21 @@ mod tests {
         };
         save(&d, &p);
         assert_eq!(load(&d), p);
+    }
+
+    /// A FILE FROM BEFORE COMAPS reads OsmAnd, and one naming an app this build
+    /// does not know keeps the default rather than landing on nothing.
+    #[test]
+    fn the_nav_app_defaults_to_osmand_for_old_and_unknown_files() {
+        let d = tmpdir("nav-app-old");
+        fs::write(path(&d), r#"{"navOn":true}"#).unwrap();
+        assert_eq!(load(&d).nav_app, NavApp::OsmAnd);
+        let d = tmpdir("nav-app-unknown");
+        fs::write(path(&d), r#"{"navApp":"waze"}"#).unwrap();
+        assert_eq!(load(&d).nav_app, NavApp::OsmAnd);
+        let d = tmpdir("nav-app-comaps");
+        fs::write(path(&d), r#"{"navApp":"comaps"}"#).unwrap();
+        assert_eq!(load(&d).nav_app, NavApp::CoMaps);
     }
 
     #[test]

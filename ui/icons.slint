@@ -703,6 +703,72 @@ export component OsmAndMark {
     }
 }
 
+// ── CoMaps' own mark (#134) ─────────────────────────────────────────────────
+//
+// THEIR ART, ON THE SAME TERMS AS OSMAND'S ABOVE. The path data is CoMaps' own
+// monochrome logo drawable, `android/app/src/main/res/drawable/
+// ic_logo_monochrome.xml` (Apache-2.0, "Copyright 2026 CoMaps Contributors" —
+// see NOTICE.md), which CoMaps itself uses as the icon of the very permission
+// this integration asks for. Naming the integration with it is nominative use;
+// confirm with CoMaps before shipping, and if they decline, replace it with a
+// neutral route glyph rather than a variation on their mark — the rule §4.9
+// set for OsmAnd's.
+//
+// ONE MECHANICAL CHANGE, which moves no point: COMMAS TO SPACES, to match every
+// other path in this file. The relative arcs and the implicit repeats are the
+// file's own and are kept.
+//
+// TWO PATHS AND TWO WEIGHTS, as the drawable has them. The outer "C" is
+// `#FFFFFFFF` and the right-hand arc with the pointer inside it is `#BFFFFFFF`
+// — the same ink at 75% — which is what keeps the pointer readable against
+// the ring at a status-bar size. Both are tinted by `color`; the 75% rides on
+// the second path's `opacity`.
+//
+// THE VIEWBOX IS THE DRAWABLE'S, 835 × 835, and it is already the ink: the
+// ring is centred at (417.5, 417.4) with radius 417.5, so there is no crop to
+// make and no nudge to centre it — unlike OsmAnd's pin, whose tail hangs below
+// its disc.
+export component CoMapsMark {
+    in property <length> size: 27px;
+    in property <color> color;
+
+    width: root.size;
+    height: root.size;
+
+    // The ring — full weight.
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 835;
+        viewbox-height: 835;
+        fill: root.color;
+        commands:
+            "M626.3 753a20 20 0 0 1 -6.2 29.6A416 416 0 0 1 417.5 835 417.7 417.7 0 0 1 0 417.4 "
+          + "417.7 417.7 0 0 1 603.3 43.5a20 20 0 0 1 7 30l-42.4 55.8a20 20 0 0 1 -24.2 6.1 "
+          + "307 307 0 0 0 -126.2 -27 309 309 0 0 0 -309 309c0 170.6 138.5 309 309 309"
+          + "a307 307 0 0 0 141.6 -34.3 20 20 0 0 1 25.1 5.6z";
+    }
+    // The arc and the pointer — the drawable's #BF, 75%.
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 835;
+        viewbox-height: 835;
+        fill: root.color;
+        opacity: 0.75;
+        commands:
+            "M698.5 141.1a20 20 0 0 1 30.8 -1.3A416 416 0 0 1 835 417.4a416 416 0 0 1 -93.3 263 "
+          + "20 20 0 0 1 -31.3 -0.6l-43 -56.6a20 20 0 0 1 -0.2 -24 307 307 0 0 0 59.3 -181.8"
+          + "c0 -74.2 -26.2 -142.3 -69.9 -195.6a20 20 0 0 1 -0.5 -24.8z"
+          + "M260.7 456.4a20 20 0 0 1 -7.7 -36.7l282 -177.4a20 20 0 0 1 29.9 22.7l-97 318.9"
+          + "a20 20 0 0 1 -37.5 2.2l-49.2 -111.5z";
+    }
+}
+
 // ── The maneuver arrow (§4.9) ───────────────────────────────────────────────
 //
 // THE SHAPE COMES FROM RUST, not from a table here. `crate::arrow` generates

@@ -219,6 +219,22 @@ name = "net.osmand.huawei"
 [[package.metadata.android.queries.package]]
 name = "net.osmand.dev"
 
+# COMAPS, all four application ids, for the second turn-by-turn source (#134).
+# Same silent-failure rule: without these `resolveContentProvider` returns null
+# on targetSdk 30+ and the picker says "Not installed" about a CoMaps that is
+# there. Kept in step with android/app/src/main/AndroidManifest.xml.
+[[package.metadata.android.queries.package]]
+name = "app.comaps.fdroid"
+
+[[package.metadata.android.queries.package]]
+name = "app.comaps.google"
+
+[[package.metadata.android.queries.package]]
+name = "app.comaps"
+
+[[package.metadata.android.queries.package]]
+name = "app.comaps.huawei"
+
 # ── ONE DELIBERATE DIVERGENCE FROM THE GRADLE MANIFEST ───────────────────────
 #
 # That file also declares a `<queries><intent>` for
@@ -303,6 +319,23 @@ max_sdk_version = 32
 # sends the driver to grant it.
 [[package.metadata.android.uses_permission]]
 name = "android.permission.SYSTEM_ALERT_WINDOW"
+
+# COMAPS' NAVIGATION FEED (#134). One per application id, because CoMaps names
+# the permission after its own id. DANGEROUS, so declaring grants nothing: the
+# driver taps Allow when they choose CoMaps. Unlike the foreground permissions
+# below, this needs no manifest component — `CarnyxComaps` lives in the runtime
+# dex and works under both packagers. Kept in step with the Gradle manifest.
+[[package.metadata.android.uses_permission]]
+name = "app.comaps.fdroid.permission.READ_NAVIGATION_DATA"
+
+[[package.metadata.android.uses_permission]]
+name = "app.comaps.google.permission.READ_NAVIGATION_DATA"
+
+[[package.metadata.android.uses_permission]]
+name = "app.comaps.permission.READ_NAVIGATION_DATA"
+
+[[package.metadata.android.uses_permission]]
+name = "app.comaps.huawei.permission.READ_NAVIGATION_DATA"
 
 # WHAT CANNOT BE DECLARED HERE, AND WHAT IT COSTS.
 #

@@ -148,6 +148,44 @@ impl Turn {
         }
     }
 
+    /// The turn as a TurnType XML string — the exact inverse of [`Turn::from_xml`].
+    ///
+    /// ── WHY A SECOND PROVIDER SPEAKS OSMAND'S VOCABULARY ────────────────────
+    ///
+    /// [`Route::turn_xml`] is the one place the face reads a turn from, and
+    /// `arrow_for` in `app.rs` reads it through [`Turn::from_xml`]. CoMaps
+    /// names its turns differently (`TURN_RIGHT`, `ENTER_ROUND_ABOUT`), so
+    /// [`crate::comaps`] reads ITS name into a [`Turn`] and writes it back out
+    /// here. That keeps one turn encoding in the model rather than two, and it
+    /// is lossless: every [`Turn`] has exactly one string, and
+    /// `every_turn_round_trips_through_its_xml_string` holds the two functions
+    /// to each other.
+    ///
+    /// THE EXIT IS APPENDED ONLY TO A ROUNDABOUT, and only when there is one —
+    /// `RNDB` alone is "a roundabout whose exit nobody named", which is what
+    /// [`Turn::from_xml`] reads back as `None`.
+    pub fn xml(self, exit: Option<u32>) -> String {
+        let plain = match self {
+            Turn::Straight => "C",
+            Turn::Left => "TL",
+            Turn::SlightLeft => "TSLL",
+            Turn::SharpLeft => "TSHL",
+            Turn::Right => "TR",
+            Turn::SlightRight => "TSLR",
+            Turn::SharpRight => "TSHR",
+            Turn::KeepLeft => "KL",
+            Turn::KeepRight => "KR",
+            Turn::UTurn => "TU",
+            Turn::RightUTurn => "TRU",
+            Turn::Roundabout => "RNDB",
+            Turn::RoundaboutLeft => "RNLB",
+        };
+        match (self, exit.filter(|n| *n > 0)) {
+            (Turn::Roundabout | Turn::RoundaboutLeft, Some(n)) => format!("{plain}{n}"),
+            _ => plain.to_string(),
+        }
+    }
+
     /// A short name, for the diagnostics log and for a face with no glyph yet.
     ///
     /// NOT USER COPY. The design handoff will bring the words and the marks it
@@ -185,6 +223,11 @@ pub enum NavState {
     /// The driver has left the route. `metres` is the DEVIATION from it, which is
     /// a different quantity from every other distance here — OsmAnd overloads the
     /// one field — so it is a separate variant rather than a flag beside a turn.
+    ///
+    /// NEGATIVE IS "NOT GIVEN", and it is not rare. CoMaps reports that the
+    /// driver is off the route and never by how much, and OsmAnd's POLL can say
+    /// `OFFR` with no distance beside it. Both used to read as `0`, which put
+    /// "OFF ROUTE by 0 m" in the log — a measurement nobody took.
     OffRoute { metres: i32 },
     /// A turn, and how far to it.
     Turn { turn: Turn, metres: i32 },
@@ -546,7 +589,9 @@ impl Nav {
         // `NavState::OffRoute => Stage::Idle` arm exists to prevent; it just
         // needed the poll to be able to say "off route" in the first place.
         if r.turn_xml.as_deref() == Some("OFFR") {
-            return NavState::OffRoute { metres: metres.max(0) };
+            // NO `.max(0)`: a missing deviation stays -1, "not given". See
+            // [`NavState::OffRoute`].
+            return NavState::OffRoute { metres };
         }
         match r.turn_xml.as_deref().and_then(Turn::from_xml) {
             // A ROUTE IS RUNNING AND THE POLL HAS NOTHING TO DRAW YET — the
@@ -754,6 +799,7 @@ impl Nav {
         let head = match self.state(now) {
             NavState::Idle => return None,
             NavState::Waiting => "navigating, no turn yet".to_string(),
+            NavState::OffRoute { metres } if metres < 0 => "OFF ROUTE".to_string(),
             NavState::OffRoute { metres } => {
                 format!("OFF ROUTE by {}", Self::distance_label(metres, units))
             }
@@ -776,6 +822,8 @@ impl Nav {
             if let Some(i) = r.imminent {
                 out.push_str(&format!(" [imminent={i}]"));
             }
+            // ONLY OSMAND EVER SETS THIS — CoMaps has no such field — so the
+            // bracket can keep naming the one app that says it.
             if r.map_visible {
                 out.push_str(" [OsmAnd map in front]");
             }
@@ -1691,5 +1739,57 @@ mod tests {
 
         nav.clear();
         assert_eq!(nav.log_line(110, m), None, "clearing leaves nothing to say");
+    }
+
+    /// `xml` IS `from_xml` BACKWARDS, for every turn and both exit cases.
+    ///
+    /// CoMaps' turns reach the face only through this pair (see [`Turn::xml`]),
+    /// so a turn that wrote one string and read back another would be a wrong
+    /// arrow on a provider no test here can drive end to end.
+    #[test]
+    fn every_turn_round_trips_through_its_xml_string() {
+        let all = [
+            Turn::Straight,
+            Turn::Left,
+            Turn::SlightLeft,
+            Turn::SharpLeft,
+            Turn::Right,
+            Turn::SlightRight,
+            Turn::SharpRight,
+            Turn::KeepLeft,
+            Turn::KeepRight,
+            Turn::UTurn,
+            Turn::RightUTurn,
+            Turn::Roundabout,
+            Turn::RoundaboutLeft,
+        ];
+        for turn in all {
+            assert_eq!(Turn::from_xml(&turn.xml(None)), Some((turn, None)), "{turn:?}");
+        }
+        assert_eq!(Turn::Roundabout.xml(Some(3)), "RNDB3");
+        assert_eq!(Turn::from_xml("RNDB3"), Some((Turn::Roundabout, Some(3))));
+        assert_eq!(Turn::RoundaboutLeft.xml(Some(2)), "RNLB2");
+        // EXIT ZERO IS NO EXIT, on the way out as on the way in.
+        assert_eq!(Turn::Roundabout.xml(Some(0)), "RNDB");
+        // AND ONLY A ROUNDABOUT CARRIES ONE: a stray exit on a plain turn would
+        // write `TR2`, which `from_xml` rightly refuses.
+        assert_eq!(Turn::Right.xml(Some(2)), "TR");
+    }
+
+    /// AN OFF-ROUTE WITH NO DISTANCE SAYS SO, rather than "by 0 m".
+    #[test]
+    fn an_off_route_reading_with_no_deviation_does_not_invent_one() {
+        let mut nav = Nav::new();
+        nav.poll(
+            Route {
+                turn_xml: Some("OFFR".into()),
+                left_seconds: Some(600),
+                ..Route::default()
+            },
+            100,
+        );
+        assert_eq!(nav.state(100), NavState::OffRoute { metres: -1 });
+        assert_eq!(nav.stage(100, true), Stage::Idle, "still no maneuver to draw");
+        assert_eq!(nav.log_line(100, Units::Metric).as_deref(), Some("OFF ROUTE"));
     }
 }

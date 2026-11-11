@@ -1306,6 +1306,162 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 135. Install the radio takeover from a phone, over network ADB
+**BUILT. NOT YET RUN AGAINST THE UNIT.** #133's outcome A needs
+`<config>/app/replace_source_list.xml` written, and the unit measured that no
+unprivileged app can write it (`docs/vendor/README.md`, "The route is closed on
+this unit"). What remains is a privileged ADB shell. The owner asked for the
+work to be automatable from a phone, a script being acceptable — *"Let's go for
+the script. Would the script also be able to find the IP of devices connected
+to the hotspot?"*
+
+**Built:** `tools/radio-takeover.sh`, with `find`, `check`, `install` and `undo`.
+It runs in Termux (`pkg install android-tools`) or on any machine with `adb`.
+
+- *Finding the unit:* with no address, it tries ADB's port on every address of
+  the phone's Wi-Fi/hotspot /24 — interfaces kept by name (`ap`, `swlan`,
+  `softap`, `wlan`, `eth`…), private ranges only, so the cellular interface is
+  never scanned — and keeps only a device with `com.nwd.kernel` installed.
+- *Install:* `adb root`, a remount only if `<config>` is its own read-only mount,
+  a MERGE with backup into any existing file, the reload broadcast, a read-back,
+  and the mount and adbd put back. A second run sees the entry without root and
+  changes nothing.
+- *Refusals, each before anything is written:* root refused, `<config>` in the
+  read-only system image, Carnyx not installed, an unfamiliar file, a radio
+  entry split over lines.
+- `check` prints the build and whether `adb root` can work — the same answer as
+  Carnyx's `build:` launch line, without needing the log.
+
+**Checked here:** `tools/test-radio-takeover.sh`, 71 checks against a fake
+`adb` whose fake `/config` refuses writes without root or on a read-only mount,
+plus the port scan against a real listener and the interface filter against
+fake `ip`/`ifconfig` output. ShellCheck 0.11 is clean on both scripts.
+
+**What one run on the unit settles:** whether its ADB listens on the network,
+whether `adb root` is allowed, and how `/config` is mounted — the three things no
+host test can know. Then whether the radio source comes back as Carnyx on wake.
+
+### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
+**BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change
+Carnyx' option for OsmAnd integration to "Nav Integration" that will then expand
+to a selector of either OsmAnd or CoMaps. Where the OsmAnd icon appears on
+Carnyx' display, this should instead be CoMaps' icon when CoMaps is selected.
+Build the CoMaps integration."* Preceded by an investigation-only pass at the
+owner's request ("Don't do any coding yet").
+
+**What CoMaps offers, read in its source** (the GitHub mirror `comaps/comaps`;
+Codeberg is refused by this container's proxy). Since v2026.07.16 CoMaps exports
+`NavigationContentProvider` — authority `<applicationId>.provider.navigation`,
+one row at `/live`, behind `<applicationId>.permission.READ_NAVIGATION_DATA`,
+protection level `dangerous`. The application id is `app.comaps` plus
+`.fdroid`, `.google`, `.huawei` or nothing ("web"), one codebase. Organic Maps
+has no such provider. Columns: session state, car direction, distance to turn
+and to destination (as DISPLAY STRINGS — "0.2 mi", "1,3 km"), seconds left,
+current and next street, exit number, completion; v2026.08.31 added route
+geometry and the destination.
+
+**Two facts in CoMaps' code decided the design.**
+
+1. `NavigationService.onLocationUpdated` calls `notifyChange` on `/live` on
+   every GPS fix while navigating — so the feed PUSHES.
+2. `RoutingController.mCachedRoutingInfo` is never cleared: after a route ends
+   the provider keeps answering with the last row, state still `OnRoute`. A poll
+   like OsmAnd's would draw a finished route forever.
+
+So `CarnyxComaps.java` WATCHES `/live` with a `ContentObserver` and queries only
+in answer to a change; when CoMaps stops navigating the changes stop and
+`Nav::EXPIRY` clears the face as it does for a silent OsmAnd poll. A
+`route_point_count` of 0 (v2026.08.31+) also reads as "no route" whatever the
+state column says.
+
+**Built.**
+
+- Settings ▸ NAVIGATION: the switch is now **Nav integration**; while it is on, a
+  **Navigation app** picker (the tuner picker's radio rows) offers OsmAnd and
+  CoMaps, each naming the install it found. The choice persists (`navApp` in
+  `prefs.json`, default OsmAnd, so an old file reads as before). Only the chosen
+  app is started; switching stops the old one, clears the face, starts the new.
+- The status-bar tell draws `CoMapsMark` in CoMaps' `#588157` when CoMaps is
+  chosen — CoMaps' own `ic_logo_monochrome.xml`, same slot, same lit/dim rule,
+  same tap-to-open. Contrast measured 3.95:1 light, 3.35:1 dark. NOTICE.md
+  records it.
+- `src/comaps.rs` reads a row into the same `nav::Route` OsmAnd's poll fills:
+  `CarDirection` names to `Turn` (15 drawn, 2 not turns), the distance strings
+  back to metres to CoMaps' own formatter rules, off-route and both rebuild
+  states to a quiet off-route, seconds left to an ETA, and the unit word to the
+  driver's units (#113's CoMaps counterpart). The stage ladder, which CoMaps
+  does not send, is derived from CoMaps' OWN voice timing
+  (`turns_notification_manager.cpp`: turn-now at speed × 8 s within 35–150 m,
+  first warning 30 s earlier within 200–2000 m / 500–5000 ft) against Carnyx's
+  GPS speed, now kept by `ingest_position`.
+- The permission is asked on a TAP only — choosing CoMaps, or tapping its row —
+  and the worker re-checks every 2 s until it lands; the sub-line says
+  "Waiting for permission: tap CoMaps below, then Allow."
+- Both manifests declare the four package queries and the four permissions.
+- `Turn::xml` (the inverse of `from_xml`, round-trip tested) carries CoMaps'
+  turns through the one turn encoding the face reads. `NavState::OffRoute`
+  now says "not given" (−1) for a missing deviation instead of "0 m".
+
+**NOT available from CoMaps, so absent on that provider:** the `THEN` block
+(CoMaps computes the turn after next but does not export it), the spoken
+instruction line, and "map in front" — the hide row says it has no effect with
+CoMaps. Left-hand-traffic roundabouts draw as right-hand (not exported).
+
+**Checked here.** 399 host tests pass, 18 of them new (13 in `comaps`, 2 in
+`nav`, 1 each in `settings` and `prefs`, and an end-to-end app test through the
+window's own callbacks), plus the reload test extended to `nav_app`.
+`tools/check-jni.sh` type-checks the new seam; `tools/check-java.sh` compiles
+`CarnyxComaps.java` against the Android 14 framework jar with no warnings of its
+own. New shots: `driving-comaps`, `-dim`, `-dark`, `nav-comaps`,
+`settings-nav-comaps` and its portrait. Against `main`, 95 shots were rendered on
+both sides and pixel-compared: 74 identical; the settings shots scrolled past
+NAVIGATION differ by the picker's rows; every other difference is a shot that
+also differs between two renders of `main` itself.
+
+**Found on the way, and fixed after:** a full `cargo run --example shot`
+panicked on `main` at `settings-diagnostics-full` — it looked up the "What could
+keep…" row, which the diagnostics clean-up (6a4a62f) parked, so every shot after
+it in the run was never drawn. The comparison above therefore excludes that
+state's two shots. The shot now taps "Check radio takeover", the remaining row
+that answers under itself, and all 103 shots render in one run.
+
+**Bug check, at the owner's request, and all four findings fixed.** Each of the
+three behavioural ones was first reproduced by running it, then fixed, and now
+has a regression test.
+
+1. *CoMaps installed while Carnyx runs never connected, and the row said "not
+   installed".* The install was read once at launch, and re-tapping CoMaps did
+   not restart a watcher that had given up. Now the picker tap and the switch
+   going on re-read both installs (`App::refresh_nav_installs`, logging any
+   change), a re-tap of the chosen app starts it if it is not running, a live
+   link outranks a stale "not installed" in the sub-line, and the not-installed
+   line says "Once it is, tap CoMaps below."
+2. *A non-English CoMaps lost the turn entirely.* About forty translations write
+   units the parser did not know (`pie`, `fod`, `μ`, `米`, `Km`…), and a turn
+   with no readable distance is not drawn. The parser now carries every unit word
+   CoMaps ships — 75, generated from its 59 translation files at `bf5945db`, no
+   word naming two units — matched by suffix so Galician's two-word `o meu`
+   reads, with a case-insensitive fallback on the last word.
+3. *A row arriving after the switch went off was drawn.* The event gate checked
+   which app was chosen, not whether the switch was on; it now checks both, for
+   OsmAnd's feed too, and `CarnyxComaps.queryOnce` re-checks for a stop after
+   its query and before delivering.
+4. *Wrong count.* CoMaps' `CarDirection` has 17 constants, 15 drawn; this entry
+   and a test comment said 18 and 16.
+
+404 host tests pass; `check-java.sh`, `check-jni.sh` and `check-docs.py` are
+clean; all 103 shots render.
+
+**What one drive settles.**
+
+- That the CoMaps row reads "Detected" with the package beside it.
+- That tapping CoMaps raises Android's dialog. OPEN QUESTION: Android 10 may not
+  offer a permission whose app was installed AFTER Carnyx; if the log says
+  "asked" and no dialog appears, reinstalling Carnyx is the fix to try.
+- A `nav: CoMaps: watching content://…/live` line, the green mark lit, and a
+  route on the face that clears within twelve seconds of ending it in CoMaps.
+- Whether any `nav: CoMaps distance not understood` line appears.
+
 ### 133. The sleep/wake behaviour: what the owner asked for, and why two builds could never have delivered it
 **OPEN. THE NEXT FOCUS OF DEVELOPMENT.** *"I want to work on the sleep/wake
 behavior, it's the next focus of development."*
