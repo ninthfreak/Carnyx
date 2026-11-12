@@ -303,28 +303,6 @@ pub enum Action {
     /// removed, and the row's own sub-line says so, because "notification
     /// access" on a radio is a thing a driver is right to look twice at.
     AskListenerPermission,
-    /// Install the kernel source remap. See `CarnyxRemap.java` and
-    /// `docs/vendor/README.md`.
-    ///
-    /// THE ONLY ROW THAT WRITES A SYSTEM PARTITION, which is why it is last and
-    /// why its answer is never assumed. It asks the vendor's own exported file
-    /// copier to drop `replace_source_list.xml` into `/config/app`, after which
-    /// the head unit's kernel launches Carnyx wherever it would have launched the
-    /// stock radio app — #133 outcome A. Whether the factory process can write
-    /// `/config` is not knowable from the firmware, so the tap only REQUESTS it
-    /// and [`Action::CheckRadioRemap`] reads the result back.
-    /// PARKED — no row in [`diag_actions`]. Measured 2026-09-25: the vendor
-    /// copier runs as an ordinary uid and its `mkdirs` on `/config/app` fails, so
-    /// this cannot install anything on this unit however it is driven. The
-    /// machinery is correct and stays for a unit whose `/config` is writable.
-    InstallRadioRemap,
-    /// Read the installed remap back. See [`Action::InstallRadioRemap`].
-    ///
-    /// A SEPARATE ROW BECAUSE THE COPY IS ANOTHER PROCESS' WORK, asynchronous and
-    /// behind a confirmation dialog. Install asks; this checks whether
-    /// `/config/app/replace_source_list.xml` actually arrived and names Carnyx.
-    /// Useful on its own, too — it reports the current state whenever tapped.
-    CheckRadioRemap,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -359,12 +337,6 @@ pub fn diag_actions() -> Vec<DiagAction> {
         //   below 33 is a row nobody here can check; that held while it was the
         //   newest thing in the panel and does not now. A unit at 33+ wants it
         //   back.
-        //
-        // * InstallRadioRemap — measured 2026-09-25: the vendor copier runs as an
-        //   ordinary uid and its `mkdirs` on `/config/app` fails, so this row
-        //   cannot install anything on this unit however it is driven. The CHECK
-        //   below stays, because it still reports the truth about `/config` and
-        //   would confirm a remap placed by a privileged shell.
         DiagAction {
             label: "Allow drawing over other apps".into(),
             sub: String::new(),
@@ -380,16 +352,6 @@ pub fn diag_actions() -> Vec<DiagAction> {
             sub: String::new(),
             divider_above: false,
             action: Action::AskListenerPermission,
-        },
-        // Its own group above "Clear log". The install it used to sit beside is
-        // parked — see the note at the top of this list — and this one stays
-        // because it still answers a live question: what `/config` actually holds,
-        // and whether a remap placed there by a privileged shell took.
-        DiagAction {
-            label: "Check radio takeover".into(),
-            sub: String::new(),
-            divider_above: true,
-            action: Action::CheckRadioRemap,
         },
         DiagAction {
             label: "Clear log".into(),
@@ -750,27 +712,20 @@ pub struct Settings {
     /// Hand the FM source back when the head unit says it is going to sleep
     /// (#92).
     ///
-    /// DEFAULT OFF SINCE THE KERNEL REMAP (#133). The switch exists to stop the
-    /// stock radio app relaunching on wake: hand the MCU source back to Android
-    /// at sleep and there is nothing for the unit to restore into FM. It works,
-    /// but it is a workaround for not being able to touch the launch, and the
-    /// firmware read in `docs/vendor/` found the real lever —
-    /// `replace_source_list.xml` remaps the radio source (appid 8) to Carnyx, so
-    /// the kernel launches THIS app wherever it would have launched the stock
-    /// one.
+    /// DEFAULT ON. The switch exists to stop the stock radio app relaunching on
+    /// wake: hand the MCU source back to Android at sleep and there is nothing
+    /// for the unit to restore into FM. On a plain unit that is the only lever a
+    /// driver has on the wake relaunch, so it ships on.
     ///
-    /// The two fight. `SourceMgr.keepCurrentSource` decides at power-off whether
-    /// to restore the radio source at all, and it reads `mcu_current_source` —
-    /// the exact byte this switch sets to 0. With the remap in place, "restore
-    /// the radio source" IS "launch Carnyx", so releasing suppresses the very
-    /// launch outcome A wants. Off is therefore the default that matches the
-    /// remap.
-    ///
-    /// ON is still meaningful on a unit WITHOUT the remap installed (no root, no
-    /// provisioning access): there the handback is the only thing that quiets FM
-    /// at ACC-off and on a force-close, so a driver who cannot write
-    /// `/config` turns it back on and gets outcome B/C. See
-    /// `docs/vendor/replace_source_list.xml`.
+    /// TURN IT OFF ON A UNIT THAT HAS THE KERNEL SOURCE REMAP INSTALLED. The
+    /// remap (`replace_source_list.xml`, read in `docs/vendor/`) points the radio
+    /// source at Carnyx, so on such a unit "restore the radio source" IS "launch
+    /// Carnyx" — the goal — and the two fight: `SourceMgr.keepCurrentSource`
+    /// decides at power-off whether to restore the radio source at all by reading
+    /// `mcu_current_source`, the exact byte this switch sets to 0, so releasing
+    /// suppresses the very launch the remap wants. Installing the remap is a
+    /// provisioning step done outside this app (`tools/radio-takeover.sh`); a
+    /// driver who does it turns this off. See `docs/vendor/replace_source_list.xml`.
     pub release_on_sleep: bool,
     /// The status-bar clock (§4.8). Default ON.
     ///
@@ -875,7 +830,7 @@ impl Default for Settings {
             permissions_asked: false,
             clearing_logos: false,
             details_open: false,
-            release_on_sleep: false,
+            release_on_sleep: true,
             clock_on: true,
             nav_on: true,
             nav_app: NavApp::OsmAnd,
@@ -969,14 +924,13 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// FIVE ROWS, AND EVERY ONE OF THEM CAN STILL DO SOMETHING.
+    /// FOUR ROWS, AND EVERY ONE OF THEM CAN STILL DO SOMETHING.
     ///
-    /// The list has been cut twice for the same reason. Five of CarFM's vendor
-    /// probes went first — none had ever been written. Four more are parked now:
-    /// the two probes whose questions the firmware decompile answered, the
-    /// notification request for a permission this unit's API is too old to have,
-    /// and the remap install that the unit is measured to refuse. See the note in
-    /// [`diag_actions`] for each.
+    /// The list has been cut for the same reason more than once. Five of CarFM's
+    /// vendor probes went first — none had ever been written. Three more are
+    /// parked now: the two probes whose questions the firmware decompile
+    /// answered, and the notification request for a permission this unit's API is
+    /// too old to have. See the note in [`diag_actions`] for each.
     ///
     /// WHAT THE RULE IS, and it has survived both cuts: a row earns its place by
     /// being able to change or report something HERE. A row that can only say
@@ -991,15 +945,14 @@ mod tests {
                 "Save to file",
                 "Allow drawing over other apps",
                 "Allow notification access",
-                "Check radio takeover",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, true, true],
-            "the log well runs into the first row; rules open the permission pair, \
-             the takeover check, and the clear"
+            [false, true, false, true],
+            "the log well runs into the first row; rules open the permission pair \
+             and the clear"
         );
         // THE TWO PERMISSION ERRANDS KEEP THEIR ORDER: the overlay the pop-up
         // needs, then the listener, which is the one whose reason a driver cannot
@@ -1015,7 +968,6 @@ mod tests {
             Action::ProbeKeepAlive,
             Action::ProbeStockRadio,
             Action::AskNotifyPermission,
-            Action::InstallRadioRemap,
         ] {
             assert!(
                 !rows.iter().any(|r| r.action == parked),

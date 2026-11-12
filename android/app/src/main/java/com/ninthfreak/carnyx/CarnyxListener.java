@@ -384,13 +384,12 @@ public final class CarnyxListener extends NotificationListenerService {
     /**
      * The driver's switch.
      *
-     * <p>DEFAULTS TO FALSE SINCE #133, matching {@code Settings::default}. The
-     * switch shipped on while the handback was the only lever on the wake
-     * relaunch; the kernel remap in {@code docs/vendor/replace_source_list.xml}
-     * is the real one, and it fights the handback — so off is the default, and an
-     * unset key means an install whose app has not pushed the mirror yet, which
-     * takes the same off. A driver on a unit without the remap turns it back on
-     * in the UI, which writes the key and never reaches this fallback.
+     * <p>FALLS BACK TO FALSE WHEN THE KEY IS UNSET. The app default is ON
+     * ({@code Settings::release_on_sleep}), but an unset key means an install
+     * whose app has not pushed the mirror yet, and the safe choice for a cold
+     * read is to do nothing rather than release on a unit it has heard nothing
+     * about. Once the app has run it writes the key — ON, or OFF on a unit set up
+     * with the kernel source remap — and this fallback is never reached.
      */
     private boolean releaseOnSleep() {
         try {

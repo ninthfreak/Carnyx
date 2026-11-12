@@ -431,10 +431,6 @@ fn android_main(android_app: slint::android::AndroidApp) {
     // SAFETY: same pointers, same lifetime argument as the two above.
     let _ = unsafe { android::probe::init(vm, activity) };
     let _ = unsafe { android::stock::init(vm, activity) };
-    // The remap installer. Loaded here for the same reason as the probes above:
-    // its class is dexed by `build.rs`, and a settings tap is the wrong moment to
-    // discover the dex will not load. See `android::remap`.
-    let _ = unsafe { android::remap::init(vm, activity) };
 
     // THE STATION POP-UP'S CLASS, loaded here rather than lazily on the first
     // station change: that change happens while the driver is in another app,
@@ -557,21 +553,6 @@ fn android_main(android_app: slint::android::AndroidApp) {
             "process: {age}s old — ALREADY RUNNING before this window opened"
         )),
         None => _driver.log_platform("process: age unavailable in this build"),
-    }
-
-    // ── WHAT KIND OF ROM THIS IS, AND WHETHER adb root COULD WORK ────────────
-    //
-    // A LAUNCH LINE AND NOT A ROW, because it is a fact about the unit rather
-    // than a question to ask it: it never changes, it belongs in every log
-    // without being remembered, and the one thing worse than not knowing is
-    // knowing only on the drives where somebody thought to tap.
-    //
-    // WHY THE APP CARES. #133's remap needs a write into `/config` that no app
-    // code can make — measured 2026-09-25, the vendor's own copier failed at it.
-    // What is left is a privileged shell, which on Android means `adb root`, and
-    // that only works on a userdebug/eng build. See `CarnyxProcess.buildKind`.
-    if let Some(kind) = android::build_kind() {
-        _driver.log_platform(&kind);
     }
 
     // AND WHETHER PARTIAL RENDERING TOOK, read back rather than assumed. The

@@ -1306,8 +1306,41 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
-### 136. Carnyx's own takeover row reads and writes `/config`; the kernel reads `/data/nwdappconfig`
-**OPEN. NOT FIXED.** Found by #135's first install, 2026-11-12: `check` printed
+### 137. Remove the radio-takeover ability from the Carnyx app
+**DONE.** The owner's call, verbatim: *"Carnyx should have all 'radio takeover'
+bits removed. Due to how this had to finally be achieved, it is clearly out of
+scope for the Carnyx project."* The takeover is installed on the unit by an
+external ADB tool (`tools/radio-takeover.sh`, #135), not by the app, so the
+in-app machinery that tried to do it is gone. Scope confirmed with the owner:
+remove the ability and its references from the APK; keep the script and all
+history; revert the sleep-handback default to ON.
+
+**Removed from the app:**
+- `CarnyxRemap.java` and `src/android/remap.rs` — the installer/checker that
+  drove the vendor copier — with their `build.rs` dex entry and `lib.rs` init.
+- `Action::InstallRadioRemap`, `Action::CheckRadioRemap`, the "Check radio
+  takeover" diagnostics row, `remap_install`/`remap_verify`, and the
+  `nativeRemapNote` native.
+- `CarnyxProcess.buildKind` and the `build_kind` seam and launch line — build
+  reporting that existed only to judge whether `adb root` could work for the
+  takeover. `CarnyxProcess` itself stays; only that method went.
+- The `com.nwd.factory.setting` `<queries>` entry in `Cargo.toml` and
+  `AndroidManifest.xml`.
+
+**Reverted:** `release_on_sleep` ships ON again (its #92 default), the handback
+being the only wake-relaunch lever on a plain unit. The field doc and the Java
+mirror-default comments (`SleepReceiver`, `CarnyxListener`, `CarnyxWake`,
+`NwdBridge`) now say so, and say a unit set up with the kernel remap turns it OFF.
+
+**Kept:** `tools/radio-takeover.sh` and its test; `docs/vendor/` and the task
+history, #133/#135/#136 included.
+
+**Checked here:** host `cargo test`, `tools/check-java.sh`, `tools/check-jni.sh`,
+and the full shot render.
+
+### 136. Carnyx's own takeover row read and wrote `/config`; the kernel reads `/data/nwdappconfig`
+**OVERTAKEN BY #137 — the in-app read-back is gone, so there is nothing to fix.**
+Found by #135's first install, 2026-11-12: `check` printed
 `config: /data/nwdappconfig (ro.nwd.config.path)`. The kernel's path is
 `SystemProperties("ro.nwd.config.path", "/config")`, and this unit sets the
 property. Carnyx never read it:
@@ -1324,9 +1357,10 @@ property. Carnyx never read it:
   `tools/radio-takeover.sh`'s header. The comments in `CarnyxRemap.java`,
   `src/android/remap.rs` and `src/settings.rs` still say `/config`.
 
-**The fix:** read `ro.nwd.config.path`, default `/config`, the way
-`CarnyxProcess.java:281` already reads system properties. Then the in-app
-read-back can be checked against the file #135 installed.
+**No longer fixed, removed instead (#137).** The in-app installer and read-back
+were deleted along with the rest of the takeover ability, so the `/config`
+constant went with them. The script (#135) reads `ro.nwd.config.path` on every
+run and so was never affected.
 
 ### 135. Install the radio takeover from a phone, over network ADB
 **INSTALLED ON THE UNIT 2026-11-12, BY THIS SCRIPT, AND WORKING ON WAKE.** The
@@ -1353,8 +1387,9 @@ It runs in Termux (`pkg install android-tools`) or on any machine with `adb`.
 - *Refusals, each before anything is written:* root refused, `<config>` in the
   read-only system image, Carnyx not installed, an unfamiliar file, a radio
   entry split over lines.
-- `check` prints the build and whether `adb root` can work — the same answer as
-  Carnyx's `build:` launch line, without needing the log.
+- `check` prints the build and whether `adb root` can work. This used to match
+  Carnyx's own `build:` launch line; that line was removed with the rest of the
+  app's takeover references (#137), so the script is now the only place it prints.
 
 **Checked here:** `tools/test-radio-takeover.sh`, 103 checks against a fake
 `adb` whose fake `/config` refuses writes without root or on a read-only mount,

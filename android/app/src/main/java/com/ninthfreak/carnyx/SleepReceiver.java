@@ -140,11 +140,13 @@ public final class SleepReceiver extends BroadcastReceiver {
     /**
      * The driver's switch, as {@link CarnyxWake#setReleaseOnSleep} last left it.
      *
-     * <p>DEFAULTS TO FALSE SINCE #133, matching {@code Settings::default}. This
-     * whole receiver is unreachable on the shipped build — see the class doc —
-     * so the value only matters if a future build revives it. It tracks the same
-     * default as every other read of this key: off, because the kernel remap is
-     * the intended lever on the wake relaunch and the handback fights it.
+     * <p>FALLS BACK TO FALSE WHEN THE KEY IS UNSET, which is the safe choice for
+     * a receiver that may run in a cold process before the app has pushed the
+     * mirror: do nothing rather than release on a unit it has heard nothing
+     * about. This is NOT the app default — {@code Settings::release_on_sleep}
+     * ships ON — only the cold-start fallback. This whole receiver is unreachable
+     * on the shipped build (see the class doc), so the value only matters if a
+     * future build revives it.
      */
     private boolean releaseOnSleep(Context context) {
         try {

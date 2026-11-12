@@ -1031,22 +1031,19 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
             ui.invoke_select_preset(1);
             ui.invoke_select_preset(3);
             driver.settle_meter_for_test();
-            // AND ONE CHECK ROW, TAPPED, so the shot shows what a row says under
+            // AND ONE ROW, TAPPED, so the shot shows what a row says under
             // itself afterwards (#126). Through the real callback; on this host
-            // there is no `/config` to read back, so the row reads "radio
-            // takeover: only on the unit", which is the honest answer and the
-            // one the shot is of.
+            // the overlay permission cannot be granted, so the row reads the
+            // honest "not permitted"-style line, which is the one the shot is of.
             //
-            // IT WAS THE KEEP-ALIVE PROBE, AND THAT ROW IS PARKED. 6a4a62f took
-            // "What could keep…" out of `diag_actions` and left this lookup
-            // behind, so `.expect` panicked here and every shot after this one
-            // in the run was never drawn. "Check radio takeover" is the row
-            // that still answers under itself. The lookup still panics if it
-            // goes too — a shot of a tap that never happened would be a picture
-            // of the wrong thing — but it names the row and the fix.
+            // THE ROW MUST STILL EXIST. Earlier shots pointed this at rows that
+            // were later parked or removed, and the `.expect` then panicked here
+            // and left every shot after it in the run undrawn — so the lookup
+            // panics with a message that names the row and the fix rather than a
+            // bare unwrap. "Allow drawing over other apps" answers under itself.
             {
                 use slint::Model;
-                const ROW: &str = "Check radio takeover";
+                const ROW: &str = "Allow drawing over other apps";
                 let rows = ui.get_settings_diag_actions();
                 let check = (0..rows.row_count())
                     .find(|&i| rows.row_data(i).map(|a| a.label == ROW).unwrap_or(false))
