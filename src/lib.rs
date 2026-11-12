@@ -19,11 +19,13 @@ pub mod logos;
 pub mod nav;
 pub mod prefs;
 pub mod rds;
+pub mod scheme;
 pub mod session;
 pub mod settings;
 pub mod signal;
 pub mod station;
 pub mod stations;
+pub mod sun;
 pub mod units;
 
 /// Build the window and drive it from the real services.

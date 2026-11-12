@@ -92,6 +92,15 @@ pub struct Prefs {
     /// See `settings::Settings::come_forward`. Defaults OFF.
     pub come_forward: bool,
     pub diag_on: bool,
+    /// Where the car last had a GPS fix, to a tenth of a degree, for the theme's
+    /// sunrise/sunset mode (#142). `None` until the first fix.
+    ///
+    /// A POSITION, KEPT ON PURPOSE AND KEPT COARSE. `callsigns.rs` makes a point
+    /// of storing no coordinates; this has to, because sunrise is a function of
+    /// where you are and a head unit in a garage has no fix to ask. A tenth of a
+    /// degree (about 11km) moves sunrise by under a minute, so nothing finer is
+    /// written.
+    pub place: Option<(f64, f64)>,
 }
 
 impl Default for Prefs {
@@ -114,6 +123,7 @@ impl Default for Prefs {
             preset_loop: s.preset_loop,
             come_forward: s.come_forward,
             diag_on: s.diag_on,
+            place: None,
         }
     }
 }
@@ -154,19 +164,32 @@ fn nav_app_from(name: &str) -> Option<NavApp> {
 
 fn theme_name(t: Theme) -> &'static str {
     match t {
-        Theme::System => "system",
         Theme::Light => "light",
         Theme::Dark => "dark",
+        Theme::Headlights => "headlights",
+        Theme::Sun => "sun",
     }
 }
 
 fn theme_from(name: &str) -> Option<Theme> {
     match name {
-        "system" => Some(Theme::System),
         "light" => Some(Theme::Light),
         "dark" => Some(Theme::Dark),
+        "headlights" => Some(Theme::Headlights),
+        "sun" => Some(Theme::Sun),
+        // WHAT EVERY INSTALL BEFORE #142 SAVED unless the driver picked light or
+        // dark by hand. "System" meant "follow the car", which on this ROM never
+        // worked — Android's night flag is pinned at DAY — so it comes back as
+        // the mode that does what it was for.
+        "system" => Some(Theme::Headlights),
         _ => None,
     }
+}
+
+/// One decimal of a degree: about 11km north-south, which moves sunrise and
+/// sunset by well under a minute and is all the sun mode needs.
+fn coarse(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 /// Names are STORED, not ordinals.
@@ -267,6 +290,18 @@ fn from_json(text: &str) -> Option<Prefs> {
     p.preset_loop = flag("presetLoop", p.preset_loop);
     p.come_forward = flag("comeForward", p.come_forward);
     p.diag_on = flag("diagOn", p.diag_on);
+    // A PLACE THAT IS NOT ON THE EARTH IS DROPPED, not clamped: a corrupt pair
+    // would put sunrise somewhere else entirely, and no place at all falls back
+    // to the clock, which is the honest answer.
+    if let Some(Json::Arr(xs)) = v.get("place") {
+        if let [lat, lon] = xs.as_slice() {
+            if let (Some(lat), Some(lon)) = (lat.as_f64(), lon.as_f64()) {
+                if lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0 {
+                    p.place = Some((coarse(lat), coarse(lon)));
+                }
+            }
+        }
+    }
     // `diagOverlayOn`, `rdsCaptureOn` and `debugOn` are DELIBERATELY not read.
     // They were CarFM's diagnostics and are gone; a file written by an older
     // build still carries them, and ignoring an unknown key is what this reader
@@ -288,12 +323,18 @@ pub fn to_json(p: &Prefs) -> String {
             None => format!("{{\"mhz\":{:.1}}}", e.mhz),
         })
         .collect();
+    // Written only once there is one. Rounded again here so a caller that forgot
+    // cannot put more precision on disk than the field's note promises.
+    let place = match p.place {
+        Some((lat, lon)) => format!(",\"place\":[{:.1},{:.1}]", coarse(lat), coarse(lon)),
+        None => String::new(),
+    };
     format!(
         concat!(
             "{{\"presets\":[{}],\"selected\":{},\"theme\":{},",
             "\"logosOn\":{},\"permissionsAsked\":{},\"releaseOnSleep\":{},",
             "\"clockOn\":{},\"navOn\":{},\"navApp\":{},",
-            "\"navHideOnMap\":{},\"presetLoop\":{},\"comeForward\":{},\"diagOn\":{}}}"
+            "\"navHideOnMap\":{},\"presetLoop\":{},\"comeForward\":{},\"diagOn\":{}{}}}"
         ),
         presets.join(","),
         json::quote(source_name(p.selected)),
@@ -308,6 +349,7 @@ pub fn to_json(p: &Prefs) -> String {
         p.preset_loop,
         p.come_forward,
         p.diag_on,
+        place,
     )
 }
 
@@ -407,9 +449,50 @@ mod tests {
             preset_loop: true,
             come_forward: true,
             diag_on: true,
+            place: Some((43.1, -89.4)),
         };
         save(&d, &p);
         assert_eq!(load(&d), p);
+    }
+
+    /// THE THEME, #142: four names, and every install before it saved
+    /// "system" — which comes back as following the headlights, the mode that
+    /// does what "system" was for. An unknown name keeps the default.
+    #[test]
+    fn theme_names_round_trip_and_system_becomes_headlights() {
+        for t in [Theme::Light, Theme::Dark, Theme::Headlights, Theme::Sun] {
+            let d = tmpdir("theme-names");
+            save(&d, &Prefs { theme: t, ..Prefs::default() });
+            assert_eq!(load(&d).theme, t, "{t:?} survives");
+        }
+        let d = tmpdir("theme-legacy");
+        fs::write(path(&d), r#"{"theme":"system"}"#).unwrap();
+        assert_eq!(load(&d).theme, Theme::Headlights);
+        let d = tmpdir("theme-unknown");
+        fs::write(path(&d), r#"{"theme":"sepia"}"#).unwrap();
+        assert_eq!(load(&d).theme, Theme::Headlights, "the default");
+    }
+
+    /// THE PLACE is written coarse and read back coarse; a pair that is not on
+    /// the Earth, or not a pair, is dropped rather than trusted.
+    #[test]
+    fn the_place_is_kept_to_a_tenth_of_a_degree_and_nonsense_is_dropped() {
+        let d = tmpdir("place-coarse");
+        save(&d, &Prefs { place: Some((43.07314, -89.40123)), ..Prefs::default() });
+        let text = fs::read_to_string(path(&d)).unwrap();
+        assert!(text.contains(r#""place":[43.1,-89.4]"#), "no more precision on disk: {text}");
+        assert_eq!(load(&d).place, Some((43.1, -89.4)));
+
+        let d = tmpdir("place-none");
+        save(&d, &Prefs::default());
+        assert!(!fs::read_to_string(path(&d)).unwrap().contains("place"), "absent until a fix");
+        assert_eq!(load(&d).place, None);
+
+        for junk in [r#"{"place":[91,0]}"#, r#"{"place":[0,181]}"#, r#"{"place":[1]}"#, r#"{"place":"here"}"#] {
+            let d = tmpdir("place-junk");
+            fs::write(path(&d), junk).unwrap();
+            assert_eq!(load(&d).place, None, "{junk}");
+        }
     }
 
     /// A FILE FROM BEFORE COMAPS reads OsmAnd, and one naming an app this build
@@ -453,7 +536,7 @@ mod tests {
         .unwrap();
         let p = load(&d);
         assert_eq!(p.presets, vec![at(88.7, None), at(105.5, None)], "presets survive");
-        assert_eq!(p.theme, Theme::System, "unknown theme falls back");
+        assert_eq!(p.theme, Theme::Headlights, "unknown theme falls back");
         assert_eq!(p.logos_on, Prefs::default().logos_on, "wrong type falls back");
         assert!(p.diag_on, "the readable field is still read");
     }

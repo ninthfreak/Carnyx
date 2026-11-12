@@ -72,35 +72,57 @@ pub struct SourceRow {
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
+/// How the face picks light or dark (#142). See `crate::scheme` for the rules.
+///
+/// FOUR, AND "SYSTEM" IS GONE. It was CarFM's `useColorScheme()` deferral, and
+/// on this ROM Android's own night flag is pinned at DAY (measured 2026-08-01,
+/// #57), so it never did anything — `apply_theme` left the palette wherever it
+/// was. Its intent survives as `Headlights`, the signal this unit actually
+/// sends; a saved "system" is read back as that (`prefs::theme_from`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
-    System,
     Light,
     Dark,
+    /// Dark while the head unit reports the headlights on.
+    Headlights,
+    /// Dark from sunset to sunrise where the car is.
+    Sun,
 }
 
 impl Theme {
-    pub const ORDER: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
+    /// The picker's order, top to bottom. The index is what the panel sends
+    /// back.
+    pub const ORDER: [Theme; 4] = [Theme::Light, Theme::Dark, Theme::Headlights, Theme::Sun];
 
-    /// The chip label. UPPER CASE is the chip's own styling in the reference and
-    /// it is baked into the string because the chip is matched by label.
+    /// The row's title. Words, not chip capitals: the owner asked for "better
+    /// naming" than "Automatic based on car lighting", and a four-way choice
+    /// whose two automatic modes are told apart by their names needs room the
+    /// chip strip did not have.
     pub fn label(self) -> &'static str {
         match self {
-            Theme::System => "SYSTEM",
-            Theme::Light => "LIGHT",
-            Theme::Dark => "DARK",
+            Theme::Light => "Light",
+            Theme::Dark => "Dark",
+            Theme::Headlights => "Follow the headlights",
+            Theme::Sun => "Follow sunrise and sunset",
         }
-    }
-
-    /// Match a tapped chip back to the enum. An unknown label leaves the current
-    /// choice alone rather than silently resetting to SYSTEM.
-    pub fn parse(label: &str) -> Option<Theme> {
-        Theme::ORDER.into_iter().find(|t| t.label() == label)
     }
 }
 
-pub fn theme_chips() -> Vec<String> {
-    Theme::ORDER.iter().map(|t| t.label().to_string()).collect()
+/// The theme picker's four rows. The descriptions are passed in because two of
+/// them report live state — the headlights, the next sunrise — which
+/// `crate::scheme` works out and this module has no business knowing.
+pub fn theme_rows(chosen: Theme, describe: impl Fn(Theme) -> String) -> Vec<SourceRow> {
+    Theme::ORDER
+        .iter()
+        .map(|&t| SourceRow {
+            name: t.label().to_string(),
+            kind: describe(t),
+            badge: String::new(),
+            badge_lit: false,
+            available: true,
+            selected: t == chosen,
+        })
+        .collect()
 }
 
 // ── Navigation app ───────────────────────────────────────────────────────────
@@ -828,7 +850,11 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             selected: Source::Nwd,
-            theme: Theme::System,
+            // FOLLOW THE HEADLIGHTS, so a fresh install goes dark with the car
+            // as every other app on the unit does — the owner's "the app does not
+            // put itself into dark mode when headlights are turned on". It is a
+            // choice in the picker, not a fixed behaviour.
+            theme: Theme::Headlights,
             battery: Battery::NotExempt,
             logos_on: false,
             // FALSE, so the one offer happens on the next launch — of a fresh
@@ -1228,12 +1254,19 @@ mod tests {
         assert_eq!(absent[2].badge, "Unavailable");
     }
 
+    /// THE THEME PICKER: four rows in order, the chosen one lit, and each
+    /// carrying the description it was handed.
     #[test]
-    fn a_theme_chip_round_trips_and_an_unknown_label_is_refused() {
-        assert_eq!(theme_chips(), ["SYSTEM", "LIGHT", "DARK"]);
-        assert_eq!(Theme::parse("DARK"), Some(Theme::Dark));
-        assert_eq!(Theme::parse("Dark"), None);
-        assert_eq!(Theme::parse(""), None);
+    fn the_theme_picker_has_four_rows_and_lights_the_chosen_one() {
+        let rows = theme_rows(Theme::Sun, |t| format!("about {}", t.label()));
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["Light", "Dark", "Follow the headlights", "Follow sunrise and sunset"]
+        );
+        assert_eq!(rows.iter().map(|r| r.selected).collect::<Vec<_>>(), [false, false, false, true]);
+        assert_eq!(rows[2].kind, "about Follow the headlights");
+        assert!(rows.iter().all(|r| r.available && r.badge.is_empty()), "no badges, nothing greyed");
+        assert_eq!(Settings::default().theme, Theme::Headlights, "a fresh install follows the car");
     }
 
     /// THE NAV PICKER: two rows, the chosen one lit, each naming what it found.

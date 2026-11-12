@@ -1306,6 +1306,94 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 142. Four appearance modes: Light, Dark, the headlights, and sunrise/sunset
+**BUILT AND TESTED ON THE HOST. NOT YET SEEN ON THE UNIT.** The owner: *"The app
+does not put itself into dark mode when headlights are turned on. I'd like this
+fixed, but I'd also like it to be optional. I'd like a new option to be added
+where it switched between light and dark mode based on time of day, whether or not
+the sun is up."* The four options, renamed as asked: **Light**, **Dark**,
+**Follow the headlights**, **Follow sunrise and sunset**.
+
+**Why it never worked.** The illumination watch was started (#57) and the
+broadcast arrived, but the `TunerEvent::Illumination` arm logged Android's
+`uiMode` and dropped the extras, so `extra_ill_state` was never read; and the old
+SYSTEM theme deliberately set nothing (`apply_theme`). Now `scheme::parse_headlights`
+reads `extra_ill_state=1`/`0` (or `true`/`false`) from the dump, and anything else
+is logged as "not understood" and changes nothing.
+
+**What decides, in order** (`scheme::decide`):
+- Follow the headlights: the last report; before the first one, the sun; with no
+  place yet, 7 PM to 7 AM. The broadcast reports changes only and no getter has
+  been found (#57), so a start after dark with the lights already on hears
+  nothing until they change. That is what the fallbacks are for.
+- Follow sunrise and sunset: the sun; with no place yet, 7 PM to 7 AM.
+- With no clock at all (every host build, or a unit reading before 2026), nothing
+  is decided and the palette is left as it is.
+
+**What is stored is one coarse place, not a sunrise table.** `prefs.json` gains
+`"place":[lat,lon]` rounded to 0.1°, taken from the GPS fix and saved only when it
+moves a tenth of a degree. `src/sun.rs` works the times out from it (NOAA/Meeus
+equations, −0.833° horizon). Checked against the astral 3.2 library at eight
+pinned cases (Madison at both solstices, the equinox and today; the equator;
+Helsinki; Sydney; Anchorage): every rise and set within 40 s. Polar day and night
+are handled.
+
+**Re-checked once a minute** on the existing 1 s tick, and at once on a headlight
+report or a new place. The palette is written only when the answer changes, and
+every change is logged with its cause, e.g. `theme: dark (headlights on)`.
+
+**Each row says what it is doing now**, e.g. "The sun is down: dark until sunrise
+at 6:47 AM." (in the clock's own 12/24-hour form), or "The headlights are on, so it
+is dark."
+
+**DESIGN SUBSTITUTION: the chip strip is gone.** The reference's three upper-case
+chips (SYSTEM / LIGHT / DARK) could not hold four options with names this long, so
+APPEARANCE now uses the same radio-row picker as the tuner source and the nav app.
+
+**Defaults and existing installs.** The default is Follow the headlights. A saved
+`"system"` loads as Follow the headlights; a saved `"light"` or `"dark"` is kept.
+
+**Evidence.** `cargo test`: 427 passed. New tests: `sun::tests` (6),
+`scheme::tests` (8), `prefs::tests::theme_names_round_trip_and_system_becomes_headlights`,
+`prefs::tests::the_place_is_kept_to_a_tenth_of_a_degree_and_nonsense_is_dropped`,
+`settings::tests::the_theme_picker_has_four_rows_and_lights_the_chosen_one`,
+and six app tests: `the_headlights_turn_the_face_dark_and_back`,
+`a_chosen_light_or_dark_ignores_the_headlights`,
+`the_sun_mode_is_light_at_noon_and_dark_after_sunset`,
+`an_unset_clock_leaves_the_palette_alone`,
+`the_suns_place_is_remembered_and_learned_coarsely`,
+`the_theme_picker_has_four_rows_and_a_tap_moves_the_light`. Mutation check:
+dropping the headlight arm's `scheme_dirty` and the tick's minute re-check fails
+the headlight and the sun tests. New shots `settings-theme-evening` and
+`-portrait` show the live lines; all 105 shots render.
+
+**Not verified on the unit:** no Carnyx drive log has ever contained a
+`com.nwd.ACTION_ILL_STATE_CHANGE` line. The `1` = lights on reading is CarFM's
+(measured 2026-08-01). The next drive with the lights switched on and off settles
+it: the log should show `illumination: [extra_ill_state=1 (…)] headlights on`
+then `theme: dark (headlights on)`.
+
+### 141. Station logos on the strip and the peek cards without a GPS fix
+**DONE.** The owner: *"The downloaded logos for stations do not appear on the
+bottom selection bar or peek cards until there is a GPS lock. The hero card works
+fine in either state."*
+
+**Cause.** `push_presets` asked `art_for` for each tile's logo by
+`slot.row`'s call sign, and only a fix fills `row`. The hero asks by the row
+**or** the learned call sign (`push_hero`), which is why it worked. The strip now
+keys on `Slot::base()`, which falls back to the call sign the preset was saved
+with; the peek cards are built from the same tiles.
+
+**The GPS logo cache exists and works.** It is the learned dial-to-call-sign map,
+`src/callsigns.rs` (CarFM's `freq_callsign_v1`, stored as `callsigns.json`):
+`refresh_nearby` relearns and saves it on every fix (`src/app.rs:5940`, `:5947`)
+and `App::with_tuner` loads it at launch (`:1341`). It was never the problem. The
+strip did not read it.
+
+**Evidence.** `a_saved_logo_shows_on_the_strip_and_the_peeks_with_no_gps_fix`
+builds the App with no fix, seeds the map from one earlier fix, and asserts every
+tile and both peek cards draw a logo. Reverting the one-line fix fails it.
+
 ### 140. "Stop the radio when Carnyx closes" means duplicate the stock app, and stays ON
 **DONE.** The owner settled what this switch is for, verbatim: *"Whenever the
 stock radio app is closed/force closed, the radio audio stops. It doesn't matter
@@ -5924,9 +6012,12 @@ chars, plus `seek(freq)`'s packed strength+frequency int.
 reports **changes only** and no getter for current illumination state has been
 found, so starting after dark with the lights already on produces no event.
 
-**Carnyx:** ported. The illumination watch is started in `App::with_tuner`
-rather than inside connect, so a session that never binds the tuner still follows
-the headlights. The same "changes only, no getter" gap applies.
+**Carnyx:** the watch was ported, but until #142 nothing acted on it. The
+illumination watch is started in `App::with_tuner` rather than inside connect, so
+a session that never binds the tuner still hears the broadcast. *(This line used
+to say Carnyx "follows the headlights". It did not: the event arm logged Android's
+`uiMode` and dropped the extras. Corrected 2026-11-12; #142 makes it true.)* The
+same "changes only, no getter" gap applies; #142 falls back to the sun.
 
 ### 59. Make the tuner-source picker actually select a tuner
 **[SESSION]** — The Settings picker (RTL-SDR / built-in / Auto) was presentational

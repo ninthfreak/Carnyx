@@ -194,6 +194,11 @@ const OVERLAYS: &[(&str, u32, u32, bool, State, f32)] = &[
     ("clock-head-unit-dark", 1024, 614, true, State::Clock12, 0.0),
     ("clock-24-hour", 1024, 614, false, State::Clock24, 0.0),
     ("clock-portrait", 360, 800, false, State::Clock12, 0.0),
+    // APPEARANCE AS THE UNIT SHOWS IT AFTER SUNSET (#142). No other shot can
+    // carry the live lines: the host has no epoch, so the picker falls back to
+    // its generic wording. Dark, because the evening it sets decides dark.
+    ("settings-theme-evening", 1024, 614, true, State::SettingsEvening, -7.0),
+    ("settings-theme-evening-portrait", 360, 800, true, State::SettingsEvening, -6.3),
     ("settings-band-themes", 1024, 614, false, State::SettingsEggs, -11.0),
     ("settings-band-themes-dark", 1024, 614, true, State::SettingsEggs, -11.0),
     ("settings-band-themes-portrait", 360, 800, false, State::SettingsEggs, -14.0),
@@ -448,6 +453,9 @@ enum State {
     /// The same instant in 24-hour, where it zero-pads and drops the meridiem.
     Clock24,
     SettingsEggs,
+    /// Settings at 5 PM in Madison on 2026-11-12, after sunset, with no headlight
+    /// report yet: the picker's live lines, and the sun's fallback deciding.
+    SettingsEvening,
     /// §6.4's dark-mode logo picker, the step after a logo is assigned.
     LogoDarkPick,
     LogoLanding,
@@ -1062,6 +1070,13 @@ fn apply(ui: &carnyx::AppWindow, driver: &Rc<App>, state: State) {
         // blank-digit pad is for, and 05 is what "minutes always pad" is for.
         State::Clock12 => driver.set_clock_for_test(8, 5, false),
         State::Clock24 => driver.set_clock_for_test(8, 5, true),
+        State::SettingsEvening => {
+            // THE CLOCK AND THE EPOCH TOGETHER, as the unit always has them:
+            // 23:00 UTC is 17:00 on a CST clock, 25 minutes after sunset.
+            driver.set_clock_for_test(17, 0, false);
+            driver.set_scheme_now_for_test(1_794_524_400);
+            ui.set_overlay(Overlay::Settings);
+        }
         State::SettingsEggs => {
             // THROUGH THE REAL CALLBACK, so the list, the label and the lit row
             // all come from `eggs::listed()` deciding rather than from a literal

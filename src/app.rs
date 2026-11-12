@@ -857,13 +857,15 @@ struct State {
     /// with RDS.
     last_sources: Option<Vec<TunerSource>>,
     last_diag_actions: Option<Vec<DiagAction>>,
-    /// The THREE models in `push_settings` that CANNOT change: the theme chips
-    /// are a fixed list, the tuner-details list is always empty (the panel
-    /// describes an RTL-SDR, which the provenance rule bars from this tree), and
-    /// the band-theme menu is `eggs::listed()` — a const filter over a const
-    /// table — behind a const off-row label. One publish is the whole truth about
-    /// all three, so they are published once and then never touched again rather
-    /// than re-derived per wake.
+    /// The TWO models in `push_settings` that CANNOT change: the tuner-details
+    /// list is always empty (the panel describes an RTL-SDR, which the
+    /// provenance rule bars from this tree), and the band-theme menu is
+    /// `eggs::listed()` — a const filter over a const table — behind a const
+    /// off-row label. One publish is the whole truth about both, so they are
+    /// published once and then never touched again rather than re-derived per
+    /// wake. (The theme chips were a third until #142 replaced them with a
+    /// picker that reports live state: `push_theme_rows`, under its own
+    /// `last_theme_rows` guard.)
     ///
     /// The band-theme menu joined them late and cost the most while it was
     /// outside: `ModelRc` compares by POINTER, so handing Slint a freshly built
@@ -940,6 +942,25 @@ struct State {
     /// car produces a fix a second, and each one would otherwise re-run a
     /// 20,733-row query and repaint the hero.
     location_dirty: bool,
+    // ── LIGHT OR DARK (#142). See `crate::scheme`. ──
+    /// The last headlight report this run. NOT persisted: the broadcast reports
+    /// changes only, and last night's "on" says nothing about this drive.
+    headlights: Option<bool>,
+    /// Where the car last had a fix, coarse — persisted as `Prefs::place`, for
+    /// the sun.
+    place: Option<(f64, f64)>,
+    /// What `apply_scheme` last wrote to `Pal.dark`, so a re-check that reaches
+    /// the same answer writes nothing and republishes nothing.
+    scheme_dark: Option<bool>,
+    /// The minute `tick` last re-checked the scheme on, so the sun is asked once
+    /// a minute rather than once a second.
+    scheme_minute: Option<i64>,
+    /// Set by a headlight report or a new place; the drain re-checks once.
+    scheme_dirty: bool,
+    /// An epoch forced by a test. See `App::scheme_now`.
+    scheme_now_test: Option<i64>,
+    /// The theme rows as last published, so an unchanged panel is not rebuilt.
+    last_theme_rows: Option<Vec<TunerSource>>,
     picker: NearbyPicker,
     settings: settings::Settings,
     logo: crate::logos::search::Model,
@@ -1349,6 +1370,9 @@ impl App {
             .collect();
 
         let picker = build_picker(db.as_ref(), location, snapshot.clone());
+        // THE SUN'S PLACE: a fix in hand now beats the one remembered from an
+        // earlier drive. See `State::place`.
+        let place = location.position().map(coarse_place).or(saved.place);
 
         // WHAT THE LAST RUN LEFT ON THE DIAL.
         //
@@ -1453,6 +1477,13 @@ impl App {
                 stereo_settle: slint::Timer::default(),
                 location,
                 location_dirty: false,
+                headlights: None,
+                place,
+                scheme_dark: None,
+                scheme_minute: None,
+                scheme_dirty: false,
+                scheme_now_test: None,
+                last_theme_rows: None,
                 picker,
                 // EVERY FIELD `Prefs` CARRIES IS READ BACK HERE, and the count
                 // is the whole point: three of the eight — `clock_on`, `nav_on`
@@ -1656,9 +1687,8 @@ impl App {
             app.state.borrow_mut().settings.log.push_head(&at, &format!("sleep watch: {sleep_watch}"));
         }
         // The restored theme has to reach the palette; `Settings` alone only
-        // records the choice.
-        let theme = app.state.borrow().settings.theme;
-        app.apply_theme(theme);
+        // records the choice. No republish: `push_all` below paints everything.
+        app.apply_scheme();
         app.connect_tuner();
         app.install_callbacks(ui);
         app.push_all();
@@ -1857,6 +1887,26 @@ impl App {
             self.resolve_presets();
             self.push_hero();
             self.push_presets();
+            // THE SUN'S PLACE, kept coarse and saved only when it moves a tenth
+            // of a degree — a parked car produces a fix every two seconds.
+            let moved = {
+                let mut s = self.state.borrow_mut();
+                match s.location.position().map(coarse_place) {
+                    Some(p) if s.place != Some(p) => {
+                        s.place = Some(p);
+                        s.scheme_dirty = true;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if moved {
+                self.save_prefs();
+            }
+        }
+        // AND THE SCHEME, ONCE, after a headlight report or a new place.
+        if std::mem::take(&mut self.state.borrow_mut().scheme_dirty) {
+            self.rescheme();
         }
     }
 
@@ -2686,8 +2736,25 @@ impl App {
                     (None, queued) => queued,
                 };
             }
-            TunerEvent::Illumination { ui_mode, .. } => {
-                s.settings.log.push(&stamp(), &format!("illumination {ui_mode}"));
+            // ── THE HEADLIGHTS (#142) ─────────────────────────────────────────
+            //
+            // THIS USED TO BE A LOG LINE AND NOTHING ELSE, while #57 recorded the
+            // headlight port as done: the watch was registered, the broadcast
+            // arrived, and the face stayed light. The extras are logged verbatim
+            // now as well, because the dump is the only record of what the unit
+            // actually sends — no drive log on file has carried one.
+            TunerEvent::Illumination { extras, ui_mode, .. } => {
+                let on = crate::scheme::parse_headlights(&extras);
+                let read = match on {
+                    Some(true) => "headlights on",
+                    Some(false) => "headlights off",
+                    None => "not understood",
+                };
+                s.settings.log.push(&stamp(), &format!("illumination: [{extras}] {read} (android {ui_mode})"));
+                if on.is_some() && on != s.headlights {
+                    s.headlights = on;
+                    s.scheme_dirty = true;
+                }
             }
             // ── THE UNIT IS GOING TO SLEEP ────────────────────────────────────
             //
@@ -3165,9 +3232,10 @@ impl App {
             // THE POP-UP IS DRAWN BY THIS APP AND HAS TO MATCH THIS APP. It is a
             // window Carnyx owns (`CarnyxOverlay`), not a system template, so it
             // gets the live palette rather than a copy of one: read straight off
-            // `Pal`, which is where light/dark actually resolves — `Theme::System`
-            // sets neither flag, so `settings.theme` can say one thing while the
-            // face shows another. `art_for`'s own note makes the same point.
+            // `Pal`, which is where light/dark actually resolves — the two
+            // automatic themes name a RULE, not a scheme, so `settings.theme` does
+            // not say which the face is showing. `art_for`'s own note makes the
+            // same point.
             //
             // The two logo grounds travel with them because a mark adapted for a
             // dark face needs a KNOWN surface behind it, not whatever the card is.
@@ -3240,13 +3308,15 @@ impl App {
         // Art first, with NO borrow held: `art_for` decodes on a miss and writes
         // the result back, so resolving it inside the map below would be a
         // mutable borrow inside a shared one.
-        let bases: Vec<String> = self
-            .state
-            .borrow()
-            .presets
-            .iter()
-            .map(|p| p.row.as_ref().map_or_else(String::new, |r| r.callsign_base.clone()))
-            .collect();
+        //
+        // THROUGH `Slot::base`, NOT `slot.row`. The row only exists once a GPS
+        // fix has resolved the dial, so keying the art on it left every tile and
+        // both peek cards bare until the first lock — while the hero, which falls
+        // back to the learned call sign, showed its logo the whole time. `base`
+        // falls back to the call sign this dial last resolved to (`saved_call`,
+        // seeded from `callsigns.json`), the same key `open_logo_search` was
+        // already moved onto for the same fault.
+        let bases: Vec<String> = self.state.borrow().presets.iter().map(Slot::base).collect();
         let art: Vec<Option<(slint::Image, LogoPlate)>> =
             bases.iter().map(|b| self.art_for(b, Some(TILE_BOX_DP))).collect();
 
@@ -3417,19 +3487,19 @@ impl App {
         // provenance rule, so the list is empty and the panel draws its own
         // emptiness rather than inventing a device.
         //
-        // PUBLISHED ONCE, with the theme chips and the band-theme menu below it.
-        // None of the three has an input: this one is always empty,
-        // `theme_chips()` takes no argument and returns the same three labels
-        // forever, and the band-theme menu is a const table behind a const
-        // filter. Handing Slint a fresh model of unchanging content on every
-        // wake from the tuner queue is a repeater rebuilt for nothing —
+        // PUBLISHED ONCE, with the band-theme menu below it. Neither has an
+        // input: this one is always empty, and the band-theme menu is a const
+        // table behind a const filter. (The theme chips used to be the third;
+        // the picker that replaced them reports live state, so it is
+        // `push_theme_rows`'s, which compares before it publishes.) Handing
+        // Slint a fresh model of unchanging content on every wake from the
+        // tuner queue is a repeater rebuilt for nothing —
         // `ModelRc` compares by POINTER, so a rebuilt model of identical rows is
         // a dirty property every time. See `State::statics_published`.
         if !s.statics_published {
             ui.set_settings_tuner_details(ModelRc::from(Rc::new(VecModel::from(
                 Vec::<TunerDetail>::new(),
             ))));
-            ui.set_settings_theme_chips(strings(&settings::theme_chips()));
 
             // ── THE HIDDEN BAND-THEME PICKER ─────────────────────────────────
             //
@@ -3500,7 +3570,6 @@ impl App {
             ui.set_settings_nav_apps(ModelRc::from(Rc::new(VecModel::from(nav_apps.clone()))));
         }
 
-        ui.set_settings_theme(cfg.theme.label().into());
         ui.set_settings_battery(match cfg.battery {
             settings::Battery::Checking => BatteryState::Checking,
             settings::Battery::Exempt => BatteryState::Exempt,
@@ -3643,6 +3712,8 @@ impl App {
             }
             s.statics_published = true;
         }
+        // THE THEME PICKER, outside the borrow: it builds its own inputs.
+        self.push_theme_rows();
         self.save_prefs();
     }
 
@@ -4321,9 +4392,9 @@ impl App {
             return None;
         }
         // THE THEME IS READ ONCE PER LOOKUP, from the palette rather than from
-        // `settings.theme`: `Theme::System` sets neither, so the setting can say
-        // one thing while the face shows another, and what a logo has to match is
-        // the face.
+        // `settings.theme`: the automatic themes name a rule rather than a
+        // scheme, so the setting does not say what the face shows, and what a
+        // logo has to match is the face.
         let dark = self.ui().global::<crate::Pal>().get_dark();
         let key = (base.to_uppercase(), box_dp.unwrap_or(0.0).round() as u32, dark);
         // Cloned out in its own statement for the reason spelt out in
@@ -4755,21 +4826,21 @@ impl App {
             }
             app.push_settings();
         });
-        on!(on_settings_set_theme, |app, t| {
-            let t: SharedString = t;
-            if let Some(theme) = settings::Theme::parse(t.as_str()) {
+        on!(on_settings_pick_theme, |app, i| {
+            // AN INDEX INTO `Theme::ORDER`, the nav picker's shape. Anything past
+            // the end leaves the choice alone.
+            if let Some(&theme) = settings::Theme::ORDER.get(i as usize) {
                 app.state.borrow_mut().settings.theme = theme;
-                app.apply_theme(theme);
-                // TWO THINGS DO NOT DERIVE THEMSELVES FROM `Pal`, and both are
-                // republished here. A band theme states its palette per scheme,
-                // so the cut has to be re-resolved when the scheme moves under
-                // it — switch to dark with AC/DC playing and "Back in Black"
-                // only arrives on this line. And a logo is a different FILE per
-                // theme: the dark face reads `k-*`/`dark.png` where the light
-                // one reads `d-*`/`display.png`, and no property binding can
-                // reach across that. Every other token turns on its own.
-                app.push_hero();
-                app.push_presets();
+                // TWO THINGS DO NOT DERIVE THEMSELVES FROM `Pal`, and `rescheme`
+                // republishes both when the palette moves. A band theme states
+                // its palette per scheme, so the cut has to be re-resolved when
+                // the scheme moves under it — switch to dark with AC/DC playing
+                // and "Back in Black" only arrives then. And a logo is a
+                // different FILE per theme: the dark face reads `k-*`/`dark.png`
+                // where the light one reads `d-*`/`display.png`, and no property
+                // binding can reach across that. Every other token turns on its
+                // own. The headlights and the sunset go through the same path.
+                app.rescheme();
             }
             app.push_settings();
         });
@@ -5295,6 +5366,7 @@ impl App {
             preset_loop: s.settings.preset_loop,
             come_forward: s.settings.come_forward,
             diag_on: s.settings.diag_on,
+            place: s.place,
         };
         if now == s.saved {
             return;
@@ -5321,16 +5393,103 @@ impl App {
         self.push_all();
     }
 
-    fn apply_theme(&self, theme: settings::Theme) {
-        // SYSTEM has nothing to read here: there is no Android UiModeManager and
-        // no desktop preference, so it holds whatever is already set rather than
-        // guessing light.
-        let ui = self.ui();
-        match theme {
-            settings::Theme::Light => ui.global::<crate::Pal>().set_dark(false),
-            settings::Theme::Dark => ui.global::<crate::Pal>().set_dark(true),
-            settings::Theme::System => {}
+    /// The epoch the scheme reads: a test's, else the device's, else none.
+    ///
+    /// NONE ON A HOST BUILD, the rule `android::clock_now` already follows: a
+    /// screenshot must not change with the hour it was taken at, and with no
+    /// epoch neither the sun nor the clock fallback can run (`scheme_inputs`).
+    ///
+    /// NONE BEFORE 2026 TOO. `session::now_unix` answers 0 for a clock it cannot
+    /// read, and a unit that boots before its clock is set reads 1970: the sun
+    /// for that date and hour is a guess dressed as an answer, so the palette is
+    /// left alone until the clock is real. The minute tick picks it up then.
+    fn scheme_now(&self) -> Option<i64> {
+        /// 2026-01-01T00:00:00Z, before this code existed.
+        const SANE: i64 = 1_767_225_600;
+        let t = match self.state.borrow().scheme_now_test {
+            Some(t) => Some(t),
+            None if cfg!(target_os = "android") => Some(crate::session::now_unix() as i64),
+            None => None,
+        };
+        t.filter(|&t| t >= SANE)
+    }
+
+    /// Everything `scheme::decide` may use, gathered once.
+    ///
+    /// THE WALL CLOCK ONLY ALONGSIDE THE EPOCH. On the unit both always exist;
+    /// on a host build the epoch never does, and a shot that sets the clock to
+    /// 8:05 for the readout must not thereby choose a palette.
+    fn scheme_inputs(&self) -> crate::scheme::Inputs {
+        let now = self.scheme_now();
+        let local = now.and_then(|_| self.clock_reading());
+        let s = self.state.borrow();
+        crate::scheme::Inputs {
+            theme: s.settings.theme,
+            headlights: s.headlights,
+            place: s.place,
+            now,
+            local,
         }
+    }
+
+    /// Decide light or dark and write it to `Pal`. True if the palette moved.
+    ///
+    /// ONLY ON A CHANGE: the decision is re-taken every minute and on every
+    /// headlight report, and an unchanged answer writes nothing — so nothing that
+    /// set `Pal` some other way (a screenshot) is overwritten by a re-check that
+    /// agrees with nothing. `None` (nothing to go on) leaves it alone entirely.
+    fn apply_scheme(&self) -> bool {
+        let inputs = self.scheme_inputs();
+        let (dark, why) = crate::scheme::decide(&inputs);
+        let Some(dark) = dark else { return false };
+        if self.state.borrow().scheme_dark == Some(dark) {
+            return false;
+        }
+        self.ui().global::<crate::Pal>().set_dark(dark);
+        let mut s = self.state.borrow_mut();
+        s.scheme_dark = Some(dark);
+        s.settings.log.push(&stamp(), &crate::scheme::log_line(dark, &why));
+        true
+    }
+
+    /// Re-decide, and on a flip republish the two things that do not derive
+    /// themselves from `Pal`: the band theme's cut and the logo art, which is a
+    /// different FILE per scheme. See `on_settings_pick_theme`. The picker rows
+    /// follow either way, since they report the live state.
+    fn rescheme(&self) {
+        if self.apply_scheme() {
+            self.push_hero();
+            self.push_presets();
+        }
+        self.push_theme_rows();
+    }
+
+    /// The theme picker's four rows, published only when one of them changed.
+    fn push_theme_rows(&self) {
+        let inputs = self.scheme_inputs();
+        let rows: Vec<TunerSource> =
+            settings::theme_rows(inputs.theme, |t| crate::scheme::describe(t, &inputs))
+                .into_iter()
+                .map(|r| TunerSource {
+                    name: r.name.into(),
+                    kind: r.kind.into(),
+                    badge: r.badge.into(),
+                    badge_lit: r.badge_lit,
+                    available: r.available,
+                    selected: r.selected,
+                })
+                .collect();
+        if self.state.borrow().last_theme_rows.as_ref() == Some(&rows) {
+            return;
+        }
+        self.state.borrow_mut().last_theme_rows = Some(rows.clone());
+        self.ui().set_settings_theme_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    /// Force the epoch the scheme reads, then re-decide. FOR TESTS.
+    pub fn set_scheme_now_for_test(&self, unix: i64) {
+        self.state.borrow_mut().scheme_now_test = Some(unix);
+        self.rescheme();
     }
 
     /// A new position, from the SCREENSHOT harness.
@@ -5383,6 +5542,16 @@ impl App {
         // for a 1s tick that only changes state on the minute roll, which is
         // what `push_clock` does with its own comparison.
         self.push_clock();
+        // SUNSET AND SUNRISE, and the 7 PM / 7 AM fallback, are times of day:
+        // something has to look at the clock for the face to change at them.
+        // Once a minute, on the minute roll — the decision is a few dozen
+        // trigonometric calls, but there is no reason to take it sixty times
+        // for one answer.
+        let minute = self.scheme_now().map(|t| t.div_euclid(60));
+        if minute != self.state.borrow().scheme_minute {
+            self.state.borrow_mut().scheme_minute = minute;
+            self.rescheme();
+        }
         // THE ROUTE AGES OUT ON THIS CLOCK AND ON NOTHING ELSE. OsmAnd stops
         // sending when a route ends, is cancelled, or the app is closed, and
         // never says which — so without a tick the last turn before the driver
@@ -6626,6 +6795,11 @@ fn resolve(db: Option<&StationDb>, mhz: f32, at: Option<(f64, f64)>) -> Option<S
         .map(|(r, _)| r)
 }
 
+/// A fix to a tenth of a degree, which is all `Prefs::place` keeps (#142).
+fn coarse_place((lat, lon): (f64, f64)) -> (f64, f64) {
+    ((lat * 10.0).round() / 10.0, (lon * 10.0).round() / 10.0)
+}
+
 /// Metres between two fixes, near enough for a threshold.
 ///
 /// EQUIRECTANGULAR, NOT HAVERSINE, and that is not a corner cut: over the few
@@ -7113,9 +7287,9 @@ mod tests {
     /// the test that fails if anyone ever takes `save_prefs` out of
     /// `push_settings` and fixes up only the callers they can see.
     ///
-    /// The chip label matters: `Theme::parse` matches the panel's own upper-case
-    /// label and leaves the choice alone on anything else, so a lower-case string
-    /// here would change nothing and pass against a genuinely broken save.
+    /// The theme goes through the picker's INDEX, which is what the panel sends:
+    /// `Theme::ORDER` position 1 is Dark, and it is not the default, so a broken
+    /// save cannot pass by leaving the default behind.
     #[test]
     fn every_remembered_setting_is_written_when_it_changes() {
         let _ui_lock = harness::ui_lock();
@@ -7123,11 +7297,9 @@ mod tests {
         let dir = std::env::temp_dir().join("carnyx-apptest-persist");
         driver.drain_events();
 
-        // A fresh directory has no file at all until something writes one. The
-        // chip label is what the panel passes and `Theme::parse` matches, and it
-        // is upper case — a lower-case string here parses to nothing, changes
-        // nothing, and would make this test pass against a broken save.
-        ui.invoke_settings_set_theme(settings::Theme::Dark.label().into());
+        // A fresh directory has no file at all until something writes one.
+        let dark = settings::Theme::ORDER.iter().position(|t| *t == settings::Theme::Dark).unwrap();
+        ui.invoke_settings_pick_theme(dark as i32);
         let after_theme = crate::prefs::load(&dir);
         assert_eq!(after_theme.theme, settings::Theme::Dark, "the theme reaches the disk");
 
@@ -7223,6 +7395,11 @@ mod tests {
             preset_loop: true,
             come_forward: true,
             diag_on: true,
+            // THE FIX'S OWN COARSE PLACE, because this launch has a fix and a
+            // fix in hand outranks the remembered one by design (`State::place`).
+            // Restoring it with NO fix is
+            // `the_suns_place_is_remembered_and_learned_coarsely`.
+            place: Some((43.1, -89.4)),
         };
         crate::prefs::save(&dir, &chosen);
 
@@ -7253,6 +7430,7 @@ mod tests {
             assert!(cfg.preset_loop, "the rail-wrap switch");
             assert!(cfg.come_forward, "the come-forward switch");
             assert!(cfg.diag_on, "the diagnostics switch");
+            assert_eq!(s.place, Some((43.1, -89.4)), "the sun's place");
             assert_eq!(
                 s.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
                 vec![88.7],
@@ -7279,6 +7457,7 @@ mod tests {
         assert_eq!(back.preset_loop, chosen.preset_loop, "the rail-wrap switch survived");
         assert_eq!(back.come_forward, chosen.come_forward, "the come-forward switch survived");
         assert_eq!(back.diag_on, chosen.diag_on, "the diagnostics switch survived");
+        assert_eq!(back.place, chosen.place, "the sun's place survived");
         assert_eq!(
             back.presets.iter().map(|p| p.mhz).collect::<Vec<_>>(),
             vec![88.7],
@@ -8497,7 +8676,7 @@ mod tests {
         let pal = ui.global::<crate::Pal>();
 
         // The ordinary ground and accent, remembered before anything is themed.
-        ui.invoke_settings_set_theme("LIGHT".into());
+        ui.invoke_settings_pick_theme(0);
         let plain_page = pal.get_page();
         let plain_blue = pal.get_blue();
 
@@ -8510,7 +8689,7 @@ mod tests {
         assert_eq!(ui.get_egg().card_bg.alpha(), 0, "the light cut states no card colour");
 
         // ── THE SCHEME MOVES UNDER A THEME THAT IS ALREADY SHOWING. ──
-        ui.invoke_settings_set_theme("DARK".into());
+        ui.invoke_settings_pick_theme(1);
         let egg = ui.get_egg();
         let dark_page = pal.get_page();
         // THE PAGE IS THE ORDINARY LIFTED CHARCOAL, and this assertion inverted
@@ -8538,7 +8717,7 @@ mod tests {
         assert_eq!(egg.outline_ink, slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9), "the hairline");
 
         // ── AND BACK, so the cut is chosen every time rather than latched. ──
-        ui.invoke_settings_set_theme("LIGHT".into());
+        ui.invoke_settings_pick_theme(0);
         assert_eq!(pal.get_page(), plain_page, "the ground comes back");
         assert_eq!(pal.get_blue(), plain_blue, "and the blue with it");
 
@@ -8547,7 +8726,7 @@ mod tests {
         // The PAGE is no longer the thing to watch for that — the theme stopped
         // restating it — so the accent is, and it is the better witness anyway:
         // it is the token a dozen components read.
-        ui.invoke_settings_set_theme("DARK".into());
+        ui.invoke_settings_pick_theme(1);
         let silver = slint::Color::from_rgb_u8(0xC9, 0xC9, 0xC9);
         assert_eq!(pal.get_blue(), silver, "still silver while the track plays");
         driver.set_radio_text_for_test("Nicolet Law - Injured? Get Nicolet!");
@@ -9587,6 +9766,317 @@ mod tests {
         assert_eq!(cold.get(88.7), Some("WERN"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE STRIP AND THE PEEKS SHOW A SAVED LOGO WITH NO FIX, AS THE HERO DOES.
+    ///
+    /// The owner, of a bug that predates the learned map's port: *"The
+    /// downloaded logos for stations do not appear on the bottom selection bar or
+    /// peek cards until there is a GPS lock. The hero card works fine in either
+    /// state."* `push_presets` keyed the art on `slot.row`, which only a fix can
+    /// fill, so every tile asked `art_for` for the empty base. The test above
+    /// pinned `Slot::base` and never looked at the strip, which is how it hid.
+    ///
+    /// Driven through the real `push_presets` on an App built with NO fix. The
+    /// art is seeded into `art_for`'s own cache because the host has no codec to
+    /// decode a master — what is under test is which key the strip asks for.
+    #[test]
+    fn a_saved_logo_shows_on_the_strip_and_the_peeks_with_no_gps_fix() {
+        use slint::Model;
+        let _ui_lock = harness::ui_lock();
+        let dir = std::env::temp_dir().join("carnyx-apptest-nofix-logos");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // ONE EARLIER DRIVE WITH A FIX, as `callsigns.json` records it.
+        let db = StationDb::open(&host_db_path()).unwrap();
+        let (lat, lon) = fake::FakeLocation::default().position().unwrap();
+        let picker = NearbyPicker::query(&db, lat, lon).unwrap();
+        let mut learned = crate::callsigns::Callsigns::default();
+        learned.relearn(
+            picker
+                .rows()
+                .iter()
+                .filter(|r| r.row.service == "FM")
+                .map(|r| (r.row.frequency_mhz as f32, r.row.callsign_base.as_str())),
+        );
+        crate::callsigns::save(&dir, &learned);
+
+        // ── TODAY: the driveway, no fix. ──
+        let ui = AppWindow::new().expect("window");
+        let driver = App::with_tuner(
+            &ui,
+            &host_db_path(),
+            &dir,
+            Box::new(crate::android::FakeTuner::new()),
+            false,
+            None,
+            fake::FakeLocation::no_fix(),
+        );
+        driver.drain_events();
+        let bases: Vec<String> = {
+            let s = driver.state.borrow();
+            assert!(!s.presets.is_empty(), "the strip has presets");
+            assert!(s.presets.iter().all(|p| p.row.is_none()), "no fix resolves no row");
+            s.presets.iter().map(Slot::base).collect()
+        };
+        assert!(bases.iter().all(|b| !b.is_empty()), "every dial is named by the learned map: {bases:?}");
+
+        // A LOGO FOR EVERY STATION, as a decoded tile-size rendition would leave
+        // it in the cache.
+        let dark = ui.global::<crate::Pal>().get_dark();
+        {
+            let mut s = driver.state.borrow_mut();
+            for b in &bases {
+                s.art.insert(
+                    (b.to_uppercase(), TILE_BOX_DP.round() as u32, dark),
+                    Some((slint::Image::default(), LogoPlate::Light)),
+                );
+            }
+        }
+        driver.push_presets();
+
+        let tiles = ui.get_presets();
+        for i in 0..tiles.row_count() {
+            let t = tiles.row_data(i).unwrap();
+            assert!(t.has_logo, "tile {i} ({}) draws its logo with no fix", t.call);
+        }
+        assert!(ui.get_prev_preset().has_logo, "the previous peek card draws its logo");
+        assert!(ui.get_next_preset().has_logo, "the next peek card draws its logo");
+
+        drop(driver);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The theme picker's rows as (name, line, selected), read off the window.
+    fn theme_rows_on(ui: &AppWindow) -> Vec<(String, String, bool)> {
+        use slint::Model;
+        let rows = ui.get_settings_theme_rows();
+        (0..rows.row_count())
+            .map(|i| {
+                let r = rows.row_data(i).unwrap();
+                (r.name.to_string(), r.kind.to_string(), r.selected)
+            })
+            .collect()
+    }
+
+    /// THE HEADLIGHTS TURN THE FACE DARK, AND OFF AGAIN TURN IT LIGHT.
+    ///
+    /// The owner: *"The app does not put itself into dark mode when headlights
+    /// are turned on."* The broadcast was received and logged and nothing read
+    /// it. Driven through `ingest_illumination` with the dump the unit sends
+    /// (`NwdBridge.startIlluminationWatch`), on the default theme.
+    ///
+    /// A HOST BUILD HAS NO EPOCH, so before the report there is nothing to
+    /// decide on and `Pal` is left alone — which is what keeps every shot that
+    /// sets `Pal` itself intact.
+    #[test]
+    fn the_headlights_turn_the_face_dark_and_back() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("headlights");
+        let dark = |ui: &AppWindow| ui.global::<crate::Pal>().get_dark();
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Headlights, "the default");
+        assert!(!dark(&ui), "light before any report");
+        assert_eq!(driver.state.borrow().scheme_dark, None, "and nothing was decided");
+
+        crate::android::ingest_illumination(
+            "com.nwd.ACTION_ILL_STATE_CHANGE".into(),
+            "extra_ill_state=1 (Byte)".into(),
+            "DAY".into(),
+        );
+        driver.drain_events();
+        assert!(dark(&ui), "headlights on: dark");
+        assert_eq!(theme_rows_on(&ui)[2].1, "The headlights are on, so it is dark.");
+        {
+            let lines = driver.state.borrow().settings.log.lines();
+            assert!(
+                lines.iter().any(|l| l.contains("illumination: [extra_ill_state=1 (Byte)] headlights on (android DAY)")),
+                "the report is logged with how it was read: {lines:?}"
+            );
+            assert!(lines.iter().any(|l| l.contains("theme: dark (headlights on)")), "and why it went dark: {lines:?}");
+        }
+
+        // A VALUE NOBODY HAS SEEN is not a report: it is logged and changes nothing.
+        crate::android::ingest_illumination(
+            "com.nwd.ACTION_ILL_STATE_CHANGE".into(),
+            "extra_ill_state=7 (Byte)".into(),
+            "DAY".into(),
+        );
+        driver.drain_events();
+        assert!(dark(&ui), "an unread value leaves it dark");
+        assert_eq!(driver.state.borrow().headlights, Some(true));
+        assert!(driver.state.borrow().settings.log.lines().iter().any(|l| l.contains("not understood")));
+
+        crate::android::ingest_illumination(
+            "com.nwd.ACTION_ILL_STATE_CHANGE".into(),
+            "extra_ill_state=0 (Byte)".into(),
+            "DAY".into(),
+        );
+        driver.drain_events();
+        assert!(!dark(&ui), "headlights off: light again");
+        assert!(driver.state.borrow().settings.log.lines().iter().any(|l| l.contains("theme: light (headlights off)")));
+    }
+
+    /// LIGHT AND DARK, CHOSEN, IGNORE THE HEADLIGHTS — and the report is kept,
+    /// so switching back to the headlights mode follows the last one at once.
+    ///
+    /// The owner asked for it optional: *"I'd like this fixed, but I'd also like
+    /// it to be optional."*
+    #[test]
+    fn a_chosen_light_or_dark_ignores_the_headlights() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("theme-chosen");
+        let dark = |ui: &AppWindow| ui.global::<crate::Pal>().get_dark();
+        let lights = |on: bool| {
+            crate::android::ingest_illumination(
+                "com.nwd.ACTION_ILL_STATE_CHANGE".into(),
+                format!("extra_ill_state={} (Byte)", on as u8),
+                "DAY".into(),
+            );
+        };
+
+        ui.invoke_settings_pick_theme(0);
+        lights(true);
+        driver.drain_events();
+        assert!(!dark(&ui), "Light stays light with the headlights on");
+        assert_eq!(driver.state.borrow().headlights, Some(true), "but the report is kept");
+
+        ui.invoke_settings_pick_theme(2);
+        assert!(dark(&ui), "back to the headlights: dark at once, from the kept report");
+
+        ui.invoke_settings_pick_theme(1);
+        lights(false);
+        driver.drain_events();
+        assert!(dark(&ui), "Dark stays dark with the headlights off");
+
+        ui.invoke_settings_pick_theme(2);
+        assert!(!dark(&ui), "and back to the headlights: light");
+    }
+
+    /// FOLLOW SUNRISE AND SUNSET: light at noon, dark after sunset, re-checked
+    /// on the minute by the 1 s tick, and the row says when it next changes.
+    ///
+    /// Madison on 2026-11-12, the day astral puts sunset at 22:36 UTC — 4:36 PM
+    /// on a CST clock. The epoch and the wall clock are set together, as the
+    /// unit always has them.
+    #[test]
+    fn the_sun_mode_is_light_at_noon_and_dark_after_sunset() {
+        const NOON: i64 = 1_794_506_400; // 18:00 UTC, 12:00 CST
+        const EVENING: i64 = 1_794_524_400; // 23:00 UTC, 17:00 CST
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("theme-sun");
+        let dark = |ui: &AppWindow| ui.global::<crate::Pal>().get_dark();
+        assert_eq!(driver.state.borrow().place, Some((43.1, -89.4)), "the fix placed the sun");
+
+        ui.invoke_settings_pick_theme(3);
+        driver.set_clock_for_test(12, 0, false);
+        driver.set_scheme_now_for_test(NOON);
+        assert!(!dark(&ui), "noon: light");
+        assert_eq!(driver.state.borrow().scheme_dark, Some(false));
+        let rows = theme_rows_on(&ui);
+        assert_eq!(rows[3].1, "The sun is up: light until sunset at 4:36 PM.");
+        assert!(rows[3].2, "and it is the chosen row");
+
+        // THE HEADLIGHTS DO NOT COUNT in this mode.
+        crate::android::ingest_illumination(
+            "com.nwd.ACTION_ILL_STATE_CHANGE".into(),
+            "extra_ill_state=1 (Byte)".into(),
+            "DAY".into(),
+        );
+        driver.drain_events();
+        assert!(!dark(&ui), "headlights on at noon: still light");
+
+        // The evening, reached the way the unit reaches it: the clock moves and
+        // the tick notices the minute.
+        {
+            let mut s = driver.state.borrow_mut();
+            s.clock_test = Some((17, 0, false));
+            s.scheme_now_test = Some(EVENING);
+        }
+        driver.tick();
+        assert!(dark(&ui), "after sunset: dark");
+        assert_eq!(theme_rows_on(&ui)[3].1, "The sun is down: dark until sunrise at 6:47 AM.");
+        assert!(driver.state.borrow().settings.log.lines().iter().any(|l| l.contains("theme: dark (sun down)")));
+    }
+
+    /// A CLOCK THAT HAS NOT BEEN SET DECIDES NOTHING. A unit reading 1970 (or the
+    /// 0 `session::now_unix` gives for an unreadable clock) would place the sun
+    /// on the wrong day at the wrong hour; the palette is left alone instead.
+    #[test]
+    fn an_unset_clock_leaves_the_palette_alone() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("theme-unset-clock");
+        ui.invoke_settings_pick_theme(3);
+        driver.set_clock_for_test(0, 0, false);
+        driver.set_scheme_now_for_test(0);
+        assert_eq!(driver.state.borrow().scheme_dark, None, "1970: nothing decided");
+        assert_eq!(
+            theme_rows_on(&ui)[3].1,
+            "Dark between sunset and sunrise.",
+            "and the row makes no claim about tonight"
+        );
+    }
+
+    /// THE SUN'S PLACE IS REMEMBERED, SO A COLD START WITH NO FIX STILL KNOWS
+    /// WHERE THE SUN IS — and a fix replaces it, kept to a tenth of a degree.
+    ///
+    /// What is stored for sunrise and sunset is this one coarse place, not a
+    /// table: `sun::now` works the times out from it in microseconds.
+    #[test]
+    fn the_suns_place_is_remembered_and_learned_coarsely() {
+        let _ui_lock = harness::ui_lock();
+        let dir = std::env::temp_dir().join("carnyx-apptest-sun-place");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::prefs::save(&dir, &crate::prefs::Prefs { place: Some((40.7, -74.0)), ..Default::default() });
+
+        let ui = AppWindow::new().expect("window");
+        let driver = App::with_tuner(
+            &ui,
+            &host_db_path(),
+            &dir,
+            Box::new(crate::android::FakeTuner::new()),
+            false,
+            None,
+            fake::FakeLocation::no_fix(),
+        );
+        driver.drain_events();
+        assert_eq!(driver.state.borrow().place, Some((40.7, -74.0)), "no fix: the saved place");
+
+        crate::android::ingest_position(43.07, -89.40, true, 0.0, false);
+        driver.drain_events();
+        assert_eq!(driver.state.borrow().place, Some((43.1, -89.4)), "a fix replaces it, coarse");
+        assert_eq!(crate::prefs::load(&dir).place, Some((43.1, -89.4)), "and it is saved");
+
+        // A parked car's jitter is not a move.
+        crate::android::ingest_position(43.08, -89.41, true, 0.0, false);
+        driver.drain_events();
+        assert_eq!(driver.state.borrow().place, Some((43.1, -89.4)));
+
+        drop(driver);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE PICKER IS FOUR ROWS, THE HEADLIGHTS LIT BY DEFAULT, AND A TAP MOVES
+    /// THE LIGHT. An index past the end changes nothing.
+    #[test]
+    fn the_theme_picker_has_four_rows_and_a_tap_moves_the_light() {
+        let _ui_lock = harness::ui_lock();
+        let (ui, driver) = app_for("theme-picker");
+        let rows = theme_rows_on(&ui);
+        assert_eq!(
+            rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            ["Light", "Dark", "Follow the headlights", "Follow sunrise and sunset"]
+        );
+        assert_eq!(rows.iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, true, false]);
+
+        ui.invoke_settings_pick_theme(3);
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Sun);
+        assert_eq!(theme_rows_on(&ui).iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, false, true]);
+
+        ui.invoke_settings_pick_theme(9);
+        ui.invoke_settings_pick_theme(-1);
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Sun, "out of range: unchanged");
     }
 
     /// THE REGRESSION, pinned.

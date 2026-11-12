@@ -3,7 +3,7 @@
 //
 // FIVE sections, in this order and no other: TUNER (connection status, an
 // optional diagnostics panel, the four-row source picker, the sleep-release
-// switch), APPEARANCE (the theme segmented control), SYSTEM (battery exemption,
+// switch), APPEARANCE (the four-row theme picker, #142), SYSTEM (battery exemption,
 // the station-logos switch, the clear-logos row), DIAGNOSTICS (the tuner-log
 // switch, the log itself and a Rust-built list of
 // action rows) and — only once the about line has been tapped six times — BAND
@@ -438,80 +438,6 @@ component RadioMark inherits Rectangle {
     }
 }
 
-/// One of the three theme chips: SYSTEM / LIGHT / DARK.
-///
-/// dc.html `chipBase`:208 + the selected/unselected pair at :212-213. The
-/// unselected outline is 1dp there and 1.5dp in SettingsPanel.tsx:700; both are
-/// border-box so nothing shifts either way, and the dc.html wins on appearance.
-///
-/// EQUAL WIDTHS. CSS `flex: 1` is `flex: 1 1 0%` — a zero basis, so three chips of
-/// different label widths come out identical. Slint distributes only the SURPLUS
-/// over each item's PREFERRED size, so the same result needs the preferred width
-/// zeroed; without this "SYSTEM" would be wider than "DARK" by the difference in
-/// their text. Declared on the component's own root so it survives being a
-/// repeated element.
-component ThemeChip inherits Rectangle {
-    in property <string> label;
-    in property <bool> on: false;
-
-    callback clicked();
-
-    preferred-width: 0px;
-    horizontal-stretch: 1;
-    // 44 in both references; floored at 48 for the same §10 reason as Pill, and
-    // this is the control the floor was most needed for — at k=0.74 a chip is
-    // 74 × 33dp.
-    min-height: Math.max(48px, Metrics.s(44));
-    border-radius: Metrics.s(10);
-    border-width: root.on ? 1.5px : 1px;
-    border-color: root.on ? Pal.blue : Pal.border;
-    background: root.on ? Pal.blue-fill : transparent;
-    opacity: touch.pressed ? 0.6 : 1.0;
-
-    touch := TouchArea { clicked => { root.clicked(); } }
-
-    HorizontalLayout {
-        padding-left: Metrics.s(4);
-        padding-right: Metrics.s(4);
-        alignment: center;
-
-        Text {
-            text: root.label;
-            font-size: Math.max(12px, Metrics.s(14));
-            font-weight: 700;
-            letter-spacing: Metrics.s(1);
-            color: root.on ? Pal.blue : Pal.dim;
-            vertical-alignment: center;
-            // The chip is sized by the layout, not by this text, so the text is
-            // what gives when three chips have to share a narrow row.
-            overflow: elide;
-        }
-    }
-}
-
-/// The three chips as one strip (dc.html `segWrapStyle`:282, `gap: 8`). A
-/// component rather than a repeated `for` written twice, because the theme row has
-/// two arrangements and both need the identical strip.
-component ThemeSegments inherits HorizontalLayout {
-    /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in RUST. `v.toUpperCase()` over
-    /// ['system','light','dark'] (SettingsPanel.tsx:439) is a decision about copy,
-    /// and Slint does not make those.
-    in property <[string]> chips;
-    /// The active chip's label, matched against `chips` — the same shape Nearby's
-    /// bucket bar uses.
-    in property <string> current;
-
-    callback pick(string);
-
-    spacing: Metrics.s(8);
-
-    for c in root.chips: ThemeChip {
-        label: c;
-        on: c == root.current;
-        clicked => { root.pick(c); }
-    }
-}
-
 // ── The rows ─────────────────────────────────────────────────────────────────
 
 /// TUNER: the connection status row.
@@ -910,8 +836,8 @@ component BatteryRow inherits Rectangle {
 /// labels are long — "Probe vendor-app replacement (read-only; may prompt for
 /// root)" — so the label wraps and the row grows, per §10.
 ///
-/// HEIGHT. 50 in the reference, floored at 48dp of real dp the way Pill,
-/// ThemeChip and CloseButton already floor theirs (§10, hit targets "in real dp,
+/// HEIGHT. 50 in the reference, floored at 48dp of real dp the way Pill and
+/// CloseButton already floor theirs (§10, hit targets "in real dp,
 /// not a scaled-down canvas"). At design scale the floor never fires; at k=0.74 it
 /// is the difference between a 37dp row and a reachable one. The pre-existing
 /// clear-logos row inherits the floor, which is a change to that row on the phone
@@ -1280,10 +1206,9 @@ export component SettingsOverlay inherits Rectangle {
     in property <string> nav-hide-sub;
 
     // ── APPEARANCE ──
-    /// ["SYSTEM", "LIGHT", "DARK"], upper-cased in Rust.
-    in property <[string]> theme-chips;
-    /// The active chip's label, matched against `theme-chips`.
-    in property <string> theme;
+    /// The theme picker's four rows (#142): name, live description, and which
+    /// one is chosen — all decided in Rust (`scheme::describe`).
+    in property <[TunerSource]> theme-rows;
 
     // ── SYSTEM ──
     in property <BatteryState> battery: BatteryState.checking;
@@ -1398,7 +1323,8 @@ export component SettingsOverlay inherits Rectangle {
     callback set-come-forward(bool);
     /// The chosen chip's label, matched back to the enum in Rust — the shape
     /// Nearby's `pick-bucket(string)` already uses.
-    callback set-theme(string);
+    /// The index into `theme-rows`.
+    callback pick-theme(int);
     callback fix-battery();
     callback set-logos(bool);
     /// Opens the host's confirm dialog; the wipe, the pluralised result alert and
@@ -1604,70 +1530,28 @@ export component SettingsOverlay inherits Rectangle {
             GroupCard {
                 pad: Metrics.s(card.narrow ? 8 : 10);
 
-                // THE ONE ROW THAT CHANGES SHAPE, and the arithmetic forces it.
-                // The segmented control is a FIXED 300dp in both references. The
-                // width left for this row is
-                //   card-w − 2·body-pad − 2·1dp group border − 2·group pad − 2·row pad,
-                // which is 602dp on the full Dudu7 — 300 for the strip, 20 for the
-                // gap, 282 for the word "Theme", comfortable. On a 360dp phone the
-                // same sum is 256dp, and 300 does not fit in it at all; on the
-                // Dudu7's ⅓ slice it is 33dp short. So below the §6.2 width track
-                // the label goes on its own line and the strip takes the full row
-                // width beneath it. Neither source specifies this — both are fixed
-                // width — but nothing else fits.
-                if !card.narrow: Rectangle {
-                    min-height: Metrics.s(62);
-
-                    HorizontalLayout {
-                        padding-left: Metrics.s(12);
-                        padding-right: Metrics.s(12);
-                        padding-top: Metrics.s(6);
-                        padding-bottom: Metrics.s(6);
-                        // 20, not the 16 every other row uses — this row alone
-                        // (dc.html `themeRowStyle`:281).
-                        spacing: Metrics.s(20);
-
-                        RowText {
-                            title: "Theme";
-                            sub: "Overrides the system colour scheme on the radio";
-                        }
-
-                        VerticalLayout {
-                            horizontal-stretch: 0;
-                            alignment: center;
-
-                            ThemeSegments {
-                                width: Metrics.s(300);
-                                chips: root.theme-chips;
-                                current: root.theme;
-                                pick(v) => { root.set-theme(v); }
-                            }
-                        }
-                    }
-                }
-
-                if card.narrow: Rectangle {
-                    min-height: Metrics.s(62);
-
-                    VerticalLayout {
-                        padding-left: Metrics.s(12);
-                        padding-right: Metrics.s(12);
-                        padding-top: Metrics.s(6);
-                        padding-bottom: Metrics.s(6);
-                        spacing: Metrics.s(12);
-
-                        RowText {
-                            title: "Theme";
-                            sub: "Overrides the system colour scheme on the radio";
-                        }
-
-                        // No width: the strip takes the row, and the three chips
-                        // divide it equally between them.
-                        ThemeSegments {
-                            chips: root.theme-chips;
-                            current: root.theme;
-                            pick(v) => { root.set-theme(v); }
-                        }
+                // ── THE THEME PICKER (#142) ─────────────────────────────────
+                //
+                // FOUR ROWS WHERE THERE WERE THREE CHIPS, and the arithmetic
+                // decided it. The chip strip was a fixed 300dp — on a 360dp
+                // phone it already took the whole row — so four chips leave about
+                // 60dp of text each, and the two automatic modes are told apart
+                // by their NAMES: "Follow the headlights" and "Follow sunrise and
+                // sunset" do not fit in a chip, and the owner asked for better
+                // naming than "Automatic based on car lighting". So the nav
+                // picker's rows — radio mark, name, a line under it — which also
+                // gives the automatic modes room to say what they are doing:
+                // "The headlights are on, so it is dark."
+                //
+                // ONE ARRANGEMENT AT EVERY WIDTH, which the chips needed two of:
+                // a list row wraps its description and grows, so the narrow case
+                // needs nothing of its own.
+                VerticalLayout {
+                    spacing: 0px;
+                    SubLabel { label: "Theme"; }
+                    for t[i] in root.theme-rows: SourceRow {
+                        source: t;
+                        clicked => { root.pick-theme(i); }
                     }
                 }
 
