@@ -1306,8 +1306,31 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 136. Carnyx's own takeover row reads and writes `/config`; the kernel reads `/data/nwdappconfig`
+**OPEN. NOT FIXED.** Found by #135's first install, 2026-11-12: `check` printed
+`config: /data/nwdappconfig (ro.nwd.config.path)`. The kernel's path is
+`SystemProperties("ro.nwd.config.path", "/config")`, and this unit sets the
+property. Carnyx never read it:
+
+- `CarnyxRemap.java:97` is `CONFIG_ROOT = "/config"`, a constant. Its install,
+  its read-back ("Check radio takeover") and its backup all use it, so the
+  in-app read-back will call the takeover #135 installed ABSENT.
+- The 2026-09-24/25 measurements ("`/config/app` DOES NOT EXIST", "THE ROUTE IS
+  CLOSED ON THIS UNIT") were taken on `/config`. They are true of `/config` and
+  say nothing about whether the factory copier can write `/data/nwdappconfig`.
+  That route is UNTRIED, not closed.
+- The docs said "`/config` on this unit" throughout. Corrected, with this
+  number, in `docs/vendor/README.md`, `docs/vendor/replace_source_list.xml` and
+  `tools/radio-takeover.sh`'s header. The comments in `CarnyxRemap.java`,
+  `src/android/remap.rs` and `src/settings.rs` still say `/config`.
+
+**The fix:** read `ro.nwd.config.path`, default `/config`, the way
+`CarnyxProcess.java:281` already reads system properties. Then the in-app
+read-back can be checked against the file #135 installed.
+
 ### 135. Install the radio takeover from a phone, over network ADB
-**BUILT. NOT YET RUN AGAINST THE UNIT.** #133's outcome A needs
+**INSTALLED ON THE UNIT 2026-11-12, BY THIS SCRIPT. NOT YET SEEN TO WORK ON
+WAKE.** #133's outcome A needs
 `<config>/app/replace_source_list.xml` written, and the unit measured that no
 unprivileged app can write it (`docs/vendor/README.md`, "The route is closed on
 this unit"). What remains is a privileged ADB shell. The owner asked for the
@@ -1371,11 +1394,36 @@ adb. (Port 5555 answering is still real — the scan uses bash's `/dev/tcp`, not
 adb.) The script now runs `adb version` first and stops at once with the
 loader's words and `pkg upgrade`, instead of thirty identical tries; 107 checks.
 
-The unit's own answer at 10.81.250.244 is NOT KNOWN YET.
+**After `pkg upgrade`, the install, 2026-11-12.** `adb version` printed
+`Version 37.0.0p1-android-tools`. Then, verbatim from the owner's phone:
+
+    build: user/test-keys, ro.debuggable=1
+      adb root should work on a build of this kind.
+    config: /data/nwdappconfig (ro.nwd.config.path)
+    Carnyx: installed.
+    /data/nwdappconfig/app/replace_source_list.xml: absent — the takeover is not installed.
+
+`install` wrote the fresh file, broadcast the reload and read it back with the
+Carnyx entry; a second `check` printed the file and "The takeover IS installed".
+
+What the install's output shows, from the code that prints it:
+
+- The ADB shell was ALREADY ROOT. `become_root` prints "Asking for adb root…"
+  unless `id -u` is 0, and that line is absent, as is "adbd is unprivileged
+  again", which only a run that raised root prints.
+- `<config>` was writable without a remount: `make_writable` prints a remount
+  line whenever its test write fails, and none was printed.
+- The connection reached "device" on the first try: `connect` prints adb's
+  answers for any other state, and none were printed.
+
+**Still open:** whether the radio source comes back as Carnyx on wake, the one
+thing this was for. And the owner found no network-ADB switch on the unit, so
+the script's closing "switch network ADB off" has nothing to act on yet.
 
 **What one run on the unit settles:** whether its ADB listens on the network,
-whether `adb root` is allowed, and how `/config` is mounted — the three things no
+whether `adb root` is allowed, and how `<config>` is mounted — the three things no
 host test can know. Then whether the radio source comes back as Carnyx on wake.
+The first three were settled 2026-11-12 (below); the wake is not.
 
 ### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
 **BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change

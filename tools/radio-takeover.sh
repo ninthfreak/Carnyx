@@ -16,18 +16,19 @@
 # kernel (`com.nwd.kernel`) to launch Carnyx wherever it would launch the stock
 # radio app — #133's outcome A. The file, the kernel code that reads it and the
 # reasons are in `docs/vendor/replace_source_list.xml` and
-# `docs/vendor/README.md`. `<config>` is `ro.nwd.config.path`, `/config` on
-# this unit.
+# `docs/vendor/README.md`. `<config>` is `ro.nwd.config.path`, read from the
+# unit on every run: `/data/nwdappconfig` on this unit (measured 2026-11-12),
+# NOT the `/config` default the rest of the tree assumed (#136).
 #
 # ── WHAT IT NEEDS, AND WHY NOTHING SMALLER WILL DO ──────────────────────────
 #
 # 1. ADB LISTENING ON THE NETWORK on the head unit — a developer-options switch,
 #    or `adb tcpip 5555` once over USB. Android 10 has no wireless pairing.
-# 2. `adb root`. `/config` is not writable by the factory copier, measured
-#    2026-09-25 (README.md, "The route is closed on this unit"), and a plain
-#    ADB shell is no more privileged than that. Only a ROM built `userdebug` or
-#    `eng`, or with `ro.debuggable=1`, accepts `adb root`; `check` prints the
-#    build and says which this is, and `install` stops cleanly if it is refused.
+#    This unit listened with no switch the owner could find.
+# 2. A root shell. Writing `<config>` is expected to need one. Only a ROM built
+#    `userdebug` or `eng`, or with `ro.debuggable=1`, accepts `adb root`;
+#    `check` prints the build and says which this is, and `install` stops
+#    cleanly if it is refused. On this unit adb's shell was root already.
 # 3. `adb` on the machine running this. In Termux: `pkg install android-tools`.
 #
 # ── WHAT IT DOES TO THE HEAD UNIT, IN ORDER ─────────────────────────────────
