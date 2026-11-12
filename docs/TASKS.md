@@ -1306,6 +1306,52 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 140. "Stop the radio when Carnyx closes" means duplicate the stock app, and stays ON
+**DONE.** The owner settled what this switch is for, verbatim: *"Whenever the
+stock radio app is closed/force closed, the radio audio stops. It doesn't matter
+if it was in the foreground or not. This is the behavior I want to duplicate."*
+And on the shut-off case they had worried about: *"My previous attempts to get
+Carnyx to stop radio audio when the car is shut off all failed. If we couldn't do
+it on purpose, we probably don't have to worry much about doing it by accident."*
+
+**No code change: the behavior is already built.** It is the same request the
+owner made under #133, recorded in its 2026-09-11 section (*"kill the radio audio
+feed when the app is closed, whether this is a force close or not"*), and #137 put
+the switch back to ON by default. `src/lib.rs` calls `android::on_app_destroyed` on every `Destroy`;
+`CarnyxWake.onAppDestroyed` has no foreground check, and with the switch on and FM
+playing it calls `NwdBridge.handBackNow`, which releases FM.
+
+**One limit, already recorded under #133 (2026-09-11):** a force-stop from
+Android's Settings screen delivers no callback at all, so nothing runs and FM is
+not released. An ordinary close and ACC-off both deliver `Destroy`.
+
+**The wake tradeoff I had flagged is not expected to bite.** On paper the
+handback zeroes `mcu_current_source`, which `keepCurrentSource` reads at
+power-off. But the 2026-09-17 drive saw the handback take (4 -> 0) and the radio
+app still launch afterwards, because the kernel restores from its own
+`SourceKeeper` record (`docs/vendor/README.md`). NOT CONFIRMED with the remap
+installed: whether the switch was on during the 2026-11-12 wake test (#135) was
+not recorded. The next ignition cycle with the switch on settles it.
+
+**Fixed the text that said the opposite.** #137 left the field doc, two Java
+comments (`CarnyxWake`, `CarnyxListener`), the #137 entry and
+`FACTORY-XML-HANDOFF.md` rule 5 advising a remapped unit to turn this OFF. All
+corrected; the UI sub-line now leads with "Stop FM when Carnyx is closed, the way
+the stock radio app does" and drops the obsolete "so the stock radio app has no
+reason to launch itself". The SCREEN_OFF sleep trigger (`NwdBridge.SLEEP_ACTIONS`)
+is left in place, so the sub-line keeps saying a screen going dark can stop FM.
+
+**Also corrected in the #138 handoff, found on re-reading it:** §0 claimed the
+remap applies "whenever that source is selected" (only the power-up restore is
+proven); §3 credited the vendor copier with dropping comments (that was the
+removed `CarnyxRemap` rebuild); §6's adb commands are now marked untried on this
+unit; §7b's recipe hid `adb pull` errors with `2>/dev/null` and ran
+`mount -o ro,remount` and `adb unroot` unconditionally, which on this unit would
+target a directory on `/data` and a shell that was already root — rewritten step
+by step with each of those made conditional, as the script does; §10 now separates
+what was printed from what was inferred. §7b and §7c now point at #139's
+`tools/source-remap.sh`, pushed by another session while this entry was written.
+
 ### 139. Remap any factory source, and pick the app from the unit's own list
 **BUILT. NOT YET RUN AGAINST THE UNIT.** The owner asked for *"a more
 sophisticated script"* that can *"edit any of the factory app pointers, not
@@ -1379,10 +1425,9 @@ history; revert the sleep-handback default to ON.
 - The `com.nwd.factory.setting` `<queries>` entry in `Cargo.toml` and
   `AndroidManifest.xml`.
 
-**Reverted:** `release_on_sleep` ships ON again (its #92 default), the handback
-being the only wake-relaunch lever on a plain unit. The field doc and the Java
-mirror-default comments (`SleepReceiver`, `CarnyxListener`, `CarnyxWake`,
-`NwdBridge`) now say so, and say a unit set up with the kernel remap turns it OFF.
+**Reverted:** `release_on_sleep` ships ON again (its #92 default). See #140 for
+what it means now: the owner's settled intent is to duplicate the stock app —
+stop FM when Carnyx is closed, ON and staying ON, remap or not.
 
 **Kept:** `tools/radio-takeover.sh` and its test; `docs/vendor/` and the task
 history, #133/#135/#136 included.

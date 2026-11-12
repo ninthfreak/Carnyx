@@ -510,7 +510,7 @@ public final class CarnyxWake {
         // the app has never pushed the mirror — on a fresh install it has barely
         // run — and the safe cold read is to leave the radio alone rather than
         // release on a unit this has heard nothing about. Once the app has run it
-        // writes the key (ON, or OFF on a unit with the kernel source remap).
+        // writes the key, carrying whatever the driver's switch says.
         boolean on = false;
         try {
             on = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

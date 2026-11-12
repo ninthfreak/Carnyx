@@ -1539,7 +1539,7 @@ export component SettingsOverlay inherits Rectangle {
                     // indistinguishable from an ignition going off, so the radio
                     // can still stop with the driver listening. One switch, two
                     // triggers, and the row has to own both.
-                    sub: "Hand the FM source back when Carnyx closes, and when the head unit sleeps, so the stock radio app has no reason to launch itself on the way back. A screen that goes dark on its own still counts as sleeping: if that happens while you are listening the radio stops, and the power button starts it again.";
+                    sub: "Stop FM when Carnyx is closed, the way the stock radio app does. A screen that goes dark on its own can stop it too; the power button starts it again.";
                     on: root.release-on-sleep;
                     toggled(v) => { root.set-release-on-sleep(v); }
                 }

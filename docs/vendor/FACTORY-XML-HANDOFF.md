@@ -15,7 +15,9 @@ in-app installer was removed (#137). The route is an external ADB step.
 The head unit's kernel (`com.nwd.kernel`) decides which Android app owns each
 audio/video "source" (radio, music, video, …). A single XML file can override
 that: for any source you list, the kernel launches YOUR package instead of the
-stock one, at power-up and whenever that source is selected.
+stock one when it starts that source's app. That is proven for the power-up
+restore; whether the mode button or the launcher's tiles go through the same
+`startApp` path has NOT been checked.
 
 - IT CHANGES WHICH APP a source launches. The radio source pointed at Carnyx is
   proven on this unit — the radio comes up as Carnyx on wake.
@@ -41,8 +43,8 @@ Read off `com.nwd.kernel_v210`:
       item.addFlags(FLAG_ACTIVITY_NEW_TASK);
       startActivity(item);            // on failure: getLaunchIntentForPackage(pkg)
 
-`ReplaceSourceList` reads the file once at construction and on a reload broadcast
-(§8). For any appid present in the file, it swaps in the package and class you
+`ReplaceSourceList` loads the file (`loadConfig`) and reloads it live on a
+broadcast (§8). For any appid present in the file, it swaps in the package and class you
 gave before the kernel launches. A source NOT in the file is launched as the
 factory configured it. The stock radio app is a passive MAIN/LAUNCHER-only target
 with no services or receivers, so once the kernel stops pointing at it, it is
@@ -84,9 +86,9 @@ Three attributes per item:
   launches the package's declared launcher activity anyway. Get it close; the
   package is what matters.
 
-`loadConfig` reads only those three attributes per item. Comments and whitespace
-are not preserved across an edit by the vendor copier, which is one reason to
-back up the original rather than trust a rebuild (§7).
+`loadConfig` reads only those three attributes per item; comments and layout in
+the file mean nothing to the kernel. The script edits line by line and keeps
+them, and a hand edit should too — then the backup (§7) is a byte-exact undo.
 
 ## 4. The appid table
 
@@ -157,7 +159,8 @@ Whatever you remap, keep release-on-sleep in mind (§8) and keep the backup (§7
 
 ## 6. Finding an app's package name and launcher activity
 
-On the unit, over ADB:
+On the unit, over ADB. These are standard Android 10 commands; none of them has
+been run on this unit yet.
 
     adb shell pm list packages -3                 # third-party packages (user-installed)
     adb shell pm list packages                    # everything, if you need a system app
@@ -184,32 +187,63 @@ already root, MERGES into any existing file, backs the original up to
 file back. See its header and `docs/vendor/README.md` for the full account, and
 `tools/test-radio-takeover.sh` for the host tests.
 
-### 7b. Any other source, by hand (what the script does not do yet)
+### 7b. Any other source, by hand
 
-The script is radio-only, so other sources are edited by hand. The safe sequence,
-mirroring what the script does for radio:
+**Superseded by `tools/source-remap.sh` (#139),** which sets or resets any
+source and lists the unit's installed apps to pick from; per #139 it is built and
+host-tested, NOT yet run against the unit. The by-hand steps stay as a reference.
+
+`radio-takeover.sh` is radio-only, so without #139's tool other sources are
+edited by hand. The steps below
+mirror the script's, one decision at a time. They have NOT been run as written;
+the script's version of each step has. Read every error adb prints — none is
+hidden here, and each one is the reason a step failed.
 
     CFG=$(adb shell getprop ro.nwd.config.path | tr -d '\r'); CFG=${CFG:-/config}
     FILE=$CFG/app/replace_source_list.xml
-    adb root                                        # needs a rootable build — see §9
-    # read what is there first; do NOT blind-overwrite (§8, the merge rule)
-    adb pull "$FILE" ./before.xml 2>/dev/null || echo "(no file yet)"
-    # if a file exists, copy before.xml, add your <ReplaceSourceItem> line, keep
-    # every existing entry, and back the original up ONCE:
-    adb shell "test -f '$CFG/app/replace_source_list.xml.mybackup' || cp '$FILE' '$CFG/app/replace_source_list.xml.mybackup'"
-    adb shell "mount -o rw,remount '$CFG'"           # only if $CFG is its own ro mount
+    BAK=$FILE.mybackup
+
+    # 1. ROOT, only if needed. If this prints 0, skip `adb root` (on this unit it
+    #    printed 0 already).
+    adb shell id -u
+    adb root                    # only if the line above was not 0
+
+    # 2. READ WHAT IS THERE FIRST — never blind-overwrite (§8, the merge rule).
+    #    "does not exist" means there is no file yet; any other error, stop.
+    adb pull "$FILE" ./before.xml
+
+    # 3. IS <config> WRITABLE? On this unit it was, with no remount.
+    adb shell "touch '$CFG/.w' && rm '$CFG/.w'"
+    #    Only if that failed: is $CFG its own mount? A line printed = yes.
+    adb shell "grep ' $CFG ' /proc/mounts"
+    #    Only if it printed a line, remount it (and remember you did):
+    adb shell "mount -o rw,remount '$CFG'"
+    #    No line = part of the system image. Stop; see §9.
+
+    # 4. BACK THE ORIGINAL UP ONCE — only if step 2 found a file:
+    adb shell "test -f '$BAK' || cp '$FILE' '$BAK'"
+
+    # 5. WRITE: before.xml plus your one <ReplaceSourceItem>, every other item kept.
+    adb shell "mkdir -p '$CFG/app' && chmod 755 '$CFG/app'"
     adb push ./after.xml "$FILE"
     adb shell "chmod 644 '$FILE'"
+
+    # 6. RELOAD AND READ BACK.
     adb shell "am broadcast -a com.nwd.ACTION_REPLACE_SOURCE_LIST_CHANGE"
-    adb pull "$FILE" ./check.xml                     # read it back and verify
-    adb shell "mount -o ro,remount '$CFG'"; adb unroot
+    adb pull "$FILE" ./check.xml && cat ./check.xml
 
-To undo: restore `...mybackup` over the file (or delete your one line and, if the
-file is then empty of items, remove the file), then broadcast the reload again.
+    # 7. PUT THINGS BACK AS YOU FOUND THEM, and only what you changed:
+    #    `adb shell "mount -o ro,remount '$CFG'"` ONLY if you remounted in step 3,
+    #    `adb unroot` ONLY if you ran `adb root` in step 1. Never remount a
+    #    directory that is not its own mount: on this unit $CFG sits on /data.
 
-### 7c. Extending the script to any appid (if you want it)
+To undo: copy `$BAK` back over the file (or delete your one line and, if no
+items are left, remove the file), then broadcast the reload again.
 
-What it would take: make `appid`, `pkgName` and `className` parameters instead of
+### 7c. Extending the script to any appid
+
+DONE AS A SEPARATE TOOL: `tools/source-remap.sh` (#139). What follows is the
+analysis that preceded it. What it would take: make `appid`, `pkgName` and `className` parameters instead of
 the hardcoded radio constants (`PKG`, `CLS`, `appid="8"`), and give `undo` a mode
 that removes only the entry you name rather than restoring the whole backup — so
 undoing one source does not wipe entries added for another. The merge, backup,
@@ -232,13 +266,16 @@ scenarios for the extra appids.
    reboot does the same.
 4. **PACKAGE OVER CLASS.** `pkgName` must be exact; `className` falls back to the
    package's launcher activity if it does not resolve.
-5. **RELEASE-ON-SLEEP FIGHTS A RADIO REMAP.** `SourceMgr.keepCurrentSource`
-   decides at power-off whether to restore the radio source at all, by reading
-   `mcu_current_source`. Carnyx's "Stop the radio when Carnyx closes" switch sets
-   that byte to 0 at sleep — which tells the kernel NOT to restore the radio, so
-   on a unit with the radio remap it suppresses the very Carnyx launch the remap
-   exists for. On a unit that has the radio remap installed, turn that switch OFF
-   in Carnyx. (Carnyx ships it ON by default, for units without the remap.)
+5. **STOP-ON-CLOSE vs. A RADIO REMAP — NOT EXPECTED TO CONFLICT.** Carnyx's
+   "Stop the radio when Carnyx closes" switch (default ON) hands the FM source
+   back when Carnyx is torn down, which zeroes `mcu_current_source`, and
+   `SourceMgr.keepCurrentSource` reads that byte at power-off — so on paper it
+   could stop the remap's wake relaunch. In practice the 2026-09-17 drive saw the
+   handback take (4 → 0) and the radio app still launch afterwards,
+   because the kernel restores from its own `SourceKeeper` record
+   (`docs/vendor/README.md`). So leave the switch ON. NOT CONFIRMED for the
+   remap itself: whether the switch was on during the 2026-11-12 wake test was
+   not recorded.
 
 ## 9. Prerequisites and gotchas
 
@@ -247,7 +284,8 @@ scenarios for the extra appids.
   or `adb tcpip 5555` once over USB. Android 10 has no wireless pairing.
 - **`adb root` must be allowed to write `<config>`.** It works only on a
   `userdebug`/`eng` build, or a `user` build left with `ro.debuggable=1`. On THIS
-  unit the shell was root already. Check with
+  unit the shell was already root (inferred from the script's output, #135).
+  Check with
   `adb shell getprop ro.build.type` and `ro.debuggable`.
 - **adb itself must run.** On the owner's phone, Termux's `adb` would not start —
   `CANNOT LINK EXECUTABLE "adb": cannot locate symbol "_ZNSt6__ndk1..."`, a libc++
@@ -262,9 +300,11 @@ scenarios for the extra appids.
 
 ## 10. Confidence: measured vs. inferred
 
-- **Measured on the unit (2026-11-12):** the config path is `/data/nwdappconfig`;
-  the shell is root; `<config>` is writable; the radio remap installs and the
-  radio comes up as Carnyx on wake.
+- **Seen on the unit (2026-11-12):** the config path is `/data/nwdappconfig`
+  (printed by `check`); the radio remap installs and reads back (printed by
+  `install` and `check`); the radio comes up as Carnyx on wake (the owner's test).
+- **Inferred from what the script did NOT print (#135):** the ADB shell was
+  already root, and `<config>` was writable without a remount.
 - **Read from the firmware (decompile of `com.nwd.kernel_v210`):** the launch
   mechanism (§1), the file format and load path (§2–3), the appid table (§4), the
   reload broadcast, the className fallback, and the release-on-sleep interaction.

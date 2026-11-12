@@ -388,8 +388,8 @@ public final class CarnyxListener extends NotificationListenerService {
      * ({@code Settings::release_on_sleep}), but an unset key means an install
      * whose app has not pushed the mirror yet, and the safe choice for a cold
      * read is to do nothing rather than release on a unit it has heard nothing
-     * about. Once the app has run it writes the key — ON, or OFF on a unit set up
-     * with the kernel source remap — and this fallback is never reached.
+     * about. Once the app has run it writes the key, carrying whatever the
+     * driver's switch says, and this fallback is never reached.
      */
     private boolean releaseOnSleep() {
         try {

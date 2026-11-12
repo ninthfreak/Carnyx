@@ -709,23 +709,29 @@ pub struct Settings {
     pub permissions_asked: bool,
     pub clearing_logos: bool,
     pub details_open: bool,
-    /// Hand the FM source back when the head unit says it is going to sleep
-    /// (#92).
+    /// Stop FM when Carnyx is closed, the way the stock radio app does (#92).
     ///
-    /// DEFAULT ON. The switch exists to stop the stock radio app relaunching on
-    /// wake: hand the MCU source back to Android at sleep and there is nothing
-    /// for the unit to restore into FM. On a plain unit that is the only lever a
-    /// driver has on the wake relaunch, so it ships on.
+    /// DEFAULT ON, AND IT STAYS ON — the behaviour the owner asked to duplicate:
+    /// *"Whenever the stock radio app is closed/force closed, the radio audio
+    /// stops. It doesn't matter if it was in the foreground or not."* The lever
+    /// is the FM source handback: when the Activity is torn down (`Destroy`),
+    /// `CarnyxWake.onAppDestroyed` hands the MCU source back and FM goes silent,
+    /// with no check on whether Carnyx was in front.
     ///
-    /// TURN IT OFF ON A UNIT THAT HAS THE KERNEL SOURCE REMAP INSTALLED. The
-    /// remap (`replace_source_list.xml`, read in `docs/vendor/`) points the radio
-    /// source at Carnyx, so on such a unit "restore the radio source" IS "launch
-    /// Carnyx" — the goal — and the two fight: `SourceMgr.keepCurrentSource`
-    /// decides at power-off whether to restore the radio source at all by reading
-    /// `mcu_current_source`, the exact byte this switch sets to 0, so releasing
-    /// suppresses the very launch the remap wants. Installing the remap is a
-    /// provisioning step done outside this app (`tools/radio-takeover.sh`); a
-    /// driver who does it turns this off. See `docs/vendor/replace_source_list.xml`.
+    /// ONE CASE IT CANNOT COVER: a force-stop from Android's Settings screen
+    /// delivers no callback of any kind, so nothing runs and nothing releases
+    /// (recorded in docs/TASKS.md under #133, 2026-09-11). An ordinary close and
+    /// ACC-off both deliver `Destroy`.
+    ///
+    /// NOT EXPECTED TO FIGHT THE KERNEL REMAP. On paper it could: the handback
+    /// zeroes `mcu_current_source`, which `SourceMgr.keepCurrentSource` reads at
+    /// power-off. But the 2026-09-17 drive saw the handback take
+    /// (`mcu_current_source` 4 -> 0) and the radio app still launch afterwards,
+    /// because the kernel restores from its own `SourceKeeper` record — see
+    /// `docs/vendor/README.md`. And the owner reports that attempts to stop FM at
+    /// shut-off never worked. So with the remap installed the radio should still
+    /// come back as Carnyx on wake. NOT CONFIRMED for the remap itself: whether
+    /// this switch was on during the owner's 2026-11-12 wake test was not recorded.
     pub release_on_sleep: bool,
     /// The status-bar clock (§4.8). Default ON.
     ///
