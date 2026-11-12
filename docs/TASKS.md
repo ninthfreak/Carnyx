@@ -1306,6 +1306,17 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 138. Handoff for creating/altering the factory remap XML
+**DONE.** `docs/vendor/FACTORY-XML-HANDOFF.md` — a self-contained brief for
+remapping any kernel source (not just radio) by hand or by the script, written
+so a fresh session can act from it alone. Covers the launch mechanism, the config
+path (`ro.nwd.config.path`, `/data/nwdappconfig` here), the file format, the full
+appid table from `SourceConstant`, which sources are safe to remap, the adb
+recipe for an arbitrary appid, the hard rules (merge/backup/reload/className
+fallback/release-on-sleep), the prerequisites and gotchas, and what is measured
+vs. inferred. Asked for by the owner: *"Make me the handoff for factory XML
+editing stuff."*
+
 ### 137. Remove the radio-takeover ability from the Carnyx app
 **DONE.** The owner's call, verbatim: *"Carnyx should have all 'radio takeover'
 bits removed. Due to how this had to finally be achieved, it is clearly out of
