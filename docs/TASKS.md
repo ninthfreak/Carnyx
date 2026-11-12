@@ -1307,7 +1307,7 @@ covered `autostart`'s removal now covers all four.
 Closes #87, #89 and #90.
 
 ### 142. Four appearance modes: Light, Dark, the headlights, and sunrise/sunset
-**BUILT AND TESTED ON THE HOST. NOT YET SEEN ON THE UNIT.** The owner: *"The app
+**BUILT AND TESTED ON THE HOST. NOT YET DRIVEN WITH CARNYX.** The owner: *"The app
 does not put itself into dark mode when headlights are turned on. I'd like this
 fixed, but I'd also like it to be optional. I'd like a new option to be added
 where it switched between light and dark mode based on time of day, whether or not
@@ -1367,11 +1367,20 @@ dropping the headlight arm's `scheme_dirty` and the tick's minute re-check fails
 the headlight and the sun tests. New shots `settings-theme-evening` and
 `-portrait` show the live lines; all 105 shots render.
 
-**Not verified on the unit:** no Carnyx drive log has ever contained a
-`com.nwd.ACTION_ILL_STATE_CHANGE` line. The `1` = lights on reading is CarFM's
-(measured 2026-08-01). The next drive with the lights switched on and off settles
-it: the log should show `illumination: [extra_ill_state=1 (…)] headlights on`
-then `theme: dark (headlights on)`.
+**The signal is proven; Carnyx's use of it has not been driven yet.** CarFM
+switched to dark on this broadcast on this unit: `extra_ill_state` toggles 1/0
+with the headlights, 1 = on (measured 2026-08-01, `RadioScreen.tsx:2367-2419`).
+The owner confirms CarFM's dark mode worked from it (2026-11-12). Carnyx registers
+the same action (`NwdBridge.startIlluminationWatch`), writes the extras dump in
+the same `key=value (Type)` form as CarFM's `NwdRadioModule.kt:231-232`, and
+reads the same `extra_ill_state=1` CarFM's regex read. CarFM's clock guess before
+the first report was 7 PM to 7 AM, the same as here.
+
+**One difference from CarFM:** CarFM read any value but 1 as lights off;
+Carnyx acts only on 1 or 0 and logs anything else as "not understood". Only 1 and
+0 have been seen. On the first drive, the log should show
+`illumination: [extra_ill_state=1 (…)] headlights on` then
+`theme: dark (headlights on)`.
 
 ### 141. Station logos on the strip and the peek cards without a GPS fix
 **DONE.** The owner: *"The downloaded logos for stations do not appear on the
