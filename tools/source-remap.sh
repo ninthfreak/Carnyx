@@ -12,7 +12,7 @@
 #
 #   SOURCE  a name from `sources` (music, video, gps, radio, launcher…) or its appid number.
 #   APP     a number from `apps`, a package name, package/activity, or a word to
-#           search for (`set music spotify`). Left out, you pick from a numbered list.
+#           search for (`set music player`). Left out, you pick from a numbered list.
 #   reset   puts ONE source back the way the original file had it; `reset all`
 #           puts the whole original file back.
 #
