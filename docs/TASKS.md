@@ -1306,6 +1306,47 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 139. Remap any factory source, and pick the app from the unit's own list
+**BUILT. NOT YET RUN AGAINST THE UNIT.** The owner asked for *"a more
+sophisticated script"* that can *"edit any of the factory app pointers, not
+just the radio"* and *"read the identifiers of installed apps on the head unit
+so I don't have to manually enter them."*
+
+**Built:** `tools/source-remap.sh`, with `sources`, `find`, `list`, `apps`,
+`set` and `reset`. Connecting, finding the unit, root, the remount rule and the
+`adb version` check are `radio-takeover.sh`'s, unchanged in behaviour.
+
+- *Any source:* by name (`music`, `video`, `gps`, `launcher`, …, plus `nav`,
+  `fm`, `home`, `bluetooth`, `settings`) or by appid, from the #138 table.
+- *The app:* a number from `apps`, an exact package, `package/activity`, or a
+  word to search package names for. Left out, a numbered list to pick from.
+  `apps` reads `cmd package query-activities` for MAIN/LAUNCHER and MAIN/HOME,
+  user-installed first; on an older `cmd` it asks `resolve-activity` per
+  package in one shell. A package that is not installed, or has nothing to
+  launch, is refused before root is asked for.
+- *The file:* text inside `<!-- -->` is never read or edited. Only the named
+  source's entries change, and the result is parsed and compared with what was
+  there before it is written; split or non-self-closed entries for that source
+  are refused. Duplicate entries for the source become one.
+- *The original:* backed up once as `replace_source_list.xml.carnyx-backup`,
+  the name `radio-takeover.sh` uses, or recorded as absent with
+  `replace_source_list.xml.carnyx-absent`.
+- *Reset per source:* `reset music` restores the original's music entry or
+  removes ours; when nothing differs from the original, the original returns
+  byte for byte and the record goes. `reset all` restores the whole original.
+- *The camera* (appid 13, the reverse camera) needs `--force`.
+
+**Tested on the host:** `tools/test-source-remap.sh`, 114 checks against
+`test-radio-takeover.sh`'s fake unit extended with `pm` and `cmd package`.
+`tools/test-radio-takeover.sh` still passes.
+
+**Not answered by it:** taking Video out of the MODE cycle. The remap file can
+only change which app a source opens; the owner asked about this and it was
+reported as untried leads, not built.
+
+**Still open:** `radio-takeover.sh undo` restores the whole backup, so after
+this script has set other sources it puts those back too. Use `reset radio`.
+
 ### 138. Handoff for creating/altering the factory remap XML
 **DONE.** `docs/vendor/FACTORY-XML-HANDOFF.md` — a self-contained brief for
 remapping any kernel source (not just radio) by hand or by the script, written
