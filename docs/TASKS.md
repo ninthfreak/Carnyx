@@ -1321,6 +1321,13 @@ the switch back to ON by default. `src/lib.rs` calls `android::on_app_destroyed`
 `CarnyxWake.onAppDestroyed` has no foreground check, and with the switch on and FM
 playing it calls `NwdBridge.handBackNow`, which releases FM.
 
+**ON BY DEFAULT IS NOT ON FOR AN EXISTING INSTALL.** `prefs::to_json` writes
+`releaseOnSleep` on every save (`src/prefs.rs:294`) and loading takes the saved
+value over the default (`src/prefs.rs:263`). A unit that last saved while the
+default was OFF (#133 to #137) keeps OFF after updating, unless the driver turned
+it on by hand. On the owner's unit, check Settings ▸ "Stop the radio when Carnyx
+closes" and turn it on.
+
 **One limit, already recorded under #133 (2026-09-11):** a force-stop from
 Android's Settings screen delivers no callback at all, so nothing runs and FM is
 not released. An ordinary close and ACC-off both deliver `Destroy`.
