@@ -1329,8 +1329,9 @@ property. Carnyx never read it:
 read-back can be checked against the file #135 installed.
 
 ### 135. Install the radio takeover from a phone, over network ADB
-**INSTALLED ON THE UNIT 2026-11-12, BY THIS SCRIPT. NOT YET SEEN TO WORK ON
-WAKE.** #133's outcome A needs
+**INSTALLED ON THE UNIT 2026-11-12, BY THIS SCRIPT, AND WORKING ON WAKE.** The
+owner, verbatim: *"The radio does come up as Carnyx, I've already tested it."*
+#133's outcome A needs
 `<config>/app/replace_source_list.xml` written, and the unit measured that no
 unprivileged app can write it (`docs/vendor/README.md`, "The route is closed on
 this unit"). What remains is a privileged ADB shell. The owner asked for the
@@ -1416,14 +1417,15 @@ What the install's output shows, from the code that prints it:
 - The connection reached "device" on the first try: `connect` prints adb's
   answers for any other state, and none were printed.
 
-**Still open:** whether the radio source comes back as Carnyx on wake, the one
-thing this was for. And the owner found no network-ADB switch on the unit, so
-the script's closing "switch network ADB off" has nothing to act on yet.
+**On wake, the radio source comes back as Carnyx** — the owner tested it the
+same day (quoted at the top of this entry). Still open: the owner found no
+network-ADB switch on the unit, so the script's closing "switch network ADB off"
+has nothing to act on yet.
 
 **What one run on the unit settles:** whether its ADB listens on the network,
 whether `adb root` is allowed, and how `<config>` is mounted — the three things no
 host test can know. Then whether the radio source comes back as Carnyx on wake.
-The first three were settled 2026-11-12 (below); the wake is not.
+All four were settled 2026-11-12: the first three below, the wake by the owner.
 
 ### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
 **BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change
