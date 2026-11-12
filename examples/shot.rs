@@ -453,8 +453,8 @@ enum State {
     /// The same instant in 24-hour, where it zero-pads and drops the meridiem.
     Clock24,
     SettingsEggs,
-    /// Settings at 5 PM in Madison on 2026-11-12, after sunset, with no headlight
-    /// report yet: the picker's live lines, and the sun's fallback deciding.
+    /// Settings at 5 PM in Madison on 2026-11-12, after sunset, on the default
+    /// (follow sunrise and sunset): the picker's live lines, the sun deciding.
     SettingsEvening,
     /// §6.4's dark-mode logo picker, the step after a logo is assigned.
     LogoDarkPick,

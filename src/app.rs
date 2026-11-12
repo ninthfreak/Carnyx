@@ -9865,7 +9865,7 @@ mod tests {
     /// The owner: *"The app does not put itself into dark mode when headlights
     /// are turned on."* The broadcast was received and logged and nothing read
     /// it. Driven through `ingest_illumination` with the dump the unit sends
-    /// (`NwdBridge.startIlluminationWatch`), on the default theme.
+    /// (`NwdBridge.startIlluminationWatch`), with the headlights mode chosen.
     ///
     /// A HOST BUILD HAS NO EPOCH, so before the report there is nothing to
     /// decide on and `Pal` is left alone — which is what keeps every shot that
@@ -9875,7 +9875,8 @@ mod tests {
         let _ui_lock = harness::ui_lock();
         let (ui, driver) = app_for("headlights");
         let dark = |ui: &AppWindow| ui.global::<crate::Pal>().get_dark();
-        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Headlights, "the default");
+        ui.invoke_settings_pick_theme(2);
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Headlights);
         assert!(!dark(&ui), "light before any report");
         assert_eq!(driver.state.borrow().scheme_dark, None, "and nothing was decided");
 
@@ -10057,7 +10058,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// THE PICKER IS FOUR ROWS, THE HEADLIGHTS LIT BY DEFAULT, AND A TAP MOVES
+    /// THE PICKER IS FOUR ROWS, THE SUN LIT BY DEFAULT, AND A TAP MOVES
     /// THE LIGHT. An index past the end changes nothing.
     #[test]
     fn the_theme_picker_has_four_rows_and_a_tap_moves_the_light() {
@@ -10068,15 +10069,15 @@ mod tests {
             rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
             ["Light", "Dark", "Follow the headlights", "Follow sunrise and sunset"]
         );
-        assert_eq!(rows.iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, true, false]);
+        assert_eq!(rows.iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, false, true]);
 
-        ui.invoke_settings_pick_theme(3);
-        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Sun);
-        assert_eq!(theme_rows_on(&ui).iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, false, true]);
+        ui.invoke_settings_pick_theme(2);
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Headlights);
+        assert_eq!(theme_rows_on(&ui).iter().map(|r| r.2).collect::<Vec<_>>(), [false, false, true, false]);
 
         ui.invoke_settings_pick_theme(9);
         ui.invoke_settings_pick_theme(-1);
-        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Sun, "out of range: unchanged");
+        assert_eq!(driver.state.borrow().settings.theme, settings::Theme::Headlights, "out of range: unchanged");
     }
 
     /// THE REGRESSION, pinned.

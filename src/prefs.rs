@@ -178,10 +178,10 @@ fn theme_from(name: &str) -> Option<Theme> {
         "headlights" => Some(Theme::Headlights),
         "sun" => Some(Theme::Sun),
         // WHAT EVERY INSTALL BEFORE #142 SAVED unless the driver picked light or
-        // dark by hand. "System" meant "follow the car", which on this ROM never
-        // worked — Android's night flag is pinned at DAY — so it comes back as
-        // the mode that does what it was for.
-        "system" => Some(Theme::Headlights),
+        // dark by hand. It was the default, not a choice — and on this ROM it
+        // did nothing, Android's night flag being pinned at DAY — so it comes
+        // back as today's default. Light and dark, which were choices, are kept.
+        "system" => Some(Theme::Sun),
         _ => None,
     }
 }
@@ -456,10 +456,10 @@ mod tests {
     }
 
     /// THE THEME, #142: four names, and every install before it saved
-    /// "system" — which comes back as following the headlights, the mode that
-    /// does what "system" was for. An unknown name keeps the default.
+    /// "system" — the old default, which comes back as the new one, following
+    /// the sun. An unknown name keeps the default.
     #[test]
-    fn theme_names_round_trip_and_system_becomes_headlights() {
+    fn theme_names_round_trip_and_system_becomes_the_sun() {
         for t in [Theme::Light, Theme::Dark, Theme::Headlights, Theme::Sun] {
             let d = tmpdir("theme-names");
             save(&d, &Prefs { theme: t, ..Prefs::default() });
@@ -467,10 +467,10 @@ mod tests {
         }
         let d = tmpdir("theme-legacy");
         fs::write(path(&d), r#"{"theme":"system"}"#).unwrap();
-        assert_eq!(load(&d).theme, Theme::Headlights);
+        assert_eq!(load(&d).theme, Theme::Sun);
         let d = tmpdir("theme-unknown");
         fs::write(path(&d), r#"{"theme":"sepia"}"#).unwrap();
-        assert_eq!(load(&d).theme, Theme::Headlights, "the default");
+        assert_eq!(load(&d).theme, Theme::Sun, "the default");
     }
 
     /// THE PLACE is written coarse and read back coarse; a pair that is not on
@@ -536,7 +536,7 @@ mod tests {
         .unwrap();
         let p = load(&d);
         assert_eq!(p.presets, vec![at(88.7, None), at(105.5, None)], "presets survive");
-        assert_eq!(p.theme, Theme::Headlights, "unknown theme falls back");
+        assert_eq!(p.theme, Theme::Sun, "unknown theme falls back");
         assert_eq!(p.logos_on, Prefs::default().logos_on, "wrong type falls back");
         assert!(p.diag_on, "the readable field is still read");
     }

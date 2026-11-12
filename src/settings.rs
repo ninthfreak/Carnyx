@@ -77,8 +77,8 @@ pub struct SourceRow {
 /// FOUR, AND "SYSTEM" IS GONE. It was CarFM's `useColorScheme()` deferral, and
 /// on this ROM Android's own night flag is pinned at DAY (measured 2026-08-01,
 /// #57), so it never did anything — `apply_theme` left the palette wherever it
-/// was. Its intent survives as `Headlights`, the signal this unit actually
-/// sends; a saved "system" is read back as that (`prefs::theme_from`).
+/// was. A saved "system" is read back as the default, `Sun`
+/// (`prefs::theme_from`): it was the default, not a choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
     Light,
@@ -850,11 +850,10 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             selected: Source::Nwd,
-            // FOLLOW THE HEADLIGHTS, so a fresh install goes dark with the car
-            // as every other app on the unit does — the owner's "the app does not
-            // put itself into dark mode when headlights are turned on". It is a
-            // choice in the picker, not a fixed behaviour.
-            theme: Theme::Headlights,
+            // FOLLOW SUNRISE AND SUNSET. The owner, 2026-11-12: "I want
+            // Carnyx' default to be time based light/dark." The headlights are
+            // a choice in the picker.
+            theme: Theme::Sun,
             battery: Battery::NotExempt,
             logos_on: false,
             // FALSE, so the one offer happens on the next launch — of a fresh
@@ -1266,7 +1265,7 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.selected).collect::<Vec<_>>(), [false, false, false, true]);
         assert_eq!(rows[2].kind, "about Follow the headlights");
         assert!(rows.iter().all(|r| r.available && r.badge.is_empty()), "no badges, nothing greyed");
-        assert_eq!(Settings::default().theme, Theme::Headlights, "a fresh install follows the car");
+        assert_eq!(Settings::default().theme, Theme::Sun, "a fresh install follows the sun");
     }
 
     /// THE NAV PICKER: two rows, the chosen one lit, each naming what it found.

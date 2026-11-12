@@ -1350,11 +1350,14 @@ is dark."
 chips (SYSTEM / LIGHT / DARK) could not hold four options with names this long, so
 APPEARANCE now uses the same radio-row picker as the tuner source and the nav app.
 
-**Defaults and existing installs.** The default is Follow the headlights. A saved
-`"system"` loads as Follow the headlights; a saved `"light"` or `"dark"` is kept.
+**Defaults and existing installs.** The default is Follow sunrise and sunset.
+The owner, 2026-11-12: *"I want Carnyx' default to be time based light/dark."*
+(It was Follow the headlights until then; that build never reached the unit.) A
+saved `"system"`, the old default rather than a choice, loads as the new default;
+a saved `"light"` or `"dark"` is kept.
 
 **Evidence.** `cargo test`: 427 passed. New tests: `sun::tests` (6),
-`scheme::tests` (8), `prefs::tests::theme_names_round_trip_and_system_becomes_headlights`,
+`scheme::tests` (8), `prefs::tests::theme_names_round_trip_and_system_becomes_the_sun`,
 `prefs::tests::the_place_is_kept_to_a_tenth_of_a_degree_and_nonsense_is_dropped`,
 `settings::tests::the_theme_picker_has_four_rows_and_lights_the_chosen_one`,
 and six app tests: `the_headlights_turn_the_face_dark_and_back`,
