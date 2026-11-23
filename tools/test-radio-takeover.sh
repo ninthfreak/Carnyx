@@ -67,6 +67,7 @@ under_cfg() { case "$1" in "$cfg" | "$cfg"/*) return 0 ;; esac; return 1; }
 # `refuse` names a target (or "all") that nothing answers for.
 refused() { [ "$(get refuse)" = all ] || [ "$(get refuse)" = "$1" ]; }
 case "$cmd" in
+    version) echo "Android Debug Bridge version 1.0.41" ;;
     connect)
         if refused "$1"; then echo "failed to connect to '$1': Connection refused"; exit 1; fi
         echo "connected to $1" ;;
@@ -366,6 +367,22 @@ check "unanswered prompt: says to tap Allow" said "Tap Allow"
 check "unanswered prompt: prints adb's own message" said "Otherwise check for a confirmation dialog"
 
 # ── adb's own words, on every failure ────────────────────────────────────────
+# An adb that cannot start, as Termux's did on the owner's phone.
+unit broken-adb
+cat > "$WORK/bin/adb-unlinked" <<'BAD'
+#!/bin/sh
+echo 'CANNOT LINK EXECUTABLE "adb": cannot locate symbol "_ZNSt6__ndk113__hash_memoryEPKvm" referenced by "/data/data/com.termux/files/usr/bin/adb"...' >&2
+exit 1
+BAD
+chmod +x "$WORK/bin/adb-unlinked"
+MOCK_STATE=$S ADB=$WORK/bin/adb-unlinked CONNECT_PAUSE=0 CONNECT_TRIES=3 \
+    bash "$SCRIPT" check 10.0.0.7 > "$S/out" 2>&1 < /dev/null
+echo $? > "$S/rc"
+check "adb that cannot start: exits 1" rc 1
+check "adb that cannot start: stops before connecting" not said "Connecting to"
+check "adb that cannot start: prints the loader's words" said '| CANNOT LINK EXECUTABLE "adb"'
+check "adb that cannot start: says how to fix it in Termux" said "pkg upgrade"
+
 unit offline auth=offline
 run check 10.0.0.7
 check "offline: exits 1" rc 1

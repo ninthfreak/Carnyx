@@ -906,10 +906,11 @@ public final class NwdBridge {
      *
      * <p>Volatile, not synchronized: it is read on a binder thread and written
      * on the UI thread, and a stale read costs one ignition cycle of the old
-     * behaviour. FALSE by default since #133, matching `Settings::default`, so a
-     * build where the mirror never runs leaves the radio alone — which is what
-     * the kernel remap wants, since the handback fights it. See
-     * `Settings::release_on_sleep`.
+     * behaviour. FALSE as the in-memory starting value, so a process where the
+     * mirror has not run yet leaves the radio alone rather than releasing on
+     * nothing — this is the cold-start value, NOT the app default, which is ON
+     * (`Settings::release_on_sleep`); the app pushes the real value as soon as it
+     * runs. See `Settings::release_on_sleep`.
      */
     private static volatile boolean releaseOnSleep = false;
 

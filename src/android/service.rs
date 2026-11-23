@@ -187,32 +187,6 @@ pub fn process_age_seconds() -> Option<u64> {
     .flatten()
 }
 
-/// What kind of build the ROM is, and whether `adb root` could work.
-///
-/// See `CarnyxProcess.buildKind` for why the app reports this at all: the remap
-/// needs a privileged write that no app code can make, so whether this unit would
-/// accept `adb root` decides whether #133's outcome A is reachable — and that
-/// answer is two system properties rather than an evening with a cable.
-///
-/// `None` on every host build, where the class does not exist.
-pub fn build_kind() -> Option<String> {
-    let class = CLASS_REF.get()?;
-    let jvm = JavaVM::singleton().ok()?;
-    jvm.attach_current_thread(|env: &mut Env| -> Result<String, jni::errors::Error> {
-        let s = env
-            .call_static_method(
-                class,
-                jni_str!("buildKind"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )?
-            .l()?;
-        let s = JString::cast_local(env, s)?;
-        s.try_to_string(env)
-    })
-    .ok()
-}
-
 /// The clock's two facts (§4.8): the local time and the system's 12/24 setting.
 ///
 /// ONE CALL FOR THE TIME so both fields come from one reading — see

@@ -412,8 +412,12 @@ it contains, overrides the package and class the kernel is about to launch:
     ReplaceSourceList.CONFIG = getConfigPath() + "/app/replace_source_list.xml"
     getConfigPath() = SystemProperties("ro.nwd.config.path", "/config")
 
-so on this unit: **`/config/app/replace_source_list.xml`**. Format, one entry per
-remapped source:
+and on this unit `ro.nwd.config.path` is **`/data/nwdappconfig`** — MEASURED
+2026-11-12 by `tools/radio-takeover.sh check` (#135) — so the file is
+**`/data/nwdappconfig/app/replace_source_list.xml`**. Everything in this file
+written before that date assumed the `/config` default without reading the
+property, and measured `/config`: the wrong directory (#136). Format, one entry
+per remapped source:
 
     <ReplaceSourceList>
       <ReplaceSourceItem appid="8" pkgName="com.ninthfreak.carnyx"
@@ -466,6 +470,11 @@ properties file, so a unit with a different config could route the power-off sav
 differently.
 
 ## Where the file goes, and how to write it
+
+**CORRECTION, 2026-11-12 (#136):** the kernel reads `<ro.nwd.config.path>/app`,
+and on this unit that is `/data/nwdappconfig/app`, not `/config/app`. This
+section and the copier sections below were written about `/config`; what they
+measured is true of `/config` and says nothing about `/data/nwdappconfig`.
 
 `/config` is a system partition, and the kernel only ever reads
 `replace_source_list.xml`. But `com.nwd.factory.setting` exposes a general
@@ -538,6 +547,10 @@ gives `CopyFolder(<COPY_PATH>/payload/app, /config/app)`, which **creates**
 part of the payload rather than assumed to be there.
 
 ### THE ROUTE IS CLOSED ON THIS UNIT: `/config` is not writable by the copier (2026-09-25)
+
+**MEASURED ON THE WRONG DIRECTORY (#136).** The kernel's directory on this unit is
+`/data/nwdappconfig` (2026-11-12). What follows is true of `/config`; whether the
+copier can write `/data/nwdappconfig` has not been tried.
 
 The layout above was built, staged correctly and confirmed at the dialog — and
 `/config/app` was still ABSENT afterward:

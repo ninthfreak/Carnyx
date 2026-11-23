@@ -70,7 +70,6 @@ const JAVA_SOURCES: &[&str] = &[
     "com/ninthfreak/carnyx/CarnyxComaps.java",
     "com/ninthfreak/carnyx/CarnyxOverlay.java",
     "com/ninthfreak/carnyx/CarnyxKernel.java",
-    "com/ninthfreak/carnyx/CarnyxRemap.java",
     "com/nwd/radio/service/data/Frequency.java",
     "com/nwd/radio/service/data/RadioPoint.java",
     // OSMAND'S AIDL PAYLOADS, and they are here for javac's sake exactly as the

@@ -63,7 +63,9 @@
       <config>/app/replace_source_list.xml
 
   where <config> is SystemProperties "ro.nwd.config.path", default "/config".
-  On this unit that resolves to /config/app/replace_source_list.xml.
+  On this unit the property is set: /data/nwdappconfig (measured 2026-11-12,
+  #135), so the file is /data/nwdappconfig/app/replace_source_list.xml. The
+  "/config" below is the default, and NOT this unit's directory (#136).
 
   /config is a system partition. The kernel only READS this file, but the
   factory app's exported, permissionless CopyFileService can WRITE it — Carnyx

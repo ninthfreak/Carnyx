@@ -72,35 +72,57 @@ pub struct SourceRow {
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
+/// How the face picks light or dark (#142). See `crate::scheme` for the rules.
+///
+/// FOUR, AND "SYSTEM" IS GONE. It was CarFM's `useColorScheme()` deferral, and
+/// on this ROM Android's own night flag is pinned at DAY (measured 2026-08-01,
+/// #57), so it never did anything — `apply_theme` left the palette wherever it
+/// was. A saved "system" is read back as the default, `Sun`
+/// (`prefs::theme_from`): it was the default, not a choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
-    System,
     Light,
     Dark,
+    /// Dark while the head unit reports the headlights on.
+    Headlights,
+    /// Dark from sunset to sunrise where the car is.
+    Sun,
 }
 
 impl Theme {
-    pub const ORDER: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
+    /// The picker's order, top to bottom. The index is what the panel sends
+    /// back.
+    pub const ORDER: [Theme; 4] = [Theme::Light, Theme::Dark, Theme::Headlights, Theme::Sun];
 
-    /// The chip label. UPPER CASE is the chip's own styling in the reference and
-    /// it is baked into the string because the chip is matched by label.
+    /// The row's title. Words, not chip capitals: the owner asked for "better
+    /// naming" than "Automatic based on car lighting", and a four-way choice
+    /// whose two automatic modes are told apart by their names needs room the
+    /// chip strip did not have.
     pub fn label(self) -> &'static str {
         match self {
-            Theme::System => "SYSTEM",
-            Theme::Light => "LIGHT",
-            Theme::Dark => "DARK",
+            Theme::Light => "Light",
+            Theme::Dark => "Dark",
+            Theme::Headlights => "Follow the headlights",
+            Theme::Sun => "Follow sunrise and sunset",
         }
-    }
-
-    /// Match a tapped chip back to the enum. An unknown label leaves the current
-    /// choice alone rather than silently resetting to SYSTEM.
-    pub fn parse(label: &str) -> Option<Theme> {
-        Theme::ORDER.into_iter().find(|t| t.label() == label)
     }
 }
 
-pub fn theme_chips() -> Vec<String> {
-    Theme::ORDER.iter().map(|t| t.label().to_string()).collect()
+/// The theme picker's four rows. The descriptions are passed in because two of
+/// them report live state — the headlights, the next sunrise — which
+/// `crate::scheme` works out and this module has no business knowing.
+pub fn theme_rows(chosen: Theme, describe: impl Fn(Theme) -> String) -> Vec<SourceRow> {
+    Theme::ORDER
+        .iter()
+        .map(|&t| SourceRow {
+            name: t.label().to_string(),
+            kind: describe(t),
+            badge: String::new(),
+            badge_lit: false,
+            available: true,
+            selected: t == chosen,
+        })
+        .collect()
 }
 
 // ── Navigation app ───────────────────────────────────────────────────────────
@@ -303,28 +325,6 @@ pub enum Action {
     /// removed, and the row's own sub-line says so, because "notification
     /// access" on a radio is a thing a driver is right to look twice at.
     AskListenerPermission,
-    /// Install the kernel source remap. See `CarnyxRemap.java` and
-    /// `docs/vendor/README.md`.
-    ///
-    /// THE ONLY ROW THAT WRITES A SYSTEM PARTITION, which is why it is last and
-    /// why its answer is never assumed. It asks the vendor's own exported file
-    /// copier to drop `replace_source_list.xml` into `/config/app`, after which
-    /// the head unit's kernel launches Carnyx wherever it would have launched the
-    /// stock radio app — #133 outcome A. Whether the factory process can write
-    /// `/config` is not knowable from the firmware, so the tap only REQUESTS it
-    /// and [`Action::CheckRadioRemap`] reads the result back.
-    /// PARKED — no row in [`diag_actions`]. Measured 2026-09-25: the vendor
-    /// copier runs as an ordinary uid and its `mkdirs` on `/config/app` fails, so
-    /// this cannot install anything on this unit however it is driven. The
-    /// machinery is correct and stays for a unit whose `/config` is writable.
-    InstallRadioRemap,
-    /// Read the installed remap back. See [`Action::InstallRadioRemap`].
-    ///
-    /// A SEPARATE ROW BECAUSE THE COPY IS ANOTHER PROCESS' WORK, asynchronous and
-    /// behind a confirmation dialog. Install asks; this checks whether
-    /// `/config/app/replace_source_list.xml` actually arrived and names Carnyx.
-    /// Useful on its own, too — it reports the current state whenever tapped.
-    CheckRadioRemap,
 }
 
 /// The rows that exist right now, in order, with their dividers.
@@ -359,12 +359,6 @@ pub fn diag_actions() -> Vec<DiagAction> {
         //   below 33 is a row nobody here can check; that held while it was the
         //   newest thing in the panel and does not now. A unit at 33+ wants it
         //   back.
-        //
-        // * InstallRadioRemap — measured 2026-09-25: the vendor copier runs as an
-        //   ordinary uid and its `mkdirs` on `/config/app` fails, so this row
-        //   cannot install anything on this unit however it is driven. The CHECK
-        //   below stays, because it still reports the truth about `/config` and
-        //   would confirm a remap placed by a privileged shell.
         DiagAction {
             label: "Allow drawing over other apps".into(),
             sub: String::new(),
@@ -380,16 +374,6 @@ pub fn diag_actions() -> Vec<DiagAction> {
             sub: String::new(),
             divider_above: false,
             action: Action::AskListenerPermission,
-        },
-        // Its own group above "Clear log". The install it used to sit beside is
-        // parked — see the note at the top of this list — and this one stays
-        // because it still answers a live question: what `/config` actually holds,
-        // and whether a remap placed there by a privileged shell took.
-        DiagAction {
-            label: "Check radio takeover".into(),
-            sub: String::new(),
-            divider_above: true,
-            action: Action::CheckRadioRemap,
         },
         DiagAction {
             label: "Clear log".into(),
@@ -747,30 +731,29 @@ pub struct Settings {
     pub permissions_asked: bool,
     pub clearing_logos: bool,
     pub details_open: bool,
-    /// Hand the FM source back when the head unit says it is going to sleep
-    /// (#92).
+    /// Stop FM when Carnyx is closed, the way the stock radio app does (#92).
     ///
-    /// DEFAULT OFF SINCE THE KERNEL REMAP (#133). The switch exists to stop the
-    /// stock radio app relaunching on wake: hand the MCU source back to Android
-    /// at sleep and there is nothing for the unit to restore into FM. It works,
-    /// but it is a workaround for not being able to touch the launch, and the
-    /// firmware read in `docs/vendor/` found the real lever —
-    /// `replace_source_list.xml` remaps the radio source (appid 8) to Carnyx, so
-    /// the kernel launches THIS app wherever it would have launched the stock
-    /// one.
+    /// DEFAULT ON, AND IT STAYS ON — the behaviour the owner asked to duplicate:
+    /// *"Whenever the stock radio app is closed/force closed, the radio audio
+    /// stops. It doesn't matter if it was in the foreground or not."* The lever
+    /// is the FM source handback: when the Activity is torn down (`Destroy`),
+    /// `CarnyxWake.onAppDestroyed` hands the MCU source back and FM goes silent,
+    /// with no check on whether Carnyx was in front.
     ///
-    /// The two fight. `SourceMgr.keepCurrentSource` decides at power-off whether
-    /// to restore the radio source at all, and it reads `mcu_current_source` —
-    /// the exact byte this switch sets to 0. With the remap in place, "restore
-    /// the radio source" IS "launch Carnyx", so releasing suppresses the very
-    /// launch outcome A wants. Off is therefore the default that matches the
-    /// remap.
+    /// ONE CASE IT CANNOT COVER: a force-stop from Android's Settings screen
+    /// delivers no callback of any kind, so nothing runs and nothing releases
+    /// (recorded in docs/TASKS.md under #133, 2026-09-11). An ordinary close and
+    /// ACC-off both deliver `Destroy`.
     ///
-    /// ON is still meaningful on a unit WITHOUT the remap installed (no root, no
-    /// provisioning access): there the handback is the only thing that quiets FM
-    /// at ACC-off and on a force-close, so a driver who cannot write
-    /// `/config` turns it back on and gets outcome B/C. See
-    /// `docs/vendor/replace_source_list.xml`.
+    /// NOT EXPECTED TO FIGHT THE KERNEL REMAP. On paper it could: the handback
+    /// zeroes `mcu_current_source`, which `SourceMgr.keepCurrentSource` reads at
+    /// power-off. But the 2026-09-17 drive saw the handback take
+    /// (`mcu_current_source` 4 -> 0) and the radio app still launch afterwards,
+    /// because the kernel restores from its own `SourceKeeper` record — see
+    /// `docs/vendor/README.md`. And the owner reports that attempts to stop FM at
+    /// shut-off never worked. So with the remap installed the radio should still
+    /// come back as Carnyx on wake. NOT CONFIRMED for the remap itself: whether
+    /// this switch was on during the owner's 2026-11-12 wake test was not recorded.
     pub release_on_sleep: bool,
     /// The status-bar clock (§4.8). Default ON.
     ///
@@ -867,7 +850,10 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             selected: Source::Nwd,
-            theme: Theme::System,
+            // FOLLOW SUNRISE AND SUNSET. The owner, 2026-11-12: "I want
+            // Carnyx' default to be time based light/dark." The headlights are
+            // a choice in the picker.
+            theme: Theme::Sun,
             battery: Battery::NotExempt,
             logos_on: false,
             // FALSE, so the one offer happens on the next launch — of a fresh
@@ -875,7 +861,7 @@ impl Default for Settings {
             permissions_asked: false,
             clearing_logos: false,
             details_open: false,
-            release_on_sleep: false,
+            release_on_sleep: true,
             clock_on: true,
             nav_on: true,
             nav_app: NavApp::OsmAnd,
@@ -969,14 +955,13 @@ impl Settings {
 mod tests {
     use super::*;
 
-    /// FIVE ROWS, AND EVERY ONE OF THEM CAN STILL DO SOMETHING.
+    /// FOUR ROWS, AND EVERY ONE OF THEM CAN STILL DO SOMETHING.
     ///
-    /// The list has been cut twice for the same reason. Five of CarFM's vendor
-    /// probes went first — none had ever been written. Four more are parked now:
-    /// the two probes whose questions the firmware decompile answered, the
-    /// notification request for a permission this unit's API is too old to have,
-    /// and the remap install that the unit is measured to refuse. See the note in
-    /// [`diag_actions`] for each.
+    /// The list has been cut for the same reason more than once. Five of CarFM's
+    /// vendor probes went first — none had ever been written. Three more are
+    /// parked now: the two probes whose questions the firmware decompile
+    /// answered, and the notification request for a permission this unit's API is
+    /// too old to have. See the note in [`diag_actions`] for each.
     ///
     /// WHAT THE RULE IS, and it has survived both cuts: a row earns its place by
     /// being able to change or report something HERE. A row that can only say
@@ -991,15 +976,14 @@ mod tests {
                 "Save to file",
                 "Allow drawing over other apps",
                 "Allow notification access",
-                "Check radio takeover",
                 "Clear log",
             ]
         );
         assert_eq!(
             rows.iter().map(|a| a.divider_above).collect::<Vec<_>>(),
-            [false, true, false, true, true],
-            "the log well runs into the first row; rules open the permission pair, \
-             the takeover check, and the clear"
+            [false, true, false, true],
+            "the log well runs into the first row; rules open the permission pair \
+             and the clear"
         );
         // THE TWO PERMISSION ERRANDS KEEP THEIR ORDER: the overlay the pop-up
         // needs, then the listener, which is the one whose reason a driver cannot
@@ -1015,7 +999,6 @@ mod tests {
             Action::ProbeKeepAlive,
             Action::ProbeStockRadio,
             Action::AskNotifyPermission,
-            Action::InstallRadioRemap,
         ] {
             assert!(
                 !rows.iter().any(|r| r.action == parked),
@@ -1270,12 +1253,19 @@ mod tests {
         assert_eq!(absent[2].badge, "Unavailable");
     }
 
+    /// THE THEME PICKER: four rows in order, the chosen one lit, and each
+    /// carrying the description it was handed.
     #[test]
-    fn a_theme_chip_round_trips_and_an_unknown_label_is_refused() {
-        assert_eq!(theme_chips(), ["SYSTEM", "LIGHT", "DARK"]);
-        assert_eq!(Theme::parse("DARK"), Some(Theme::Dark));
-        assert_eq!(Theme::parse("Dark"), None);
-        assert_eq!(Theme::parse(""), None);
+    fn the_theme_picker_has_four_rows_and_lights_the_chosen_one() {
+        let rows = theme_rows(Theme::Sun, |t| format!("about {}", t.label()));
+        assert_eq!(
+            rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["Light", "Dark", "Follow the headlights", "Follow sunrise and sunset"]
+        );
+        assert_eq!(rows.iter().map(|r| r.selected).collect::<Vec<_>>(), [false, false, false, true]);
+        assert_eq!(rows[2].kind, "about Follow the headlights");
+        assert!(rows.iter().all(|r| r.available && r.badge.is_empty()), "no badges, nothing greyed");
+        assert_eq!(Settings::default().theme, Theme::Sun, "a fresh install follows the sun");
     }
 
     /// THE NAV PICKER: two rows, the chosen one lit, each naming what it found.

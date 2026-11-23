@@ -1306,8 +1306,270 @@ covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
 
+### 142. Four appearance modes: Light, Dark, the headlights, and sunrise/sunset
+**BUILT AND TESTED ON THE HOST. NOT YET DRIVEN WITH CARNYX.** The owner: *"The app
+does not put itself into dark mode when headlights are turned on. I'd like this
+fixed, but I'd also like it to be optional. I'd like a new option to be added
+where it switched between light and dark mode based on time of day, whether or not
+the sun is up."* The four options, renamed as asked: **Light**, **Dark**,
+**Follow the headlights**, **Follow sunrise and sunset**.
+
+**Why it never worked.** The illumination watch was started (#57) and the
+broadcast arrived, but the `TunerEvent::Illumination` arm logged Android's
+`uiMode` and dropped the extras, so `extra_ill_state` was never read; and the old
+SYSTEM theme deliberately set nothing (`apply_theme`). Now `scheme::parse_headlights`
+reads `extra_ill_state=1`/`0` (or `true`/`false`) from the dump, and anything else
+is logged as "not understood" and changes nothing.
+
+**What decides, in order** (`scheme::decide`):
+- Follow the headlights: the last report; before the first one, the sun; with no
+  place yet, 7 PM to 7 AM. The broadcast reports changes only and no getter has
+  been found (#57), so a start after dark with the lights already on hears
+  nothing until they change. That is what the fallbacks are for.
+- Follow sunrise and sunset: the sun; with no place yet, 7 PM to 7 AM.
+- With no clock at all (every host build, or a unit reading before 2026), nothing
+  is decided and the palette is left as it is.
+
+**What is stored is one coarse place, not a sunrise table.** `prefs.json` gains
+`"place":[lat,lon]` rounded to 0.1°, taken from the GPS fix and saved only when it
+moves a tenth of a degree. `src/sun.rs` works the times out from it (NOAA/Meeus
+equations, −0.833° horizon). Checked against the astral 3.2 library at eight
+pinned cases (Madison at both solstices, the equinox and today; the equator;
+Helsinki; Sydney; Anchorage): every rise and set within 40 s. Polar day and night
+are handled.
+
+**Re-checked once a minute** on the existing 1 s tick, and at once on a headlight
+report or a new place. The palette is written only when the answer changes, and
+every change is logged with its cause, e.g. `theme: dark (headlights on)`.
+
+**Each row says what it is doing now**, e.g. "The sun is down: dark until sunrise
+at 6:47 AM." (in the clock's own 12/24-hour form), or "The headlights are on, so it
+is dark."
+
+**DESIGN SUBSTITUTION: the chip strip is gone.** The reference's three upper-case
+chips (SYSTEM / LIGHT / DARK) could not hold four options with names this long, so
+APPEARANCE now uses the same radio-row picker as the tuner source and the nav app.
+
+**Defaults and existing installs.** The default is Follow sunrise and sunset.
+The owner, 2026-11-12: *"I want Carnyx' default to be time based light/dark."*
+(It was Follow the headlights until then; that build never reached the unit.) A
+saved `"system"`, the old default rather than a choice, loads as the new default;
+a saved `"light"` or `"dark"` is kept.
+
+**Evidence.** `cargo test`: 427 passed. New tests: `sun::tests` (6),
+`scheme::tests` (8), `prefs::tests::theme_names_round_trip_and_system_becomes_the_sun`,
+`prefs::tests::the_place_is_kept_to_a_tenth_of_a_degree_and_nonsense_is_dropped`,
+`settings::tests::the_theme_picker_has_four_rows_and_lights_the_chosen_one`,
+and six app tests: `the_headlights_turn_the_face_dark_and_back`,
+`a_chosen_light_or_dark_ignores_the_headlights`,
+`the_sun_mode_is_light_at_noon_and_dark_after_sunset`,
+`an_unset_clock_leaves_the_palette_alone`,
+`the_suns_place_is_remembered_and_learned_coarsely`,
+`the_theme_picker_has_four_rows_and_a_tap_moves_the_light`. Mutation check:
+dropping the headlight arm's `scheme_dirty` and the tick's minute re-check fails
+the headlight and the sun tests. New shots `settings-theme-evening` and
+`-portrait` show the live lines; all 105 shots render.
+
+**The signal is proven; Carnyx's use of it has not been driven yet.** CarFM
+switched to dark on this broadcast on this unit: `extra_ill_state` toggles 1/0
+with the headlights, 1 = on (measured 2026-08-01, `RadioScreen.tsx:2367-2419`).
+The owner confirms CarFM's dark mode worked from it (2026-11-12). Carnyx registers
+the same action (`NwdBridge.startIlluminationWatch`), writes the extras dump in
+the same `key=value (Type)` form as CarFM's `NwdRadioModule.kt:231-232`, and
+reads the same `extra_ill_state=1` CarFM's regex read. CarFM's clock guess before
+the first report was 7 PM to 7 AM, the same as here.
+
+**One difference from CarFM:** CarFM read any value but 1 as lights off;
+Carnyx acts only on 1 or 0 and logs anything else as "not understood". Only 1 and
+0 have been seen. On the first drive, the log should show
+`illumination: [extra_ill_state=1 (…)] headlights on` then
+`theme: dark (headlights on)`.
+
+### 141. Station logos on the strip and the peek cards without a GPS fix
+**DONE.** The owner: *"The downloaded logos for stations do not appear on the
+bottom selection bar or peek cards until there is a GPS lock. The hero card works
+fine in either state."*
+
+**Cause.** `push_presets` asked `art_for` for each tile's logo by
+`slot.row`'s call sign, and only a fix fills `row`. The hero asks by the row
+**or** the learned call sign (`push_hero`), which is why it worked. The strip now
+keys on `Slot::base()`, which falls back to the call sign the preset was saved
+with; the peek cards are built from the same tiles.
+
+**The GPS logo cache exists and works.** It is the learned dial-to-call-sign map,
+`src/callsigns.rs` (CarFM's `freq_callsign_v1`, stored as `callsigns.json`):
+`refresh_nearby` relearns and saves it on every fix (`src/app.rs:5940`, `:5947`)
+and `App::with_tuner` loads it at launch (`:1341`). It was never the problem. The
+strip did not read it.
+
+**Evidence.** `a_saved_logo_shows_on_the_strip_and_the_peeks_with_no_gps_fix`
+builds the App with no fix, seeds the map from one earlier fix, and asserts every
+tile and both peek cards draw a logo. Reverting the one-line fix fails it.
+
+### 140. "Stop the radio when Carnyx closes" means duplicate the stock app, and stays ON
+**DONE.** The owner settled what this switch is for, verbatim: *"Whenever the
+stock radio app is closed/force closed, the radio audio stops. It doesn't matter
+if it was in the foreground or not. This is the behavior I want to duplicate."*
+And on the shut-off case they had worried about: *"My previous attempts to get
+Carnyx to stop radio audio when the car is shut off all failed. If we couldn't do
+it on purpose, we probably don't have to worry much about doing it by accident."*
+
+**No code change: the behavior is already built.** It is the same request the
+owner made under #133, recorded in its 2026-09-11 section (*"kill the radio audio
+feed when the app is closed, whether this is a force close or not"*), and #137 put
+the switch back to ON by default. `src/lib.rs` calls `android::on_app_destroyed` on every `Destroy`;
+`CarnyxWake.onAppDestroyed` has no foreground check, and with the switch on and FM
+playing it calls `NwdBridge.handBackNow`, which releases FM.
+
+**ON BY DEFAULT IS NOT ON FOR AN EXISTING INSTALL.** `prefs::to_json` writes
+`releaseOnSleep` on every save (`src/prefs.rs:294`) and loading takes the saved
+value over the default (`src/prefs.rs:263`). A unit that last saved while the
+default was OFF (#133 to #137) keeps OFF after updating, unless the driver turned
+it on by hand. On the owner's unit, check Settings ▸ "Stop the radio when Carnyx
+closes" and turn it on.
+
+**One limit, already recorded under #133 (2026-09-11):** a force-stop from
+Android's Settings screen delivers no callback at all, so nothing runs and FM is
+not released. An ordinary close and ACC-off both deliver `Destroy`.
+
+**The wake tradeoff I had flagged is not expected to bite.** On paper the
+handback zeroes `mcu_current_source`, which `keepCurrentSource` reads at
+power-off. But the 2026-09-17 drive saw the handback take (4 -> 0) and the radio
+app still launch afterwards, because the kernel restores from its own
+`SourceKeeper` record (`docs/vendor/README.md`). NOT CONFIRMED with the remap
+installed: whether the switch was on during the 2026-11-12 wake test (#135) was
+not recorded. The next ignition cycle with the switch on settles it.
+
+**Fixed the text that said the opposite.** #137 left the field doc, two Java
+comments (`CarnyxWake`, `CarnyxListener`), the #137 entry and
+`FACTORY-XML-HANDOFF.md` rule 5 advising a remapped unit to turn this OFF. All
+corrected; the UI sub-line now leads with "Stop FM when Carnyx is closed, the way
+the stock radio app does" and drops the obsolete "so the stock radio app has no
+reason to launch itself". The SCREEN_OFF sleep trigger (`NwdBridge.SLEEP_ACTIONS`)
+is left in place, so the sub-line keeps saying a screen going dark can stop FM.
+
+**Also corrected in the #138 handoff, found on re-reading it:** §0 claimed the
+remap applies "whenever that source is selected" (only the power-up restore is
+proven); §3 credited the vendor copier with dropping comments (that was the
+removed `CarnyxRemap` rebuild); §6's adb commands are now marked untried on this
+unit; §7b's recipe hid `adb pull` errors with `2>/dev/null` and ran
+`mount -o ro,remount` and `adb unroot` unconditionally, which on this unit would
+target a directory on `/data` and a shell that was already root — rewritten step
+by step with each of those made conditional, as the script does; §10 now separates
+what was printed from what was inferred. §7b and §7c now point at #139's
+`tools/source-remap.sh`, pushed by another session while this entry was written.
+
+### 139. Remap any factory source, and pick the app from the unit's own list
+**BUILT. NOT YET RUN AGAINST THE UNIT.** The owner asked for *"a more
+sophisticated script"* that can *"edit any of the factory app pointers, not
+just the radio"* and *"read the identifiers of installed apps on the head unit
+so I don't have to manually enter them."*
+
+**Built:** `tools/source-remap.sh`, with `sources`, `find`, `list`, `apps`,
+`set` and `reset`. Connecting, finding the unit, root, the remount rule and the
+`adb version` check are `radio-takeover.sh`'s, unchanged in behaviour.
+
+- *Any source:* by name (`music`, `video`, `gps`, `launcher`, …, plus `nav`,
+  `fm`, `home`, `bluetooth`, `settings`) or by appid, from the #138 table.
+- *The app:* a number from `apps`, an exact package, `package/activity`, or a
+  word to search package names for. Left out, a numbered list to pick from.
+  `apps` reads `cmd package query-activities` for MAIN/LAUNCHER and MAIN/HOME,
+  user-installed first; on an older `cmd` it asks `resolve-activity` per
+  package in one shell. A package that is not installed, or has nothing to
+  launch, is refused before root is asked for.
+- *The file:* text inside `<!-- -->` is never read or edited. Only the named
+  source's entries change, and the result is parsed and compared with what was
+  there before it is written; split or non-self-closed entries for that source
+  are refused. Duplicate entries for the source become one.
+- *The original:* backed up once as `replace_source_list.xml.carnyx-backup`,
+  the name `radio-takeover.sh` uses, or recorded as absent with
+  `replace_source_list.xml.carnyx-absent`.
+- *Reset per source:* `reset music` restores the original's music entry or
+  removes ours; when nothing differs from the original, the original returns
+  byte for byte and the record goes. `reset all` restores the whole original.
+- *The camera* (appid 13, the reverse camera) needs `--force`.
+
+**Tested on the host:** `tools/test-source-remap.sh`, 114 checks against
+`test-radio-takeover.sh`'s fake unit extended with `pm` and `cmd package`.
+`tools/test-radio-takeover.sh` still passes.
+
+**Not answered by it:** taking Video out of the MODE cycle. The remap file can
+only change which app a source opens; the owner asked about this and it was
+reported as untried leads, not built.
+
+**Still open:** `radio-takeover.sh undo` restores the whole backup, so after
+this script has set other sources it puts those back too. Use `reset radio`.
+
+### 138. Handoff for creating/altering the factory remap XML
+**DONE.** `docs/vendor/FACTORY-XML-HANDOFF.md` — a self-contained brief for
+remapping any kernel source (not just radio) by hand or by the script, written
+so a fresh session can act from it alone. Covers the launch mechanism, the config
+path (`ro.nwd.config.path`, `/data/nwdappconfig` here), the file format, the full
+appid table from `SourceConstant`, which sources are safe to remap, the adb
+recipe for an arbitrary appid, the hard rules (merge/backup/reload/className
+fallback/release-on-sleep), the prerequisites and gotchas, and what is measured
+vs. inferred. Asked for by the owner: *"Make me the handoff for factory XML
+editing stuff."*
+
+### 137. Remove the radio-takeover ability from the Carnyx app
+**DONE.** The owner's call, verbatim: *"Carnyx should have all 'radio takeover'
+bits removed. Due to how this had to finally be achieved, it is clearly out of
+scope for the Carnyx project."* The takeover is installed on the unit by an
+external ADB tool (`tools/radio-takeover.sh`, #135), not by the app, so the
+in-app machinery that tried to do it is gone. Scope confirmed with the owner:
+remove the ability and its references from the APK; keep the script and all
+history; revert the sleep-handback default to ON.
+
+**Removed from the app:**
+- `CarnyxRemap.java` and `src/android/remap.rs` — the installer/checker that
+  drove the vendor copier — with their `build.rs` dex entry and `lib.rs` init.
+- `Action::InstallRadioRemap`, `Action::CheckRadioRemap`, the "Check radio
+  takeover" diagnostics row, `remap_install`/`remap_verify`, and the
+  `nativeRemapNote` native.
+- `CarnyxProcess.buildKind` and the `build_kind` seam and launch line — build
+  reporting that existed only to judge whether `adb root` could work for the
+  takeover. `CarnyxProcess` itself stays; only that method went.
+- The `com.nwd.factory.setting` `<queries>` entry in `Cargo.toml` and
+  `AndroidManifest.xml`.
+
+**Reverted:** `release_on_sleep` ships ON again (its #92 default). See #140 for
+what it means now: the owner's settled intent is to duplicate the stock app —
+stop FM when Carnyx is closed, ON and staying ON, remap or not.
+
+**Kept:** `tools/radio-takeover.sh` and its test; `docs/vendor/` and the task
+history, #133/#135/#136 included.
+
+**Checked here:** host `cargo test`, `tools/check-java.sh`, `tools/check-jni.sh`,
+and the full shot render.
+
+### 136. Carnyx's own takeover row read and wrote `/config`; the kernel reads `/data/nwdappconfig`
+**OVERTAKEN BY #137 — the in-app read-back is gone, so there is nothing to fix.**
+Found by #135's first install, 2026-11-12: `check` printed
+`config: /data/nwdappconfig (ro.nwd.config.path)`. The kernel's path is
+`SystemProperties("ro.nwd.config.path", "/config")`, and this unit sets the
+property. Carnyx never read it:
+
+- `CarnyxRemap.java:97` is `CONFIG_ROOT = "/config"`, a constant. Its install,
+  its read-back ("Check radio takeover") and its backup all use it, so the
+  in-app read-back will call the takeover #135 installed ABSENT.
+- The 2026-09-24/25 measurements ("`/config/app` DOES NOT EXIST", "THE ROUTE IS
+  CLOSED ON THIS UNIT") were taken on `/config`. They are true of `/config` and
+  say nothing about whether the factory copier can write `/data/nwdappconfig`.
+  That route is UNTRIED, not closed.
+- The docs said "`/config` on this unit" throughout. Corrected, with this
+  number, in `docs/vendor/README.md`, `docs/vendor/replace_source_list.xml` and
+  `tools/radio-takeover.sh`'s header. The comments in `CarnyxRemap.java`,
+  `src/android/remap.rs` and `src/settings.rs` still say `/config`.
+
+**No longer fixed, removed instead (#137).** The in-app installer and read-back
+were deleted along with the rest of the takeover ability, so the `/config`
+constant went with them. The script (#135) reads `ro.nwd.config.path` on every
+run and so was never affected.
+
 ### 135. Install the radio takeover from a phone, over network ADB
-**BUILT. NOT YET RUN AGAINST THE UNIT.** #133's outcome A needs
+**INSTALLED ON THE UNIT 2026-11-12, BY THIS SCRIPT, AND WORKING ON WAKE.** The
+owner, verbatim: *"The radio does come up as Carnyx, I've already tested it."*
+#133's outcome A needs
 `<config>/app/replace_source_list.xml` written, and the unit measured that no
 unprivileged app can write it (`docs/vendor/README.md`, "The route is closed on
 this unit"). What remains is a privileged ADB shell. The owner asked for the
@@ -1329,8 +1591,9 @@ It runs in Termux (`pkg install android-tools`) or on any machine with `adb`.
 - *Refusals, each before anything is written:* root refused, `<config>` in the
   read-only system image, Carnyx not installed, an unfamiliar file, a radio
   entry split over lines.
-- `check` prints the build and whether `adb root` can work — the same answer as
-  Carnyx's `build:` launch line, without needing the log.
+- `check` prints the build and whether `adb root` can work. This used to match
+  Carnyx's own `build:` launch line; that line was removed with the rest of the
+  app's takeover references (#137), so the script is now the only place it prints.
 
 **Checked here:** `tools/test-radio-takeover.sh`, 103 checks against a fake
 `adb` whose fake `/config` refuses writes without root or on a read-only mount,
@@ -1361,11 +1624,47 @@ removed the one thing a failure needs. Fixed:
 - Output is discarded in three places, named in the script's header: the port
   scan, the interface lookup and `let_go`.
 
-The unit's actual answer at 10.81.250.244 is NOT KNOWN YET: the next run prints it.
+**The next run printed the reason, and it was not the unit.** Both of adb's
+answers were Android's program loader refusing to start adb on the phone:
+`CANNOT LINK EXECUTABLE "adb": cannot locate symbol
+"_ZNSt6__ndk113__hash_memoryEPKvm"` — a libc++ symbol, so Termux's adb was
+built against a newer `libc++` package than the one installed. EVERY EARLIER
+"could not connect" WAS THIS: the head unit has not yet been asked anything by
+adb. (Port 5555 answering is still real — the scan uses bash's `/dev/tcp`, not
+adb.) The script now runs `adb version` first and stops at once with the
+loader's words and `pkg upgrade`, instead of thirty identical tries; 107 checks.
+
+**After `pkg upgrade`, the install, 2026-11-12.** `adb version` printed
+`Version 37.0.0p1-android-tools`. Then, verbatim from the owner's phone:
+
+    build: user/test-keys, ro.debuggable=1
+      adb root should work on a build of this kind.
+    config: /data/nwdappconfig (ro.nwd.config.path)
+    Carnyx: installed.
+    /data/nwdappconfig/app/replace_source_list.xml: absent — the takeover is not installed.
+
+`install` wrote the fresh file, broadcast the reload and read it back with the
+Carnyx entry; a second `check` printed the file and "The takeover IS installed".
+
+What the install's output shows, from the code that prints it:
+
+- The ADB shell was ALREADY ROOT. `become_root` prints "Asking for adb root…"
+  unless `id -u` is 0, and that line is absent, as is "adbd is unprivileged
+  again", which only a run that raised root prints.
+- `<config>` was writable without a remount: `make_writable` prints a remount
+  line whenever its test write fails, and none was printed.
+- The connection reached "device" on the first try: `connect` prints adb's
+  answers for any other state, and none were printed.
+
+**On wake, the radio source comes back as Carnyx** — the owner tested it the
+same day (quoted at the top of this entry). Still open: the owner found no
+network-ADB switch on the unit, so the script's closing "switch network ADB off"
+has nothing to act on yet.
 
 **What one run on the unit settles:** whether its ADB listens on the network,
-whether `adb root` is allowed, and how `/config` is mounted — the three things no
+whether `adb root` is allowed, and how `<config>` is mounted — the three things no
 host test can know. Then whether the radio source comes back as Carnyx on wake.
+All four were settled 2026-11-12: the first three below, the wake by the owner.
 
 ### 134. CoMaps as a second turn-by-turn source, behind a "Nav integration" picker
 **BUILT. NOT YET RUN AGAINST COMAPS.** The owner, verbatim: *"I want to change
@@ -5725,9 +6024,12 @@ chars, plus `seek(freq)`'s packed strength+frequency int.
 reports **changes only** and no getter for current illumination state has been
 found, so starting after dark with the lights already on produces no event.
 
-**Carnyx:** ported. The illumination watch is started in `App::with_tuner`
-rather than inside connect, so a session that never binds the tuner still follows
-the headlights. The same "changes only, no getter" gap applies.
+**Carnyx:** the watch was ported, but until #142 nothing acted on it. The
+illumination watch is started in `App::with_tuner` rather than inside connect, so
+a session that never binds the tuner still hears the broadcast. *(This line used
+to say Carnyx "follows the headlights". It did not: the event arm logged Android's
+`uiMode` and dropped the extras. Corrected 2026-11-12; #142 makes it true.)* The
+same "changes only, no getter" gap applies; #142 falls back to the sun.
 
 ### 59. Make the tuner-source picker actually select a tuner
 **[SESSION]** — The Settings picker (RTL-SDR / built-in / Auto) was presentational
