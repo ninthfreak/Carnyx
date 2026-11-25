@@ -1071,11 +1071,26 @@ pub mod prep {
 /// Making a logo drawn for white paper readable on the dark face, from
 /// `services/logoDark/`.
 ///
-/// The whole tree is framework-free maths and was already unit-tested in Node, so
-/// this is a 1:1 port rather than a reinterpretation. Every constant is the
-/// HANDOFF DOCUMENT'S, not the old python file's — CarFM's own header says the doc
-/// wins where the two disagree, and the one that bites is the neutral chroma
-/// threshold: 0.03, not the 0.045 left in a stale signature.
+/// IT BEGAN AS A 1:1 PORT AND IS NO LONGER ONE (#143). The colour maths, the
+/// blur, the labelling, the checkerboard and the trim are still CarFM's, with
+/// the handoff document's constants — the doc wins over the old python file, and
+/// the one that bites is the neutral chroma threshold, 0.03 and not the 0.045
+/// left in a stale signature. What changed is everything that decides WHAT IS
+/// PAPER AND WHAT IS INK, because the port's answers were the ones the owner saw:
+/// logos on grey plates, and pale pixels left between strokes.
+///
+/// - The ground is read off the file's margin before the trim
+///   (`stages::find_ground`), and a file that is already transparent, or whose
+///   background is a colour of its own, is recognised as such.
+/// - Paper is cleared everywhere by unmixing it from the ink beside it
+///   (`stages::unmix`), where it was faded by lightness and only if grey.
+/// - A tile carrying light lettering is left exactly as drawn
+///   (`stages::find_bodies`), where a coverage threshold chose one of two routes.
+/// - The lift follows the dark surface (`stages::lift_floor`), where it was a
+///   fixed lightness chosen for a surface the app no longer has.
+///
+/// `tools/dark-sheet.py` renders any folder of logos through this on the dark
+/// card. Change a threshold here and look at that before believing a test.
 ///
 /// HUE IS NEVER MODIFIED. All colour work is in OKLab and touches only L or the
 /// MAGNITUDE of (a, b); scaling chroma is `a, b *= k`, which preserves the angle.
@@ -1085,18 +1100,33 @@ pub mod dark {
     /// The dark surface a treatment is judged against: `Pal.panel` in the dark
     /// theme, `#33373D`, which `ui/tokens.slint` carries as the identical value.
     ///
-    /// IT MOVED WITH THE RAMP. Handoff v1.16.0 lifted the dark theme off its
-    /// blue-navy values and this was `#212B38` before it. The stored PNG is
-    /// background-independent — `remap` clears paper to transparency rather than
-    /// darkening it — so the pixels are unaffected; what the background decides is
-    /// the GATE's verdict, and therefore which treatment gets picked. A variant
-    /// judged against the old surface can be the wrong CHOICE on the new one.
+    /// IT MOVED WITH THE RAMP, AND THE PIXELS MOVE WITH IT. Handoff v1.16.0
+    /// lifted the dark theme off its blue-navy values and this was `#212B38`
+    /// before it. Three things read it: how far dark ink is lifted
+    /// (`stages::lift_floor`), which shapes count as dark-on-light bodies
+    /// (`stages::find_bodies`), and the gate's verdict. So a variant built for
+    /// another surface is the wrong PICTURE here, not just possibly the wrong
+    /// choice — the port's lift ignored the surface, which is how it came to be
+    /// too dim for this one.
     ///
     /// DARK-MODE-LOGOS §"Caching" is explicit about the consequence: "the
     /// dark-theme background colour is an input to stages 5a and 5d — read it from
     /// the theme … key the cache by (logoId, backgroundColour)". `DarkInfo::bg` is
     /// that key; see `assign::wants_dark_adaptation`.
     pub const LOGO_DARK_BG: [f64; 3] = [51.0 / 255.0, 55.0 / 255.0, 61.0 / 255.0];
+
+    /// Which generation of the pipeline built a stored variant.
+    ///
+    /// BUMP IT WHEN THE PIXELS A TREATMENT PRODUCES CHANGE. A variant is a file
+    /// on the unit, and nothing else says it was built by code that no longer
+    /// exists: the background key covers the surface moving and says nothing
+    /// about the maths. `assign::wants_dark_adaptation` re-adapts anything
+    /// stamped with a different number, once, in the background.
+    ///
+    /// 1 is the CarFM port — every variant written before the stamp existed.
+    /// 2 is #143: paper cleared by unmixing, bodies left as drawn, and a lift
+    /// that follows the surface.
+    pub const DARK_ALGO: u32 = 2;
 
     /// `LOGO_DARK_BG` as the 24-bit value the store records beside a variant.
     ///
@@ -1259,9 +1289,11 @@ pub mod dark {
         /// Border-connected subset of `mask`: 1 where the pixel is masked AND
         /// reachable from the image border through other masked pixels.
         ///
-        /// This is what makes keying safe. A flood from the border cannot reach a
-        /// letter's enclosed counter, so the hole in a white "O" on a white plate
-        /// stays opaque instead of being punched out.
+        /// This finds the EXTERIOR and nothing else: a flood from the border
+        /// cannot reach a letter's enclosed counter. That is the whole of the
+        /// `as-is` key, and it is how `stages::key_logo` tells the paper outside
+        /// a shape from the paper inside it — which it then clears, or keeps,
+        /// depending on what the shape is.
         ///
         /// Iterative stack, no recursion: a 1-megapixel image would blow the call
         /// stack otherwise, and logos that big are routine.
@@ -1312,8 +1344,9 @@ pub mod dark {
             pub count: usize,
         }
 
-        /// Two-pass union-find labeling, 4-connectivity — so `remap` can protect
-        /// a light-neutral blob that is large enough to be a wordmark.
+        /// Two-pass union-find labeling, 4-connectivity. `stages::find_bodies`
+        /// uses it twice: for the shapes a logo is made of, and for the dark
+        /// pieces inside them.
         pub fn connected_components(mask: &[u8], w: usize, h: usize) -> Components {
             let n = w * h;
             let mut parent: Vec<u32> = vec![0; n + 1];
@@ -1385,9 +1418,9 @@ pub mod dark {
         }
     }
 
-    /// The five stages, in order: flatten a baked-in checkerboard, trim uniform
-    /// padding, key the border-connected background to transparency, route on the
-    /// remaining coverage, then build and gate the treatments.
+    /// The stages, in order: flatten a baked-in checkerboard, read the ground off
+    /// the margin, trim uniform padding, remove the ground while leaving bodies
+    /// as drawn, then build and gate the treatments.
     pub mod stages {
         use super::super::{js_round_u8, Raster};
         use super::blur::box_blur;
@@ -1397,13 +1430,16 @@ pub mod dark {
 
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Treatment {
-            /// Lightness remap: clear the paper, lift the ink, keep the hue.
+            /// Paper cleared throughout, dark ink lifted to read on the surface,
+            /// hue kept; bodies left as drawn. The first choice for anything
+            /// with a ground.
             Remap,
             /// A light glow under untouched ink.
             Halo,
-            /// The keyed image, unmodified.
+            /// Only the exterior removed, nothing recoloured: the logo as drawn.
             AsIs,
-            /// A grey rounded plate behind the original — the guaranteed floor.
+            /// A grey rounded plate behind the keyed mark. The last resort for a
+            /// logo with a ground, and never the answer for one without.
             Plate,
         }
 
@@ -1698,285 +1734,811 @@ pub mod dark {
             )
         }
 
+        /// What the logo was drawn on, as far as the image itself can say.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub enum Ground {
+            /// One flat paper colour (unit sRGB), found at the corners or along
+            /// most of the border, which a flood from the border can remove.
+            Paper([f64; 3]),
+            /// The file already carries a transparent background.
+            Alpha,
+            /// No single background: a tile that fills its frame, or a photo.
+            Opaque,
+        }
+
         #[derive(Clone, Debug, PartialEq)]
         pub struct KeyInfo {
+            /// False only for [`Ground::Opaque`].
             pub keyed: bool,
-            /// Opaque fraction AFTER keying — the routing input.
+            pub ground: Ground,
+            /// Opaque fraction AFTER keying.
             pub coverage: f64,
+            /// The paper colour, or black when there is none.
             pub bg: [f64; 3],
+            /// Self-contained bodies left exactly as drawn. See [`find_bodies`].
+            pub bodies: usize,
             pub note: String,
         }
 
-        /// Flood the border-connected background to alpha 0, feather it, and
-        /// decontaminate the partial-alpha edge.
+        /// How far from the paper a pixel may be and still be paper, in the units
+        /// of [`paper_dist`]. The border flood's threshold since the first port.
+        const PAPER_T: f64 = 0.10;
+        /// Below this an ENCLOSED paper-coloured pixel is cleared outright; from
+        /// here up to [`PAPER_T`] it fades in, so a pale tint has no hard edge.
+        const PAPER_RAMP_LO: f64 = 0.05;
+
+        /// Distance from the paper: the SMALLER of the OKLab and the sRGB one.
         ///
-        /// Two abort paths, and both matter. Fewer than 3 of 4 corners agreeing
-        /// means there is no single background to key — a diagonal split, a photo —
-        /// and keying anyway would eat half the image. A region outside [2%, 92%]
-        /// means the mask found either nothing or everything, and neither is a
-        /// background.
-        pub fn key_background(img: &Raster) -> (Raster, KeyInfo) {
+        /// OKLAB ALONE IS WRONG ON DARK PAPER. Its lightness is a cube root, so
+        /// `(12,12,12)` is 0.15 from black — JPEG noise on a black background
+        /// reads as ink and the key leaves a crust of specks round every letter.
+        /// On white the OKLab figure is the smaller one and nothing changes.
+        fn paper_dist(r: u8, g: u8, b: u8, paper: [f64; 3], paper_lab: [f64; 3]) -> f64 {
+            let d = [
+                r as f64 / 255.0 - paper[0],
+                g as f64 / 255.0 - paper[1],
+                b as f64 / 255.0 - paper[2],
+            ];
+            let rgb = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            lab_dist(srgb8_to_lab(r, g, b), paper_lab).min(rgb)
+        }
+
+        /// What [`find_ground`] decided, and in a word why when it found nothing.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct Found {
+            pub ground: Ground,
+            pub note: &'static str,
+        }
+
+        /// Decide what the logo was drawn on.
+        ///
+        /// ASK THIS OF THE IMAGE AS IT WAS EXPORTED, BEFORE THE TRIM. A logo file
+        /// has a margin, and the margin is the paper — four corners of it. Once
+        /// the trim has cropped to the mark, the ink reaches the edges and the
+        /// corners are as likely to be ink as paper: a bar across the top of a
+        /// logo owns two of them and about half the border.
+        ///
+        /// THE CORNERS SPEAK FIRST, then the border. A rounded tile fills its
+        /// frame, so the border's median is the TILE's colour while three or four
+        /// corners are paper — and going by the border left four white slivers on
+        /// every such logo. The border is asked second, for the opposite shape: a
+        /// band along one edge takes two corners with it while most of the border
+        /// is still paper.
+        pub fn find_ground(img: &Raster) -> Found {
+            let (w, h) = (img.w as usize, img.h as usize);
+            let px = &img.rgba;
+            let opaque = |note: &'static str| Found { ground: Ground::Opaque, note };
+            if !img.is_valid() || w < 2 || h < 2 {
+                return opaque("empty raster");
+            }
+            let mut border: Vec<usize> = Vec::with_capacity(2 * (w + h));
+            for x in 0..w {
+                border.push(x);
+                border.push((h - 1) * w + x);
+            }
+            for y in 0..h {
+                border.push(y * w);
+                border.push(y * w + w - 1);
+            }
+
+            // ALREADY TRANSPARENT. Nothing is paper, so nothing opaque is keyed:
+            // this used to take the transparent pixels' own RGB as the "paper"
+            // and flood into ink of that colour, which deleted the white text from
+            // every logo that had been drawn for a dark background.
+            let clear = border.iter().filter(|&&i| px[i * 4 + 3] < 128).count();
+            if clear * 2 >= border.len() {
+                return Found { ground: Ground::Alpha, note: "already transparent" };
+            }
+
+            let unit = |i: usize| -> [f64; 3] {
+                let j = i * 4;
+                [px[j] as f64 / 255.0, px[j + 1] as f64 / 255.0, px[j + 2] as f64 / 255.0]
+            };
+            let close = |i: usize, paper: [f64; 3], lab: [f64; 3]| -> bool {
+                let j = i * 4;
+                px[j + 3] < 128
+                    || paper_dist(px[j], px[j + 1], px[j + 2], paper, lab) <= PAPER_T / 2.0
+            };
+            let corners = [0, w - 1, (h - 1) * w, (h - 1) * w + w - 1];
+            let corner_paper: [f64; 3] = std::array::from_fn(|c| {
+                let mut v: Vec<f64> = corners.iter().map(|&i| unit(i)[c]).collect();
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                (v[1] + v[2]) / 2.0
+            });
+            let corner_lab = srgb_unit_to_lab(corner_paper[0], corner_paper[1], corner_paper[2]);
+            let agree = corners.iter().filter(|&&i| close(i, corner_paper, corner_lab)).count();
+            let paper = if agree >= 3 {
+                corner_paper
+            } else {
+                let solid: Vec<usize> =
+                    border.iter().copied().filter(|&i| px[i * 4 + 3] >= 128).collect();
+                let border_paper: [f64; 3] = std::array::from_fn(|c| {
+                    let mut v: Vec<f64> = solid.iter().map(|&i| unit(i)[c]).collect();
+                    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                    v[v.len() >> 1]
+                });
+                let lab = srgb_unit_to_lab(border_paper[0], border_paper[1], border_paper[2]);
+                let share = solid.iter().filter(|&&i| close(i, border_paper, lab)).count();
+                // 55%, not half: a clean two-colour split is two halves of a
+                // picture, not a paper and a band.
+                if (share as f64) < 0.55 * solid.len() as f64 {
+                    return opaque("no single background — left opaque");
+                }
+                border_paper
+            };
+            // A COLOUR OF THE LOGO'S OWN IS NOT PAPER. White, cream, grey and
+            // black are what artwork gets exported onto; a red or a navy that
+            // fills the frame is a tile, and keying it out leaves the lettering
+            // standing on nothing with the station's colour gone. Pale tints
+            // still count as paper — left in, they are a near-white slab.
+            let paper_lab = srgb_unit_to_lab(paper[0], paper[1], paper[2]);
+            let paper_chroma = chroma(paper_lab[1], paper_lab[2]);
+            if paper_chroma >= 0.12 || (paper_chroma >= 0.06 && paper_lab[0] < 0.90) {
+                return opaque("the background is the logo's own colour — left as drawn");
+            }
+            Found { ground: Ground::Paper(paper), note: "" }
+        }
+
+        /// One image read against its ground: which pixels are that ground.
+        struct Analysis {
+            ground: Ground,
+            /// 1 where the pixel is paper-coloured, or was already transparent.
+            near: Vec<u8>,
+            /// 1 where `near` reaches the border: the exterior.
+            flood: Vec<u8>,
+            /// [`paper_dist`] per pixel; empty unless the ground is paper.
+            dist: Vec<f32>,
+            note: String,
+        }
+
+        /// Flood the ground in from the border of `img`, which may be the
+        /// TRIMMED image where [`find_ground`] was asked about the untrimmed one.
+        ///
+        /// NO LOWER LIMIT ON WHAT THE FLOOD REMOVES, where there used to be 2%.
+        /// The paper is already known, so a flood that reaches little is not
+        /// evidence against it: the four corners of a rounded tile are 1.4% of
+        /// it, and a logo inside a rectangular frame has NO paper on its border
+        /// at all once trimmed — the paper is all inside the frame, where
+        /// [`unmix`] clears it. The upper limit stays, raised from 92% to 97% for
+        /// a hairline wordmark: past that the flood has eaten the logo.
+        fn analyse(img: &Raster, found: Found) -> Analysis {
             let (w, h) = (img.w as usize, img.h as usize);
             let n = w * h;
-            let coverage_of = |r: &Raster| -> f64 {
-                let o = (0..r.pixels()).filter(|i| r.rgba[i * 4 + 3] >= 128).count();
-                o as f64 / r.pixels() as f64
-            };
-            if !img.is_valid() {
-                return (
-                    img.clone(),
-                    KeyInfo {
-                        keyed: false,
-                        coverage: 0.0,
-                        bg: [0.0; 3],
-                        note: "empty raster".into(),
-                    },
-                );
-            }
             let px = &img.rgba;
-
-            // Median border colour over ALL border pixels — transparent ones
-            // included, unlike `prep::mark_bounds`, because here a transparent
-            // frame is a perfectly good background to key against.
-            let mut bs: [Vec<f64>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-            {
-                let mut add = |x: usize, y: usize| {
-                    let j = (y * w + x) * 4;
-                    for (c, v) in bs.iter_mut().enumerate() {
-                        v.push(px[j + c] as f64 / 255.0);
-                    }
-                };
-                for x in 0..w {
-                    add(x, 0);
-                    add(x, h - 1);
-                }
-                for y in 0..h {
-                    add(0, y);
-                    add(w - 1, y);
-                }
+            let opaque = |note: String| Analysis {
+                ground: Ground::Opaque,
+                near: vec![0; n],
+                flood: vec![0; n],
+                dist: Vec::new(),
+                note,
+            };
+            if !img.is_valid() || w < 2 || h < 2 {
+                return opaque("empty raster".into());
             }
-            let bg: [f64; 3] = std::array::from_fn(|c| {
-                bs[c].sort_by(|a, b| a.partial_cmp(b).unwrap());
-                bs[c][bs[c].len() >> 1]
-            });
-            let bg_lab = srgb_unit_to_lab(bg[0], bg[1], bg[2]);
-
-            let corner_ok = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
-                .iter()
-                .filter(|(x, y)| {
-                    let j = (y * w + x) * 4;
-                    lab_dist(srgb8_to_lab(px[j], px[j + 1], px[j + 2]), bg_lab) <= 0.05
-                })
-                .count();
-            if corner_ok < 3 {
-                let cov = coverage_of(img);
-                return (
-                    img.clone(),
-                    KeyInfo {
-                        keyed: false,
-                        coverage: cov,
-                        bg,
-                        note: "corners disagree — left opaque".into(),
-                    },
-                );
-            }
-
+            let paper = match found.ground {
+                Ground::Opaque => return opaque(found.note.to_string()),
+                Ground::Alpha => {
+                    let near: Vec<u8> = (0..n).map(|i| (px[i * 4 + 3] < 128) as u8).collect();
+                    let flood = border_connected_mask(&near, w, h);
+                    return Analysis {
+                        ground: Ground::Alpha,
+                        near,
+                        flood,
+                        dist: Vec::new(),
+                        note: found.note.to_string(),
+                    };
+                }
+                Ground::Paper(p) => p,
+            };
+            let paper_lab = srgb_unit_to_lab(paper[0], paper[1], paper[2]);
             let mut near = vec![0u8; n];
-            for (i, slot) in near.iter_mut().enumerate() {
+            let mut dist = vec![0f32; n];
+            for i in 0..n {
                 let j = i * 4;
                 if px[j + 3] < 128 {
-                    *slot = 1; // already transparent counts as background
+                    near[i] = 1; // already transparent counts as background
                     continue;
                 }
-                if lab_dist(srgb8_to_lab(px[j], px[j + 1], px[j + 2]), bg_lab) <= 0.10 {
-                    *slot = 1;
-                }
+                let d = paper_dist(px[j], px[j + 1], px[j + 2], paper, paper_lab);
+                dist[i] = d as f32;
+                near[i] = (d <= PAPER_T) as u8;
             }
-            let bg_mask = border_connected_mask(&near, w, h);
-            let removed: usize = bg_mask.iter().map(|v| *v as usize).sum();
+            let flood = border_connected_mask(&near, w, h);
+            let removed: usize = flood.iter().map(|v| *v as usize).sum();
             let frac = removed as f64 / n as f64;
-            if !(0.02..=0.92).contains(&frac) {
-                let cov = coverage_of(img);
-                return (
-                    img.clone(),
-                    KeyInfo {
-                        keyed: false,
-                        coverage: cov,
-                        bg,
-                        note: format!(
-                            "region {}% out of [2,92]% — left opaque",
-                            (frac * 100.0) as i64
-                        ),
-                    },
-                );
+            if frac > 0.97 {
+                return opaque(format!("region {:.0}% is nearly all of it — left opaque", frac * 100.0));
             }
+            Analysis {
+                ground: Ground::Paper(paper),
+                near,
+                flood,
+                dist,
+                note: format!("keyed {}% of pixels", (frac * 100.0) as i64),
+            }
+        }
 
+        fn coverage_of(r: &Raster) -> f64 {
+            if r.pixels() == 0 {
+                return 0.0;
+            }
+            let o = (0..r.pixels()).filter(|i| r.rgba[i * 4 + 3] >= 128).count();
+            o as f64 / r.pixels() as f64
+        }
+
+        /// The exterior set to alpha 0, feathered, and its edge decontaminated.
+        ///
+        /// The original key, and still what the `as-is` treatment gets: it removes
+        /// only what the border flood reached, so everything enclosed stays
+        /// exactly as drawn.
+        fn feather(img: &Raster, flood: &[u8], paper: [f64; 3]) -> Raster {
+            let (w, h) = (img.w as usize, img.h as usize);
+            let n = w * h;
+            let px = &img.rgba;
             let mut alpha = vec![0f32; n];
             for i in 0..n {
-                alpha[i] = if bg_mask[i] != 0 { 0.0 } else { px[i * 4 + 3] as f32 / 255.0 };
+                alpha[i] = if flood[i] != 0 { 0.0 } else { px[i * 4 + 3] as f32 / 255.0 };
             }
             let blurred = box_blur(&alpha, w, h, 1.0, 3);
             let mut out = img.rgba.clone();
             for (i, &soft) in blurred.iter().enumerate() {
                 let j = i * 4;
                 let a = (((soft as f64) - 0.25) / 0.5).clamp(0.0, 1.0);
-                // Decontaminate the feathered edge: a half-transparent pixel still
-                // carries half the old background's colour, which on a dark face
-                // shows as a pale fringe around the mark.
+                // A half-transparent pixel still carries half the paper's colour,
+                // which on a dark face shows as a pale fringe round the mark.
                 if a > 0.001 && a < 0.999 {
                     let d = a.max(0.08);
                     for c in 0..3 {
-                        let v = (px[j + c] as f64 / 255.0 - bg[c] * (1.0 - a)) / d;
+                        let v = (px[j + c] as f64 / 255.0 - paper[c] * (1.0 - a)) / d;
                         out[j + c] = js_round_u8(v.clamp(0.0, 1.0) * 255.0);
                     }
                 }
                 out[j + 3] = js_round_u8(a * 255.0);
             }
-            let raster = Raster { w: img.w, h: img.h, rgba: out };
-            let cov = coverage_of(&raster);
-            (
-                raster,
-                KeyInfo {
-                    keyed: true,
-                    coverage: cov,
-                    bg,
-                    note: format!("keyed {}% of pixels", (frac * 100.0) as i64),
-                },
-            )
+            Raster { w: img.w, h: img.h, rgba: out }
         }
 
-        /// Coverage decides the family, and the threshold is the whole point: a
-        /// mostly-opaque image is a TILE, which a halo can only sit behind, while
-        /// isolated ink can actually be remapped.
-        pub fn route(coverage: f64) -> Vec<Treatment> {
-            if coverage > 0.80 {
-                vec![Treatment::Halo, Treatment::AsIs]
-            } else {
-                vec![Treatment::Remap, Treatment::Halo]
-            }
-        }
-
-        /// Lightness remap that keeps the brand hue. Two steps:
+        /// The border key on its own: exterior paper removed, nothing else.
         ///
-        /// 1. CLEAR THE PAPER to transparency. Light near-neutral ink — letter
-        ///    counters, ring gaps, the white field behind a mark — fades to alpha 0
-        ///    on a lightness ramp, so the real dark surface shows through. It is
-        ///    never DARKENED to black, because that only works on a black theme,
-        ///    and it is why the stored PNG is background-independent and the ladder
-        ///    can be pre-rendered.
-        /// 2. LIFT the remaining dark ink, and never darken anything.
-        ///
-        /// A large light-neutral component is PROTECTED: that is a white wordmark,
-        /// and clearing it would delete the station's name.
-        pub fn remap(img: &Raster) -> Raster {
-            const NEUTRAL_C: f64 = 0.03; // the document's value, NOT the stale 0.045
-            const SOFT_C: f64 = 0.048; // only near-neutral pixels may be cleared
-            let n = img.pixels();
-            let (w, h) = (img.w as usize, img.h as usize);
-            let px = &img.rgba;
-
-            let mut lp = vec![0f64; n];
-            let mut ap = vec![0f64; n];
-            let mut bp = vec![0f64; n];
-            let mut alpha = vec![0f64; n];
-            let mut light_neutral = vec![0u8; n];
-            for i in 0..n {
-                let j = i * 4;
-                let lab = srgb8_to_lab(px[j], px[j + 1], px[j + 2]);
-                lp[i] = lab[0];
-                ap[i] = lab[1];
-                bp[i] = lab[2];
-                alpha[i] = px[j + 3] as f64 / 255.0;
-                if alpha[i] > 0.5 && chroma(lab[1], lab[2]) < NEUTRAL_C && lab[0] > 0.72 {
-                    light_neutral[i] = 1;
-                }
-            }
-            let cc = connected_components(&light_neutral, w, h);
-            let mut protect = vec![0u8; cc.count + 1];
-            // `skip(1)`, because label 0 is "not a component" and is never
-            // protected — the same range `1..=cc.count` walked.
-            for (id, slot) in protect.iter_mut().enumerate().skip(1) {
-                if cc.areas[id] as f64 >= 0.08 * n as f64 {
-                    *slot = 1;
-                }
-            }
-
-            // Paper colour = mean of the UNPROTECTED light-neutral pixels, used to
-            // decontaminate partly-cleared edges. White when there are none.
-            let (mut pr, mut pg, mut pb, mut pc) = (0.0f64, 0.0f64, 0.0f64, 0usize);
-            for i in 0..n {
-                if light_neutral[i] != 0 && protect[cc.labels[i] as usize] == 0 {
-                    let j = i * 4;
-                    pr += px[j] as f64 / 255.0;
-                    pg += px[j + 1] as f64 / 255.0;
-                    pb += px[j + 2] as f64 / 255.0;
-                    pc += 1;
-                }
-            }
-            let paper: [f64; 3] = if pc > 0 {
-                [pr / pc as f64, pg / pc as f64, pb / pc as f64]
-            } else {
-                [1.0, 1.0, 1.0]
+        /// Three outcomes, and [`KeyInfo::ground`] says which. Paper found: it is
+        /// flooded from the border and feathered. Already transparent: returned
+        /// untouched. Neither: returned untouched and `keyed` is false — a
+        /// diagonal split or a photo has no one background, and keying it anyway
+        /// would eat half the picture.
+        pub fn key_background(img: &Raster) -> (Raster, KeyInfo) {
+            let a = analyse(img, find_ground(img));
+            let raster = match a.ground {
+                Ground::Paper(paper) => feather(img, &a.flood, paper),
+                Ground::Alpha | Ground::Opaque => img.clone(),
             };
+            let info = KeyInfo {
+                keyed: a.ground != Ground::Opaque,
+                ground: a.ground,
+                coverage: coverage_of(&raster),
+                bg: match a.ground {
+                    Ground::Paper(p) => p,
+                    _ => [0.0; 3],
+                },
+                bodies: 0,
+                note: a.note,
+            };
+            (raster, info)
+        }
 
-            let mut new_a = alpha.clone();
-            for i in 0..n {
-                if protect[cc.labels[i] as usize] != 0 {
-                    continue;
+        /// How far a path from the paper may dip below its own highest point and
+        /// still count as one slope, in unit sRGB. Wide enough for JPEG noise on a
+        /// plateau; far too narrow to get down the far side of an outline.
+        const SLOPE_TOL: f32 = 0.03;
+        /// How alike two colours' directions from the paper must be to be the
+        /// same ink. A pale yellow next to red is yellow thinned, not red thinned.
+        const SAME_HUE_COS: f32 = 0.80;
+        /// Under this distance from the paper a direction is noise, not a hue.
+        const HUE_MIN: f32 = 0.06;
+
+        /// Clear the paper EVERYWHERE, by what each pixel is a blend of.
+        ///
+        /// THE PIXELS THE OLD CLEAR LEFT BEHIND WERE NEVER WHITE. It faded light
+        /// NEUTRAL pixels and kept everything with colour in it — but the gap
+        /// between two yellow rings is pale yellow all the way across, never
+        /// reaching white, so it stayed as a cream smear with holes punched where
+        /// the purest pixels were. An antialiased edge is the same thing one pixel
+        /// wide.
+        ///
+        /// So this asks a different question: not "is it light and grey" but "is
+        /// it PAPER MIXED WITH THE INK BESIDE IT". Three steps.
+        ///
+        /// 1. SLOPES. Starting from every paper-coloured pixel, walk outward for
+        ///    as long as the colour keeps moving away from the paper. What that
+        ///    reaches is the rising edge of some ink. A fill behind an outline is
+        ///    not reached — getting there means coming back down — so ink that
+        ///    merely touches other ink is never thinned.
+        /// 2. PEAKS. From each slope pixel, climb to the strongest ink of its own
+        ///    hue. That is the ink it is a blend of.
+        /// 3. UNMIX. The pixel's alpha is how far along the paper-to-peak line it
+        ///    sits, and its colour becomes the peak's. Pure ink is 1, pure paper
+        ///    0, and a gap between rings is whatever fraction of ring it really
+        ///    was.
+        ///
+        /// Every step is O(pixels): a bucket queue for the walk, pointer-jumping
+        /// for the climb. No window scan, so the cost does not grow with the
+        /// image's resolution.
+        ///
+        /// ALSO RETURNS WHICH SLOPES RISE FROM THE EXTERIOR — 1 where the walk
+        /// that reached a pixel began at paper the border flood found, 0 where
+        /// it began at paper enclosed in the mark. A body keeps its enclosed
+        /// paper and everything rising from it, and still wants its OUTER edge
+        /// unmixed; this is what tells the two apart.
+        fn unmix(img: &Raster, a: &Analysis, paper: [f64; 3]) -> (Raster, Vec<u8>) {
+            let (w, h) = (img.w as usize, img.h as usize);
+            let n = w * h;
+            let px = &img.rgba;
+            let p32 = [paper[0] as f32, paper[1] as f32, paper[2] as f32];
+            let vec_of = |i: usize| -> [f32; 3] {
+                let j = i * 4;
+                [
+                    px[j] as f32 / 255.0 - p32[0],
+                    px[j + 1] as f32 / 255.0 - p32[1],
+                    px[j + 2] as f32 / 255.0 - p32[2],
+                ]
+            };
+            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let mut d = vec![0f32; n];
+            for (i, slot) in d.iter_mut().enumerate() {
+                if px[i * 4 + 3] >= 128 {
+                    let v = vec_of(i);
+                    *slot = dot(v, v).sqrt();
                 }
-                if alpha[i] > 0.5 && chroma(ap[i], bp[i]) < SOFT_C {
-                    // 0 at L ≤ 0.55, 1 at L ≥ 0.85.
-                    let cov = ((lp[i] - 0.55) / 0.30).clamp(0.0, 1.0);
-                    if cov > 0.0 {
-                        new_a[i] = alpha[i] * (1.0 - cov);
+            }
+
+            // 1. The slopes. `m` is the highest point on the best path from the
+            // paper, and infinite where no path arrives. Buckets by `m` make it a
+            // priority flood without a heap; every pixel is pushed at most once.
+            const LEVELS: usize = 1040; // d ≤ √3, at 600 steps to the unit
+            let level = |m: f32| ((m * 600.0) as usize).min(LEVELS - 1);
+            let mut m = vec![f32::INFINITY; n];
+            let mut outer = vec![0u8; n];
+            let mut buckets: Vec<Vec<u32>> = vec![Vec::new(); LEVELS];
+            for i in 0..n {
+                if a.near[i] != 0 {
+                    m[i] = d[i];
+                    outer[i] = a.flood[i];
+                    buckets[level(d[i])].push(i as u32);
+                }
+            }
+            for b in 0..LEVELS {
+                let mut k = 0;
+                while k < buckets[b].len() {
+                    let q = buckets[b][k] as usize;
+                    k += 1;
+                    let mq = m[q];
+                    let (x, y) = (q % w, q / w);
+                    for ny in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                        for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                            let p = ny * w + nx;
+                            if m[p].is_finite() || d[p] < mq - SLOPE_TOL {
+                                continue;
+                            }
+                            let mp = mq.max(d[p]);
+                            m[p] = mp;
+                            outer[p] = outer[q];
+                            buckets[level(mp)].push(p as u32);
+                        }
                     }
                 }
             }
+            drop(buckets);
 
+            // 2. The peaks. `up[i]` is the steepest same-hue step from `i`, and
+            // `i` itself at a summit; following it to the end and writing the end
+            // back along the way leaves `up[i]` holding the peak.
+            let mut up: Vec<u32> = (0..n as u32).collect();
+            for i in 0..n {
+                if !m[i].is_finite() {
+                    continue;
+                }
+                let (vi, di) = (vec_of(i), d[i]);
+                let (x, y) = (i % w, i / w);
+                let mut best = di;
+                for ny in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                    for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                        let j = ny * w + nx;
+                        let dj = d[j];
+                        if dj <= best {
+                            continue;
+                        }
+                        if di >= HUE_MIN && dot(vec_of(j), vi) < SAME_HUE_COS * dj * di {
+                            continue;
+                        }
+                        best = dj;
+                        up[i] = j as u32;
+                    }
+                }
+            }
+            for i in 0..n {
+                let mut root = i;
+                while up[root] as usize != root {
+                    root = up[root] as usize;
+                }
+                let mut c = i;
+                while up[c] as usize != root {
+                    let next = up[c] as usize;
+                    up[c] = root as u32;
+                    c = next;
+                }
+            }
+
+            // 3. Unmix.
             let mut out = img.rgba.clone();
             for i in 0..n {
                 let j = i * 4;
-                let a = new_a[i];
-                out[j + 3] = js_round_u8(a * 255.0);
-                if protect[cc.labels[i] as usize] != 0 {
-                    continue; // protected: keep the original lightness and chroma
+                let mut alpha = if a.flood[i] != 0 {
+                    0.0
+                } else if m[i].is_finite() {
+                    let peak = up[i] as usize;
+                    let df = d[peak];
+                    let along = if df > 1e-6 {
+                        (dot(vec_of(i), vec_of(peak)) / (df * df)) as f64
+                    } else {
+                        0.0
+                    };
+                    let fade = if a.near[i] != 0 {
+                        ((a.dist[i] as f64 - PAPER_RAMP_LO) / (PAPER_T - PAPER_RAMP_LO))
+                            .clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    along.clamp(0.0, 1.0) * fade
+                } else {
+                    1.0
+                };
+                // A knee at both ends: noise on a plateau is not 96% ink, and the
+                // last trace of an edge is not 4% ink.
+                alpha = ((alpha - 0.06) / 0.88).clamp(0.0, 1.0);
+                if alpha < 0.999 {
+                    let den = alpha.max(0.10);
+                    for c in 0..3 {
+                        let v = (px[j + c] as f64 / 255.0 - paper[c] * (1.0 - alpha)) / den;
+                        out[j + c] = js_round_u8(v.clamp(0.0, 1.0) * 255.0);
+                    }
                 }
-                if new_a[i] < alpha[i] - 1e-6 {
-                    if a > 0.001 {
-                        let d = a.max(0.10);
-                        for c in 0..3 {
-                            let v = (px[j + c] as f64 / 255.0 - paper[c] * (1.0 - a)) / d;
-                            out[j + c] = js_round_u8(v.clamp(0.0, 1.0) * 255.0);
+                out[j + 3] = js_round_u8(alpha * px[j + 3] as f64);
+            }
+            (Raster { w: img.w, h: img.h, rgba: out }, outer)
+        }
+
+        /// Which parts of the logo are BODIES — to be left exactly as drawn.
+        ///
+        /// A black tile with white lettering is not ink on paper: the tile is the
+        /// ground and the lettering is the mark. Clearing its white and lifting
+        /// its black, which is right for a wordmark, turns it into a white slab
+        /// with holes. Returns 1 for every pixel of such a shape.
+        ///
+        /// THE TEST IS STRICT BECAUSE THE TWO MISTAKES ARE NOT EQUAL. A body
+        /// taken for ink is recoloured and still reads. Ink taken for a body is
+        /// LEFT DARK ON A DARK FACE with its counters showing white — unreadable.
+        /// So a shape (one connected piece of everything the border flood did not
+        /// reach) has to be all of:
+        ///
+        /// - SOLID. At least 30% of it survives being eaten in by 8% of the
+        ///   logo's short side. Lettering does not; a tile, a disc, a band does.
+        /// - MOSTLY NOT PAPER. Paper-coloured pixels inside are at most 28% of
+        ///   it. An outlined oval and a set of rings are mostly paper inside.
+        /// - TWO-TONED: at least 8% dark and 6% light.
+        /// - NESTED. Some dark piece inside it touches no exterior — the counter
+        ///   of a white "0" on the tile, a black word on a yellow one. This is
+        ///   what a fat letter never has: its own counter is light, and nothing
+        ///   dark sits inside that.
+        ///
+        /// `dark` is "would need lifting on this surface", so the answer depends
+        /// on the theme's background and is recomputed when that moves.
+        fn find_bodies(
+            w: usize,
+            h: usize,
+            shape: &[u8],
+            paper_inside: &[u8],
+            exterior: &[u8],
+            dark: &[u8],
+        ) -> (Vec<u8>, usize) {
+            let n = w * h;
+            let mut zone = vec![0u8; n];
+            let cc = connected_components(shape, w, h);
+            if cc.count == 0 {
+                return (zone, 0);
+            }
+            let total: usize = cc.areas.iter().sum();
+
+            // Eaten in by `rho`: a square window, two separable passes, and
+            // anything beyond the frame counts as outside.
+            let rho = ((0.08 * w.min(h) as f64).round() as usize).max(3);
+            let erode = |src: &[u8], along_x: bool| -> Vec<u8> {
+                let mut out = vec![0u8; n];
+                let (lines, span) = if along_x { (h, w) } else { (w, h) };
+                let at = |l: usize, s: usize| if along_x { l * w + s } else { s * w + l };
+                for l in 0..lines {
+                    let mut run = 0usize; // consecutive 1s ending at s
+                    let mut ahead = vec![0usize; span + 1];
+                    for s in (0..span).rev() {
+                        ahead[s] = if src[at(l, s)] != 0 { ahead[s + 1] + 1 } else { 0 };
+                    }
+                    for s in 0..span {
+                        run = if src[at(l, s)] != 0 { run + 1 } else { 0 };
+                        if run > rho && ahead[s] > rho {
+                            out[at(l, s)] = 1;
                         }
                     }
+                }
+                out
+            };
+            let core = erode(&erode(shape, true), false);
+
+            let k = cc.count + 1;
+            let (mut thick, mut paper, mut darks) = (vec![0usize; k], vec![0usize; k], vec![0usize; k]);
+            for i in 0..n {
+                let id = cc.labels[i] as usize;
+                if id == 0 {
                     continue;
                 }
-                if a <= 0.5 {
-                    continue; // keyed background — leave it alone
+                thick[id] += core[i] as usize;
+                paper[id] += paper_inside[i] as usize;
+                darks[id] += dark[i] as usize;
+            }
+
+            // Dark pieces, and whether each one comes within two pixels of the
+            // exterior — two, because an antialiased rim sits between them.
+            //
+            // THE EDGE OF THE IMAGE IS EXTERIOR TOO. A mark trimmed tight has no
+            // paper left on its border, so the flood is empty there and nothing
+            // would ever "touch" it: a fat black "O" filling its frame read as a
+            // dark piece nested in a shape, and so as a body — the one mistake
+            // this function exists not to make.
+            let dcc = connected_components(dark, w, h);
+            let mut touches = vec![false; dcc.count + 1];
+            let mut home = vec![0u32; dcc.count + 1];
+            for i in 0..n {
+                let id = dcc.labels[i] as usize;
+                if id == 0 {
+                    continue;
                 }
-                let old_l = lp[i];
-                let c = chroma(ap[i], bp[i]);
-                let neutral = c < NEUTRAL_C;
-                let mut new_l = if neutral && old_l < 0.5 {
-                    1.0 - old_l // dark neutral ink inverts
-                } else if !neutral && old_l < 0.45 {
-                    old_l.max(0.62) // dark brand colour lifts to a readable floor
+                home[id] = cc.labels[i];
+                if touches[id] {
+                    continue;
+                }
+                let (x, y) = (i % w, i / w);
+                if x < 2 || y < 2 || x + 2 >= w || y + 2 >= h {
+                    touches[id] = true;
+                    continue;
+                }
+                'scan: for ny in y.saturating_sub(2)..=(y + 2).min(h - 1) {
+                    for nx in x.saturating_sub(2)..=(x + 2).min(w - 1) {
+                        if exterior[ny * w + nx] != 0 {
+                            touches[id] = true;
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+            let mut nested = vec![false; k];
+            for id in 1..=dcc.count {
+                let shape_id = home[id] as usize;
+                if shape_id == 0 || touches[id] {
+                    continue;
+                }
+                let floor = (0.0003 * cc.areas[shape_id] as f64).max(4.0);
+                if dcc.areas[id] as f64 >= floor {
+                    nested[shape_id] = true;
+                }
+            }
+
+            let mut bodies = 0usize;
+            let mut is_body = vec![false; k];
+            for id in 1..=cc.count {
+                let area = cc.areas[id] as f64;
+                if area < 64.0 || area < 0.03 * total as f64 {
+                    continue;
+                }
+                let light = area - darks[id] as f64;
+                if thick[id] as f64 >= 0.30 * area
+                    && paper[id] as f64 <= 0.28 * area
+                    && darks[id] as f64 >= 0.08 * area
+                    && light >= 0.06 * area
+                    && nested[id]
+                {
+                    is_body[id] = true;
+                    bodies += 1;
+                }
+            }
+            if bodies > 0 {
+                for i in 0..n {
+                    zone[i] = is_body[cc.labels[i] as usize] as u8;
+                }
+            }
+            (zone, bodies)
+        }
+
+        /// The logo with its ground removed, and what to leave alone in it.
+        pub struct Keyed {
+            /// Paper cleared everywhere except INSIDE a body, whose outer edge is
+            /// still unmixed. What `remap`, `halo` and `plate` are built from.
+            pub selective: Raster,
+            /// Only the exterior removed — the `as-is` treatment.
+            pub border: Raster,
+            /// 1 inside a body: pixels no treatment may change.
+            pub zone: Vec<u8>,
+            pub info: KeyInfo,
+        }
+
+        /// Stage 3 in full: find the ground, remove it, and mark the bodies.
+        ///
+        /// `found` is [`find_ground`]'s answer for the image BEFORE it was trimmed.
+        /// `bg` is the dark surface, because what counts as a body depends on
+        /// which ink would need lifting on it.
+        pub fn key_logo(img: &Raster, found: Found, bg: [f64; 3]) -> Keyed {
+            let (w, h) = (img.w as usize, img.h as usize);
+            let n = w * h;
+            let a = analyse(img, found);
+            // THE GATE'S LINE, NOT THE LIFT'S. `lift_floor` sits a little above
+            // it on purpose, and a colour that lands in the gap — a plain orange
+            // does — would be split by JPEG noise into "dark" and "light" pixels
+            // at random, which reads as a two-toned shape with dark pieces
+            // nested in it. That is the description of a body.
+            let floor = srgb_unit_to_lab(bg[0], bg[1], bg[2])[0] + READABLE_DL;
+            let px = &img.rgba;
+            // "Dark" is judged on the pixels as drawn, inside the shape and not
+            // paper-coloured.
+            let dark_mask = |shape: &[u8], paper_inside: &[u8]| -> Vec<u8> {
+                (0..n)
+                    .map(|i| {
+                        let j = i * 4;
+                        (shape[i] != 0
+                            && paper_inside[i] == 0
+                            && srgb8_to_lab(px[j], px[j + 1], px[j + 2])[0] < floor)
+                            as u8
+                    })
+                    .collect()
+            };
+            let (selective, border, zone, bodies) = match a.ground {
+                Ground::Opaque => (img.clone(), img.clone(), vec![1u8; n], 0),
+                Ground::Alpha => {
+                    let shape: Vec<u8> = a.near.iter().map(|v| 1 - v).collect();
+                    let none = vec![0u8; n];
+                    let dark = dark_mask(&shape, &none);
+                    let (zone, bodies) = find_bodies(w, h, &shape, &none, &a.flood, &dark);
+                    (img.clone(), img.clone(), zone, bodies)
+                }
+                Ground::Paper(paper) => {
+                    let border = feather(img, &a.flood, paper);
+                    let (full, outer) = unmix(img, &a, paper);
+                    let shape: Vec<u8> = a.flood.iter().map(|v| 1 - v).collect();
+                    let inside: Vec<u8> =
+                        (0..n).map(|i| (a.near[i] != 0 && a.flood[i] == 0) as u8).collect();
+                    let dark = dark_mask(&shape, &inside);
+                    let (zone, bodies) = find_bodies(w, h, &shape, &inside, &a.flood, &dark);
+                    // INSIDE A BODY, ONLY THE OUTER EDGE IS UNMIXED. Everything
+                    // else goes back to the pixels as drawn: the paper enclosed
+                    // in it is its lettering. The outer edge used to get the old
+                    // feathered cut instead, which sliced The Hog's own soft
+                    // glow at a hard line and stranded a sliver of it above.
+                    let mut rgba = full.rgba;
+                    if bodies > 0 {
+                        for i in 0..n {
+                            if zone[i] != 0 && outer[i] == 0 {
+                                rgba[i * 4..i * 4 + 4].copy_from_slice(&px[i * 4..i * 4 + 4]);
+                            }
+                        }
+                    }
+                    (Raster { w: img.w, h: img.h, rgba }, border, zone, bodies)
+                }
+            };
+            let info = KeyInfo {
+                keyed: a.ground != Ground::Opaque,
+                ground: a.ground,
+                coverage: coverage_of(&selective),
+                bg: match a.ground {
+                    Ground::Paper(p) => p,
+                    _ => [0.0; 3],
+                },
+                bodies,
+                note: if bodies > 0 {
+                    format!("{}, {bodies} left as drawn", a.note)
                 } else {
-                    old_l
-                };
-                new_l = new_l.max(old_l); // never darken
-                let (mut av, mut bv) = (ap[i], bp[i]);
-                if new_l > old_l {
-                    // Lightening a colour without dropping chroma reads as
-                    // fluorescent; 0.85 is the doc's damping.
-                    av *= 0.85;
-                    bv *= 0.85;
+                    a.note
+                },
+            };
+            Keyed { selective, border, zone, info }
+        }
+
+        /// Which treatments are built, in the order they are tried.
+        ///
+        /// ONE ORDER FOR EVERYTHING WITH A GROUND, where there used to be two
+        /// chosen by how much of the frame the logo covered. That threshold was
+        /// 80% and The Hog measured 80.4%: a different crop of the same logo would
+        /// have been recoloured instead of left alone. [`find_bodies`] decides
+        /// that per shape now, so `remap` is safe to try first on anything.
+        ///
+        /// An opaque image has nothing to remap — with no paper there is no
+        /// telling ink from ground — so it keeps the old tile order.
+        pub fn route(ground: Ground) -> Vec<Treatment> {
+            match ground {
+                Ground::Opaque => vec![Treatment::Halo, Treatment::AsIs],
+                _ => vec![Treatment::Remap, Treatment::Halo, Treatment::AsIs],
+            }
+        }
+
+        /// What happens when nothing passes the gate.
+        ///
+        /// THE GREY PLATE ONLY FOR A LOGO THAT HAS A GROUND. It exists to put
+        /// dark ink back on something light. An opaque tile already has its own
+        /// ground, so a plate behind it is a grey frame round a picture that was
+        /// readable or was not — it never helped, and the owner did not approve
+        /// it: *"light gray rectangles. This is not something I approved."*
+        pub fn floor(ground: Ground) -> Treatment {
+            match ground {
+                Ground::Opaque => Treatment::AsIs,
+                _ => Treatment::Plate,
+            }
+        }
+
+        /// How much lighter than the surface ink must be to read on it. The gate
+        /// measures it and `remap` is built to clear it, from this one number.
+        pub const READABLE_DL: f64 = 0.32;
+        /// Chroma under which a colour is treated as grey.
+        const NEUTRAL_C: f64 = 0.03; // the document's value, NOT the stale 0.045
+        /// No ink is LIFTED past this. Ink already lighter is left as it was.
+        const LIFT_CAP: f64 = 0.92;
+
+        /// The lightness dark ink is lifted to on a given surface.
+        ///
+        /// IT FOLLOWS THE SURFACE, AND THAT IS THE WHOLE BUG IT FIXES. This was a
+        /// fixed 0.62, chosen when the dark face was navy `#212B38` (L 0.286):
+        /// 0.334 above it, just over the gate's 0.32. Handoff v1.16.0 moved the
+        /// face to charcoal `#33373D` (L 0.335) and the same 0.62 was now 0.285
+        /// above it — under the gate. Every logo with dark coloured ink failed
+        /// its own remap and fell to the grey plate.
+        pub fn lift_floor(bg: [f64; 3]) -> f64 {
+            (srgb_unit_to_lab(bg[0], bg[1], bg[2])[0] + READABLE_DL + 0.025).min(LIFT_CAP - 0.02)
+        }
+
+        /// Lift the ink that would not read on the dark surface, keeping its hue.
+        ///
+        /// The paper is already gone — [`key_logo`] cleared it — so this is only
+        /// the second half of what `remap` used to be, and it leaves every pixel
+        /// inside a body (`zone`) exactly alone.
+        ///
+        /// - Grey ink inverts: black becomes near-white, and nothing lands under
+        ///   the floor.
+        /// - Coloured ink below the floor is raised to it. This used to stop at
+        ///   L 0.45, which left a band of mid-tones that were neither lifted nor
+        ///   readable.
+        /// - NOTHING IS DARKENED. The port brought white ink down to the cap with
+        ///   everything else, so a white wordmark came out light grey; the cap
+        ///   limits how far a LIFT goes and nothing more.
+        ///
+        /// The two rules are blended across a band of chroma rather than switched
+        /// at one value, so noise in a dark grey cannot flicker it between them.
+        pub fn remap(img: &Raster, zone: &[u8], bg: [f64; 3]) -> Raster {
+            let floor = lift_floor(bg);
+            let px = &img.rgba;
+            let mut out = img.rgba.clone();
+            for i in 0..img.pixels() {
+                let j = i * 4;
+                if px[j + 3] == 0 || zone.get(i).is_some_and(|z| *z != 0) {
+                    continue;
                 }
-                new_l = new_l.min(0.92);
-                let rgb = lab_to_srgb8(new_l, av, bv);
-                out[j] = rgb[0];
-                out[j + 1] = rgb[1];
-                out[j + 2] = rgb[2];
+                let lab = srgb8_to_lab(px[j], px[j + 1], px[j + 2]);
+                let old_l = lab[0];
+                let grey = (1.0 - old_l).max(floor).max(old_l);
+                let hued = old_l.max(floor);
+                let t = ((chroma(lab[1], lab[2]) - NEUTRAL_C) / NEUTRAL_C).clamp(0.0, 1.0);
+                let new_l = (grey + (hued - grey) * t).min(LIFT_CAP);
+                if new_l <= old_l + 1e-9 {
+                    continue;
+                }
+                // Lightening a colour without dropping chroma reads as
+                // fluorescent; 0.85 is the doc's damping, reached over a lift of
+                // 0.2 so a nudge does not cost a colour its strength.
+                let k = 1.0 - 0.15 * ((new_l - old_l) / 0.2).clamp(0.0, 1.0);
+                let rgb = lab_to_srgb8(new_l, lab[1] * k, lab[2] * k);
+                out[j..j + 3].copy_from_slice(&rgb);
             }
             Raster { w: img.w, h: img.h, rgba: out }
         }
@@ -2022,7 +2584,27 @@ pub mod dark {
         ///
         /// Ink is eroded by 1 px before measuring so an antialiased edge, which is
         /// half background by construction, cannot fail a perfectly good mark.
-        pub fn gate(cand: &Candidate, bg: [f64; 3]) -> (bool, String) {
+        ///
+        /// `exempt` IS THE BODIES. A black tile is not unreadable ink: it is the
+        /// ground its white lettering stands on, and [`find_bodies`] has already
+        /// established that it carries light content. Measured as ink it failed
+        /// every time — The Hog scored 0.44 and 0.42 against a pass mark of 0.45 —
+        /// which is the other half of how logos reached the grey plate. Exempt pixels still
+        /// count toward the blow-out figure, since a white slab is a white slab.
+        ///
+        /// `paper_left` SAYS WHETHER WHITE CAN STILL BE PAPER. The blow-out rule
+        /// fails a candidate that is 45% white, and what it is catching is a
+        /// logo's own unremoved background glaring off a dark face. Once
+        /// `key_logo` has cleared the paper, white is INK — and failing it sent
+        /// every logo drawn in white for a dark background to the grey plate,
+        /// white on light grey. So the rule applies only to what may still hold
+        /// paper: `as-is`, and an image no ground was found in.
+        pub fn gate(
+            cand: &Candidate,
+            bg: [f64; 3],
+            exempt: Option<&[u8]>,
+            paper_left: bool,
+        ) -> (bool, String) {
             if cand.treatment == Treatment::Plate {
                 return (true, "plate is the guaranteed floor".into());
             }
@@ -2064,7 +2646,7 @@ pub mod dark {
 
             let (mut neutral_tot, mut neutral_pass) = (0usize, 0usize);
             let (mut chrom_tot, mut chrom_pass) = (0usize, 0usize);
-            let (mut ink_tot, mut blowout) = (0usize, 0usize);
+            let (mut ink_tot, mut judged, mut blowout) = (0usize, 0usize, 0usize);
             for (i, &kept) in eroded.iter().enumerate() {
                 if kept == 0 {
                     continue;
@@ -2079,7 +2661,11 @@ pub mod dark {
                 if lab[0] > 0.95 {
                     blowout += 1;
                 }
-                let readable = (lab[0] - bg_lab[0]).abs() > 0.32;
+                if exempt.is_some_and(|z| z.get(i).is_some_and(|v| *v != 0)) {
+                    continue;
+                }
+                judged += 1;
+                let readable = (lab[0] - bg_lab[0]).abs() > READABLE_DL;
                 if chroma(lab[1], lab[2]) < 0.04 {
                     neutral_tot += 1;
                     if readable {
@@ -2095,20 +2681,24 @@ pub mod dark {
             if ink_tot == 0 {
                 return (false, "no ink".into());
             }
+            let blow = blowout as f64 / ink_tot as f64;
+            let glare = paper_left && blow >= 0.45;
+            if judged == 0 {
+                return (!glare, format!("all body blowout={blow:.2}"));
+            }
             // Both ink groups are judged separately and the WORSE one decides, so
             // a treatment that saves the wordmark and destroys the roundel fails.
             // A group under 8% of the ink is noise and does not get a vote.
             let mut groups: Vec<f64> = Vec::new();
-            if neutral_tot as f64 >= 0.08 * ink_tot as f64 {
+            if neutral_tot as f64 >= 0.08 * judged as f64 {
                 groups.push(neutral_pass as f64 / neutral_tot as f64);
             }
-            if chrom_tot as f64 >= 0.08 * ink_tot as f64 {
+            if chrom_tot as f64 >= 0.08 * judged as f64 {
                 groups.push(chrom_pass as f64 / chrom_tot as f64);
             }
             let min_group = groups.iter().copied().fold(f64::INFINITY, f64::min);
             let min_group = if groups.is_empty() { 0.0 } else { min_group };
-            let blow = blowout as f64 / ink_tot as f64;
-            let pass = min_group >= 0.45 && blow < 0.45;
+            let pass = min_group >= 0.45 && !glare;
             (pass, format!("minGroup={min_group:.2} blowout={blow:.2}"))
         }
 
@@ -2118,8 +2708,8 @@ pub mod dark {
     pub mod pipeline {
         use super::super::Raster;
         use super::stages::{
-            flatten_checkerboard, gate, halo, key_background, plate_params, remap, route, Bbox,
-            Candidate, CheckerInfo, KeyInfo, Treatment,
+            find_ground, flatten_checkerboard, floor, gate, halo, key_logo, plate_params, remap,
+            route, Bbox, Candidate, CheckerInfo, KeyInfo, Keyed, Treatment,
         };
 
         #[derive(Clone, Debug)]
@@ -2133,52 +2723,69 @@ pub mod dark {
             pub order: Vec<Treatment>,
             /// Every built candidate: routed ones first, then the plate floor.
             pub candidates: Vec<Candidate>,
-            /// First routed candidate that passed the gate, else `Plate`.
+            /// First routed candidate that passed the gate, else the floor for
+            /// this logo's ground — see `stages::floor`.
             pub pick: Treatment,
             /// Per-treatment gate notes, for logs.
             pub gates: Vec<(Treatment, String)>,
         }
 
-        fn build(t: Treatment, keyed: &Raster) -> Candidate {
-            match t {
-                Treatment::Remap => {
-                    Candidate { treatment: t, raster: remap(keyed), plate: None }
-                }
-                Treatment::Halo => Candidate { treatment: t, raster: halo(keyed), plate: None },
-                Treatment::AsIs => {
-                    Candidate { treatment: t, raster: keyed.clone(), plate: None }
-                }
+        fn build(t: Treatment, keyed: &Keyed, bg: [f64; 3]) -> Candidate {
+            let raster: Raster = match t {
+                Treatment::Remap => remap(&keyed.selective, &keyed.zone, bg),
+                Treatment::Halo => halo(&keyed.selective),
+                // ONLY THE EXTERIOR REMOVED. The other three are built from the
+                // logo with its paper cleared throughout; this one keeps every
+                // enclosed white, so the picker always offers the logo as drawn.
+                Treatment::AsIs => keyed.border.clone(),
                 // The plate's PIXELS are the keyed image — the grey rounded
                 // rectangle is drawn behind it by the UI, never baked in.
-                Treatment::Plate => Candidate {
-                    treatment: t,
-                    raster: keyed.clone(),
-                    plate: Some(plate_params()),
-                },
-            }
+                Treatment::Plate => keyed.selective.clone(),
+            };
+            Candidate { treatment: t, raster, plate: (t == Treatment::Plate).then(plate_params) }
         }
 
         /// Run the whole pipeline for a given dark background (unit sRGB, read
         /// from the theme token — never hardcoded at the call site).
         pub fn adapt_logo_for_dark(src: &Raster, bg: [f64; 3]) -> AdaptResult {
             let (r1, checkerboard) = flatten_checkerboard(src);
-            let (r2, bbox) = super::stages::trim(&r1);
-            let (keyed, key) = key_background(&r2);
-            let coverage = key.coverage;
-            let order = route(coverage);
+            // THE GROUND IS READ BEFORE THE TRIM, off the margin the file was
+            // exported with. See `find_ground`.
+            let found = find_ground(&r1);
+            let (r2, mut bbox) = super::stages::trim(&r1);
+            let mut keyed = key_logo(&r2, found, bg);
+            // NOTHING WAS REMOVED, SO WHAT THE TRIM TOOK WAS THE LOGO. The trim
+            // crops any uniform margin, and on a coloured tile that margin is the
+            // tile: it came back cropped to its lettering, with the letters
+            // touching the edge. With no ground to remove there was no padding
+            // either, so the untrimmed image is the one to keep.
+            if !keyed.info.keyed && (r2.w != r1.w || r2.h != r1.h) {
+                keyed = key_logo(&r1, found, bg);
+                bbox = Bbox { x0: 0, y0: 0, x1: r1.w.saturating_sub(1), y1: r1.h.saturating_sub(1) };
+            }
+            let coverage = keyed.info.coverage;
+            let order = route(keyed.info.ground);
 
-            let mut candidates: Vec<Candidate> = order.iter().map(|t| build(*t, &keyed)).collect();
+            let mut candidates: Vec<Candidate> =
+                order.iter().map(|t| build(*t, &keyed, bg)).collect();
             let mut gates: Vec<(Treatment, String)> = Vec::new();
             let mut pick: Option<Treatment> = None;
             for c in &candidates {
-                let (ok, note) = gate(c, bg);
+                // `as-is` on a keyed logo is judged with NO exemption: it is the
+                // one candidate that leaves enclosed paper in, so it has to stand
+                // on what is actually readable. An opaque image is one body, and
+                // `key_logo` marks the whole of it.
+                let paper_left = c.treatment == Treatment::AsIs || !keyed.info.keyed;
+                let exempt = (c.treatment != Treatment::AsIs || !keyed.info.keyed)
+                    .then_some(keyed.zone.as_slice());
+                let (ok, note) = gate(c, bg, exempt, paper_left);
                 gates.push((c.treatment, format!("{}{note}", if ok { "PASS " } else { "fail " })));
                 if ok && pick.is_none() {
                     pick = Some(c.treatment);
                 }
             }
-            let plate = build(Treatment::Plate, &keyed);
-            let (_, plate_note) = gate(&plate, bg);
+            let plate = build(Treatment::Plate, &keyed, bg);
+            let (_, plate_note) = gate(&plate, bg, None, false);
             candidates.push(plate);
             gates.push((Treatment::Plate, format!("PASS {plate_note}")));
 
@@ -2186,11 +2793,11 @@ pub mod dark {
                 bg,
                 checkerboard,
                 bbox,
-                key,
+                key: keyed.info.clone(),
                 coverage,
                 order,
                 candidates,
-                pick: pick.unwrap_or(Treatment::Plate),
+                pick: pick.unwrap_or(floor(keyed.info.ground)),
                 gates,
             }
         }
@@ -2362,6 +2969,9 @@ pub mod store {
         /// happens to be current, which is the assumption that would hide the
         /// problem.
         pub bg: u32,
+        /// `dark::DARK_ALGO` as it stood when this variant was built. `1` for
+        /// anything written before the stamp existed.
+        pub algo: u32,
     }
 
     #[derive(Clone, Debug, Default, PartialEq)]
@@ -2413,10 +3023,11 @@ pub mod store {
             ));
             if let Some(d) = &self.dark {
                 parts.push(format!(
-                    "\"dark\":{{\"treatment\":{},\"chosen\":{},\"bg\":{}}}",
+                    "\"dark\":{{\"treatment\":{},\"chosen\":{},\"bg\":{},\"algo\":{}}}",
                     json::quote(&d.treatment),
                     d.chosen,
-                    d.bg
+                    d.bg,
+                    d.algo
                 ));
             }
             format!("{{{}}}", parts.join(","))
@@ -2447,6 +3058,7 @@ pub mod store {
                         // is no valid background this app composites onto, so an
                         // old entry reads as stale and gets re-judged.
                         bg: d.get("bg").and_then(Json::as_u32).unwrap_or(0),
+                        algo: d.get("algo").and_then(Json::as_u32).unwrap_or(1),
                     })
                 }),
             })
@@ -2788,7 +3400,12 @@ pub mod store {
             self.put_derived(base, "dark.png", png)?;
             self.patch_meta(base, |m| {
                 m.dark =
-                    Some(DarkInfo { treatment: treatment.as_enum().to_string(), chosen, bg });
+                    Some(DarkInfo {
+                        treatment: treatment.as_enum().to_string(),
+                        chosen,
+                        bg,
+                        algo: super::dark::DARK_ALGO,
+                    });
                 m.dark_sizes = Vec::new();
             })
         }
@@ -3052,7 +3669,7 @@ pub trait LogoNet: Send + Sync {
 /// not milliseconds, so it MUST NOT run on the Slint event loop — see
 /// `service::Worker`, which is the only thing that should call in here.
 pub mod assign {
-    use super::dark::{bg_key, pipeline, stages::Treatment, LOGO_DARK_BG};
+    use super::dark::{bg_key, pipeline, stages::Treatment, DARK_ALGO, LOGO_DARK_BG};
     use super::store::{LogoStore, StoreError};
     use super::{prep, ImageCodec, Raster};
 
@@ -3159,7 +3776,7 @@ pub mod assign {
         let res = pipeline::adapt_logo_for_dark(&master, gate_bg);
         let prior = store.dark_info(base);
         let (treatment, chosen) = pipeline::choose_treatment(
-            prior.as_ref().map(|d| (d.treatment.as_str(), d.chosen)),
+            prior.as_ref().map(|d| (d.treatment.as_str(), d.chosen && !stale_plate(d))),
             &res.candidates,
             res.pick,
         );
@@ -3180,6 +3797,25 @@ pub mod assign {
         sizes.sort_unstable();
         let _ = store.set_dark_sizes(base, sizes);
         Some(cand.treatment)
+    }
+
+    /// A grey plate stored by the pipeline before #143, chosen or not.
+    ///
+    /// THE ONE STORED CHOICE THAT IS NOT HONOURED, and only across that one
+    /// change. "Use this" in the picker writes `chosen = true` for whichever row
+    /// is selected, and the row it opens on is the pipeline's own pick — so a
+    /// driver who accepted the default has the same bit on disk as one who
+    /// overrode it. The old pipeline's default was the plate for most coloured
+    /// logos, by a fault in its own arithmetic (`stages::lift_floor`), and the
+    /// owner's word on the result was *"light gray rectangles. This is not
+    /// something I approved."* Honouring those bits would leave every one of them
+    /// in place.
+    ///
+    /// So a plate from generation 1 is re-judged once. A plate chosen from the
+    /// picker after this — stamped with the current generation — is kept like
+    /// any other choice, and so is every non-plate choice from before it.
+    fn stale_plate(d: &super::store::DarkInfo) -> bool {
+        d.algo < 2 && d.treatment == Treatment::Plate.as_enum()
     }
 
     /// Every dark treatment this station's master can produce, for the picker.
@@ -3452,14 +4088,17 @@ pub mod assign {
         }
         match store.meta(base).and_then(|m| m.dark) {
             None => true,
-            // JUDGED AGAINST A DIFFERENT SURFACE, SO RE-JUDGE IT. The stored
-            // pixels are background-independent, but the GATE's verdict is not:
-            // it composites each candidate onto the real dark ground and asks
-            // whether the mark still separates from it. Move the ground and the
-            // answer can change, which is why DARK-MODE-LOGOS keys the cache by
-            // `(logoId, backgroundColour)` rather than by the logo alone. Handoff
-            // v1.16.0 moved it, so every variant cached before that is stale.
-            Some(d) => d.bg != bg_key(gate_bg),
+            // BUILT FOR A DIFFERENT SURFACE, SO REBUILD IT. The lift and the gate
+            // both read the dark ground — see `dark::LOGO_DARK_BG` — so moving it
+            // changes the picture as well as the pick, which is why
+            // DARK-MODE-LOGOS keys the cache by `(logoId, backgroundColour)`
+            // rather than by the logo alone. Handoff v1.16.0 moved it, so every
+            // variant cached before that is stale.
+            //
+            // AND BUILT BY DIFFERENT CODE, SO REBUILD IT. The pixels are a
+            // function of the pipeline as well as of the master; see
+            // `dark::DARK_ALGO`.
+            Some(d) => d.bg != bg_key(gate_bg) || d.algo != DARK_ALGO,
         }
     }
 }
@@ -5313,56 +5952,342 @@ mod tests {
         assert_eq!(info.note, "colours not neutral");
     }
 
-    #[test]
-    fn route_switches_family_at_eighty_percent_coverage() {
-        use dark::stages::Treatment::*;
-        assert_eq!(dark::stages::route(0.81), vec![Halo, AsIs]);
-        assert_eq!(dark::stages::route(0.80), vec![Remap, Halo]);
-        assert_eq!(dark::stages::route(0.79), vec![Remap, Halo]);
+    const NAVY: [u8; 4] = [26, 42, 120, 255];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+    /// The dark face BEFORE handoff v1.16.0 — the surface the port's fixed
+    /// constants were chosen against.
+    const NAVY_FACE: [f64; 3] = [0x21 as f64 / 255.0, 0x2B as f64 / 255.0, 0x38 as f64 / 255.0];
+
+    fn lightness(r: &Raster, x: u32, y: u32) -> f64 {
+        let j = r.at(x, y);
+        dark::oklab::srgb8_to_lab(r.rgba[j], r.rgba[j + 1], r.rgba[j + 2])[0]
+    }
+
+    fn alpha(r: &Raster, x: u32, y: u32) -> u8 {
+        r.rgba[r.at(x, y) + 3]
+    }
+
+    fn surface_l(bg: [f64; 3]) -> f64 {
+        dark::oklab::srgb_unit_to_lab(bg[0], bg[1], bg[2])[0]
+    }
+
+    fn candidate(res: &dark::pipeline::AdaptResult, t: dark::stages::Treatment) -> &Raster {
+        &res.candidates.iter().find(|c| c.treatment == t).expect("built").raster
     }
 
     #[test]
-    fn key_background_aborts_when_the_corners_disagree() {
+    fn the_route_and_the_floor_follow_the_ground() {
+        use dark::stages::{floor, route, Ground, Treatment::*};
+        assert_eq!(route(Ground::Paper([1.0; 3])), vec![Remap, Halo, AsIs]);
+        assert_eq!(route(Ground::Alpha), vec![Remap, Halo, AsIs]);
+        // No ground, nothing to tell ink from: there is nothing to remap.
+        assert_eq!(route(Ground::Opaque), vec![Halo, AsIs]);
+        assert_eq!(floor(Ground::Paper([1.0; 3])), Plate);
+        assert_eq!(floor(Ground::Alpha), Plate);
+        assert_eq!(floor(Ground::Opaque), AsIs, "a tile is never put on the grey plate");
+    }
+
+    #[test]
+    fn key_background_leaves_a_two_way_split_alone() {
         let mut split = field(16, 16, WHITE);
         block(&mut split, 0, 0, 8, 16, [10, 10, 10, 255]);
         let (out, info) = dark::stages::key_background(&split);
         assert!(!info.keyed);
-        assert!(info.note.starts_with("corners disagree"), "{}", info.note);
+        assert_eq!(info.ground, dark::stages::Ground::Opaque);
+        assert!(info.note.starts_with("no single background"), "{}", info.note);
         assert_eq!(out.rgba, split.rgba, "an aborted key must not touch the pixels");
     }
 
+    /// THE GROUND, FROM THE FOUR SHAPES THAT USED TO FOOL IT.
     #[test]
-    fn remap_lifts_dark_ink_and_never_darkens() {
-        use dark::oklab::srgb8_to_lab;
-        let mut img = field(32, 32, CLEAR);
-        block(&mut img, 8, 8, 16, 16, [0, 0, 0, 255]);
-        let out = dark::stages::remap(&img);
-        let j = out.at(16, 16);
-        let after = srgb8_to_lab(out.rgba[j], out.rgba[j + 1], out.rgba[j + 2]);
-        // Black ink inverts and is then capped at L = 0.92.
-        assert!(after[0] > 0.85, "L after remap = {}", after[0]);
-        assert!(after[0] <= 0.925);
-        // No pixel anywhere came out darker than it went in.
-        for i in 0..out.pixels() {
-            let (a, b) = (i * 4, i * 4);
-            if img.rgba[a + 3] > 128 && out.rgba[b + 3] > 128 {
-                let before = srgb8_to_lab(img.rgba[a], img.rgba[a + 1], img.rgba[a + 2]);
-                let now = srgb8_to_lab(out.rgba[b], out.rgba[b + 1], out.rgba[b + 2]);
-                assert!(now[0] >= before[0] - 1e-3, "pixel {i} darkened");
-            }
+    fn the_ground_is_read_off_the_corners_then_the_border() {
+        use dark::stages::{find_ground, Ground};
+        let paper = |g: Ground| match g {
+            Ground::Paper(p) => p,
+            other => panic!("expected paper, got {other:?}"),
+        };
+
+        // A ROUNDED TILE: the border's median is the tile, the corners are paper.
+        let mut tile = field(40, 24, NAVY);
+        for (x, y) in [(0, 0), (39, 0), (0, 23), (39, 23)] {
+            tile.set(x, y, WHITE);
+        }
+        assert_eq!(paper(find_ground(&tile).ground), [1.0, 1.0, 1.0]);
+
+        // A BAND ALONG ONE EDGE takes two corners; most of the border is paper.
+        let mut band = field(40, 24, WHITE);
+        block(&mut band, 0, 18, 40, 6, RED);
+        assert_eq!(paper(find_ground(&band).ground), [1.0, 1.0, 1.0]);
+
+        // A COLOUR THAT FILLS THE FRAME is the logo's own, and stays.
+        let found = find_ground(&field(40, 24, RED));
+        assert_eq!(found.ground, Ground::Opaque);
+        assert!(found.note.contains("own colour"), "{}", found.note);
+        // Black and cream are paper like white is.
+        assert_eq!(paper(find_ground(&field(40, 24, BLACK)).ground), [0.0, 0.0, 0.0]);
+        assert!(matches!(find_ground(&field(40, 24, [255, 246, 220, 255])).ground, Ground::Paper(_)));
+
+        // ALREADY TRANSPARENT is its own answer, whatever RGB hides under it.
+        let mut clear = field(40, 24, [255, 255, 255, 0]);
+        block(&mut clear, 10, 8, 20, 8, WHITE);
+        assert_eq!(find_ground(&clear).ground, Ground::Alpha);
+    }
+
+    /// THE BUG, IN TWO NUMBERS, and the rule that replaces them.
+    ///
+    /// The port lifted dark coloured ink to a FIXED lightness of 0.62. Against
+    /// the navy face that was just over the gate's 0.32; handoff v1.16.0 moved
+    /// the face to charcoal and the same 0.62 was under it, so every such logo
+    /// failed its own remap and fell to the grey plate.
+    #[test]
+    fn the_lift_floor_follows_the_surface() {
+        use dark::stages::{lift_floor, READABLE_DL};
+        assert!(0.62 > surface_l(NAVY_FACE) + READABLE_DL, "0.62 passed on the navy face");
+        assert!(0.62 < surface_l(dark::LOGO_DARK_BG) + READABLE_DL, "and fails on charcoal");
+        for bg in [NAVY_FACE, dark::LOGO_DARK_BG, [0.0, 0.0, 0.0]] {
+            assert!(lift_floor(bg) > surface_l(bg) + READABLE_DL, "the floor clears the gate on {bg:?}");
         }
     }
 
     #[test]
-    fn remap_protects_a_white_wordmark() {
-        // A white block covering 25% of the image — well over the 8% protect
-        // threshold — is a wordmark, and clearing it would delete the station's
-        // name from its own logo.
-        let mut img = field(20, 20, [0, 0, 0, 255]);
-        block(&mut img, 5, 5, 10, 10, WHITE);
-        let out = dark::stages::remap(&img);
-        let j = out.at(10, 10);
+    fn remap_lifts_dark_ink_and_never_darkens() {
+        use dark::stages::READABLE_DL;
+        let bg = dark::LOGO_DARK_BG;
+        let mut img = field(40, 32, CLEAR);
+        block(&mut img, 4, 4, 10, 16, BLACK);
+        block(&mut img, 18, 4, 10, 16, NAVY);
+        block(&mut img, 4, 24, 28, 4, WHITE);
+        let none = vec![0u8; img.pixels()];
+        let out = dark::stages::remap(&img, &none, bg);
+
+        // Black ink inverts and is capped at L = 0.92.
+        let black = lightness(&out, 8, 12);
+        assert!(black > 0.85 && black <= 0.925, "black lifted to {black}");
+        // Dark colour comes up to where it reads on THIS surface.
+        let navy = lightness(&out, 22, 12);
+        assert!(navy > surface_l(bg) + READABLE_DL, "navy lifted to {navy}");
+        // WHITE STAYS WHITE. The port brought it down to the cap with the rest.
+        let j = out.at(10, 26);
         assert_eq!(&out.rgba[j..j + 4], &[255, 255, 255, 255]);
+        // No pixel anywhere came out darker than it went in.
+        for i in 0..out.pixels() {
+            let j = i * 4;
+            if img.rgba[j + 3] > 128 {
+                let before = dark::oklab::srgb8_to_lab(img.rgba[j], img.rgba[j + 1], img.rgba[j + 2]);
+                let now = dark::oklab::srgb8_to_lab(out.rgba[j], out.rgba[j + 1], out.rgba[j + 2]);
+                assert!(now[0] >= before[0] - 1e-3, "pixel {i} darkened");
+            }
+        }
+
+        // A BODY IS LEFT EXACTLY ALONE.
+        let mut zone = none.clone();
+        for y in 4..20 {
+            for x in 18..28 {
+                zone[(y * 40 + x) as usize] = 1;
+            }
+        }
+        let kept = dark::stages::remap(&img, &zone, bg);
+        let j = kept.at(22, 12);
+        assert_eq!(&kept.rgba[j..j + 4], &NAVY);
+        assert!(lightness(&kept, 8, 12) > 0.85, "and the ink outside it is still lifted");
+    }
+
+    /// THE REGRESSION THE OWNER SAW: dark coloured ink on white paper — WIBA's
+    /// shape — is recoloured and sits on the card. It was on the grey plate.
+    #[test]
+    fn a_dark_coloured_wordmark_is_recoloured_not_plated() {
+        use dark::stages::Treatment;
+        let mut img = field(120, 60, WHITE);
+        block(&mut img, 12, 10, 40, 14, NAVY);
+        block(&mut img, 60, 10, 48, 14, NAVY);
+        block(&mut img, 12, 34, 96, 10, [150, 20, 30, 255]);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.pick, Treatment::Remap, "{:?}", res.gates);
+        let out = candidate(&res, Treatment::Remap);
+        // Every opaque pixel of it reads on the card.
+        let floor = surface_l(dark::LOGO_DARK_BG) + dark::stages::READABLE_DL;
+        for y in 0..out.h {
+            for x in 0..out.w {
+                if alpha(out, x, y) > 200 {
+                    assert!(lightness(out, x, y) > floor, "({x},{y}) is still dark");
+                }
+            }
+        }
+    }
+
+    /// THE PIXELS THE OWNER SAW LEFT BEHIND, in miniature.
+    ///
+    /// Gold stripes three pixels wide with three-pixel gaps that are PALE YELLOW
+    /// all the way across — never white, because at this size the gap is nothing
+    /// but the two stripes' antialiasing. That is WPR's roundel, measured
+    /// (`#bdac64` rings, `#fff6d2` between them). The old clear kept anything
+    /// with colour in it, so the gaps stayed as a cream field.
+    #[test]
+    fn tinted_gaps_between_strokes_are_cleared() {
+        let gold = [189, 172, 100, 255];
+        let gap = [255, 246, 210, 255];
+        let mut img = field(64, 40, WHITE);
+        block(&mut img, 8, 8, 45, 24, gap);
+        for k in 0..8 {
+            block(&mut img, 8 + k * 6, 8, 3, 24, gold);
+        }
+        // Closed top and bottom, as a ring closes on itself: the gaps are
+        // ENCLOSED, which is what kept a flood from the border out of them.
+        block(&mut img, 8, 8, 45, 3, gold);
+        block(&mut img, 8, 29, 45, 3, gold);
+        let found = dark::stages::find_ground(&img);
+        let keyed = dark::stages::key_logo(&img, found, dark::LOGO_DARK_BG);
+        assert_eq!(keyed.info.bodies, 0);
+        // The middle of a stripe is ink, the middle of a gap is not.
+        assert_eq!(alpha(&keyed.selective, 9, 20), 255, "a stripe keeps its ink");
+        for k in 0..7 {
+            let a = alpha(&keyed.selective, 8 + k * 6 + 4, 20);
+            assert!(a < 48, "gap {k} still holds alpha {a}");
+        }
+        // AND THE OLD KEY LEFT THEM, which is what `as-is` still shows: the gaps
+        // are enclosed, so a flood from the border never reaches them.
+        assert_eq!(alpha(&keyed.border, 12, 20), 255);
+    }
+
+    /// A LOGO DRAWN IN WHITE FOR A DARK BACKGROUND KEEPS ITS TEXT.
+    ///
+    /// Two faults met here. The key took the transparent pixels' own RGB for
+    /// "paper" and flooded into ink of that colour, and what survived was
+    /// faded out by the lightness clear — so the wordmark was deleted, and the
+    /// plate that caught the failure set white on light grey.
+    #[test]
+    fn white_ink_on_transparency_is_kept() {
+        use dark::stages::Treatment;
+        let mut img = field(80, 40, [255, 255, 255, 0]);
+        for k in 0..5 {
+            block(&mut img, 8 + k * 14, 8, 8, 16, WHITE);
+        }
+        block(&mut img, 8, 30, 64, 4, [255, 140, 0, 255]);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.key.ground, dark::stages::Ground::Alpha);
+        assert_eq!(res.pick, Treatment::Remap, "{:?}", res.gates);
+        let out = candidate(&res, Treatment::Remap);
+        let j = out.at(10, 12);
+        assert_eq!(&out.rgba[j..j + 4], &[255, 255, 255, 255], "the lettering is untouched");
+    }
+
+    /// A TILE WITH LIGHT LETTERING IS LEFT AS DRAWN — The Hog's shape.
+    ///
+    /// A navy tile on white paper, corners rounded, carrying a white "0": white
+    /// ring, navy counter. Clearing its white and lifting its navy is right for
+    /// a wordmark and turns this into a pale slab with holes.
+    #[test]
+    fn a_tile_with_light_lettering_is_left_as_drawn() {
+        use dark::stages::Treatment;
+        let mut img = field(100, 64, WHITE);
+        block(&mut img, 6, 6, 88, 52, NAVY);
+        for (x, y) in [(6, 6), (93, 6), (6, 57), (93, 57)] {
+            img.set(x, y, WHITE);
+        }
+        block(&mut img, 20, 18, 24, 28, WHITE);
+        block(&mut img, 28, 26, 8, 12, NAVY); // the counter: dark, nested in light
+        block(&mut img, 56, 18, 8, 28, WHITE);
+        block(&mut img, 72, 18, 8, 28, WHITE);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.key.bodies, 1, "{}", res.key.note);
+        assert_eq!(res.pick, Treatment::Remap, "{:?}", res.gates);
+        let out = candidate(&res, Treatment::Remap);
+        // Trimmed to the tile, so the tile's own pixels start at the origin.
+        let at = |x: u32, y: u32| {
+            let j = out.at(x - 6, y - 6);
+            [out.rgba[j], out.rgba[j + 1], out.rgba[j + 2], out.rgba[j + 3]]
+        };
+        assert_eq!(at(50, 32), NAVY, "the tile keeps its colour");
+        assert_eq!(at(22, 20), WHITE, "the lettering keeps its white");
+        assert_eq!(at(30, 30), NAVY, "and its counter");
+    }
+
+    /// A FAT LETTER IS INK, HOWEVER SOLID IT IS.
+    ///
+    /// The mistake that must not be made: a letter taken for a body is left dark
+    /// on a dark face with its counter showing white. A black "O" has no dark
+    /// piece nested inside it, which is what tells it from a tile.
+    #[test]
+    fn a_fat_letter_is_ink_and_its_counter_is_cleared() {
+        use dark::stages::Treatment;
+        let mut img = field(80, 60, WHITE);
+        block(&mut img, 14, 8, 52, 44, BLACK);
+        block(&mut img, 30, 20, 20, 20, WHITE);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.key.bodies, 0, "{}", res.key.note);
+        assert_eq!(res.pick, Treatment::Remap, "{:?}", res.gates);
+        let out = candidate(&res, Treatment::Remap);
+        // Trimmed to the letter: (14, 8) is the origin.
+        assert!(lightness(out, 4, 4) > 0.85, "the stroke is lifted");
+        assert_eq!(alpha(out, 26, 22), 0, "the counter is cleared");
+    }
+
+    /// A LOGO INSIDE A RECTANGULAR FRAME, once trimmed, has NO paper on its
+    /// border — the frame is the border. The old key found nothing to flood and
+    /// left the whole white interior in.
+    #[test]
+    fn a_framed_logo_has_its_interior_cleared() {
+        use dark::stages::Treatment;
+        let mut img = field(100, 60, WHITE);
+        block(&mut img, 8, 8, 84, 44, BLACK);
+        block(&mut img, 11, 11, 78, 38, WHITE);
+        block(&mut img, 24, 22, 52, 14, NAVY);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.pick, Treatment::Remap, "{:?} {}", res.gates, res.key.note);
+        let out = candidate(&res, Treatment::Remap);
+        assert_eq!(alpha(out, 8, 8), 0, "the interior is cleared");
+        assert!(lightness(out, 1, 20) > 0.85, "the frame is lifted");
+        assert!(alpha(out, 30, 20) > 200, "and the word is still there");
+    }
+
+    /// JPEG NOISE ON BLACK PAPER IS STILL PAPER.
+    ///
+    /// OKLab's lightness is a cube root, so `(12,12,12)` is 0.15 from black —
+    /// further than the whole paper threshold. Judged by OKLab alone, the noise
+    /// round every letter on a black background reads as ink.
+    #[test]
+    fn noise_on_dark_paper_is_still_paper() {
+        let mut img = field(60, 40, BLACK);
+        // One pixel in eleven lifted to grey 13: isolated, each a local maximum,
+        // which is what the noise looks like and what nothing but the paper
+        // test can remove — there is no ink beside it to be a thinning of.
+        for y in 1..39u32 {
+            for x in 1..59u32 {
+                if (x * 7 + y * 13) % 11 == 0 {
+                    img.set(x, y, [13, 13, 13, 255]);
+                }
+            }
+        }
+        block(&mut img, 20, 12, 20, 16, WHITE);
+        let found = dark::stages::find_ground(&img);
+        let keyed = dark::stages::key_logo(&img, found, dark::LOGO_DARK_BG);
+        let left = (0..img.pixels())
+            .filter(|i| {
+                let (x, y) = ((i % 60) as u32, (i / 60) as u32);
+                let outside = !(18..42).contains(&x) || !(10..30).contains(&y);
+                outside && keyed.selective.rgba[i * 4 + 3] != 0
+            })
+            .count();
+        assert_eq!(left, 0, "{left} specks of paper survived");
+        assert_eq!(alpha(&keyed.selective, 30, 20), 255, "the lettering did");
+    }
+
+    /// AN IMAGE WITH NO GROUND NEVER FALLS TO THE GREY PLATE.
+    ///
+    /// The plate exists to put dark ink back on something light. A tile has its
+    /// own ground already, so a plate behind it is a grey frame and nothing more.
+    #[test]
+    fn an_opaque_image_never_falls_to_the_plate() {
+        use dark::stages::{Ground, Treatment};
+        // A red tile with dark lettering nothing can rescue: the gate fails it.
+        let mut img = field(60, 40, [90, 12, 16, 255]);
+        block(&mut img, 14, 12, 32, 16, [40, 8, 10, 255]);
+        let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
+        assert_eq!(res.key.ground, Ground::Opaque);
+        assert_ne!(res.pick, Treatment::Plate, "{:?}", res.gates);
+        // And it comes back at its full size: the trim's margin WAS the tile.
+        let out = candidate(&res, res.pick);
+        assert_eq!((out.w, out.h), (60, 40));
     }
 
     #[test]
@@ -5374,28 +6299,32 @@ mod tests {
             raster: field(8, 8, [200, 200, 200, 255]),
             plate: None,
         };
-        assert!(gate(&light, bg).0, "{}", gate(&light, bg).1);
+        assert!(gate(&light, bg, None, false).0, "{}", gate(&light, bg, None, false).1);
         // A wash barely different from the surface itself: unreadable.
         let wash = Candidate {
             treatment: Treatment::Remap,
             raster: field(8, 8, [42, 52, 66, 255]),
             plate: None,
         };
-        assert!(!gate(&wash, bg).0);
-        // Blown out to pure white — legible, but not what was drawn.
-        let blown = Candidate {
-            treatment: Treatment::Remap,
+        assert!(!gate(&wash, bg, None, false).0);
+        // UNLESS IT IS A BODY, which stands on its own ground rather than ours.
+        let all = vec![1u8; 64];
+        assert!(gate(&wash, bg, Some(&all), false).0);
+        // Pure white: a glare where paper may be left in, ink where it cannot be.
+        let white = Candidate {
+            treatment: Treatment::AsIs,
             raster: field(8, 8, [255, 255, 255, 255]),
             plate: None,
         };
-        assert!(!gate(&blown, bg).0);
+        assert!(!gate(&white, bg, None, true).0, "unremoved paper fails");
+        assert!(gate(&white, bg, None, false).0, "white ink does not");
         // The floor always passes, whatever it is carrying.
         let plate = Candidate {
             treatment: Treatment::Plate,
             raster: field(8, 8, [42, 52, 66, 255]),
             plate: Some(dark::stages::plate_params()),
         };
-        assert!(gate(&plate, bg).0);
+        assert!(gate(&plate, bg, None, false).0);
     }
 
     #[test]
@@ -5407,10 +6336,13 @@ mod tests {
         let mut img = field(64, 64, WHITE);
         block(&mut img, 10, 16, 40, 20, [20, 20, 20, 255]);
         let res = dark::pipeline::adapt_logo_for_dark(&img, dark::LOGO_DARK_BG);
-        assert_eq!(res.candidates.len(), 3);
+        // Remap, halo, as-is, then the plate: the picker's four rows.
+        assert_eq!(res.candidates.len(), 4);
         assert_eq!(res.candidates.last().unwrap().treatment, dark::stages::Treatment::Plate);
-        assert!(res.candidates[..2].iter().all(|c| c.treatment != dark::stages::Treatment::Plate));
+        assert!(res.candidates[..3].iter().all(|c| c.treatment != dark::stages::Treatment::Plate));
         assert_eq!(res.candidates[0].treatment, res.order[0]);
+        assert!(res.candidates.last().unwrap().plate.is_some(), "and only the plate carries a slab");
+        assert!(res.candidates[..3].iter().all(|c| c.plate.is_none()));
     }
 
     #[test]
@@ -5800,9 +6732,9 @@ mod tests {
     /// DARK-MODE-LOGOS keys the cache by `(logoId, backgroundColour)` and says
     /// why: the background is an INPUT to the gate, which composites each
     /// candidate onto the real dark ground and asks whether the mark still
-    /// separates from it. The pixels do not depend on it — `remap` clears paper to
-    /// transparency — but the CHOICE does, so moving the ground can make a stored
-    /// pick the wrong one while the file itself stays perfectly valid.
+    /// separates from it. Since #143 the pixels depend on it too — dark ink is
+    /// lifted to a lightness set by the surface — so moving the ground makes a
+    /// stored variant the wrong picture as well as possibly the wrong pick.
     ///
     /// Handoff v1.16.0 moved it, `#212B38` to `#33373D`, which is what turned this
     /// from a note in a document into a thing that had to be built.
@@ -5830,6 +6762,106 @@ mod tests {
         s.put_dark("WMAD", dark::stages::Treatment::Remap, b"k", false, 0).unwrap();
         assert_eq!(s.dark_info("WMAD").unwrap().bg, 0);
         assert!(assign::wants_dark_adaptation(&s, "WMAD", here));
+    }
+
+    /// The unit's logo store as an OLDER BUILD left it: every `algo` stamp
+    /// struck from the files on disk, and the store opened afresh.
+    ///
+    /// Done to the files rather than through a setter because that is what an
+    /// update actually meets — `meta.json` and `index.json` written by code that
+    /// had never heard of the field.
+    fn as_an_older_build_left_it(dir: &Path) -> store::LogoStore {
+        fn strip(path: &Path) {
+            if path.is_dir() {
+                for e in std::fs::read_dir(path).unwrap().flatten() {
+                    strip(&e.path());
+                }
+            } else if path.extension().is_some_and(|x| x == "json") {
+                let raw = std::fs::read_to_string(path).unwrap();
+                let cut = raw.replace(&format!(",\"algo\":{}", dark::DARK_ALGO), "");
+                std::fs::write(path, cut).unwrap();
+            }
+        }
+        strip(dir);
+        store::LogoStore::new(dir)
+    }
+
+    /// A VARIANT BUILT BY AN OLDER PIPELINE IS REBUILT, ONCE.
+    ///
+    /// The fix is in the maths, and a variant is a FILE: without a stamp saying
+    /// which maths built it, every logo already on the unit keeps the picture
+    /// the owner complained about until its master is replaced by hand.
+    #[test]
+    fn a_variant_from_an_older_pipeline_is_rebuilt_once() {
+        let tmp = TempDir::new("dark-algo");
+        let s = store::LogoStore::new(tmp.path());
+        let codec = RawCodec;
+        let mut master = field(120, 60, WHITE);
+        block(&mut master, 12, 10, 96, 14, NAVY);
+        block(&mut master, 12, 34, 96, 10, [150, 20, 30, 255]);
+        s.put_original("WIBA", &encoded(&master), "image/png", "manual").unwrap();
+        let here = dark::LOGO_DARK_BG;
+
+        assign::regenerate_dark(&s, &codec, "WIBA", here).unwrap();
+        assert_eq!(s.dark_info("WIBA").unwrap().algo, dark::DARK_ALGO, "stamped as it is written");
+        assert!(!assign::wants_dark_adaptation(&s, "WIBA", here), "and settled");
+
+        // The same store as the build before this one would have left it.
+        let old = as_an_older_build_left_it(tmp.path());
+        assert_eq!(old.dark_info("WIBA").unwrap().algo, 1, "no stamp reads as the first pipeline");
+        assert!(assign::wants_dark_adaptation(&old, "WIBA", here), "so it is queued");
+
+        assign::regenerate_dark(&old, &codec, "WIBA", here).unwrap();
+        assert_eq!(old.dark_info("WIBA").unwrap().algo, dark::DARK_ALGO);
+        assert!(!assign::wants_dark_adaptation(&old, "WIBA", here), "once, and not again");
+    }
+
+    /// A GREY PLATE FROM BEFORE THE FIX IS RE-JUDGED EVEN IF IT WAS "CHOSEN".
+    ///
+    /// "Use this" in the picker writes `chosen` for whichever row is selected,
+    /// and the row it opens on is the pipeline's own pick. So a driver who took
+    /// the default has the same bit on disk as one who overrode it — and the old
+    /// default, for a logo like this one, was the plate. The owner: *"light gray
+    /// rectangles. This is not something I approved."*
+    ///
+    /// ONLY THAT, AND ONLY ONCE: a plate chosen under the current pipeline is a
+    /// choice like any other, and so is every non-plate choice from before it.
+    #[test]
+    fn a_plate_from_before_the_fix_is_re_judged_and_a_new_one_is_kept() {
+        use dark::stages::Treatment;
+        let tmp = TempDir::new("dark-stale-plate");
+        let s = store::LogoStore::new(tmp.path());
+        let codec = RawCodec;
+        let mut master = field(120, 60, WHITE);
+        block(&mut master, 12, 10, 96, 14, NAVY);
+        block(&mut master, 12, 34, 96, 10, [150, 20, 30, 255]);
+        let here = dark::LOGO_DARK_BG;
+        for base in ["WIBA", "WHOG"] {
+            s.put_original(base, &encoded(&master), "image/png", "manual").unwrap();
+        }
+        // On disk as the old build left them: one accepted plate, one chosen halo.
+        assert!(assign::set_dark_treatment(&s, &codec, "WIBA", Treatment::Plate, here));
+        assert!(assign::set_dark_treatment(&s, &codec, "WHOG", Treatment::Halo, here));
+        let old = as_an_older_build_left_it(tmp.path());
+        assert!(old.dark_info("WIBA").unwrap().chosen, "the bit is on disk");
+
+        assign::regenerate_dark(&old, &codec, "WIBA", here).unwrap();
+        let now = old.dark_info("WIBA").unwrap();
+        assert_eq!(now.treatment, "REMAP", "the plate is gone");
+        assert!(!now.chosen, "and what replaced it is the pipeline's pick, not a choice");
+
+        // A choice that was not the plate survives the same update.
+        assign::regenerate_dark(&old, &codec, "WHOG", here).unwrap();
+        let kept = old.dark_info("WHOG").unwrap();
+        assert_eq!(kept.treatment, "HALO");
+        assert!(kept.chosen);
+
+        // AND A PLATE CHOSEN NOW STICKS, through as many regenerations as come.
+        assert!(assign::set_dark_treatment(&old, &codec, "WIBA", Treatment::Plate, here));
+        assign::regenerate_dark(&old, &codec, "WIBA", here).unwrap();
+        let chosen = old.dark_info("WIBA").unwrap();
+        assert_eq!(chosen.treatment, "PLATE");
+        assert!(chosen.chosen);
     }
 
     /// THE GATE BACKGROUND IS THE PALETTE'S, and it has to stay the palette's.

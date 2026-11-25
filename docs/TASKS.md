@@ -376,10 +376,12 @@ port produces the same output as that Python reference, stage by stage
 (checkerboard → trim → key → route → remap/halo/plate/gate), rather than merely
 looking right. Cannot be done without requesting `pipeline.py`.
 
-**Carnyx:** carried over unchanged. The pipeline was ported again into
-`src/logos.rs` (OKLab, connected components, box blur, the five stages) and is
-tested against its own expectations, not against the Python reference. Still
-blocked on requesting `pipeline.py`.
+**Carnyx:** narrowed by #143. The pipeline was ported again into `src/logos.rs`
+and is tested against its own expectations, not against the Python reference.
+Since #143 the keying, the paper clearing, the routing, the lift and the gate are
+Carnyx's own and have no reference to be in parity with. What is still a port is
+the OKLab maths, the box blur, the labelling, the checkerboard flatten and the
+trim; parity for those is still blocked on requesting `pipeline.py`.
 
 ### 49. Replace the fabricated tuner diagnostics
 **[AUDIT #25]** — `SettingsPanel.tsx:264` maps a **literal array** into the
@@ -1305,6 +1307,98 @@ ignores the rest, so the three dropped keys cost a driver nothing; the test that
 covered `autostart`'s removal now covers all four.
 
 Closes #87, #89 and #90.
+
+### 143. Dark-mode logos: no grey plates, and the paper actually removed
+**BUILT AND TESTED ON THE HOST. NOT YET SEEN ON THE UNIT.** The owner: *"The
+station logos in dark mode don't seem to look as good as I remember from CarFM's
+version."* Then, on being shown what the pipeline does: *"Some of them, yes, light
+gray rectangles. This is not something I approved, and would like it fixed. Also,
+there are logos where there's clusters of white or near-white pixels that are left
+behind, and I was hoping there was a better algorithm we could use."*
+
+**Measured before anything was changed.** The host has no image codec, so
+`examples/darkprobe.rs` runs the shipping pipeline on pixels decoded elsewhere and
+`tools/dark-sheet.py` lays every treatment out on the dark card. Run over the
+three real logos in CarFM's design handoff (WPR, WIBA 101.5, 105.9 The Hog) and 25
+synthetic ones that each isolate one failure:
+
+| automatic pick | before | after |
+|---|---|---|
+| recoloured (`remap`) | 10 | 24 |
+| glow (`halo`) | 1 | 4 |
+| **grey plate** | **17** | **0** |
+
+WIBA and The Hog were two of the 17. WPR was recoloured both times, and is the
+"pixels left behind" case.
+
+**Why the grey plates.** Three faults, each enough on its own:
+- The lift was a FIXED lightness. Dark coloured ink was raised to OKLab L 0.62,
+  and the gate passes ink more than 0.32 from the surface. On CarFM's navy face
+  `#212B38` (L 0.286) that is 0.334: a pass. Handoff v1.16.0 moved the face to
+  charcoal `#33373D` (L 0.335) and the same ink is 0.285 away: a fail. The remap
+  failed its own gate and the plate caught it. `stages::lift_floor` now derives
+  the lift from the surface.
+- A tile was measured as ink. The Hog's black tile is the ground its lettering
+  stands on; scored as unreadable dark ink it got 0.44 (`halo`) and 0.42
+  (`as-is`) against a pass mark of 0.45. Shapes like it are now found
+  (`stages::find_bodies`) and left as drawn.
+- White ink counted as a fault. The gate failed anything 45% white, which is
+  right for unremoved paper and wrong for a logo drawn in white. It now applies
+  only where paper can still be present.
+
+**Why the leftover pixels.** The old clear faded pixels that were light AND grey.
+The gap between two of WPR's rings is pale yellow the whole way across (`#fff6d2`
+between `#bdac64` rings, measured): never white, so never cleared, and the purest
+pixels in it were punched out as holes. `stages::unmix` asks instead whether a
+pixel is paper mixed with the ink beside it, and sets its alpha to how much ink
+that is. It runs for every treatment, where the old clear ran only inside `remap`.
+
+**Found on the way, all fixed:**
+- A logo already on transparency had its white text deleted: the key took the
+  transparent pixels' own RGB for the paper colour.
+- A rounded tile kept four white corner slivers: the border's median colour is
+  the tile, and the region rule refused to key anything under 2% of the image.
+- A logo inside a rectangular frame kept its whole white interior.
+- Noise on a black background survived as specks: OKLab puts `(12,12,12)` further
+  from black than the entire paper threshold.
+- A coloured square tile was keyed away, leaving its lettering on nothing. A
+  saturated colour filling the frame is now the logo's own, and stays.
+- White ink came out light grey: the lift's cap was applied to ink it had not
+  lifted.
+- The background was judged after the crop, where a bar across the top of a logo
+  owns two of the four corners and about half the border. It is read off the
+  file's margin before the crop now (`stages::find_ground`).
+
+**Logos already on the unit are rebuilt.** A variant is a file, so the store now
+stamps each one with `dark::DARK_ALGO` and `wants_dark_adaptation` re-queues any
+with an older stamp, once, on the worker, the first time it is drawn dark.
+
+**ONE STORED CHOICE IS NOT HONOURED, ONCE.** "Use this" in the picker writes
+`chosen` for whichever row is selected, and the row it opens on is the pipeline's
+own pick, so accepting the default and overriding it leave the same bit. The old
+default was the plate for most coloured logos. A plate stamped by the old pipeline
+is therefore re-judged on this update; a plate chosen afterwards is kept, and so
+is every non-plate choice from before (`assign::stale_plate`).
+
+**The picker offers four rows where it offered three.** `as-is` is now built for
+every logo with a background: only the outside removed, nothing recoloured.
+
+**Evidence.** `cargo test`: 438 passed. Seventeen new or rewritten tests in
+`logos::tests` cover the faults above. Ten mutations, each undoing one fix, each
+failed at least one of them. All 105 app shots render. Speed on the host for a
+1024-pixel logo, old then new: WPR 0.47 s then 0.39 s, The Hog 0.27 s then 0.41 s.
+
+**Known limits.**
+- A soft drop shadow under dark lettering comes out as a pale smudge.
+- A tile whose lettering has no closed letters ("MIX", "KISS FM") is not
+  recognised as a tile and is recoloured instead. It still reads.
+- The test logos are three real ones and 25 drawn for the purpose. The network
+  policy of the build container blocks image search, so no wider real set was
+  run.
+
+**Not verified on the unit.** Nothing here has been seen on the head unit's
+screen. The test: switch to dark, and WIBA and The Hog should sit on the card with
+no grey rectangle; WPR's rings should have dark gaps between them.
 
 ### 142. Four appearance modes: Light, Dark, the headlights, and sunrise/sunset
 **BUILT AND TESTED ON THE HOST. NOT YET DRIVEN WITH CARNYX.** The owner: *"The app
